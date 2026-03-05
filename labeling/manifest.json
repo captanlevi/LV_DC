@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "YT Video Watcher",
+  "version": "1.0",
+  "description": "Observe live video playback",
+  "permissions": ["storage", "downloads"],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.youtube.com/*",
+        "*://www.facebook.com/*",
+        "*://m.facebook.com/*",
+        "*://web.facebook.com/*",
+        "*://*.cnn.com/*"
+      ],
+      "js": ["content.js"],
+      "all_frames": true
+    }
+  ]
+}
