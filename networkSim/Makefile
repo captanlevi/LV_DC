@@ -7,7 +7,9 @@ BANDWIDTH = 500kbit
 DELAY = 0ms
 PLR = 0%
 
-CAPTURE_DIR = /home/captanlevi/Desktop/Live/data
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+CAPTURE_DIR := $(realpath $(MAKEFILE_DIR)/../current_data)
+#CAPTURE_DIR = /home/captanlevi/Desktop/Live/data
 IN_FILE = $(CAPTURE_DIR)/incoming.pcap
 OUT_FILE = $(CAPTURE_DIR)/outgoing.pcap
 MERGED_FILE = $(CAPTURE_DIR)/merged.pcap
