@@ -13,6 +13,7 @@ CAPTURE_DIR := $(realpath $(MAKEFILE_DIR)/../current_data)
 IN_FILE = $(CAPTURE_DIR)/incoming.pcap
 OUT_FILE = $(CAPTURE_DIR)/outgoing.pcap
 MERGED_FILE = $(CAPTURE_DIR)/merged.pcap
+NETWORK_LOG_FILE = $(CAPTURE_DIR)/net_labels.txt
 .PHONY: enable disable start-capture stop-capture merge-capture clean-captures
 
 enable:
@@ -129,3 +130,9 @@ merge-capture:
 
 run_network_sim:
 	cd .. && python3 -m networkSim.exp
+
+change_perm:
+	OWNER=$${SUDO_USER:-$${USER}}; \
+	[ -f $(MERGED_FILE) ] && sudo chown $$OWNER $(MERGED_FILE) && sudo chmod 644 $(MERGED_FILE); \
+	[ -f $(NETWORK_LOG_FILE) ] && sudo chown $$OWNER $(NETWORK_LOG_FILE) && sudo chmod 644 $(NETWORK_LOG_FILE); \
+	echo "Permissions updated for existing files"

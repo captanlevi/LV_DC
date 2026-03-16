@@ -67,6 +67,15 @@ def finalize_pcap() -> bool:
         return False
 
 
+def change_perm() -> bool:
+    try:
+        run(["make", "change_perm"])
+        return True
+    except Exception as e:
+        print(e)
+        return False
+
+
 def ossilate(
     stable_time_in_seconds: int,
     net_labels: list[NetLabel],
@@ -115,3 +124,4 @@ if __name__ == "__main__":
             raise ValueError("Could not finish removing the network setup")
 
         save_json(path="../current_data/net_labels.txt", data=net_labels)
+        change_perm()
