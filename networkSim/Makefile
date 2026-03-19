@@ -30,36 +30,21 @@ enable:
 	sudo tc qdisc del dev $(IFB_INGRESS) root || true
 	sudo tc qdisc del dev $(IFB_EGRESS) root || true
 
-	@echo "📥 Shaping incoming traffic (IPv4 + IPv6)..."
+	@echo "📥 Shaping incoming traffic (All Protocols)..."
 	sudo tc qdisc add dev $(IFACE) handle ffff: ingress
-
-	# IPv4 ingress redirect
-	sudo tc filter add dev $(IFACE) parent ffff: protocol ip u32 \
-        match u8 0x11 0xff at 0x9 action mirred egress redirect dev $(IFB_INGRESS)
-
-	# IPv6 ingress redirect
-	# Match Next Header 17 (UDP) at byte offset 6 of the IPv6 header
-	sudo tc filter add dev $(IFACE) parent ffff: protocol ipv6 u32 \
-		match u8 0x11 0xff at 0x6 action mirred egress redirect dev $(IFB_INGRESS)
+	# Catch ALL ingress traffic and send to IFB_INGRESS
+	sudo tc filter add dev $(IFACE) parent ffff: \
+		matchall action mirred egress redirect dev $(IFB_INGRESS)
 
 	sudo tc qdisc add dev $(IFB_INGRESS) root handle 1: htb default 10
 
-	@echo "📤 Shaping and mirroring outgoing traffic (IPv4 + IPv6)..."
+	@echo "📤 Shaping and mirroring outgoing traffic (All Protocols)..."
 	sudo tc qdisc add dev $(IFACE) root handle 1: htb default 10
+	# Catch ALL egress traffic and mirror to IFB_EGRESS for capture
+	sudo tc filter add dev $(IFACE) parent 1: \
+		matchall action mirred egress mirror dev $(IFB_EGRESS)
 
-	# IPv4 egress mirror
-	# Match IP protocol 17 (UDP) at byte offset 9 of the IP header
-	sudo tc filter add dev $(IFACE) protocol ip parent 1: \
-		u32 match u8 0x11 0xff at 0x9 action mirred egress mirror dev $(IFB_EGRESS)
-
-	# IPv6 egress mirror
-	# Match Next Header 17 (UDP) at byte offset 6 of the IPv6 header
-	sudo tc filter add dev $(IFACE) protocol ipv6 parent 1: \
-		u32 match u8 0x11 0xff at 0x6 action mirred egress mirror dev $(IFB_EGRESS)
-
-	@echo "✅ Shaping ENABLED on $(IFACE)"
-	@echo "   🧲 Incoming traffic redirected to $(IFB_INGRESS)"
-	@echo "   🧲 Outgoing traffic mirrored to $(IFB_EGRESS)"
+	@echo "✅ Shaping ENABLED on $(IFACE) for ALL traffic (TCP/UDP/IPv4/IPv6)"
 
 slow:
 	@echo "📉 Applying bandwidth limit and delay..."
