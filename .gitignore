@@ -1,2 +1,4 @@
 /data
 /current_data
+*.pyc
+/__pycache__
