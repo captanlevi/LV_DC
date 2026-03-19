@@ -7,6 +7,7 @@ import json
 import subprocess
 import os
 import signal
+import random
 
 
 @dataclass
@@ -93,6 +94,63 @@ def ossilate(
         index += 1
 
 
+def oscillate_balanced(net_labels, episode_length=180):
+    """
+    Generate balanced network scenarios with minimal interruptions.
+    """
+    scenarios = ["high", "medium", "low", "stall", "oscillation"]
+    last_rate = None  # Track last applied bandwidth
+
+    while True:
+        scenario = random.choice(scenarios)
+        print(f"\n🎬 Scenario: {scenario}")
+
+        start_time = time.time()
+
+        if scenario == "high":
+            rates = [4000, 5000]
+            duration_fn = lambda: random.expovariate(1 / 40)
+
+        elif scenario == "medium":
+            rates = [800, 1000, 1500]
+            duration_fn = lambda: random.expovariate(1 / 30)
+
+        elif scenario == "low":
+            rates = [100, 200, 300]
+            duration_fn = lambda: random.expovariate(1 / 25)
+
+        elif scenario == "stall":
+            # occasional drop to very low bandwidth
+            def stall_pattern():
+                if random.random() < 0.5:
+                    return random.choice([50, 100])  # stall trigger
+                return random.choice([2000, 4000])
+
+            duration_fn = lambda: random.uniform(5, 20)
+
+        elif scenario == "oscillation":
+            rates = [100, 500, 1000, 5000]
+            duration_fn = lambda: random.uniform(5, 15)
+
+        # ---- run scenario ----
+        while time.time() - start_time < episode_length:
+
+            # choose rate based on scenario
+            if scenario == "stall":
+                rate = stall_pattern()
+            else:
+                rate = random.choice(rates)
+
+            # Only apply network shaping if rate changed
+            if rate != last_rate:
+                run(["make", "slow", f"BANDWIDTH={rate}kbit"])
+                last_rate = rate
+
+            net_labels.append(NetLabel(timestamp=time.time(), speed=rate))
+
+            time.sleep(duration_fn())
+
+
 def save_json(path: str, data: list[NetLabel]):
     save_data = [asdict(obj) for obj in data]
     with open(path, "w") as f:
@@ -114,7 +172,8 @@ if __name__ == "__main__":
         raise ValueError("Cannot initialize pcap capture")
 
     try:
-        ossilate(stable_time_in_seconds=30, net_labels=net_labels)
+        # ossilate(stable_time_in_seconds=30, net_labels=net_labels)
+        oscillate_balanced(net_labels=net_labels, episode_length=120)
 
     finally:
         # Need to stop capture before tearing down the network
