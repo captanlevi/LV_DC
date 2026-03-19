@@ -43,7 +43,7 @@ class Scenario:
     def sample_delay(self) -> int:
         return random.randint(self.delay_min, self.delay_max)
     def sample_loss(self) -> float:
-        return random.uniform(a= self.loss_pct_min, b = self.loss_pct_max)
+        return round(random.uniform(a= self.loss_pct_min, b = self.loss_pct_max),1)
 
 
 SCENARIOS = {
@@ -68,12 +68,12 @@ SCENARIOS = {
         loss_pct_lim=(0.5, 3.0),
     ),
     "144": Scenario(
-        rate_lim=(100, 300),
+        rate_lim=(130, 300),
         delay_lim=(100, 300),
         loss_pct_lim=(1.0, 5.0),
     ),
     "stall": Scenario(
-        rate_lim=(50, 200),
+        rate_lim=(100, 200),
         delay_lim=(200, 1000),
         loss_pct_lim=(5.0, 20.0),
     ),
@@ -88,15 +88,15 @@ TRANSITIONS = {
         "360": 0.4,
     },
     "480": {
-        "720": 0.2,
-        "480": 0.3,
-        "360": 0.3,
+        "720": 0.4,
+        "480": 0.2,
+        "360": 0.2,
         "240": 0.2,
     },
     "360": {
-        "480": 0.25,
-        "360": 0.25,
-        "240": 0.3,
+        "480": 0.4,
+        "360": 0.2,
+        "240": 0.2,
         "144": 0.2,
     },
     "240": {
@@ -106,9 +106,9 @@ TRANSITIONS = {
         "stall": 0.1,
     },
     "144": {
-        "240": 0.3,
-        "144": 0.3,
-        "stall": 0.4,
+        "240": 0.5,
+        "144": 0.2,
+        "stall": 0.3,
     },
     "stall": {
         "144": 0.7,

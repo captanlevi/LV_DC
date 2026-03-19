@@ -11,3 +11,4 @@ class NetStat:
     duration: float
     delay_ms: int
     loss_pct: float
+    state : str

@@ -1,6 +1,6 @@
 import subprocess
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict
 import time
 import json
 
@@ -8,7 +8,7 @@ import subprocess
 import os
 import signal
 
-from networkSim.utils.netStat import net_episode_generator
+from utils.netStat import net_episode_generator
 from utils.dataModels import NetLabel
 
 
@@ -80,7 +80,9 @@ def ossilate(
 ):
 
     for net_stat in net_episode_generator(episode_length= episode_time_in_seconds):
-        run(["make", "slow", f"BANDWIDTH={net_stat.delay_ms}kbit DELAY={net_stat.delay_ms}ms PLR={net_stat.loss_pct}%"])
+        print(f"Currently shaping {net_stat}")
+        #run(["make", "slow", f"BANDWIDTH={net_stat.delay_ms}, kbit DELAY={net_stat.delay_ms}ms, PLR={net_stat.loss_pct}%"])
+        run(["make", "slow", f"BANDWIDTH={net_stat.rate}kbit", f"DELAY={net_stat.delay_ms}ms", f"PLR={net_stat.loss_pct}%"])
         ts = time.time()
         net_labels.append(NetLabel(timestamp=ts, speed=net_stat.rate))
         time.sleep(net_stat.duration)
@@ -110,7 +112,7 @@ if __name__ == "__main__":
 
     try:
         # ossilate(stable_time_in_seconds=30, net_labels=net_labels)
-        ossilate(episode_time_in_seconds= 120, net_labels= net_labels)
+        ossilate(episode_time_in_seconds= 60, net_labels= net_labels)
 
     finally:
         # Need to stop capture before tearing down the network
