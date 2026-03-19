@@ -3,7 +3,7 @@
 IFACE = wlp0s20f3
 IFB_INGRESS = ifb0
 IFB_EGRESS = ifb1
-BANDWIDTH = 500kbit
+BANDWIDTH = 1000kbit
 DELAY = 0ms
 PLR = 0%
 
