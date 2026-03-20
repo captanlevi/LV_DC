@@ -1,4 +1,13 @@
 /data
 /current_data
 *.pyc
-/__pycache__
+*.pcap
+*pcapng
+*.vscode
+# Ignore all CSV files
+*.csv
+*.txt
+*.log
+/rushi_env
+__pycache__/
+.DS_Store

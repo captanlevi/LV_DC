@@ -22,12 +22,19 @@ Notes:
 
 """
 
+
 class Scenario:
     """
     rates is the speed in kbit
     1000 kbit == 1 mbit
     """
-    def __init__(self, rate_lim : tuple[int,int], delay_lim : tuple[int,int], loss_pct_lim : tuple[float,float]):
+
+    def __init__(
+        self,
+        rate_lim: tuple[int, int],
+        delay_lim: tuple[int, int],
+        loss_pct_lim: tuple[float, float],
+    ):
         """
         delay in ms
         """
@@ -38,12 +45,15 @@ class Scenario:
         self.loss_pct_min, self.loss_pct_max = loss_pct_lim
 
         assert self.rate_max >= self.rate_min and self.rate_min > 0
+
     def sample_rate(self) -> int:
-        return random.randint(self.rate_min,self.rate_max)
+        return random.randint(self.rate_min, self.rate_max)
+
     def sample_delay(self) -> int:
         return random.randint(self.delay_min, self.delay_max)
+
     def sample_loss(self) -> float:
-        return round(random.uniform(a= self.loss_pct_min, b = self.loss_pct_max),1)
+        return round(random.uniform(a=self.loss_pct_min, b=self.loss_pct_max), 1)
 
 
 SCENARIOS = {
@@ -68,17 +78,16 @@ SCENARIOS = {
         loss_pct_lim=(0.5, 3.0),
     ),
     "144": Scenario(
-        rate_lim=(130, 300),
+        rate_lim=(150, 300),
         delay_lim=(100, 300),
         loss_pct_lim=(1.0, 5.0),
     ),
     "stall": Scenario(
         rate_lim=(100, 200),
         delay_lim=(200, 1000),
-        loss_pct_lim=(5.0, 20.0),
+        loss_pct_lim=(5.0, 10.0),
     ),
 }
-
 
 
 TRANSITIONS = {
@@ -111,11 +120,10 @@ TRANSITIONS = {
         "stall": 0.3,
     },
     "stall": {
-        "144": 0.7,
-        "stall": 0.3,
+        "144": 1,
+        "stall": 0,
     },
 }
-
 
 
 def next_state(curr: str) -> str:
