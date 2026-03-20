@@ -63,7 +63,7 @@ SCENARIOS = {
         loss_pct_lim=(0.0, 0.5),
     ),
     "480": Scenario(
-        rate_lim=(1000, 2500),
+        rate_lim=(700, 1700),
         delay_lim=(30, 120),
         loss_pct_lim=(0.0, 1.0),
     ),
