@@ -19,9 +19,11 @@ def net_episode_generator(episode_length: int):
 
             # Make sure we don't go past the episode
             remaining_time = episode_length - curr_time
-            if dur > remaining_time or state == "stall":
-                # in case we have a stall state, we do not continue it beyond one fraction.
+            if dur > remaining_time:
                 dur = max(1, remaining_time)
+                run_inner = False
+            if state == "stall":
+                # in case we have a stall state, we do not continue it beyond one fraction.
                 run_inner = False
             yield NetStat(
                 rate=scenario.sample_rate(),
