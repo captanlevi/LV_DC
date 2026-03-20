@@ -73,19 +73,19 @@ SCENARIOS = {
         loss_pct_lim=(0.0, 2.0),
     ),
     "240": Scenario(
-        rate_lim=(300, 700),
+        rate_lim=(350, 700),
         delay_lim=(80, 200),
         loss_pct_lim=(0.5, 3.0),
     ),
     "144": Scenario(
-        rate_lim=(150, 300),
+        rate_lim=(170, 350),
         delay_lim=(100, 300),
         loss_pct_lim=(1.0, 5.0),
     ),
     "stall": Scenario(
-        rate_lim=(100, 200),
-        delay_lim=(200, 1000),
-        loss_pct_lim=(5.0, 10.0),
+        rate_lim=(130, 250),
+        delay_lim=(200, 500),
+        loss_pct_lim=(5.0, 8.0),
     ),
 }
 
