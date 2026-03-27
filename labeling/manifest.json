@@ -16,7 +16,16 @@
         "*://www.facebook.com/*",
         "*://m.facebook.com/*",
         "*://web.facebook.com/*",
-        "*://*.cnn.com/*"
+        "*://*.cnn.com/*",
+
+        "*://www.tiktok.com/*",
+        "*://*.tiktok.com/*",
+
+        "*://www.instagram.com/*",
+        "*://*.instagram.com/*",
+
+        "*://www.twitch.tv/*",
+        "*://*.twitch.tv/*"
       ],
       "js": ["content.js"],
       "all_frames": true
