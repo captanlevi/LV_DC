@@ -9,11 +9,13 @@ PLR = 0%
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 CAPTURE_DIR := $(realpath $(MAKEFILE_DIR)/../current_data)
-#CAPTURE_DIR = /home/captanlevi/Desktop/Live/data
 IN_FILE = $(CAPTURE_DIR)/incoming.pcap
 OUT_FILE = $(CAPTURE_DIR)/outgoing.pcap
 MERGED_FILE = $(CAPTURE_DIR)/merged.pcap
 NETWORK_LOG_FILE = $(CAPTURE_DIR)/net_labels.txt
+SSL_KEY_LOG_FILE = $(CAPTURE_DIR)/ssl_keys.log
+HTTP_LOG_FILE = $(CAPTURE_DIR)/http.json
+
 .PHONY: enable disable start-capture stop-capture merge-capture clean-captures
 
 enable:
@@ -121,3 +123,84 @@ change_perm:
 	[ -f $(MERGED_FILE) ] && sudo chown $$OWNER $(MERGED_FILE) && sudo chmod 644 $(MERGED_FILE); \
 	[ -f $(NETWORK_LOG_FILE) ] && sudo chown $$OWNER $(NETWORK_LOG_FILE) && sudo chmod 644 $(NETWORK_LOG_FILE); \
 	echo "Permissions updated for existing files"
+
+start_chrome:
+	@echo "🚀 Starting Chrome with SSL key logging..."
+	@export SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE); \
+	open -a "Google Chrome"
+	@echo "✅ Chrome started with SSL key logging to $(SSL_KEY_LOG_FILE)"
+
+kill_chrome:
+	@echo "🛑 Killing Chrome processes..."
+	@pkill -f "Google Chrome" || true
+	@echo "✅ Chrome processes killed"
+
+remove_ssl_keys:
+	@echo "🧹 Removing existing SSL key log file..."
+	@rm -f $(SSL_KEY_LOG_FILE)
+	@echo "✅ SSL key log file removed"
+
+
+make_http_logs:
+	@tshark -r $(CAPTURE_DIR)/http_test.pcapng \
+	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
+	-d udp.port==443,quic \
+	-Y "http3" \
+	-T json \
+	-e frame.time_epoch \
+	-e ip.src -e ip.dst -e udp.srcport -e udp.dstport \
+	-e http3.frame_streamid \
+	-e http3.header.header.name \
+	-e http3.headers.header.value \
+	-e http3.headers.method \
+	-e http3.headers.path \
+	-e http3.headers.status \
+	-e http3.headers.content_type \
+	-e http3.frame_type \
+	-e quic.stream.offset \
+	-e http3.data > $(CAPTURE_DIR)/h3_raw.json
+
+	@tshark -r $(CAPTURE_DIR)/http_test.pcapng \
+	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
+	-Y "http2" \
+	-T json \
+	-e frame.time_epoch \
+	-e ip.src -e ip.dst -e tcp.srcport -e tcp.dstport \
+	-e http2.streamid \
+	-e http2.header.name \
+	-e http2.header.value \
+	-e http2.headers.method \
+	-e http2.headers.path \
+	-e http2.headers.status \
+	-e http2.headers.content_type \
+	-e http2.data.data \
+	-e http2.type > $(CAPTURE_DIR)/h2_raw.json
+
+	@tshark -r $(CAPTURE_DIR)/http_test.pcapng \
+	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
+	-Y "http" \
+	-T json \
+	-e frame.time_epoch \
+	-e ip.src -e ip.dst -e tcp.srcport -e tcp.dstport \
+	-e http.request.method \
+	-e http.request.uri \
+	-e http.response.code \
+	-e http.content_type \
+	-e http.file_data \
+	-e http.transfer_encoding \
+	-e http.content_encoding  > $(CAPTURE_DIR)/h1_raw.json
+
+
+
+process_http_logs:
+	@echo "📊 Processing HTTP logs into structured format..."
+	@python3 $(MAKEFILE_DIR)/unit_extractor.py --path $(CAPTURE_DIR) --save_path $(HTTP_LOG_FILE)
+	@echo "✅ HTTP logs processed and saved"
+
+
+remove_http_logs:
+	@echo "🧹 Removing existing HTTP log files..."
+	@rm -f $(CAPTURE_DIR)/h3_raw.json
+	@rm -f $(CAPTURE_DIR)/h2_raw.json
+	@rm -f $(CAPTURE_DIR)/h1_raw.json
+	@echo "✅ HTTP log files removed"

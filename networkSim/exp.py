@@ -12,7 +12,6 @@ from utils.netStat import net_episode_generator
 from utils.dataModels import NetLabel
 
 
-
 def run_(cmd):
     print(f"> {cmd}")
     subprocess.run(cmd, shell=True)
@@ -31,6 +30,15 @@ def run(args):
 def initialize_network() -> bool:
     try:
         run(["make", "enable"])
+        return True
+    except Exception as e:
+        print(e)
+        return False
+
+
+def open_chrome_with_ssl_key_log() -> bool:
+    try:
+        run(["make", "open_chrome"])
         return True
     except Exception as e:
         print(e)
@@ -74,20 +82,54 @@ def change_perm() -> bool:
         return False
 
 
+def make_http_logs() -> bool:
+    try:
+        run(["make", "make_http_logs"])
+        return True
+    except Exception as e:
+        print(e)
+        return False
+
+
+def process_http_logs() -> bool:
+    try:
+        run(["make", "process_http_logs"])
+        return True
+    except Exception as e:
+        print(e)
+        return False
+
+
+def remove_ssl_and_http_logs() -> bool:
+    try:
+        run(["make", "remove_ssl_keys"])
+        run(["make", "remove_http_logs"])
+        return True
+    except Exception as e:
+        print(e)
+        return False
+
+
 def ossilate(
     episode_time_in_seconds: int,
     net_labels: list[NetLabel],
 ):
 
-    for net_stat in net_episode_generator(episode_length= episode_time_in_seconds):
+    for net_stat in net_episode_generator(episode_length=episode_time_in_seconds):
         print(f"Currently shaping {net_stat}")
-        #run(["make", "slow", f"BANDWIDTH={net_stat.delay_ms}, kbit DELAY={net_stat.delay_ms}ms, PLR={net_stat.loss_pct}%"])
-        run(["make", "slow", f"BANDWIDTH={net_stat.rate}kbit", f"DELAY={net_stat.delay_ms}ms", f"PLR={net_stat.loss_pct}%"])
+        # run(["make", "slow", f"BANDWIDTH={net_stat.delay_ms}, kbit DELAY={net_stat.delay_ms}ms, PLR={net_stat.loss_pct}%"])
+        run(
+            [
+                "make",
+                "slow",
+                f"BANDWIDTH={net_stat.rate}kbit",
+                f"DELAY={net_stat.delay_ms}ms",
+                f"PLR={net_stat.loss_pct}%",
+            ]
+        )
         ts = time.time()
         net_labels.append(NetLabel(timestamp=ts, speed=net_stat.rate))
         time.sleep(net_stat.duration)
-
-
 
 
 def save_json(path: str, data: list[NetLabel]):
@@ -110,9 +152,11 @@ if __name__ == "__main__":
     if is_capture and initialize_pcap() == False:
         raise ValueError("Cannot initialize pcap capture")
 
+    if open_chrome_with_ssl_key_log() == False:
+        raise ValueError("Cannot open chrome with SSL key log enabled")
     try:
         # ossilate(stable_time_in_seconds=30, net_labels=net_labels)
-        ossilate(episode_time_in_seconds= 60, net_labels= net_labels)
+        ossilate(episode_time_in_seconds=60, net_labels=net_labels)
 
     finally:
         # Need to stop capture before tearing down the network
@@ -120,6 +164,15 @@ if __name__ == "__main__":
             raise ValueError("Cannot finalize pcap capture")
         if finalize_network() == False:
             raise ValueError("Could not finish removing the network setup")
+
+        if make_http_logs() == False:
+            print("Could not make http logs from the pcap")
+        # Here run python script to parse the http logs and save the relevant data structure for training the model
+        if process_http_logs() == False:
+            print("Could not process http logs")
+
+        if remove_ssl_and_http_logs() == False:
+            print("Could not remove ssl and http logs")
 
         save_json(path="../current_data/net_labels.txt", data=net_labels)
         change_perm()
