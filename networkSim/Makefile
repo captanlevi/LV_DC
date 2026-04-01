@@ -9,6 +9,7 @@ PLR = 0%
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 CAPTURE_DIR := $(realpath $(MAKEFILE_DIR)/../current_data)
+VENV_DIR := $(realpath $(MAKEFILE_DIR)/../rushi_env)
 IN_FILE = $(CAPTURE_DIR)/incoming.pcap
 OUT_FILE = $(CAPTURE_DIR)/outgoing.pcap
 MERGED_FILE = $(CAPTURE_DIR)/merged.pcap
@@ -122,13 +123,12 @@ change_perm:
 	OWNER=$${SUDO_USER:-$${USER}}; \
 	[ -f $(MERGED_FILE) ] && sudo chown $$OWNER $(MERGED_FILE) && sudo chmod 644 $(MERGED_FILE); \
 	[ -f $(NETWORK_LOG_FILE) ] && sudo chown $$OWNER $(NETWORK_LOG_FILE) && sudo chmod 644 $(NETWORK_LOG_FILE); \
+	[ -f $(HTTP_LOG_FILE) ] && sudo chown $$OWNER $(HTTP_LOG_FILE) && sudo chmod 644 $(HTTP_LOG_FILE); \
 	echo "Permissions updated for existing files"
 
 start_chrome:
-	@echo "🚀 Starting Chrome with SSL key logging..."
-	@export SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE); \
-	open -a "Google Chrome"
-	@echo "✅ Chrome started with SSL key logging to $(SSL_KEY_LOG_FILE)"
+	@echo "🚀 Starting Chrome..."
+	@sudo -u $(SUDO_USER) SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) /usr/bin/chromium-browser --no-sandbox &
 
 kill_chrome:
 	@echo "🛑 Killing Chrome processes..."
@@ -142,7 +142,7 @@ remove_ssl_keys:
 
 
 make_http_logs:
-	@tshark -r $(CAPTURE_DIR)/http_test.pcapng \
+	@tshark -r $(MERGED_FILE) \
 	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
 	-d udp.port==443,quic \
 	-Y "http3" \
@@ -160,7 +160,7 @@ make_http_logs:
 	-e quic.stream.offset \
 	-e http3.data > $(CAPTURE_DIR)/h3_raw.json
 
-	@tshark -r $(CAPTURE_DIR)/http_test.pcapng \
+	@tshark -r $(MERGED_FILE) \
 	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
 	-Y "http2" \
 	-T json \
@@ -176,7 +176,7 @@ make_http_logs:
 	-e http2.data.data \
 	-e http2.type > $(CAPTURE_DIR)/h2_raw.json
 
-	@tshark -r $(CAPTURE_DIR)/http_test.pcapng \
+	@tshark -r $(MERGED_FILE) \
 	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
 	-Y "http" \
 	-T json \
@@ -191,10 +191,9 @@ make_http_logs:
 	-e http.content_encoding  > $(CAPTURE_DIR)/h1_raw.json
 
 
-
 process_http_logs:
 	@echo "📊 Processing HTTP logs into structured format..."
-	@python3 $(MAKEFILE_DIR)/unit_extractor.py --path $(CAPTURE_DIR) --save_path $(HTTP_LOG_FILE)
+	@bash -c "source $(VENV_DIR)/bin/activate && python3 $(MAKEFILE_DIR)/unit_extractor.py --path $(CAPTURE_DIR) --save_path $(HTTP_LOG_FILE)"
 	@echo "✅ HTTP logs processed and saved"
 
 

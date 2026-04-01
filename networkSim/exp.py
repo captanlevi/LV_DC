@@ -38,7 +38,7 @@ def initialize_network() -> bool:
 
 def open_chrome_with_ssl_key_log() -> bool:
     try:
-        run(["make", "open_chrome"])
+        run(["make", "start_chrome"])
         return True
     except Exception as e:
         print(e)
