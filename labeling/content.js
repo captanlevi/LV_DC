@@ -70,7 +70,7 @@ function tryFlush() {
         if (chrome.runtime.lastError) return;
         if (!resp?.ok) return;
         eventBuffer.splice(0, batch.length);
-      }
+      },
     );
   } catch (e) {
     // ignore 'Extension context invalidated'
