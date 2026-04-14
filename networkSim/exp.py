@@ -128,7 +128,9 @@ def ossilate(
             ]
         )
         ts = time.time()
-        net_labels.append(NetLabel(timestamp=ts, speed=net_stat.rate))
+        net_labels.append(
+            NetLabel(timestamp=ts, speed=net_stat.rate, state=net_stat.state)
+        )
         time.sleep(net_stat.duration)
 
 

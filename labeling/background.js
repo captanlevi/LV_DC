@@ -49,7 +49,7 @@ function eventsToCSV(events) {
         // Escape quotes for CSV safety
         return `"${String(val).replace(/"/g, '""')}"`;
       })
-      .join(",")
+      .join(","),
   );
 
   return [header.join(","), ...rows].join("\n");
@@ -79,7 +79,7 @@ function exportCSV() {
         chrome.storage.local.remove("events", () => {
           console.log("[BG] Exported CSV and cleared stored events");
         });
-      }
+      },
     );
   });
 }
