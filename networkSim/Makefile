@@ -128,7 +128,7 @@ change_perm:
 
 start_chrome:
 	@echo "🚀 Starting Chrome..."
-	@sudo -u $(SUDO_USER) SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) /usr/bin/chromium-browser --no-sandbox &
+	@sudo -u $(SUDO_USER) SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) /usr/bin/chromium-browser --no-sandbox > /dev/null 2>&1 &
 
 kill_chrome:
 	@echo "🛑 Killing Chrome processes..."
