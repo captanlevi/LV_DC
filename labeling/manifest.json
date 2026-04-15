@@ -25,7 +25,10 @@
         "*://*.instagram.com/*",
 
         "*://www.twitch.tv/*",
-        "*://*.twitch.tv/*"
+        "*://*.twitch.tv/*",
+
+        "*://live.bilibili.com/*",
+        "*://*.bilibili.com/*"
       ],
       "js": ["content.js"],
       "all_frames": true
