@@ -69,22 +69,22 @@ SCENARIOS = {
     ),
     "360": Scenario(
         rate_lim=(800, 1200),
-        delay_lim=(0, 80),
+        delay_lim=(0, 50),
         loss_pct_lim=(0.0, 1.5),
     ),
     "240": Scenario(
-        rate_lim=(400, 1000),
-        delay_lim=(0, 100),
+        rate_lim=(800, 1500),
+        delay_lim=(0, 50),
         loss_pct_lim=(0.5, 2.0),
     ),
     "144": Scenario(
-        rate_lim=(180, 500),
-        delay_lim=(0, 100),
+        rate_lim=(600, 1200),
+        delay_lim=(0, 50),
         loss_pct_lim=(1.0, 2.0),
     ),
     "stall": Scenario(
-        rate_lim=(130, 250),
-        delay_lim=(0, 120),
+        rate_lim=(400, 900),
+        delay_lim=(0, 50),
         loss_pct_lim=(1.0, 5.0),
     ),
 }
