@@ -59,33 +59,33 @@ class Scenario:
 SCENARIOS = {
     "720": Scenario(
         rate_lim=(2500, 7500),
-        delay_lim=(20, 80),
+        delay_lim=(0, 50),
         loss_pct_lim=(0.0, 0.5),
     ),
     "480": Scenario(
         rate_lim=(1000, 2000),
-        delay_lim=(30, 120),
+        delay_lim=(0, 50),
         loss_pct_lim=(0.0, 1.0),
     ),
     "360": Scenario(
         rate_lim=(800, 1200),
-        delay_lim=(50, 150),
-        loss_pct_lim=(0.0, 2.0),
+        delay_lim=(0, 80),
+        loss_pct_lim=(0.0, 1.5),
     ),
     "240": Scenario(
         rate_lim=(400, 1000),
-        delay_lim=(80, 200),
-        loss_pct_lim=(0.5, 3.0),
+        delay_lim=(0, 100),
+        loss_pct_lim=(0.5, 2.0),
     ),
     "144": Scenario(
         rate_lim=(180, 500),
-        delay_lim=(100, 300),
-        loss_pct_lim=(1.0, 5.0),
+        delay_lim=(0, 100),
+        loss_pct_lim=(1.0, 2.0),
     ),
     "stall": Scenario(
         rate_lim=(130, 250),
-        delay_lim=(200, 500),
-        loss_pct_lim=(5.0, 8.0),
+        delay_lim=(0, 120),
+        loss_pct_lim=(1.0, 5.0),
     ),
 }
 
