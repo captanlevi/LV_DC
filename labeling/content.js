@@ -13,6 +13,7 @@ const FLUSH_INTERVAL_MS = 1000;
 const RESOLUTION_POLL_INTERVAL_MS = 1000;
 let flushInProgress = false;
 let collecting = true; // After ending set this to false
+let inStall = false;
 
 /**
  * Build a self-contained event snapshot
@@ -84,8 +85,18 @@ function tryFlush() {
  */
 function observeVideo(v) {
   v.addEventListener("loadedmetadata", () => emit("meta"));
-  v.addEventListener("playing", () => emit("start"));
-  v.addEventListener("waiting", () => emit("stall"));
+  v.addEventListener("playing", () => {
+    if (inStall) {
+      inStall = false;
+      emit("start");
+    }
+  });
+  v.addEventListener("waiting", () => {
+    if (!inStall) {
+      inStall = true;
+      emit("stall");
+    }
+  });
   v.addEventListener("resize", () => emit("resize"));
   v.addEventListener("ended", () => emit("end"));
   v.addEventListener("pause", () => {
@@ -173,4 +184,21 @@ setInterval(() => {
 setInterval(() => {
   if (!video) return;
   emit("res_meta");
+}, RESOLUTION_POLL_INTERVAL_MS);
+
+setInterval(() => {
+  if (!video) return;
+
+  const isBuffering = video.readyState < 3;
+
+  if (isBuffering && !inStall) {
+    inStall = true;
+    stallStartTs = performance.now();
+    emit("stall");
+  }
+
+  if (!isBuffering && inStall) {
+    inStall = false;
+    emit("start"); // recovery
+  }
 }, RESOLUTION_POLL_INTERVAL_MS);
