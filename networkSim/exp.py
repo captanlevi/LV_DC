@@ -9,8 +9,9 @@ import os
 import signal
 
 from utils.netStat import net_episode_generator
+from utils.shaping import YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS
 from utils.dataModels import NetLabel
-
+import argparse
 
 def run_(cmd):
     print(f"> {cmd}")
@@ -113,9 +114,11 @@ def remove_ssl_and_http_logs() -> bool:
 def ossilate(
     episode_time_in_seconds: int,
     net_labels: list[NetLabel],
+    transition_dct : dict[str,dict[str,float]]
+
 ):
 
-    for net_stat in net_episode_generator(episode_length=episode_time_in_seconds):
+    for net_stat in net_episode_generator(episode_length=episode_time_in_seconds, transition_dict= transition_dct):
         print(f"Currently shaping {net_stat}")
         # run(["make", "slow", f"BANDWIDTH={net_stat.delay_ms}, kbit DELAY={net_stat.delay_ms}ms, PLR={net_stat.loss_pct}%"])
         run(
@@ -144,6 +147,34 @@ def save_json(path: str, data: list[NetLabel]):
 
 if __name__ == "__main__":
 
+    platform_choices = ["youtube", "tiktok", "twitch", "bilibili"]
+
+
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--platform",
+        required=True,
+        choices=platform_choices,
+    )
+
+    args = parser.parse_args()
+
+    platform = args.platform
+
+    transition = None
+
+    if platform == "youtube":
+        transition = YOUTUBE_TRANSITIONS
+    elif platform == "tiktok":
+        transition = TIKTOK_TRANSITIONS
+    elif platform == "twitch":
+        transition = TWITCH_TRANSITIONS
+    elif platform == "bilibili":
+        transition = BILIBILI_TRANSITIONS
+    else:
+        raise ValueError(f"Platform name is wrong please check it is one of {platform_choices}")
+
     is_capture: bool = True
 
     net_labels = []
@@ -158,7 +189,7 @@ if __name__ == "__main__":
         raise ValueError("Cannot open chrome with SSL key log enabled")
     try:
         # ossilate(stable_time_in_seconds=30, net_labels=net_labels)
-        ossilate(episode_time_in_seconds=60, net_labels=net_labels)
+        ossilate(episode_time_in_seconds=60, net_labels=net_labels, transition_dct= transition)
 
     finally:
         # Need to stop capture before tearing down the network

@@ -3,10 +3,10 @@ from .dataModels import NetStat
 import random
 
 
-def net_episode_generator(episode_length: int):
+def net_episode_generator(episode_length: int, transition_dict : dict[str, dict[str,float]]):
     min_state_time = episode_length / 5
     max_state_time = episode_length / 2
-    state = "720"  # First state is always 720
+    state = "10"  # First state is always max internet
     while True:
         curr_time = 0
         run_inner = True
@@ -34,4 +34,4 @@ def net_episode_generator(episode_length: int):
             )
 
             curr_time += dur
-        state = next_state(state)
+        state = next_state(state, transition_dict= transition_dict)
