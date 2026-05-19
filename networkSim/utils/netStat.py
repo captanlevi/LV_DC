@@ -1,12 +1,12 @@
-from .shaping import next_state, SCENARIOS
+from .shaping import next_state, initial_state, SCENARIOS
 from .dataModels import NetStat
 import random
 
 
-def net_episode_generator(episode_length: int, transition_dict : dict[str, dict[str,float]]):
+def net_episode_generator(episode_length: int, transition_dict: dict[str, dict[str, float]]):
     min_state_time = episode_length / 5
     max_state_time = episode_length / 2
-    state = "10"  # First state is always max internet
+    state = initial_state(transition_dict)  # random weighted start (not always max)
     while True:
         curr_time = 0
         run_inner = True
@@ -22,9 +22,7 @@ def net_episode_generator(episode_length: int, transition_dict : dict[str, dict[
             if dur > remaining_time:
                 dur = max(1, remaining_time)
                 run_inner = False
-            if state == "stall":
-                # in case we have a stall state, we do not continue it beyond one fraction.
-                run_inner = False
+
             yield NetStat(
                 rate=scenario.sample_rate(),
                 duration=dur,
@@ -34,4 +32,4 @@ def net_episode_generator(episode_length: int, transition_dict : dict[str, dict[
             )
 
             curr_time += dur
-        state = next_state(state, transition_dict= transition_dict)
+        state = next_state(state, transition_dict=transition_dict)

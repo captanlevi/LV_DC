@@ -57,11 +57,24 @@ class Scenario:
 
 
 
-def next_state(curr: str, transition_dict : dict[str,dict[str,float]]) -> str:
+def next_state(curr: str, transition_dict: dict[str, dict[str, float]]) -> str:
     trans = transition_dict[curr]
     states = list(trans.keys())
     probs = list(trans.values())
     return random.choices(states, weights=probs, k=1)[0]
+
+
+def initial_state(transition_dict: dict[str, dict[str, float]]) -> str:
+    """
+    Random weighted start state — upper half of the bandwidth range gets
+    higher weight so sessions cover high-quality and recovery trajectories,
+    not just the downgrade-from-peak path that always starting at '10' creates.
+    """
+    all_states = sorted(transition_dict.keys(), key=lambda s: int(s))
+    n = len(all_states)
+    # Linear weights: highest state gets weight n, lowest gets weight 1
+    weights = list(range(1, n + 1))
+    return random.choices(all_states, weights=weights, k=1)[0]
 
 
 SCENARIOS = {
