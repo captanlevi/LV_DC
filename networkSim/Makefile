@@ -15,7 +15,7 @@ OUT_FILE = $(CAPTURE_DIR)/outgoing.pcap
 MERGED_FILE = $(CAPTURE_DIR)/merged.pcap
 NETWORK_LOG_FILE = $(CAPTURE_DIR)/net_labels.txt
 SSL_KEY_LOG_FILE = $(CAPTURE_DIR)/ssl_keys.log
-HTTP_LOG_FILE = $(CAPTURE_DIR)/http.json
+HTTP_LOG_FILE = $(CAPTURE_DIR)/http_v2.json
 
 .PHONY: enable disable start-capture stop-capture merge-capture clean-captures
 
@@ -144,40 +144,6 @@ remove_ssl_keys:
 make_http_logs:
 	@tshark -r $(MERGED_FILE) \
 	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
-	-d udp.port==443,quic \
-	-Y "http3" \
-	-T json \
-	-e frame.time_epoch \
-	-e ip.src -e ip.dst -e udp.srcport -e udp.dstport \
-	-e http3.frame_streamid \
-	-e http3.header.header.name \
-	-e http3.headers.header.value \
-	-e http3.headers.method \
-	-e http3.headers.path \
-	-e http3.headers.status \
-	-e http3.headers.content_type \
-	-e http3.frame_type \
-	-e quic.stream.offset \
-	-e http3.data > $(CAPTURE_DIR)/h3_raw.json
-
-	@tshark -r $(MERGED_FILE) \
-	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
-	-Y "http2" \
-	-T json \
-	-e frame.time_epoch \
-	-e ip.src -e ip.dst -e tcp.srcport -e tcp.dstport \
-	-e http2.streamid \
-	-e http2.header.name \
-	-e http2.header.value \
-	-e http2.headers.method \
-	-e http2.headers.path \
-	-e http2.headers.status \
-	-e http2.headers.content_type \
-	-e http2.data.data \
-	-e http2.type > $(CAPTURE_DIR)/h2_raw.json
-
-	@tshark -r $(MERGED_FILE) \
-	-o tls.keylog_file:$(SSL_KEY_LOG_FILE) \
 	-Y "http" \
 	-T json \
 	-e frame.time_epoch \
@@ -188,18 +154,23 @@ make_http_logs:
 	-e http.content_type \
 	-e http.file_data \
 	-e http.transfer_encoding \
-	-e http.content_encoding  > $(CAPTURE_DIR)/h1_raw.json
+	-e http.content_encoding > $(CAPTURE_DIR)/h1_raw.json
 
+
+SAVE_PDML ?= 0
 
 process_http_logs:
 	@echo "📊 Processing HTTP logs into structured format..."
-	@bash -c "source $(VENV_DIR)/bin/activate && python3 $(MAKEFILE_DIR)/unit_extractor.py --path $(CAPTURE_DIR) --save_path $(HTTP_LOG_FILE)"
+	@bash -c "source $(VENV_DIR)/bin/activate && python3 $(MAKEFILE_DIR)/unit_extractor.py \
+		--path $(CAPTURE_DIR) \
+		--save_path $(HTTP_LOG_FILE) \
+		--pcap $(MERGED_FILE) \
+		--ssl_keys $(SSL_KEY_LOG_FILE) \
+		$(if $(filter 1,$(SAVE_PDML)),--save_pdml,)"
 	@echo "✅ HTTP logs processed and saved"
 
 
 remove_http_logs:
 	@echo "🧹 Removing existing HTTP log files..."
-	@rm -f $(CAPTURE_DIR)/h3_raw.json
-	@rm -f $(CAPTURE_DIR)/h2_raw.json
 	@rm -f $(CAPTURE_DIR)/h1_raw.json
 	@echo "✅ HTTP log files removed"
