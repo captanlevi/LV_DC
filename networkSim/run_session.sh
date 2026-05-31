@@ -7,7 +7,7 @@ EPISODES=${2:-10}
 INITIAL=${3:-}
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV="$SCRIPT_DIR/../rushi_env"
+VENV="$SCRIPT_DIR/../.venv"
 
 CMD=()
 if [ -d "$VENV" ]; then

@@ -43,13 +43,21 @@ else
     ok "All system packages present"
 fi
 
-# Check Chrome / Chromium
+# Check Chrome / Chromium — install Chromium via apt if nothing is found
 CHROME_BIN=$(which google-chrome chromium-browser chromium 2>/dev/null | head -1 || true)
 if [ -z "$CHROME_BIN" ]; then
-    err "No Chrome or Chromium found."
-    warn "Install Google Chrome:  https://www.google.com/chrome/"
-    warn "Or Chromium:            sudo apt install chromium-browser"
-    ISSUES+=("Chrome/Chromium not installed")
+    echo "No Chrome or Chromium found — installing chromium-browser via apt..."
+    sudo apt-get update -qq
+    sudo apt-get install -y chromium-browser
+    CHROME_BIN=$(which chromium-browser chromium 2>/dev/null | head -1 || true)
+    if [ -z "$CHROME_BIN" ]; then
+        err "Chromium install failed. Install manually:"
+        warn "  Google Chrome:  https://www.google.com/chrome/"
+        warn "  Chromium:       sudo apt install chromium-browser"
+        ISSUES+=("Chrome/Chromium not installed — install manually")
+    else
+        ok "Installed Chromium: $CHROME_BIN"
+    fi
 else
     ok "Browser: $CHROME_BIN"
 fi

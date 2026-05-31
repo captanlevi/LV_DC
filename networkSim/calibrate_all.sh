@@ -6,7 +6,7 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV="$SCRIPT_DIR/../rushi_env"
+VENV="$SCRIPT_DIR/../.venv"
 PY=$( [ -d "$VENV" ] && echo "$VENV/bin/python3" || echo "python3" )
 
 run_platform() {
