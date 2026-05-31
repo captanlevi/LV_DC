@@ -252,6 +252,9 @@ if __name__ == "__main__":
     if args.save_dir:
         session_dir = args.save_dir
         session_dir.mkdir(parents=True, exist_ok=True)
+    elif not args.auto:
+        session_dir = Path(__file__).parent.parent / "current_data"
+        session_dir.mkdir(parents=True, exist_ok=True)
     else:
         session_dir = make_session_dir(platform)
     print(f"Session directory: {session_dir}")
