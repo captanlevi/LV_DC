@@ -78,88 +78,50 @@ def initial_state(transition_dict: dict[str, dict[str, float]]) -> str:
 
 
 SCENARIOS = {
-    "10": Scenario(
-        rate_lim=(6000, 7500),
-        delay_lim=(0, 50),
-        loss_pct_lim=(0.0, 0.5),
-    ),
-    "9" : Scenario(
-        rate_lim= (5000,6000),
-        delay_lim= (0,50),
-        loss_pct_lim= (0.0,.5)
+    # Calibration ground truth (YouTube/SkyNews, 2026-05-21):
+    #   ≤450 kbit/s → 144p
+    #   650 kbit/s  → 240–360p (borderline)
+    #   900–1200    → stable 360p
+    #   ≥1800       → 1080p (with quality forcing)
 
-    ),
-    "8" : Scenario(
-        rate_lim= (3000,4000),
-        delay_lim= (0,50),
-        loss_pct_lim= (0.0,.5)
-
-    ),
-    "7" : Scenario(
-        rate_lim= (2000,3000),
-        delay_lim= (0,50),
-        loss_pct_lim= (0.0,.5)
-
-    ),
-    "6" : Scenario(
-        rate_lim= (1500,2000),
-        delay_lim= (0,80),
-        loss_pct_lim= (0.0,.6)
-
-    ),
-    "5" : Scenario(
-        rate_lim= (1000,1500),
-        delay_lim= (0,80),
-        loss_pct_lim= (0.0,.7)
-
-    ),
-    "4" : Scenario(
-        rate_lim= (800,1000),
-        delay_lim= (0,90),
-        loss_pct_lim= (0.0,.8)
-
-    ),
-    "3" : Scenario(
-        rate_lim= (500,800),
-        delay_lim= (0,100),
-        loss_pct_lim= (0.0,.8)
-
-    ),
-    "2" : Scenario(
-        rate_lim= (400,500),
-        delay_lim= (0,100),
-        loss_pct_lim= (0.0,.8)
-
-    ),
-    "1" : Scenario(
-        rate_lim= (180,400),
-        delay_lim= (0,100),
-        loss_pct_lim= (0.0,.8)
-
-    )
+    # State 10: rock-solid 1080p, headroom to spare
+    "10": Scenario(rate_lim=(6000, 9000), delay_lim=(0, 20),  loss_pct_lim=(0.0, 0.05)),
+    # State 9: clean 1080p
+    "9":  Scenario(rate_lim=(4000, 6000), delay_lim=(0, 30),  loss_pct_lim=(0.0, 0.1)),
+    # State 8: comfortable 1080p
+    "8":  Scenario(rate_lim=(2500, 4000), delay_lim=(0, 40),  loss_pct_lim=(0.0, 0.15)),
+    # State 7: 1080p tight margin — momentary drops can cause brief stalls
+    "7":  Scenario(rate_lim=(1800, 2500), delay_lim=(0, 60),  loss_pct_lim=(0.0, 0.2)),
+    # State 6: transition zone — 360p ABR, could be nudged to 1080p
+    "6":  Scenario(rate_lim=(1400, 1800), delay_lim=(0, 70),  loss_pct_lim=(0.0, 0.2)),
+    # State 5: stable 360p upper end
+    "5":  Scenario(rate_lim=(1000, 1400), delay_lim=(0, 80),  loss_pct_lim=(0.0, 0.25)),
+    # State 4: stable 360p  (calibrated: 900–1200 kbit/s → solid 360p)
+    "4":  Scenario(rate_lim=(700,  1000), delay_lim=(0, 90),  loss_pct_lim=(0.0, 0.3)),
+    # State 3: 240p/360p borderline, stalls possible (calibrated: 650 kbit/s borderline)
+    "3":  Scenario(rate_lim=(450,  700),  delay_lim=(0, 110), loss_pct_lim=(0.0, 0.4)),
+    # State 2: 240p with regular stalls (calibrated: ≤450 kbit/s → 144p/stall)
+    "2":  Scenario(rate_lim=(280,  450),  delay_lim=(0, 130), loss_pct_lim=(0.0, 0.5)),
+    # State 1: 144p / near-stall (calibrated: ≤450 kbit/s confirmed 144p)
+    "1":  Scenario(rate_lim=(150,  280),  delay_lim=(0, 150), loss_pct_lim=(0.0, 0.5)),
 }
 
 
 YOUTUBE_TRANSITIONS = {
-    "10": {"10": 0.4, "9": 0.3, "8": 0.2, "7": 0.1},
-
-    "9":  {"10": 0.2, "9": 0.4, "8": 0.25, "7": 0.1, "6": 0.05},
-
-    "8":  {"9": 0.2, "8": 0.4, "7": 0.25, "6": 0.1, "5": 0.05},
-
-    "7":  {"8": 0.2, "7": 0.4, "6": 0.25, "5": 0.1, "4": 0.05},
-
-    "6":  {"7": 0.2, "6": 0.4, "5": 0.25, "4": 0.1, "3": 0.05},
-
-    "5":  {"6": 0.2, "5": 0.4, "4": 0.25, "3": 0.1, "2": 0.05},
-
-    "4":  {"5": 0.2, "4": 0.4, "3": 0.25, "2": 0.1, "1": 0.05},
-
-    "3":  {"4": 0.2, "3": 0.4, "2": 0.25, "1": 0.15},
-
-    "2":  {"3": 0.2, "2": 0.4, "1": 0.4},
-
-    "1":  {"2": 0.3, "1": 0.7},
+    # Target stationary: ~40% in 1080p (7-10), ~40% in 360p (4-6), ~20% stall-risk (1-3)
+    # 1080p zone: states 7-10 (≥1800 kbit/s)
+    "10": {"10": 0.40, "9": 0.30, "8": 0.20, "7": 0.10},
+    "9":  {"10": 0.25, "9": 0.35, "8": 0.20, "7": 0.15, "6": 0.05},
+    "8":  {"10": 0.10, "9": 0.20, "8": 0.35, "7": 0.20, "6": 0.15},
+    "7":  {"9": 0.15,  "8": 0.20, "7": 0.30, "6": 0.20, "5": 0.15},
+    # 360p transition zone: states 4-6 (700–1800 kbit/s)
+    "6":  {"7": 0.25,  "6": 0.30, "8": 0.10, "5": 0.20, "4": 0.15},
+    "5":  {"6": 0.25,  "5": 0.30, "7": 0.10, "4": 0.20, "3": 0.15},
+    "4":  {"5": 0.30,  "4": 0.35, "6": 0.15, "3": 0.15, "2": 0.05},
+    # Stall-risk zone: states 1-3 (150–700 kbit/s) — upward bias, cap enforced in netStat.py
+    "3":  {"4": 0.35,  "5": 0.25, "3": 0.20, "2": 0.15, "6": 0.05},
+    "2":  {"3": 0.35,  "4": 0.30, "2": 0.20, "5": 0.10, "1": 0.05},
+    "1":  {"2": 0.45,  "3": 0.30, "1": 0.15, "4": 0.10},
 }
 
 
@@ -188,23 +150,20 @@ BILIBILI_TRANSITIONS = {
 
 
 TIKTOK_TRANSITIONS = {
+    # Calibration note (2026-05-21): TikTok live does NOT do traditional ABR.
+    # Streamers broadcast at a fixed source resolution; the player buffers/stalls
+    # instead of downgrading quality. Stall probability is the key QoE signal.
+    # Resolution seen depends on the individual streamer, not bandwidth state.
+    # States 1-3 are stall-risk; transitions push strongly back to mid-band.
     "10": {"10": 0.5, "9": 0.25, "8": 0.15, "7": 0.1},
-
     "9":  {"10": 0.25, "9": 0.35, "8": 0.2, "7": 0.15, "6": 0.05},
-
     "8":  {"9": 0.25, "8": 0.35, "7": 0.2, "6": 0.15, "5": 0.05},
-
     # mid band (very dynamic)
     "7":  {"8": 0.25, "7": 0.3, "6": 0.2, "5": 0.15, "9": 0.1},
-
     "6":  {"7": 0.25, "6": 0.3, "5": 0.2, "8": 0.15, "4": 0.1},
-
     "5":  {"6": 0.3, "5": 0.3, "7": 0.2, "4": 0.15, "8": 0.05},
-
-    # 360p floor — strong bounce
+    # stall-risk floor — strong upward bounce
     "4":  {"6": 0.4, "5": 0.25, "7": 0.15, "4": 0.2},
-
-    # forbidden/stall states → instant recovery
     "3":  {"5": 0.6, "6": 0.3, "4": 0.1},
     "2":  {"5": 0.6, "6": 0.3, "4": 0.1},
     "1":  {"5": 0.7, "6": 0.3},
@@ -213,27 +172,26 @@ TIKTOK_TRANSITIONS = {
 
 
 TWITCH_TRANSITIONS = {
+    # Calibration ground truth (2026-05-21):
+    #   450-650 kbit/s  → 240p
+    #   900-1200 kbit/s → 360p
+    #   1800-3500       → 480p  (ABR natural ceiling without quality-forcing)
+    #   5500            → 720p
+    #   8000            → 1080p
+    # 1080p zone: states 9-10 (≥5500 kbit/s)
     "10": {"10": 0.55, "9": 0.25, "8": 0.15, "7": 0.05},
-
     "9":  {"10": 0.25, "9": 0.4, "8": 0.2, "7": 0.1, "6": 0.05},
-
+    # 720p zone: state 8 (2500-5500 kbit/s), 480p ABR floor
     "8":  {"9": 0.25, "8": 0.4, "7": 0.2, "6": 0.1, "5": 0.05},
-
-    # core operating band (720p-ish)
     "7":  {"8": 0.2, "7": 0.4, "6": 0.2, "5": 0.1, "9": 0.1},
-
+    # 480p zone: states 6-7 (1400-2500 kbit/s)
     "6":  {"7": 0.25, "6": 0.35, "5": 0.2, "8": 0.1, "4": 0.1},
-
-    # fallback band (more sticky than TikTok)
+    # 360p zone: states 4-5 (700-1400 kbit/s)
     "5":  {"6": 0.3, "5": 0.35, "4": 0.2, "7": 0.1, "3": 0.05},
-
     "4":  {"5": 0.3, "4": 0.4, "6": 0.15, "3": 0.1, "2": 0.05},
-
-    # low states — recover, but not instantly
+    # Low/stall zone: states 1-3 (≤700 kbit/s)
     "3":  {"5": 0.35, "4": 0.25, "3": 0.25, "6": 0.1, "2": 0.05},
-
     "2":  {"4": 0.35, "3": 0.3, "2": 0.25, "5": 0.1},
-
     "1":  {"3": 0.4, "2": 0.3, "1": 0.2, "4": 0.1},
 }
 

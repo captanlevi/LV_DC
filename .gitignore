@@ -8,6 +8,7 @@
 *.csv
 *.txt
 *.log
+/.venv
 /rushi_env
 __pycache__/
 .DS_Store

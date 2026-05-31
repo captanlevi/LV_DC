@@ -2,26 +2,34 @@
 // Video QoE Collector (background.js)
 // =====================
 
-// On message
+// Track which tabs have active video collection so we only export when
+// the right tab closes (not any unrelated tab).
+const videoTabIds = new Set();
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.kind !== "video-events-batch") return;
 
-  console.log("[BG][EVENT BATCH]", msg.payload.length);
-  const incoming_event = msg.payload.map((evt) => ({
+  const tabId = sender.tab?.id ?? null;
+
+  // Register this tab as a video tab on first event
+  if (tabId !== null) {
+    videoTabIds.add(tabId);
+  }
+
+  const incoming = msg.payload.map((evt) => ({
     ...evt,
-    tabId: sender.tab?.id ?? null,
+    tabId,
     url: sender.tab?.url ?? null,
   }));
 
   chrome.storage.local.get({ events: [] }, (data) => {
-    const events = data.events.concat(incoming_event);
-    // Persist to storage immediately
+    const events = data.events.concat(incoming);
     chrome.storage.local.set({ events }, () => {
       sendResponse({ ok: true });
     });
   });
 
-  return true; // keep sendResponse valid async, i need this in background scripts otherwise it breaks the function and does not wait.
+  return true; // keep channel open for async sendResponse
 });
 
 function eventsToCSV(events) {
@@ -40,13 +48,11 @@ function eventsToCSV(events) {
     "event_id",
   ];
 
-  console.log;
   const rows = events.map((e) =>
     header
       .map((key) => {
         const val = e[key];
         if (val == null) return "";
-        // Escape quotes for CSV safety
         return `"${String(val).replace(/"/g, '""')}"`;
       })
       .join(","),
@@ -56,14 +62,12 @@ function eventsToCSV(events) {
 }
 
 function exportCSV() {
-  chrome.storage.local.get({ events: [] }, (events) => {
-    const csv = eventsToCSV(events.events); // events is an object with key 'events'
+  chrome.storage.local.get({ events: [] }, (data) => {
+    const csv = eventsToCSV(data.events);
 
     if (!csv) {
       console.log("[BG] No events to export");
-      chrome.storage.local.remove("events", () => {
-        console.log("[BG] Cleared stored events");
-      });
+      chrome.storage.local.remove("events");
       return;
     }
 
@@ -73,9 +77,13 @@ function exportCSV() {
       {
         url: dataUrl,
         filename: `lv_qoe_${Date.now()}.csv`,
-        saveAs: true,
+        saveAs: false,
       },
-      () => {
+      (downloadId) => {
+        if (chrome.runtime.lastError || downloadId === undefined) {
+          console.log("[BG] Download failed — keeping events in storage");
+          return;
+        }
         chrome.storage.local.remove("events", () => {
           console.log("[BG] Exported CSV and cleared stored events");
         });
@@ -85,6 +93,8 @@ function exportCSV() {
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  console.log("[BG] Tab closed:", tabId);
+  if (!videoTabIds.has(tabId)) return; // ignore unrelated tab closes
+  videoTabIds.delete(tabId);
+  console.log("[BG] Video tab closed:", tabId);
   exportCSV();
 });

@@ -1,8 +1,6 @@
 // =====================
-// YouTube Video QoE Collector (content.js)
+// Video QoE Collector (content.js)
 // =====================
-
-// for cnn https://edition.cnn.com/videos/fast/cnni-fast
 
 let video = null;
 let event_id = 0;
@@ -12,12 +10,9 @@ const MAX_BUFFER_SIZE = 1000;
 const FLUSH_INTERVAL_MS = 1000;
 const RESOLUTION_POLL_INTERVAL_MS = 1000;
 let flushInProgress = false;
-let collecting = true; // After ending set this to false
+let collecting = true;
 let inStall = false;
 
-/**
- * Build a self-contained event snapshot
- */
 function buildEvent(type) {
   return {
     event_id: event_id++,
@@ -31,32 +26,22 @@ function buildEvent(type) {
   };
 }
 
-/**
- * Emit event to background.js
- */
 function emit(type) {
-  // res_meta is a polling event so i treat it as such
   if (!collecting) return;
   if (type !== "res_meta" && type === lastEventType) return;
   if (type !== "res_meta") lastEventType = type;
 
   const evt = buildEvent(type);
-
-  // Always buffer locally first
   eventBuffer.push(evt);
 
-  // Prevent unbounded growth
   if (eventBuffer.length > MAX_BUFFER_SIZE) {
     eventBuffer.shift();
   }
 
   tryFlush();
-
   console.log("[YT][EVENT]", evt);
 }
 
-// Flushing function: send buffered events to background.js
-// Took care to avoid concurrent flushes, so safe to call from multiple places in an async manner.
 function tryFlush() {
   if (flushInProgress || eventBuffer.length === 0) return;
   flushInProgress = true;
@@ -74,17 +59,16 @@ function tryFlush() {
       },
     );
   } catch (e) {
-    // ignore 'Extension context invalidated'
     console.log("[YT][ERROR] Message failed", e);
     flushInProgress = false;
   }
 }
 
-/**
- * Attach media event listeners to a video element
- */
 function observeVideo(v) {
   v.addEventListener("loadedmetadata", () => emit("meta"));
+
+  // Use only event-based stall detection — the readyState interval below
+  // is intentionally removed to avoid double-counting the same buffer event.
   v.addEventListener("playing", () => {
     if (inStall) {
       inStall = false;
@@ -97,21 +81,19 @@ function observeVideo(v) {
       emit("stall");
     }
   });
+
   v.addEventListener("resize", () => emit("resize"));
   v.addEventListener("ended", () => emit("end"));
   v.addEventListener("pause", () => {
     if (!v.ended) emit("pause");
   });
 
-  // Catch cases where video is already playing
+  // Catch cases where video is already playing when we attach
   if (!v.paused && !v.ended) {
     emit("start");
   }
 }
 
-/**
- * Attach only once per video element
- */
 function attachVideo(v) {
   if (video === v) return;
 
@@ -127,22 +109,17 @@ function endCollection(reason = "manual") {
   if (!collecting) return;
 
   collecting = false;
-  lastEventType = null; // I will allow same event type for end, as this is unique and must survive shutdown.
+  lastEventType = null;
 
   emit("end");
   tryFlush();
 
-  if (video) {
-    video = null;
-  }
-
+  video = null;
   observer.disconnect();
   console.log("[YT] Collection ended:", reason);
 }
 
-/**
- * MutationObserver: detects when YouTube inserts/replaces <video>
- */
+// MutationObserver: detects when the platform inserts/replaces <video>
 const observer = new MutationObserver((mutations) => {
   for (const m of mutations) {
     if (m.addedNodes.length > 0) {
@@ -155,37 +132,34 @@ const observer = new MutationObserver((mutations) => {
   }
 });
 
-// Start observing the whole document
 observer.observe(document.documentElement, {
   childList: true,
   subtree: true,
 });
 
-// Fallback: try once in case video already exists
+// Fallback: attach immediately if video already exists
 const existingVideo = document.querySelector("video");
 if (existingVideo) {
   attachVideo(existingVideo);
 }
 
 window.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") {
-    tryFlush();
-  }
+  if (document.visibilityState === "hidden") tryFlush();
 });
 
-window.addEventListener("pagehide", () => {
-  tryFlush();
-});
+window.addEventListener("pagehide", () => tryFlush());
 
-setInterval(() => {
-  tryFlush();
-}, FLUSH_INTERVAL_MS);
+// Periodic flush in case message channel was busy
+setInterval(tryFlush, FLUSH_INTERVAL_MS);
 
+// Resolution polling — records current dimensions once per second
 setInterval(() => {
   if (!video) return;
   emit("res_meta");
 }, RESOLUTION_POLL_INTERVAL_MS);
 
+// Stall safety-net: catches buffering that doesn't fire a 'waiting' event
+// (e.g. stream gaps on some platforms). Guards against double-emit with inStall flag.
 setInterval(() => {
   if (!video) return;
 
@@ -193,12 +167,11 @@ setInterval(() => {
 
   if (isBuffering && !inStall) {
     inStall = true;
-    stallStartTs = performance.now();
     emit("stall");
   }
 
   if (!isBuffering && inStall) {
     inStall = false;
-    emit("start"); // recovery
+    emit("start");
   }
 }, RESOLUTION_POLL_INTERVAL_MS);
