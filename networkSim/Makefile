@@ -1,6 +1,6 @@
 # Configurable parameters
 # PLZ keep paths ABSOLUTE no RELATIVE SHIT
-IFACE = wlp0s20f3
+IFACE ?= wlp0s20f3
 IFB_INGRESS = ifb0
 IFB_EGRESS = ifb1
 BANDWIDTH = 1000kbit
