@@ -24,7 +24,7 @@ fi
 
 # ── 2. System packages ───────────────────────────────────────────────────────
 hdr "Installing system packages"
-PKGS=(python3.10 python3.10-venv python3-pip tshark tcpdump wireshark-common
+PKGS=(python3 python3-venv python3-pip tshark tcpdump wireshark-common
       iproute2 make curl)
 
 MISSING_PKGS=()
@@ -76,8 +76,27 @@ fi
 # ── 4. Python .venv ──────────────────────────────────────────────────────────
 hdr "Setting up Python .venv"
 VENV="$ROOT/.venv"
+
+# Find python3 >= 3.10, preferring newer versions
+PYTHON_BIN=""
+for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "$candidate" &>/dev/null; then
+        ver=$("$candidate" -c "import sys; print(sys.version_info >= (3,10))" 2>/dev/null)
+        if [ "$ver" = "True" ]; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+    err "No Python >= 3.10 found. Install python3.10 or newer and re-run."
+    exit 1
+fi
+ok "Using $PYTHON_BIN ($(${PYTHON_BIN} --version))"
+
 if [ ! -d "$VENV" ]; then
-    python3.10 -m venv "$VENV"
+    "$PYTHON_BIN" -m venv "$VENV"
     ok "Created $VENV"
 else
     ok ".venv already exists"
