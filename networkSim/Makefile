@@ -124,11 +124,7 @@ merge-capture:
 
 
 run_network_sim:
-	@if [ -d "$(VENV_DIR)" ]; then \
-		$(VENV_DIR)/bin/python3 -u $(MAKEFILE_DIR)/exp.py; \
-	else \
-		python3 -u $(MAKEFILE_DIR)/exp.py; \
-	fi
+	python3 -u $(MAKEFILE_DIR)/exp.py
 
 change_perm:
 	OWNER=$${SUDO_USER:-$${USER}}; \
@@ -146,20 +142,12 @@ CHROME_PROFILE := $(CAPTURE_DIR)/chrome_profile
 start_chrome:
 	@echo "🚀 Starting Chrome with remote debugging..."
 	@mkdir -p $(CHROME_PROFILE)
-	@mkdir -p $(CAPTURE_DIR)/labels
-	@LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
-	sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) \
-		--no-sandbox \
-		--user-data-dir=$(CHROME_PROFILE) \
-		--remote-debugging-port=9222 \
-		--remote-allow-origins=* \
-		--disable-features=ChromeWhatsNewUI \
-		--no-first-run \
-		--disable-default-apps \
-		--autoplay-policy=no-user-gesture-required \
-		--mute-audio \
-		--load-extension=$(LABELING_DIR) \
-		about:blank > /dev/null 2>&1 &
+	@CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --load-extension=$(LABELING_DIR) about:blank"; \
+	if [ -n "$${SUDO_USER:-}" ]; then \
+		sudo -u $$SUDO_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > /dev/null 2>&1 & \
+	else \
+		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > /dev/null 2>&1 & \
+	fi
 	@echo "✅ Chrome launched (debug port 9222, extension loaded)"
 
 kill_chrome:

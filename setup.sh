@@ -129,10 +129,8 @@ if [ -z "$DEFAULT_IFACE" ]; then
 else
     ok "Detected default interface: $DEFAULT_IFACE"
     if [ "$DEFAULT_IFACE" != "$MAKEFILE_IFACE" ]; then
-        warn "Makefile IFACE='$MAKEFILE_IFACE' but your default interface is '$DEFAULT_IFACE'"
-        warn "Fix: edit networkSim/Makefile line 3  →  IFACE ?= $DEFAULT_IFACE"
-        warn "  or pass it at runtime:  sudo make enable IFACE=$DEFAULT_IFACE"
-        ISSUES+=("Makefile IFACE=$MAKEFILE_IFACE — change to IFACE ?= $DEFAULT_IFACE in networkSim/Makefile")
+        sed -i "s/^IFACE ?=.*/IFACE ?= $DEFAULT_IFACE/" "$MAKEFILE"
+        ok "Updated Makefile IFACE: $MAKEFILE_IFACE → $DEFAULT_IFACE"
     else
         ok "Makefile IFACE matches ($MAKEFILE_IFACE)"
     fi
@@ -161,12 +159,41 @@ echo "  3. Click 'Load unpacked' → select:  $LABELING_DIR"
 echo "  4. The extension persists in your Chrome profile after that."
 ISSUES+=("Load Chrome extension manually once (see above)")
 
-# ── 9. sudoers reminder ───────────────────────────────────────────────────────
-hdr "Sudo requirements"
-echo "The following commands are called with sudo during collection:"
-echo "  modprobe ifb, ip link, tc, tcpdump, chown/chmod"
-echo "If running in a CI/unattended environment, add a sudoers entry:"
-echo "  $USER ALL=(ALL) NOPASSWD: /sbin/tc, /sbin/ip, /sbin/modprobe, /usr/sbin/tcpdump"
+# ── 9. sudoers — write NOPASSWD entries so exp.py runs without sudo ───────────
+hdr "Configuring passwordless sudo for network commands"
+
+SUDOERS_FILE="/etc/sudoers.d/lv_dc"
+
+# Resolve actual binary paths (they differ across distros/Ubuntu versions)
+resolve_bin() {
+    # Try sbin variants first, then fall back to `which`
+    for p in "/usr/sbin/$1" "/sbin/$1" "/usr/bin/$1" "/bin/$1"; do
+        [ -x "$p" ] && echo "$p" && return
+    done
+    command -v "$1" 2>/dev/null || echo "/usr/sbin/$1"
+}
+
+TC=$(resolve_bin tc)
+IP=$(resolve_bin ip)
+MODPROBE=$(resolve_bin modprobe)
+TCPDUMP=$(resolve_bin tcpdump)
+TSHARK=$(resolve_bin tshark)
+KILL="/usr/bin/kill"
+[ -x /bin/kill ] && KILL="/bin/kill"
+
+SUDOERS_LINE="$USER ALL=(ALL) NOPASSWD: $TC, $IP, $MODPROBE, $TCPDUMP, $TSHARK, $KILL, /usr/bin/chown, /bin/chown, /usr/bin/chmod, /bin/chmod"
+
+echo "$SUDOERS_LINE" | sudo tee "$SUDOERS_FILE" > /dev/null
+sudo chmod 440 "$SUDOERS_FILE"
+
+# Validate — visudo -c rejects broken sudoers files
+if sudo visudo -c -f "$SUDOERS_FILE" &>/dev/null; then
+    ok "Passwordless sudo configured ($SUDOERS_FILE)"
+else
+    warn "sudoers validation failed — removing $SUDOERS_FILE to stay safe"
+    sudo rm -f "$SUDOERS_FILE"
+    ISSUES+=("Passwordless sudo not configured — you may be prompted during collection")
+fi
 
 # ── 10. Summary ───────────────────────────────────────────────────────────────
 hdr "Setup complete"
@@ -183,7 +210,7 @@ fi
 
 echo "Run a collection session:"
 echo "  cd $ROOT/networkSim"
-echo "  sudo ./../.venv/bin/python3 -u exp.py --platform youtube"
+echo "  python3 exp.py --platform youtube"
 echo ""
-echo "Or with make (sets up network shaping first):"
-echo "  cd $ROOT/networkSim && sudo make enable && sudo make run_network_sim"
+echo "Or with make:"
+echo "  cd $ROOT/networkSim && make run_network_sim"

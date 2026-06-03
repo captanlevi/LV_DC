@@ -1,11 +1,18 @@
+import sys
+import os
+from pathlib import Path
+
+# Re-exec with .venv python if not already running inside it
+_VENV_PYTHON = Path(__file__).parent.parent / ".venv" / "bin" / "python3"
+if _VENV_PYTHON.exists() and Path(sys.executable).resolve() != _VENV_PYTHON.resolve():
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON)] + sys.argv)
+
 import subprocess
 import time
 from dataclasses import asdict
 import json
-import os
 import signal
 import argparse
-from pathlib import Path
 
 from utils.netStat import net_episode_generator
 from utils.shaping import YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS

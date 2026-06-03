@@ -575,11 +575,11 @@ class BrowserSession:
         self._page = CDPPage(ws_url)
         self._start_time = time.time()
 
-        # Direct extension CSV downloads into the session directory (or a fallback)
-        labels_dir = self._session_dir or (Path(__file__).parent.parent / "current_data" / "labels")
-        labels_dir.mkdir(parents=True, exist_ok=True)
-        _set_download_dir(self._page, str(labels_dir))
-        print(f"[browser] Downloads → {labels_dir}", flush=True)
+        # Direct extension CSV downloads into the session directory
+        download_dir = self._session_dir or (Path(__file__).parent.parent / "current_data")
+        download_dir.mkdir(parents=True, exist_ok=True)
+        _set_download_dir(self._page, str(download_dir))
+        print(f"[browser] Downloads → {download_dir}", flush=True)
 
         # Clear any stale events from a previous killed/crashed session
         try:
