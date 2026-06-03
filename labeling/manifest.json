@@ -3,7 +3,7 @@
   "name": "YT Video Watcher",
   "version": "1.0",
   "description": "Observe live video playback",
-  "permissions": ["storage", "downloads"],
+  "permissions": ["storage"],
 
   "background": {
     "service_worker": "background.js"

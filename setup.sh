@@ -95,17 +95,18 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 ok "Using $PYTHON_BIN ($(${PYTHON_BIN} --version))"
 
-if [ ! -d "$VENV" ]; then
+if [ ! -d "$VENV" ] || ! "$VENV/bin/python3" -c "" &>/dev/null; then
+    [ -d "$VENV" ] && { warn ".venv is broken — recreating"; rm -rf "$VENV"; }
     "$PYTHON_BIN" -m venv "$VENV"
     ok "Created $VENV"
 else
-    ok ".venv already exists"
+    ok ".venv already exists and is healthy"
 fi
 
 echo "Installing Python packages..."
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet \
-    "network_core>=0.5.3" \
+    "network_core>=0.6.0" \
     scapy \
     "websocket-client>=1.0" \
     pandas \

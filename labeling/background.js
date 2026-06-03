@@ -32,69 +32,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // keep channel open for async sendResponse
 });
 
-function eventsToCSV(events) {
-  if (!events.length) return "";
-
-  const header = [
-    "ts",
-    "type",
-    "video_w",
-    "video_h",
-    "client_w",
-    "client_h",
-    "dropped",
-    "tabId",
-    "url",
-    "event_id",
-  ];
-
-  const rows = events.map((e) =>
-    header
-      .map((key) => {
-        const val = e[key];
-        if (val == null) return "";
-        return `"${String(val).replace(/"/g, '""')}"`;
-      })
-      .join(","),
-  );
-
-  return [header.join(","), ...rows].join("\n");
-}
-
-function exportCSV() {
-  chrome.storage.local.get({ events: [] }, (data) => {
-    const csv = eventsToCSV(data.events);
-
-    if (!csv) {
-      console.log("[BG] No events to export");
-      chrome.storage.local.remove("events");
-      return;
-    }
-
-    const dataUrl = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
-
-    chrome.downloads.download(
-      {
-        url: dataUrl,
-        filename: `lv_qoe_${Date.now()}.csv`,
-        saveAs: false,
-      },
-      (downloadId) => {
-        if (chrome.runtime.lastError || downloadId === undefined) {
-          console.log("[BG] Download failed — keeping events in storage");
-          return;
-        }
-        chrome.storage.local.remove("events", () => {
-          console.log("[BG] Exported CSV and cleared stored events");
-        });
-      },
-    );
-  });
-}
-
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (!videoTabIds.has(tabId)) return; // ignore unrelated tab closes
   videoTabIds.delete(tabId);
-  console.log("[BG] Video tab closed:", tabId);
-  exportCSV();
 });
