@@ -143,6 +143,8 @@ fi
 hdr "Creating working directories"
 mkdir -p "$ROOT/current_data"
 mkdir -p "$ROOT/data"
+# Wipe any stale chrome profile (may be root-owned from a previous run).
+maybe_sudo rm -rf "$ROOT/current_data/chrome_profile" 2>/dev/null || true
 # Make sure these are writable by the real user too.
 if [ "$(id -u)" -eq 0 ] && [ "$REAL_USER" != "root" ]; then
     chown "$REAL_USER":"$REAL_USER" "$ROOT/current_data" "$ROOT/data" 2>/dev/null || true

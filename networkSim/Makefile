@@ -167,6 +167,7 @@ kill_chrome:
 	        "$(CHROME_PROFILE)/Default/Last Tabs" \
 	        "$(CHROME_PROFILE)/Default/Current Tabs" \
 	        "$(CHROME_PROFILE)/Default/Last Browser" 2>/dev/null || true
+	@rm -f $(CAPTURE_DIR)/chrome.pid $(CAPTURE_DIR)/chrome.log
 	@echo "✅ Chrome killed, session files cleared"
 
 remove_ssl_keys:
