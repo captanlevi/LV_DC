@@ -293,6 +293,8 @@ if __name__ == "__main__":
         # Manual mode (default): wait for Chrome to be reachable, then hand off.
         from browser import _wait_for_cdp
         if not _wait_for_cdp(30):
+            log = Path(__file__).parent.parent / "current_data" / "chrome.log"
+            print(f"[error] Chrome CDP not available after 30s — check {log} for Chrome errors", file=sys.stderr)
             raise ValueError("Chrome CDP not available")
         print("\n" + "="*60)
         print(f"Chrome is open. Navigate to a {platform} live video.")

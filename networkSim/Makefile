@@ -141,16 +141,17 @@ CHROME_BIN ?= $(shell which google-chrome chromium-browser chromium 2>/dev/null 
 # Separate profile so collection Chrome/Chromium doesn't share state with your daily browser
 CHROME_PROFILE := $(CAPTURE_DIR)/chrome_profile
 
+CHROME_LOG := $(CAPTURE_DIR)/chrome.log
+
 start_chrome:
 	@echo "🚀 Starting Chrome with remote debugging..."
 	@mkdir -p $(CHROME_PROFILE)
+	@mkdir -p $(CAPTURE_DIR)/labels
 	@CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --load-extension=$(LABELING_DIR) about:blank"; \
-	if [ -n "$${SUDO_USER:-}" ]; then \
-		sudo -u $$SUDO_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > /dev/null 2>&1 & \
-	else \
-		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > /dev/null 2>&1 & \
-	fi
-	@echo "✅ Chrome launched (debug port 9222, extension loaded)"
+	LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
+	sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
+	echo $$! > $(CAPTURE_DIR)/chrome.pid
+	@echo "✅ Chrome launched (debug port 9222, log → $(CHROME_LOG))"
 
 kill_chrome:
 	@echo "🛑 Killing collection Chrome..."
