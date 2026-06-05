@@ -13,7 +13,7 @@ if not _VENV_PYTHON.exists():
 # Checking sys.path (not sys.executable) avoids the symlink false-match where
 # .venv/bin/python3 and /usr/bin/python3 resolve to the same binary.
 _venv_sp = _glob.glob(str(_VENV_DIR / "lib" / "python*" / "site-packages"))
-if not any(p in sys.path for p in _venv_sp):
+if _venv_sp and not any(p in sys.path for p in _venv_sp):
     os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON)] + sys.argv)
 
 import subprocess

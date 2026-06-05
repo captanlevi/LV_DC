@@ -149,7 +149,11 @@ start_chrome:
 	mkdir -p $(CHROME_PROFILE); \
 	chown -R $$LAUNCH_USER $(CHROME_PROFILE) 2>/dev/null || true; \
 	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --load-extension=$(LABELING_DIR) about:blank"; \
-	sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
+	if [ "$$LAUNCH_USER" = "$$(id -un)" ]; then \
+		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
+	else \
+		sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
+	fi; \
 	echo $$! > $(CAPTURE_DIR)/chrome.pid
 	@echo "✅ Chrome launched (debug port 9222, log → $(CHROME_LOG))"
 

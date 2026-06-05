@@ -103,7 +103,7 @@ fi
 ok "Using $PYTHON_BIN ($(${PYTHON_BIN} --version))"
 
 if [ ! -d "$VENV" ] || ! "$VENV/bin/python3" -c "" &>/dev/null; then
-    [ -d "$VENV" ] && { warn ".venv is broken — recreating"; rm -rf "$VENV"; }
+    [ -d "$VENV" ] && { warn ".venv is broken — recreating"; maybe_sudo rm -rf "$VENV"; }
     "$PYTHON_BIN" -m venv "$VENV"
     ok "Created $VENV"
 else
