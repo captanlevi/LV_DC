@@ -1,13 +1,19 @@
 import sys
 import os
+import glob as _glob
 from pathlib import Path
 
-# Re-exec with .venv python if not already running inside it
-_VENV_PYTHON = Path(__file__).parent.parent / ".venv" / "bin" / "python3"
+_VENV_DIR = Path(__file__).parent.parent / ".venv"
+_VENV_PYTHON = _VENV_DIR / "bin" / "python3"
 if not _VENV_PYTHON.exists():
-    print(f"[error] .venv not found — run setup.sh first", file=sys.stderr)
+    print("[error] .venv not found — run setup.sh first", file=sys.stderr)
     sys.exit(1)
-if Path(sys.executable).resolve() != _VENV_PYTHON.resolve():
+
+# Re-exec with venv Python if its site-packages aren't already in sys.path.
+# Checking sys.path (not sys.executable) avoids the symlink false-match where
+# .venv/bin/python3 and /usr/bin/python3 resolve to the same binary.
+_venv_sp = _glob.glob(str(_VENV_DIR / "lib" / "python*" / "site-packages"))
+if not any(p in sys.path for p in _venv_sp):
     os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON)] + sys.argv)
 
 import subprocess
