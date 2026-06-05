@@ -145,10 +145,11 @@ CHROME_LOG := $(CAPTURE_DIR)/chrome.log
 
 start_chrome:
 	@echo "🚀 Starting Chrome with remote debugging..."
-	@mkdir -p $(CHROME_PROFILE)
-	@mkdir -p $(CAPTURE_DIR)/labels
-	@CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --load-extension=$(LABELING_DIR) about:blank"; \
-	LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
+	@LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
+	mkdir -p $(CHROME_PROFILE); \
+	chown -R $$LAUNCH_USER $(CHROME_PROFILE) 2>/dev/null || true; \
+	mkdir -p $(CAPTURE_DIR)/labels; \
+	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --load-extension=$(LABELING_DIR) about:blank"; \
 	sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	echo $$! > $(CAPTURE_DIR)/chrome.pid
 	@echo "✅ Chrome launched (debug port 9222, log → $(CHROME_LOG))"
