@@ -116,6 +116,8 @@ def kill_chrome() -> None:
         run(["make", "kill_chrome"])
     except Exception as e:
         print(e)
+    for _f in ["chrome.pid", "chrome.log"]:
+        (Path(__file__).parent.parent / "current_data" / _f).unlink(missing_ok=True)
 
 
 def configure_chrome_download_dir(session_dir: Path) -> None:
