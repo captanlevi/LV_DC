@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # LV_DC setup script — run once on a new Linux machine.
-# Must be run as a normal user (not root); will call sudo when needed.
+# Can be run as a normal user (./setup.sh) OR as root (sudo ./setup.sh).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -11,6 +11,13 @@ ok()   { echo -e "${GREEN}[OK]${NC}  $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()  { echo -e "${RED}[ERR]${NC}  $*"; }
 hdr()  { echo -e "\n${BOLD}==> $*${NC}"; }
+
+# When invoked as "sudo ./setup.sh", SUDO_USER is the real user; use it so
+# we don't create root-owned files the regular user can't write later.
+REAL_USER="${SUDO_USER:-$USER}"
+
+# Wrap privileged commands: if already root, run directly; otherwise use sudo.
+maybe_sudo() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 
 ISSUES=()
 
@@ -34,11 +41,11 @@ done
 
 if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
     echo "Installing: ${MISSING_PKGS[*]}"
-    sudo apt-get update -qq
+    maybe_sudo apt-get update -qq
     # tshark install prompts "should non-superusers capture packets?" — answer yes
     echo "wireshark-common wireshark-common/install-setuid boolean true" \
-        | sudo debconf-set-selections
-    sudo apt-get install -y "${MISSING_PKGS[@]}"
+        | maybe_sudo debconf-set-selections
+    maybe_sudo apt-get install -y "${MISSING_PKGS[@]}"
 else
     ok "All system packages present"
 fi
@@ -47,8 +54,8 @@ fi
 CHROME_BIN=$(which google-chrome chromium-browser chromium 2>/dev/null | head -1 || true)
 if [ -z "$CHROME_BIN" ]; then
     echo "No Chrome or Chromium found — installing chromium-browser via apt..."
-    sudo apt-get update -qq
-    sudo apt-get install -y chromium-browser
+    maybe_sudo apt-get update -qq
+    maybe_sudo apt-get install -y chromium-browser
     CHROME_BIN=$(which chromium-browser chromium 2>/dev/null | head -1 || true)
     if [ -z "$CHROME_BIN" ]; then
         err "Chromium install failed. Install manually:"
@@ -64,13 +71,13 @@ fi
 
 # ── 3. tshark / wireshark group ──────────────────────────────────────────────
 hdr "Configuring tshark permissions"
-if ! groups "$USER" | grep -q wireshark; then
-    echo "Adding $USER to wireshark group (re-login required to take effect)"
-    sudo usermod -aG wireshark "$USER"
+if ! groups "$REAL_USER" 2>/dev/null | grep -q wireshark; then
+    echo "Adding $REAL_USER to wireshark group (re-login required to take effect)"
+    maybe_sudo usermod -aG wireshark "$REAL_USER"
     warn "You must log out and back in (or run 'newgrp wireshark') before tshark works without sudo"
     ISSUES+=("Log out and back in so tshark group membership takes effect")
 else
-    ok "$USER is in the wireshark group"
+    ok "$REAL_USER is in the wireshark group"
 fi
 
 # ── 4. Python .venv ──────────────────────────────────────────────────────────
@@ -105,18 +112,41 @@ fi
 
 echo "Installing Python packages..."
 "$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet \
-    "network_core>=0.6.0" \
+
+# Required runtime packages — must all succeed.
+"$VENV/bin/pip" install \
     scapy \
     "websocket-client>=1.0" \
     pandas \
     numpy
-ok "Python packages installed"
+
+# Optional: network_core (may not be needed on all machines).
+if ! "$VENV/bin/pip" install --quiet "network_core>=0.5.3" 2>/dev/null; then
+    warn "network_core install failed — unit_extractor features will be unavailable"
+    ISSUES+=("network_core not installed — HTTP log processing unavailable")
+fi
+
+# Verify the critical package actually imported correctly.
+if ! "$VENV/bin/python3" -c "import websocket" 2>/dev/null; then
+    err "websocket-client failed to import after install — something went wrong with pip"
+    exit 1
+fi
+ok "Python packages installed (websocket-client verified)"
+
+# If we ran as root, hand venv ownership to the real user so they can use it.
+if [ "$(id -u)" -eq 0 ] && [ "$REAL_USER" != "root" ]; then
+    chown -R "$REAL_USER":"$REAL_USER" "$VENV" 2>/dev/null || true
+    ok "venv ownership set to $REAL_USER"
+fi
 
 # ── 5. current_data directory ────────────────────────────────────────────────
 hdr "Creating working directories"
 mkdir -p "$ROOT/current_data"
 mkdir -p "$ROOT/data"
+# Make sure these are writable by the real user too.
+if [ "$(id -u)" -eq 0 ] && [ "$REAL_USER" != "root" ]; then
+    chown "$REAL_USER":"$REAL_USER" "$ROOT/current_data" "$ROOT/data" 2>/dev/null || true
+fi
 ok "current_data/ and data/ ready"
 
 # ── 6. Network interface ─────────────────────────────────────────────────────
@@ -139,9 +169,9 @@ fi
 
 # ── 7. IFB kernel module ─────────────────────────────────────────────────────
 hdr "Checking ifb kernel module"
-if sudo modprobe ifb 2>/dev/null; then
-    sudo ip link add ifb0 type ifb 2>/dev/null || true
-    sudo ip link delete ifb0 2>/dev/null || true
+if maybe_sudo modprobe ifb 2>/dev/null; then
+    maybe_sudo ip link add ifb0 type ifb 2>/dev/null || true
+    maybe_sudo ip link delete ifb0 2>/dev/null || true
     ok "ifb module loadable"
 else
     err "Cannot load ifb kernel module — traffic shaping will not work."
@@ -167,7 +197,6 @@ SUDOERS_FILE="/etc/sudoers.d/lv_dc"
 
 # Resolve actual binary paths (they differ across distros/Ubuntu versions)
 resolve_bin() {
-    # Try sbin variants first, then fall back to `which`
     for p in "/usr/sbin/$1" "/sbin/$1" "/usr/bin/$1" "/bin/$1"; do
         [ -x "$p" ] && echo "$p" && return
     done
@@ -182,17 +211,16 @@ TSHARK=$(resolve_bin tshark)
 KILL="/usr/bin/kill"
 [ -x /bin/kill ] && KILL="/bin/kill"
 
-SUDOERS_LINE="$USER ALL=(ALL) NOPASSWD: $TC, $IP, $MODPROBE, $TCPDUMP, $TSHARK, $KILL, /usr/bin/chown, /bin/chown, /usr/bin/chmod, /bin/chmod"
+SUDOERS_LINE="$REAL_USER ALL=(ALL) NOPASSWD: $TC, $IP, $MODPROBE, $TCPDUMP, $TSHARK, $KILL, /usr/bin/chown, /bin/chown, /usr/bin/chmod, /bin/chmod"
 
-echo "$SUDOERS_LINE" | sudo tee "$SUDOERS_FILE" > /dev/null
-sudo chmod 440 "$SUDOERS_FILE"
+echo "$SUDOERS_LINE" | maybe_sudo tee "$SUDOERS_FILE" > /dev/null
+maybe_sudo chmod 440 "$SUDOERS_FILE"
 
-# Validate — visudo -c rejects broken sudoers files
-if sudo visudo -c -f "$SUDOERS_FILE" &>/dev/null; then
+if maybe_sudo visudo -c -f "$SUDOERS_FILE" &>/dev/null; then
     ok "Passwordless sudo configured ($SUDOERS_FILE)"
 else
     warn "sudoers validation failed — removing $SUDOERS_FILE to stay safe"
-    sudo rm -f "$SUDOERS_FILE"
+    maybe_sudo rm -f "$SUDOERS_FILE"
     ISSUES+=("Passwordless sudo not configured — you may be prompted during collection")
 fi
 

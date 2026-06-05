@@ -4,7 +4,10 @@ from pathlib import Path
 
 # Re-exec with .venv python if not already running inside it
 _VENV_PYTHON = Path(__file__).parent.parent / ".venv" / "bin" / "python3"
-if _VENV_PYTHON.exists() and Path(sys.executable).resolve() != _VENV_PYTHON.resolve():
+if not _VENV_PYTHON.exists():
+    print(f"[error] .venv not found — run setup.sh first", file=sys.stderr)
+    sys.exit(1)
+if Path(sys.executable).resolve() != _VENV_PYTHON.resolve():
     os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON)] + sys.argv)
 
 import subprocess

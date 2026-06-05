@@ -123,8 +123,10 @@ merge-capture:
 	@rm $(OUT_FILE)
 
 
+PLATFORM ?= youtube
+
 run_network_sim:
-	python3 -u $(MAKEFILE_DIR)/exp.py
+	python3 -u $(MAKEFILE_DIR)/exp.py --platform $(PLATFORM)
 
 change_perm:
 	OWNER=$${SUDO_USER:-$${USER}}; \
