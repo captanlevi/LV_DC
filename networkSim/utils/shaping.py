@@ -107,6 +107,28 @@ SCENARIOS = {
 }
 
 
+def get_higher_state(current_state : str):
+    if current_state not in SCENARIOS:
+        raise ValueError(f"state {current_state} not found in SCENARIOS")
+    current_state_int = int(current_state)
+    if current_state_int == len(SCENARIOS):
+        # This is the highest so we just return this
+        return current_state
+    return str(current_state_int + 1)
+    
+
+def get_lower_state(current_state : str):
+    if current_state not in SCENARIOS:
+        raise ValueError(f"state {current_state} not found in SCENARIOS")
+    current_state_int = int(current_state)
+    if current_state_int == 1:
+        # This is the lowest so we just return this
+        return current_state
+    return str(current_state_int - 1)
+
+
+
+
 YOUTUBE_TRANSITIONS = {
     # Target stationary: ~40% in 1080p (7-10), ~40% in 360p (4-6), ~20% stall-risk (1-3)
     # 1080p zone: states 7-10 (≥1800 kbit/s)

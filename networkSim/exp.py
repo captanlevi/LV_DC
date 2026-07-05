@@ -22,10 +22,11 @@ from dataclasses import asdict
 import json
 import signal
 import argparse
+import asyncio
 
 from utils.netStat import net_episode_generator
-from utils.shaping import YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS
-from utils.dataModels import NetLabel
+from utils.shaping import YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS, get_higher_state, get_lower_state
+from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -36,6 +37,10 @@ PLATFORM_ABBREV = {
     "tiktok": "ti",
     "bilibili": "bi",
 }
+
+
+CURRENT_NET_STAT : None | NetStat = None
+SYSTEM_TICK : float = 0.1
 
 
 def make_session_dir(platform: str) -> Path:
@@ -185,21 +190,11 @@ def change_perm(session_dir: Path) -> bool:
         return False
 
 
-def ossilate(
-    episode_time_in_seconds: int,
-    net_labels: list[NetLabel],
-    transition_dct: dict[str, dict[str, float]],
-    forced_initial_state: str | None = None,
-    max_episodes: int | None = None,
-):
-    for net_stat in net_episode_generator(
-        episode_length=episode_time_in_seconds,
-        transition_dict=transition_dct,
-        forced_initial_state=forced_initial_state,
-        max_episodes=max_episodes,
-    ):
-        print(f"Currently shaping {net_stat}")
-        run(
+def _apply_net_stat(net_stat : NetStat):
+    global CURRENT_NET_STAT
+    print(f"Currently shaping {net_stat}")
+    CURRENT_NET_STAT = net_stat
+    run(
             [
                 "make",
                 "slow",
@@ -208,11 +203,106 @@ def ossilate(
                 f"PLR={net_stat.loss_pct}%",
             ]
         )
+
+
+
+async def _ossilate(
+    episode_time_in_seconds: int,
+    net_labels: list[NetLabel],
+    stop_event : asyncio.Event,
+    transition_dct: dict[str, dict[str, float]],
+    forced_initial_state: str | None = None,
+    max_episodes: int | None = None,
+    
+)-> bool:
+    # returns True if the for loop ends
+    for net_stat in net_episode_generator(
+        episode_length=episode_time_in_seconds,
+        transition_dict=transition_dct,
+        forced_initial_state=forced_initial_state,
+        max_episodes=max_episodes,
+    ):
+        _apply_net_stat(net_stat= net_stat)
         ts = time.time()
         net_labels.append(
             NetLabel(timestamp=ts, speed=net_stat.rate, state=net_stat.state)
         )
-        time.sleep(net_stat.duration)
+
+        while time.time() < ts + net_stat.duration:
+            await asyncio.sleep(SYSTEM_TICK)
+            if stop_event.is_set():
+                return False
+        
+    return True
+
+async def experiment(
+    episode_time_in_seconds: int,
+    net_labels: list[NetLabel],
+    transition_dct: dict[str, dict[str, float]],
+    forced_initial_state: str | None = None,
+    max_episodes: int | None = None,
+):
+    stop_event = asyncio.Event()
+
+    def _make_task(initial_state: str | None) -> asyncio.Task:
+        return asyncio.create_task(
+            _ossilate(
+                episode_time_in_seconds=episode_time_in_seconds,
+                net_labels=net_labels,
+                stop_event=stop_event,
+                forced_initial_state=initial_state,
+                max_episodes=max_episodes,
+                transition_dct=transition_dct,
+            )
+        )
+
+    osc_task = _make_task(forced_initial_state)
+
+    try:
+        while True:
+            input_task = asyncio.create_task(asyncio.to_thread(input, "[u=faster / d=slower / q=quit]: "))
+            done, _ = await asyncio.wait({osc_task, input_task}, return_when=asyncio.FIRST_COMPLETED)
+
+            if osc_task in done:
+                input_task.cancel()
+                break
+
+            try:
+                user_input = input_task.result().strip().lower()
+            except EOFError:
+                # stdin closed (Ctrl+D)
+                stop_event.set()
+                await osc_task
+                break
+
+            if user_input == "q":
+                stop_event.set()
+                await osc_task
+                break
+            elif user_input in ("u", "d"):
+                stop_event.set()
+                await osc_task
+                stop_event = asyncio.Event()
+                curr = CURRENT_NET_STAT.state if CURRENT_NET_STAT is not None else None
+                if curr is not None:
+                    next_s = get_higher_state(curr) if user_input == "u" else get_lower_state(curr)
+                else:
+                    next_s = None
+                print(f"  → jumping to state {next_s}")
+                osc_task = _make_task(next_s)
+            # unrecognized input: re-enter the wait
+    except asyncio.CancelledError:
+        stop_event.set()
+        osc_task.cancel()
+        raise
+
+
+
+
+
+
+
+
 
 
 def save_json(path: str | Path, data: list[NetLabel]):
@@ -306,13 +396,16 @@ if __name__ == "__main__":
         browser = None
 
     try:
-        ossilate(
+        asyncio.run(experiment(
             episode_time_in_seconds=60,
             net_labels=net_labels,
             transition_dct=transition,
             forced_initial_state=args.initial_state,
             max_episodes=args.episodes,
-        )
+        ))
+
+    except KeyboardInterrupt:
+        print("\nCtrl+C received — stopping experiment")
 
     finally:
         if browser is not None:
