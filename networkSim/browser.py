@@ -370,7 +370,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             return False
 
         header = ["ts", "type", "video_w", "video_h", "client_w", "client_h",
-                  "dropped", "tabId", "url", "event_id"]
+                  "dropped", "current_time", "tabId", "url", "event_id"]
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]

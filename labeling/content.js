@@ -23,6 +23,9 @@ function buildEvent(type) {
     client_w: video?.clientWidth ?? null,
     client_h: video?.clientHeight ?? null,
     dropped: video?.getVideoPlaybackQuality?.().droppedVideoFrames ?? null,
+    // Advancing playhead proves the element is really playing; a frozen
+    // current_time makes stale res_meta ticks detectable in post-processing.
+    current_time: video?.currentTime ?? null,
   };
 }
 
@@ -65,33 +68,47 @@ function tryFlush() {
 }
 
 function observeVideo(v) {
-  v.addEventListener("loadedmetadata", () => emit("meta"));
+  // Ignore events from elements we are no longer attached to — platforms
+  // (Twitch especially) swap <video> elements on ads/quality changes, and a
+  // discarded element can keep firing pause/ended after we move on.
+  const guard = (fn) => () => {
+    if (v !== video) return;
+    fn();
+  };
 
-  // Use only event-based stall detection — the readyState interval below
-  // is intentionally removed to avoid double-counting the same buffer event.
-  v.addEventListener("playing", () => {
-    if (inStall) {
-      inStall = false;
-      emit("start");
-    }
-  });
-  v.addEventListener("waiting", () => {
+  v.addEventListener("loadedmetadata", guard(() => emit("meta")));
+
+  // Emit "start" on every playing transition (not only stall recovery) so a
+  // pause -> resume without rebuffering is visible in the labels. emit()
+  // dedupes consecutive identical event types, so this cannot spam.
+  v.addEventListener("playing", guard(() => {
+    inStall = false;
+    emit("start");
+  }));
+  v.addEventListener("waiting", guard(() => {
     if (!inStall) {
       inStall = true;
       emit("stall");
     }
-  });
+  }));
 
-  v.addEventListener("resize", () => emit("resize"));
-  v.addEventListener("ended", () => emit("end"));
-  v.addEventListener("pause", () => {
+  v.addEventListener("resize", guard(() => emit("resize")));
+  v.addEventListener("ended", guard(() => emit("end")));
+  v.addEventListener("pause", guard(() => {
     if (!v.ended) emit("pause");
-  });
+  }));
 
   // Catch cases where video is already playing when we attach
   if (!v.paused && !v.ended) {
     emit("start");
   }
+}
+
+function pickBestVideo() {
+  // Prefer the element that is actually playing over the first one in DOM
+  // order — after an element swap the dead one often remains in the DOM.
+  const candidates = [...document.querySelectorAll("video")];
+  return candidates.find((x) => !x.paused && !x.ended) ?? candidates[0] ?? null;
 }
 
 function attachVideo(v) {
@@ -123,7 +140,7 @@ function endCollection(reason = "manual") {
 const observer = new MutationObserver((mutations) => {
   for (const m of mutations) {
     if (m.addedNodes.length > 0) {
-      const v = document.querySelector("video");
+      const v = pickBestVideo();
       if (v) {
         attachVideo(v);
         break;
@@ -138,7 +155,7 @@ observer.observe(document.documentElement, {
 });
 
 // Fallback: attach immediately if video already exists
-const existingVideo = document.querySelector("video");
+const existingVideo = pickBestVideo();
 if (existingVideo) {
   attachVideo(existingVideo);
 }
@@ -154,6 +171,14 @@ setInterval(tryFlush, FLUSH_INTERVAL_MS);
 
 // Resolution polling — records current dimensions once per second
 setInterval(() => {
+  // Detachment recovery: if our element left the DOM (platform swapped the
+  // player), re-attach to the live one instead of polling a dead reference.
+  if (video && !video.isConnected) {
+    const v = pickBestVideo();
+    if (v && v !== video) {
+      attachVideo(v);
+    }
+  }
   if (!video) return;
   emit("res_meta");
 }, RESOLUTION_POLL_INTERVAL_MS);
