@@ -226,7 +226,60 @@ else
     ISSUES+=("Passwordless sudo not configured — you may be prompted during collection")
 fi
 
-# ── 10. Summary ───────────────────────────────────────────────────────────────
+# ── 10. End-to-end capture self-test ─────────────────────────────────────────
+hdr "Running end-to-end capture self-test"
+
+SELFTEST_DIR="$ROOT/current_data/.setup_selftest"
+rm -rf "$SELFTEST_DIR"
+mkdir -p "$SELFTEST_DIR"
+
+selftest_ok=true
+pushd "$ROOT/networkSim" > /dev/null
+
+if ! make enable >/tmp/lv_dc_selftest_enable.log 2>&1; then
+    err "make enable failed — see /tmp/lv_dc_selftest_enable.log"
+    ISSUES+=("Traffic shaping (make enable) failed — check IFACE/ifb/sudoers (log: /tmp/lv_dc_selftest_enable.log)")
+    selftest_ok=false
+fi
+
+if $selftest_ok; then
+    make start-capture SESSION_DIR="$SELFTEST_DIR" >/tmp/lv_dc_selftest_capture.log 2>&1 || true
+    sleep 1
+    curl -s --max-time 5 https://www.google.com -o /dev/null || true
+    sleep 2
+    make stop-capture SESSION_DIR="$SELFTEST_DIR" >>/tmp/lv_dc_selftest_capture.log 2>&1 || true
+
+    IN_SIZE=$(stat -c%s "$SELFTEST_DIR/incoming.pcap" 2>/dev/null || echo 0)
+    OUT_SIZE=$(stat -c%s "$SELFTEST_DIR/outgoing.pcap" 2>/dev/null || echo 0)
+
+    # A pcap with only the global header and no packets is ~24 bytes.
+    if [ "$IN_SIZE" -le 24 ] && [ "$OUT_SIZE" -le 24 ]; then
+        err "Self-test capture produced no packets (incoming=${IN_SIZE}B, outgoing=${OUT_SIZE}B)"
+        ISSUES+=("Live capture test produced 0 packets — ifb/tc mirroring is not working on this machine")
+        selftest_ok=false
+    else
+        ok "Captured traffic: incoming=${IN_SIZE}B, outgoing=${OUT_SIZE}B"
+        make merge-capture SESSION_DIR="$SELFTEST_DIR" >>/tmp/lv_dc_selftest_capture.log 2>&1 || true
+        if [ -s "$SELFTEST_DIR/merged.pcap" ]; then
+            ok "merge-capture produced a non-empty merged.pcap"
+        else
+            err "merge-capture failed or produced empty output — see /tmp/lv_dc_selftest_capture.log"
+            ISSUES+=("merge-capture failed — check mergecap/permissions (log: /tmp/lv_dc_selftest_capture.log)")
+            selftest_ok=false
+        fi
+    fi
+
+    make disable >/tmp/lv_dc_selftest_disable.log 2>&1 || warn "make disable had errors (see /tmp/lv_dc_selftest_disable.log) — interfaces may need manual cleanup"
+fi
+
+popd > /dev/null
+rm -rf "$SELFTEST_DIR"
+
+if $selftest_ok; then
+    ok "End-to-end capture self-test passed — http_log generation should work"
+fi
+
+# ── 11. Summary ───────────────────────────────────────────────────────────────
 hdr "Setup complete"
 echo ""
 if [ ${#ISSUES[@]} -eq 0 ]; then
