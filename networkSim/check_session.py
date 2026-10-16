@@ -74,6 +74,7 @@ PLATFORM_PAGE = {
     "bilibili": re.compile(r"(^|\.)(bilibili\.com|bilibili\.cn|biliapi\.(com|net)|hdslb\.net|biliimg\.com)$"),
 }
 EXOGENOUS = ("chrome_service", "os_service", "unknown")
+LOW_STATE_MAX = 3   # LV_DC utils/netStat._LOW_STATE_THRESHOLD: states 1-3 are the stall-risk "low" states
 
 
 def flow_category(names: set, platform: str) -> str:
@@ -454,19 +455,33 @@ def traffic_checks(sd: Path, platform: str) -> dict:
         s0, s1 = lab[0]["timestamp"], t1
         have = {int((p[0] - s0) // 60) for p in pk if s0 <= p[0] <= s1 and (p[1] in mine or p[2] in mine)}
         gaps = [m for m in range(int((s1 - s0) // 60)) if m not in have]
-    # Addendum C: realised dwell per state (consecutive episodes)
-    dwell = collections.defaultdict(list)
-    run_state, run_len = None, 0
-    for a in lab:
+    # Addendum C (QA only; addendum G: net_labels are coverage / debug): realised dwell per state. net_labels rows are
+    # SUB-STEPS of the 60 s episodes (12-30 s each), so a run of same-state rows is measured in seconds and reported
+    # in episodes as seconds / 60 (levi: yt_1 showed a "run of 19" rows under cap 6); plus the longest run of
+    # consecutive low-state (<= LOW_STATE_MAX) time, against the session's low-state cap
+    dwell_s = collections.defaultdict(list)
+    low_runs, low_acc = [], 0.0
+    run_state, run_s = None, 0.0
+    for i, a in enumerate(lab):
+        end = lab[i + 1]["timestamp"] if i + 1 < len(lab) else t1
+        dur = max(0.0, end - a["timestamp"])
         st = a.get("state")
         if st == run_state:
-            run_len += 1
+            run_s += dur
         else:
             if run_state is not None:
-                dwell[run_state].append(run_len)
-            run_state, run_len = st, 1
+                dwell_s[run_state].append(run_s)
+            run_state, run_s = st, dur
+        if st is not None and str(st).isdigit() and int(st) <= LOW_STATE_MAX:
+            low_acc += dur
+        elif low_acc:
+            low_runs.append(low_acc)
+            low_acc = 0.0
     if run_state is not None:
-        dwell[run_state].append(run_len)
+        dwell_s[run_state].append(run_s)
+    if low_acc:
+        low_runs.append(low_acc)
+    dwell = {k: [round(x / 60.0, 1) for x in v] for k, v in dwell_s.items()}
     bg_eps = [e["background_share"] for e in eps if e["background_share"] is not None]
     # the enforced share covers the shaper-running window (first episode to the end of the capture): the labelled
     # collection. Before it, Chrome starts and the page loads cold (yt: ~10 MB from www.youtube.com in the first 10 s,
@@ -493,6 +508,8 @@ def traffic_checks(sd: Path, platform: str) -> dict:
         if d[4] != "media":
             host_bytes[(d[5] or "(unnamed)", d[4])] += d[1]
     exo_bytes = sum(cat_bytes[c] for c in EXOGENOUS)
+    v6_media = sum(d[1] for d in win if d[2] and ":" in d[3][2])
+    v6_all = sum(d[1] for d in win if ":" in d[3][2])
     return {
         "pcap": True, "pcap_bytes": pcap.stat().st_size, "minutes": (t1 - t0) / 60.0, "client_ip": me,
         # enforced (FAIL > max_background_share): exogenous background over the shaper window (addendum I)
@@ -519,6 +536,11 @@ def traffic_checks(sd: Path, platform: str) -> dict:
         "episodes": eps, "shaper_bind_share": (sum(binds) / len(binds)) if binds else None,
         "capture_gap_minutes": gaps,
         "dwell_episodes_per_state": {k: v for k, v in sorted(dwell.items(), key=lambda kv: int(kv[0]))},
+        "dwell_s_per_state": {k: [round(x) for x in v] for k, v in sorted(dwell_s.items(), key=lambda kv: int(kv[0]))},
+        "low_run_max_episodes": round(max(low_runs) / 60.0, 1) if low_runs else 0.0,
+        # IPv6 (levi / supervisor, t37): old data is IPv4-only; a selected media flow over IPv6 FAILs (ipv6_media)
+        "ipv6_media_share": (v6_media / win_media) if win_media else None,
+        "ipv6_downstream_share": (v6_all / win_total) if win_total else None,
     }
 
 
@@ -575,6 +597,8 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
             why.append("labels.csv lacks the v2 columns (old extension loaded?)")
         if lab.get("usable_share") is not None and lab["usable_share"] < CHECKS["usable_share_min"]:
             why.append(f"usable (non-ad play or stall) {lab['usable_share']:.2f} of the session < {CHECKS['usable_share_min']}")
+    if net.get("ipv6_media_share"):
+        why.append(f"ipv6_media: {net['ipv6_media_share']:.3f} of media bytes on IPv6 flows (old data is IPv4-only)")
     exo = net.get("exogenous_share")
     if exo is not None and exo > max_bg:
         why.append(f"exogenous background (Chrome / OS / unnamed flows) {exo:.3f} of shaper-window downstream > {max_bg}")
@@ -653,7 +677,9 @@ def main() -> int:
           f"| downstream before the first episode (MB; page load) | {net.get('pre_shaper_downstream_mb')} |",
           f"| 60 s windows with exogenous > 0.25 x their downstream (reported; addenda G / I) | {net.get('background_heavy_windows')} |",
           f"| shaper binds (share of episodes; reported QA only, addendum G) | {net.get('shaper_bind_share')} |",
-          f"| Addendum C: dwell per state (episodes in a row) | {net.get('dwell_episodes_per_state')} |",
+          f"| Addendum C (QA): dwell per state, episodes (seconds / 60) | {net.get('dwell_episodes_per_state')} |",
+          f"| longest low-state run, episodes / low-state cap | {net.get('low_run_max_episodes')} / {out['low_state_cap']} |",
+          f"| IPv6 share of media bytes (FAIL > 0) / of all downstream; IPv6 sysctl at start | {net.get('ipv6_media_share')} / {net.get('ipv6_downstream_share')}; {meta.get('ipv6_sysctl')} |",
           f"| matrix / low-state cap | {out['matrix']} / {out['low_state_cap']} |",
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
           f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",

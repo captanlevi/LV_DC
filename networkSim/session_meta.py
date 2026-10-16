@@ -56,6 +56,22 @@ def ntp_offset() -> dict:
     return {"tool": None, "raw": None, "error": "no chronyc / ntpdate / sntp available"}
 
 
+def ipv6_state() -> dict:
+    """IPv6 sysctl state per interface (Linux /proc/sys/net/ipv6/conf/<if>/disable_ipv6; 1 = disabled) and whether
+    any interface holds a global IPv6 address (t37: old data is IPv4-only; IPv6 is disabled on the box)."""
+    root = Path("/proc/sys/net/ipv6/conf")
+    if not root.exists():
+        return {"available": False}
+    conf = {}
+    for d in sorted(root.iterdir()):
+        try:
+            conf[d.name] = int((d / "disable_ipv6").read_text().strip())
+        except Exception:
+            pass
+    addrs = _run(["ip", "-6", "addr", "show", "scope", "global"])
+    return {"available": True, "disable_ipv6": conf, "global_v6_addresses": bool(addrs and "inet6" in addrs)}
+
+
 def shaper_config(platform: str, transitions: dict, episode_s: int, **extra) -> dict:
     from utils.shaping import SCENARIOS
     scen = {k: {kk: vv for kk, vv in vars(v).items()} for k, v in SCENARIOS.items()}
@@ -92,7 +108,7 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
                                       forced_initial_state=forced_initial_state),
                  channel_url_requested=channel_url_requested, channel_type=channel_type, channel_handle=channel_handle,
                  profile_template=profile_template,
-                 ntp_offset_start=ntp_offset())
+                 ntp_offset_start=ntp_offset(), ipv6_sysctl=ipv6_state())
 
 
 def finish(session_dir: Path, channel_url: str | None, **extra) -> dict:
