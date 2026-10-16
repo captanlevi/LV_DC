@@ -39,7 +39,8 @@ CHECKS = {
     "usable_share_min": 0.6,
     "shaper_ratio_max": 1.1,
     "shaper_episode_share_min": 0.9,      # reported QA only, never a FAIL (levi addendum G: net_labels are coverage / debug)
-    "max_background_share": 0.05,          # over the shaper window (levi addendum F)
+    "max_background_share": 0.05,          # EXOGENOUS background over the shaper window (levi addenda F, I)
+    "unknown_list_share": 0.02,            # list the top unnamed servers in check.md above this share (addendum I)
     "window_background_flag": 0.25,     # per 60 s wall-clock window: background > 0.25 x its downstream (reported; addendum G)
     "flag_window_s": 60.0,
     "shots_share_min": 0.5,
@@ -55,6 +56,43 @@ MEDIA_HOSTS = {
     "tiktok": [r"(^|\.)pull-[a-z0-9-]+\.(tiktokcdn|ttlivecdn)\.com$"],
     "bilibili": [r"(^|\.)bilivideo\.(com|cn)$", r"(^|\.)hdslb\.com$"],
 }
+# background categories (copied from LVQoE scripts/analysis/t40_old_background.py, master 2a6e771; keep in sync).
+# levi prereg addendum I: only EXOGENOUS background (Chrome's own and the OS's downloads, and unnamed flows) is enforced;
+# platform_page (first-party non-media: page, chat websockets, images) and other are reported
+CHROME_SERVICE = re.compile(
+    r"optimizationguide|(^|\.)update\.googleapis\.com$|(^|\.)gvt1\.com$|(^|\.)gvt2\.com$|^clients\d*\.google\.com$|"
+    r"clients\d*\.googleusercontent\.com$|safebrowsing|content-autofill|clientservices\.googleapis\.com$|"
+    r"(^|\.)dl\.google\.com$|edgedl\.|^accounts\.google\.com$|^android\.clients\.google\.com$|^mtalk\.google\.com$|"
+    r"^chromewebstore\.googleapis\.com$|^safebrowsingohttpgateway|^beacons\d*\.gvt\d\.com$")
+OS_SERVICE = re.compile(r"(^|\.)(ubuntu\.com|canonical\.com|snapcraft\.io|snapcraftcontent\.com|launchpad\.net|"
+                        r"launchpadcontent\.net|fwupd\.org|debian\.org)$")
+PLATFORM_PAGE = {
+    "youtube": re.compile(r"(^|\.)(youtube\.com|ytimg\.com|ggpht\.com|youtube-nocookie\.com|youtubei\.googleapis\.com)$"),
+    "twitch": re.compile(r"(^|\.)(twitch\.tv|jtvnw\.net|twitchcdn\.net|twitchsvc\.net|ext-twitch\.tv)$"),
+    "tiktok": re.compile(r"(^|\.)(tiktok\.com|tiktokv\.com|tiktokv\.us|tiktokcdn\.com|tiktokcdn-us\.com|ttwstatic\.com|"
+                         r"ibytedtos\.com|byteoversea\.com|ttlivecdn\.com|tiktokw\.us)$"),
+    "bilibili": re.compile(r"(^|\.)(bilibili\.com|bilibili\.cn|biliapi\.(com|net)|hdslb\.net|biliimg\.com)$"),
+}
+EXOGENOUS = ("chrome_service", "os_service", "unknown")
+
+
+def flow_category(names: set, platform: str) -> str:
+    """media / chrome_service / os_service / platform_page / other, or unknown when the flow has no name."""
+    names = {n for n in names if n}
+    if not names:
+        return "unknown"
+    if any(re.search(pt, n) for n in names for pt in MEDIA_HOSTS.get(platform, [])):
+        return "media"
+    if any(CHROME_SERVICE.search(n) for n in names):
+        return "chrome_service"
+    if any(OS_SERVICE.search(n) for n in names):
+        return "os_service"
+    pp = PLATFORM_PAGE.get(platform)
+    if pp is not None and any(pp.search(n) for n in names):
+        return "platform_page"
+    return "other"
+
+
 MEDIA_URL_PATTERNS = ("/videoplayback", ".ts", ".m4s", ".flv", "/v1/segment/")
 META_REQUIRED = ("lvdc_commit", "extension_version", "chrome", "shaper", "channel_url", "hostname", "ntp_offset_start")
 TSHARK = shutil.which("tshark") or "tshark"
@@ -306,21 +344,22 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     for p in pk:
         if p[7] and p[1] == me:
             flow_sni[(p[1], p[3], p[2], p[4], p[5])] = p[7].split("|")[0].lower()
-    pats = [re.compile(x) for x in MEDIA_HOSTS.get(platform, [])]
-
-    def is_media(server, key):
+    def classify(server, key):
         names = {flow_sni[key]} if key in flow_sni else ip_names.get(server, set())
-        return any(pt.search(n) for n in names for pt in pats)
+        cat = flow_category(names, platform)
+        # an unnamed flow is identified by its server address (a missed video CDN shows up here: addendum I, brad)
+        return cat, (sorted(names)[0] if names else f"{key[2]}:{key[3]}/{key[4]}")
 
-    media_cache: dict[tuple, bool] = {}
+    media_cache: dict[tuple, tuple] = {}
     down = []
     for p in pk:
         if p[2] != me:
             continue
         key = (p[2], p[4], p[1], p[3], p[5])                  # client-side 5-tuple of the flow
         if key not in media_cache:
-            media_cache[key] = is_media(p[1], key)
-        down.append((p[0], p[6], media_cache[key], key))
+            media_cache[key] = classify(p[1], key)
+        cat, host = media_cache[key]
+        down.append((p[0], p[6], cat == "media", key, cat, host))
     down_total = sum(d[1] for d in down)
     down_media = sum(d[1] for d in down if d[2])
     http_media = http_media_flows(sd)
@@ -366,22 +405,38 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     # share is reported.
     w0 = lab[0]["timestamp"] if lab else t0
     win = [d for d in down if d[0] >= w0]
-    # levi addendum G (reported, not a FAIL): 60 s wall-clock windows of the shaped capture whose background bytes
-    # exceed 0.25 x the window's downstream bytes (independent of net_labels' set rates)
+    # levi addenda G / I (reported, not a FAIL): 60 s wall-clock windows of the shaped capture whose EXOGENOUS
+    # background bytes exceed 0.25 x the window's downstream bytes (independent of net_labels' set rates)
     fw = CHECKS["flag_window_s"]
-    wtot, wbg = collections.Counter(), collections.Counter()
+    wtot, wexo = collections.Counter(), collections.Counter()
     for d in win:
         k = int((d[0] - w0) // fw)
         wtot[k] += d[1]
-        if not d[2]:
-            wbg[k] += d[1]
-    heavy_windows = [{"minute": k, "background_of_downstream": round(wbg[k] / wtot[k], 3)} for k in sorted(wtot)
-                     if wtot[k] and wbg[k] > CHECKS["window_background_flag"] * wtot[k]]
+        if d[4] in EXOGENOUS:
+            wexo[k] += d[1]
+    heavy_windows = [{"minute": k, "exogenous_of_downstream": round(wexo[k] / wtot[k], 3)} for k in sorted(wtot)
+                     if wtot[k] and wexo[k] > CHECKS["window_background_flag"] * wtot[k]]
     win_total = sum(d[1] for d in win)
     win_media = sum(d[1] for d in win if d[2])
+    cat_bytes, host_bytes = collections.Counter(), collections.Counter()
+    for d in win:
+        cat_bytes[d[4]] += d[1]
+        if d[4] != "media":
+            host_bytes[(d[5] or "(unnamed)", d[4])] += d[1]
+    exo_bytes = sum(cat_bytes[c] for c in EXOGENOUS)
     return {
         "pcap": True, "pcap_bytes": pcap.stat().st_size, "minutes": (t1 - t0) / 60.0, "client_ip": me,
+        # enforced (FAIL > max_background_share): exogenous background over the shaper window (addendum I)
+        "exogenous_share": (exo_bytes / win_total) if win_total else None,
+        # reported: all non-media background, per category, and the top background hosts
         "background_share": (1 - win_media / win_total) if win_total else None,
+        "category_shares": {c: round(b / win_total, 4) for c, b in cat_bytes.most_common()} if win_total else {},
+        "background_hosts_top": [{"host": h, "category": c, "share": round(b / win_total, 4), "mb": round(b / 1e6, 3)}
+                                 for (h, c), b in host_bytes.most_common(12)] if win_total else [],
+        # addendum I (brad): with an unknown share above UNKNOWN_LIST_SHARE, the top unnamed servers by bytes
+        "unknown_hosts_top": [{"server": h, "share": round(b / win_total, 4), "mb": round(b / 1e6, 3)}
+                              for (h, c), b in host_bytes.most_common() if c == "unknown"][:12]
+                             if win_total and cat_bytes["unknown"] > CHECKS["unknown_list_share"] * win_total else [],
         "background_share_whole_capture": (1 - down_media / down_total) if down_total else None,
         "pre_shaper_downstream_mb": (down_total - win_total) / 1e6,
         "background_share_episode_max": max(bg_eps) if bg_eps else None,
@@ -447,9 +502,9 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
             why.append("labels.csv lacks the v2 columns (old extension loaded?)")
         if lab.get("usable_share") is not None and lab["usable_share"] < CHECKS["usable_share_min"]:
             why.append(f"usable (non-ad play or stall) {lab['usable_share']:.2f} of the session < {CHECKS['usable_share_min']}")
-    bg = net.get("background_share")
-    if bg is not None and bg > max_bg:
-        why.append(f"background traffic (by host) {bg:.3f} > {max_bg}")
+    exo = net.get("exogenous_share")
+    if exo is not None and exo > max_bg:
+        why.append(f"exogenous background (Chrome / OS / unnamed flows) {exo:.3f} of shaper-window downstream > {max_bg}")
     if shots.get("share") is not None and shots["share"] < CHECKS["shots_share_min"]:
         why.append(f"screenshots {shots['n']} of ~{shots['expected']} expected")
     if meta_missing:
@@ -503,9 +558,11 @@ def main() -> int:
           f"| tier mix (quality time, ads masked) | {lab.get('tier_mix_quality_time')} |",
           f"| yt 144 / 240 / 360p shares | {lab.get('yt_low_tier_shares')} |",
           f"| tier changes / min | {lab.get('tier_changes_per_min')} |",
-          f"| background share by host, shaper window (episode max) / whole capture / by http_v2 | {net.get('background_share')} ({net.get('background_share_episode_max')}) / {net.get('background_share_whole_capture')} / {net.get('background_share_http_v2')} |",
+          f"| exogenous background share, shaper window (enforced, addendum I) | {net.get('exogenous_share')} |",
+          f"| all background share, shaper window (episode max) / whole capture / by http_v2 | {net.get('background_share')} ({net.get('background_share_episode_max')}) / {net.get('background_share_whole_capture')} / {net.get('background_share_http_v2')} |",
+          f"| shares by category (shaper window) | {net.get('category_shares')} |",
           f"| downstream before the first episode (MB; page load) | {net.get('pre_shaper_downstream_mb')} |",
-          f"| 60 s windows with background > 0.25 x their downstream (reported; addendum G) | {net.get('background_heavy_windows')} |",
+          f"| 60 s windows with exogenous > 0.25 x their downstream (reported; addenda G / I) | {net.get('background_heavy_windows')} |",
           f"| shaper binds (share of episodes; reported QA only, addendum G) | {net.get('shaper_bind_share')} |",
           f"| Addendum C: dwell per state (episodes in a row) | {net.get('dwell_episodes_per_state')} |",
           f"| matrix / low-state cap | {out['matrix']} / {out['low_state_cap']} |",
@@ -522,6 +579,14 @@ def main() -> int:
           f"| ad actions | {dict(acts)} |",
           f"| player pin: target / realised / ok | {pin.get('target')} / {pin.get('final_player')} / {pin.get('ok')} |",
           f"| meta.json missing | {meta_missing} |"]
+    if net.get("background_hosts_top"):
+        md += ["", "Background hosts, shaper window (top by bytes; exogenous = chrome_service / os_service / unknown):", "",
+               "| host | category | share of downstream | MB |", "|---|---|---|---|"]
+        md += [f"| {h['host']} | {h['category']} | {h['share']} | {h['mb']} |" for h in net["background_hosts_top"]]
+    if net.get("unknown_hosts_top"):
+        md += ["", f"Unnamed flows above {CHECKS['unknown_list_share']} of downstream: top servers (check for a missed video CDN):",
+               "", "| server:port/proto | share of downstream | MB |", "|---|---|---|"]
+        md += [f"| {h['server']} | {h['share']} | {h['mb']} |" for h in net["unknown_hosts_top"]]
     (sd / "check.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     if v == "FAIL" and a.move_failed:
