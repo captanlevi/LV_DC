@@ -88,8 +88,11 @@ disable:
 start-capture:
 	@mkdir -p $(CAPTURE_DIR)
 	@mkdir -p $(SESSION_DIR)
-	@sudo tcpdump -i $(IFB_INGRESS) -U -w $(IN_FILE) & echo $$! > $(CAPTURE_DIR)/ifb0.pid
-	@sudo tcpdump -i $(IFB_EGRESS) -U -w $(OUT_FILE) & echo $$! > $(CAPTURE_DIR)/ifb1.pid
+	@# v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails ("Couldn't change ownership of
+	@# savefile") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never
+	@# opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.
+	@sudo sh -c 'exec tcpdump -i $(IFB_INGRESS) -U -w - > "$(IN_FILE)"' & echo $$! > $(CAPTURE_DIR)/ifb0.pid
+	@sudo sh -c 'exec tcpdump -i $(IFB_EGRESS) -U -w - > "$(OUT_FILE)"' & echo $$! > $(CAPTURE_DIR)/ifb1.pid
 	@echo "✅ Capture started"
 
 
@@ -101,17 +104,18 @@ stop-capture:
 	@if [ -f $(CAPTURE_DIR)/ifb0.pid ]; then \
 		PID=`cat $(CAPTURE_DIR)/ifb0.pid`; \
 		sudo kill -INT $$PID; \
-		sudo wait $$PID 2>/dev/null || true; \
+		for i in $$(seq 50); do sudo kill -0 $$PID 2>/dev/null || break; sleep 0.2; done; \
 		rm $(CAPTURE_DIR)/ifb0.pid; \
 	fi
 
 	@if [ -f $(CAPTURE_DIR)/ifb1.pid ]; then \
 		PID=`cat $(CAPTURE_DIR)/ifb1.pid`; \
 		sudo kill -INT $$PID; \
-		sudo wait $$PID 2>/dev/null || true; \
+		for i in $$(seq 50); do sudo kill -0 $$PID 2>/dev/null || break; sleep 0.2; done; \
 		rm $(CAPTURE_DIR)/ifb1.pid; \
 	fi
 
+	@# (the loop above waits up to 10 s for tcpdump to flush and exit; `sudo wait` never waited: wait is a shell builtin)
 	@echo "✅ Capture fully stopped"
 
 

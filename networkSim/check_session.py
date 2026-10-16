@@ -360,7 +360,6 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     bg_eps = [e["background_share"] for e in eps if e["background_share"] is not None]
     return {
         "pcap": True, "pcap_bytes": pcap.stat().st_size, "minutes": (t1 - t0) / 60.0, "client_ip": me,
-        "ssl_keys": (sd / "ssl_keys.log").exists(),
         "background_share": (1 - down_media / down_total) if down_total else None,
         "background_share_episode_max": max(bg_eps) if bg_eps else None,
         "background_share_http_v2": (1 - down_http_media / down_total) if down_total and http_media else None,
@@ -408,8 +407,8 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
         why.append(f"tt_logged_out_cap (quality countdown on {lab['quality_countdown_ticks']} ticks)")
     if not net.get("pcap") or not net.get("packets", 1):
         why.append("no pcap / no packets")
-    if net.get("pcap") and not net.get("ssl_keys"):
-        why.append("ssl_keys.log missing (v2 keeps the keys)")
+    if not net.get("ssl_keys"):
+        why.append("ssl_keys.log missing or empty (v2 keeps the keys)")
     if net.get("capture_gap_minutes"):
         why.append(f"capture gap: minutes with zero client packets {net['capture_gap_minutes']}")
     if not lab.get("n_res_meta"):
@@ -450,6 +449,9 @@ def main() -> int:
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
     net = traffic_checks(sd, platform)
+    # independent of the pcap (a header-only pcap used to return early and report the keys missing; chaos smoke run)
+    keys = sd / "ssl_keys.log"
+    net["ssl_keys"] = keys.exists() and keys.stat().st_size > 0
     shot_files = list((sd / "shots").glob("*.jpg")) if (sd / "shots").exists() else []
     dur = lab.get("duration_s") or (net.get("minutes") or 0) * 60
     exp_n = int(dur / CHECKS["shot_interval_s"]) if dur else 0
