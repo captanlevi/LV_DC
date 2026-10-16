@@ -293,16 +293,69 @@ def packets(pcap: Path):
     proc.wait()
 
 
-def client_ip(pkts) -> str | None:
-    c = collections.Counter()
+def client_ips(pkts) -> set:
+    """The capture host's own addresses, one per family: the top source of packets to server ports 443 / 80 (and the
+    top destination of packets from them). The old rule (most common private address) missed IPv6: a global v6
+    address is not private, so video over IPv6 was never counted as ours (chaos yt pilot: background 1.000)."""
+    c4, c6 = collections.Counter(), collections.Counter()
     for p in pkts:
-        for ip in (p[1], p[2]):
+        if p[4] in ("443", "80"):
+            ip = p[1]
+        elif p[3] in ("443", "80"):
+            ip = p[2]
+        else:
+            continue
+        (c6 if ":" in ip else c4)[ip] += 1
+    out = {c.most_common(1)[0][0] for c in (c4, c6) if c}
+    if not out:   # no web traffic at all: fall back to the most common private address
+        c = collections.Counter(ip for p in pkts for ip in (p[1], p[2]) if _private(ip))
+        out = {c.most_common(1)[0][0]} if c else set()
+    return out
+
+
+def _private(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def nc_flow_names(sd: Path, pcap: Path) -> tuple[dict, str]:
+    """Flow names from network_core's flow table (the LVQoE pipeline's own SNI / QUIC Initial / DNS attribution,
+    independent of the keylog and of the box's tshark version), keyed (client, cport, server, sport, proto).
+    Written to <session>/check_nc/ (the pipeline's own merged*.csv are produced later, elsewhere). Returns
+    ({}, reason) when network_core is unavailable or fails; check_session then falls back to tshark's names."""
+    try:
+        from network_core.pcap import process_pcap
+    except Exception as e:
+        return {}, f"network_core unavailable ({type(e).__name__})"
+    out_dir = sd / "check_nc"
+    flows, pkts = out_dir / "mergedFlows.csv", out_dir / "mergedPackets.csv"
+    try:
+        if not flows.exists():
+            out_dir.mkdir(exist_ok=True)
+            process_pcap(str(pcap), str(flows), str(pkts))
             try:
-                if ipaddress.ip_address(ip).is_private:
-                    c[ip] += 1
-            except ValueError:
-                pass
-    return c.most_common(1)[0][0] if c else None
+                from network_core.finalize import finalize
+                finalize(flows, Path(str(flows) + ".dns_obs.csv"), keep_dns_obs=True)
+            except Exception:
+                pass   # DNS names stay empty; SNI still names TLS / QUIC flows
+        names = {}
+        with open(flows) as fh:
+            for r in csv.DictReader(fh):
+                try:
+                    a, b, pr = r["FiveTuple"].split("->")[:3]
+                    cip, cport = a.rsplit(":", 1)
+                    sip, sport = b.rsplit(":", 1)
+                except ValueError:
+                    continue
+                proto = "TCP" if "6)" in pr and "17)" not in pr else "UDP" if "17)" in pr else pr
+                name = next((v for v in (r.get("SNI"), r.get("DNSName")) if v and v.lower() != "nan"), "")
+                if name:
+                    names[(cip.strip("[]"), cport, sip.strip("[]"), sport, proto)] = name.lower().split("|")[0]
+        return names, f"network_core ({len(names)} named flows)"
+    except Exception as e:
+        return {}, f"network_core failed ({type(e).__name__}: {str(e)[:120]})"
 
 
 def http_media_flows(sd: Path) -> set:
@@ -330,9 +383,12 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     pk = list(packets(pcap))
     if not pk:
         return {"pcap": True, "packets": 0}
-    me = client_ip(pk)
+    mine = client_ips(pk)
+    me = ",".join(sorted(mine))
     t0, t1 = min(p[0] for p in pk), max(p[0] for p in pk)
-    # host per flow: SNI on the client's handshake, else DNS answers for the server address
+    nc_names, nc_note = nc_flow_names(sd, pcap)
+    # host per flow: network_core's name (SNI / QUIC Initial / DNS), else tshark's SNI on the client's handshake,
+    # else tshark's DNS answers for the server address
     ip_names: dict[str, set] = collections.defaultdict(set)
     for p in pk:
         if p[8] and p[9]:
@@ -342,10 +398,20 @@ def traffic_checks(sd: Path, platform: str) -> dict:
                         ip_names[addr].add(name.lower())
     flow_sni: dict[tuple, str] = {}
     for p in pk:
-        if p[7] and p[1] == me:
+        if p[7] and p[1] in mine:
             flow_sni[(p[1], p[3], p[2], p[4], p[5])] = p[7].split("|")[0].lower()
+    name_src = collections.Counter()
+
     def classify(server, key):
-        names = {flow_sni[key]} if key in flow_sni else ip_names.get(server, set())
+        if key in nc_names:
+            names, src = {nc_names[key]}, "network_core"
+        elif key in flow_sni:
+            names, src = {flow_sni[key]}, "tshark_sni"
+        elif ip_names.get(server):
+            names, src = ip_names[server], "tshark_dns"
+        else:
+            names, src = set(), "none"
+        name_src[src] += 1
         cat = flow_category(names, platform)
         # an unnamed flow is identified by its server address (a missed video CDN shows up here: addendum I, brad)
         return cat, (sorted(names)[0] if names else f"{key[2]}:{key[3]}/{key[4]}")
@@ -353,13 +419,16 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     media_cache: dict[tuple, tuple] = {}
     down = []
     for p in pk:
-        if p[2] != me:
+        if p[2] not in mine:
             continue
         key = (p[2], p[4], p[1], p[3], p[5])                  # client-side 5-tuple of the flow
         if key not in media_cache:
             media_cache[key] = classify(p[1], key)
         cat, host = media_cache[key]
         down.append((p[0], p[6], cat == "media", key, cat, host))
+    flow_bytes = collections.Counter()
+    for d in down:
+        flow_bytes[d[3]] += d[1]
     down_total = sum(d[1] for d in down)
     down_media = sum(d[1] for d in down if d[2])
     http_media = http_media_flows(sd)
@@ -383,7 +452,7 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     gaps = []
     if lab:
         s0, s1 = lab[0]["timestamp"], t1
-        have = {int((p[0] - s0) // 60) for p in pk if s0 <= p[0] <= s1 and (p[1] == me or p[2] == me)}
+        have = {int((p[0] - s0) // 60) for p in pk if s0 <= p[0] <= s1 and (p[1] in mine or p[2] in mine)}
         gaps = [m for m in range(int((s1 - s0) // 60)) if m not in have]
     # Addendum C: realised dwell per state (consecutive episodes)
     dwell = collections.defaultdict(list)
@@ -443,6 +512,10 @@ def traffic_checks(sd: Path, platform: str) -> dict:
         "background_heavy_windows": heavy_windows,
         "background_share_http_v2": (1 - down_http_media / down_total) if down_total and http_media else None,
         "flows_by_sni": sum(1 for k in media_cache if k in flow_sni), "flows": len(media_cache),
+        # attribution diagnostics: where flow names came from, and the largest flows with their names
+        "name_source": nc_note, "flows_named_by": dict(name_src),
+        "top_flows": [{"flow": f"{k[2]}:{k[3]}/{k[4]}", "host": media_cache[k][1], "category": media_cache[k][0],
+                       "mb": round(b / 1e6, 3)} for k, b in flow_bytes.most_common(8)],
         "episodes": eps, "shaper_bind_share": (sum(binds) / len(binds)) if binds else None,
         "capture_gap_minutes": gaps,
         "dwell_episodes_per_state": {k: v for k, v in sorted(dwell.items(), key=lambda kv: int(kv[0]))},
