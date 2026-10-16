@@ -38,9 +38,10 @@ CHECKS = {
     "advancing_share_min": 0.8,
     "usable_share_min": 0.6,
     "shaper_ratio_max": 1.1,
-    "shaper_episode_share_min": 0.9,
+    "shaper_episode_share_min": 0.9,      # reported QA only, never a FAIL (levi addendum G: net_labels are coverage / debug)
     "max_background_share": 0.05,          # over the shaper window (levi addendum F)
-    "episode_background_capacity_flag": 0.25,   # reported per episode, not a FAIL (levi addendum F)
+    "window_background_flag": 0.25,     # per 60 s wall-clock window: background > 0.25 x its downstream (reported; addendum G)
+    "flag_window_s": 60.0,
     "shots_share_min": 0.5,
     "shot_interval_s": 10.0,
 }
@@ -336,13 +337,8 @@ def traffic_checks(sd: Path, platform: str) -> dict:
         byts = sum(d[1] for d in seg)
         kbit = byts * 8 / 1000 / (hi - lo)
         ratio = kbit / a["speed"] if a.get("speed") else None
-        bg_bytes = sum(d[1] for d in seg if not d[2])
-        set_bytes = a["speed"] * 1000 / 8 * (hi - lo) if a.get("speed") else None
         eps.append({"state": a.get("state"), "set_kbit": a.get("speed"), "measured_kbit": kbit, "ratio": ratio,
-                    "background_share": (1 - sum(d[1] for d in seg if d[2]) / byts) if byts else None,
-                    # levi addendum F (reported, not a FAIL): background bytes above 0.25 x set rate x duration
-                    "background_of_set_capacity": (bg_bytes / set_bytes) if set_bytes else None,
-                    "background_heavy": bool(set_bytes) and bg_bytes > CHECKS["episode_background_capacity_flag"] * set_bytes})
+                    "background_share": (1 - sum(d[1] for d in seg if d[2]) / byts) if byts else None})
         binds.append(ratio is not None and ratio <= CHECKS["shaper_ratio_max"])
     # capture gaps: minutes with zero client packets while the shaper runs
     gaps = []
@@ -370,6 +366,17 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     # share is reported.
     w0 = lab[0]["timestamp"] if lab else t0
     win = [d for d in down if d[0] >= w0]
+    # levi addendum G (reported, not a FAIL): 60 s wall-clock windows of the shaped capture whose background bytes
+    # exceed 0.25 x the window's downstream bytes (independent of net_labels' set rates)
+    fw = CHECKS["flag_window_s"]
+    wtot, wbg = collections.Counter(), collections.Counter()
+    for d in win:
+        k = int((d[0] - w0) // fw)
+        wtot[k] += d[1]
+        if not d[2]:
+            wbg[k] += d[1]
+    heavy_windows = [{"minute": k, "background_of_downstream": round(wbg[k] / wtot[k], 3)} for k in sorted(wtot)
+                     if wtot[k] and wbg[k] > CHECKS["window_background_flag"] * wtot[k]]
     win_total = sum(d[1] for d in win)
     win_media = sum(d[1] for d in win if d[2])
     return {
@@ -378,8 +385,7 @@ def traffic_checks(sd: Path, platform: str) -> dict:
         "background_share_whole_capture": (1 - down_media / down_total) if down_total else None,
         "pre_shaper_downstream_mb": (down_total - win_total) / 1e6,
         "background_share_episode_max": max(bg_eps) if bg_eps else None,
-        "background_heavy_episodes": [{"i": i, "state": e["state"], "of_set_capacity": round(e["background_of_set_capacity"], 3)}
-                                      for i, e in enumerate(eps) if e["background_heavy"]],
+        "background_heavy_windows": heavy_windows,
         "background_share_http_v2": (1 - down_http_media / down_total) if down_total and http_media else None,
         "flows_by_sni": sum(1 for k in media_cache if k in flow_sni), "flows": len(media_cache),
         "episodes": eps, "shaper_bind_share": (sum(binds) / len(binds)) if binds else None,
@@ -441,9 +447,6 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
             why.append("labels.csv lacks the v2 columns (old extension loaded?)")
         if lab.get("usable_share") is not None and lab["usable_share"] < CHECKS["usable_share_min"]:
             why.append(f"usable (non-ad play or stall) {lab['usable_share']:.2f} of the session < {CHECKS['usable_share_min']}")
-    sb = net.get("shaper_bind_share")
-    if sb is not None and sb < CHECKS["shaper_episode_share_min"]:
-        why.append(f"shaper binds in {sb:.2f} of episodes < {CHECKS['shaper_episode_share_min']}")
     bg = net.get("background_share")
     if bg is not None and bg > max_bg:
         why.append(f"background traffic (by host) {bg:.3f} > {max_bg}")
@@ -502,8 +505,8 @@ def main() -> int:
           f"| tier changes / min | {lab.get('tier_changes_per_min')} |",
           f"| background share by host, shaper window (episode max) / whole capture / by http_v2 | {net.get('background_share')} ({net.get('background_share_episode_max')}) / {net.get('background_share_whole_capture')} / {net.get('background_share_http_v2')} |",
           f"| downstream before the first episode (MB; page load) | {net.get('pre_shaper_downstream_mb')} |",
-          f"| episodes with background > 0.25 x set capacity (reported; addendum F) | {net.get('background_heavy_episodes')} |",
-          f"| shaper binds (share of episodes) | {net.get('shaper_bind_share')} |",
+          f"| 60 s windows with background > 0.25 x their downstream (reported; addendum G) | {net.get('background_heavy_windows')} |",
+          f"| shaper binds (share of episodes; reported QA only, addendum G) | {net.get('shaper_bind_share')} |",
           f"| Addendum C: dwell per state (episodes in a row) | {net.get('dwell_episodes_per_state')} |",
           f"| matrix / low-state cap | {out['matrix']} / {out['low_state_cap']} |",
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
