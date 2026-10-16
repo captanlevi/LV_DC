@@ -18,15 +18,32 @@ This README is the operator's reference. History and lessons are in `SESSION_NOT
 | Chrome | branded `google-chrome-stable`, version held for the whole batch: `sudo apt-mark hold google-chrome-stable` (unhold after). The version is recorded in every `meta.json`. |
 | IPv6 off | `sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1` (persist in `/etc/sysctl.d/`). Check that `ip -6 addr show scope global` is empty. Old data is IPv4-only; `check_session` FAILs `ipv6_media`. |
 | OS downloads off | `sudo systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer fwupd-refresh.timer`; `sudo snap refresh --hold`. Log both; undo after the batch. |
-| display | Pin and screen sizes assume 1920x1080 (geometry targets up to `player:1280x720` / `player:537x880` need it). `xrandr` before a batch. |
+| data volume | `data/` may be a symlink to an external disk (chaos: exFAT USB HDD at `/media/<user>/<label>/LV_DC_v2_data`). exFAT has no chown (the capture writes through a root shell), is case-insensitive and allows no symlinks inside. Check `mountpoint /media/<user>/<label>` and free space before a batch; `meta.json` records the realpath, mount and fstype per session. |
+| mount-path trap | after a manual `sudo mount`, the empty `/media/<user>/<label>` dir stays, so at the next login udisks mounts at `<label>1` and `data/` dangles. Fix: `sudo umount /media/<user>/<label>1; sudo rmdir` the stale dir(s); remount at `/media/<user>/<label>`. |
+| IPv6 off across reboots | persist `net.ipv6.conf.all.disable_ipv6=1`, `net.ipv6.conf.default.disable_ipv6=1` **and** `net.ipv6.conf.<iface>.disable_ipv6=1` in `/etc/sysctl.d/`. The interface line fails at boot, before Wi-Fi exists, so re-apply `sudo sysctl -p /etc/sysctl.d/<file>` after every boot / login. |
+| OS downloads across reboots | `systemctl stop` does not survive a reboot. For the batch window, run `sudo systemctl disable --now unattended-upgrades apt-daily.timer apt-daily-upgrade.timer fwupd-refresh.timer`; re-enable after. |
+| launch environment = cookie store | Chrome picks gnome-keyring when `XDG_CURRENT_DESKTOP` / `DESKTOP_SESSION` are set (desktop session), and `basic` when they are not (ssh). Build the templates and run the batch from the **same** environment (chaos: both from ssh). A login-autostart relaunch must `env -i` to the ssh variable set, or the tt login cookie does not decrypt. |
+| display | Geometry targets need 1920x1080 (`player:1280x720`, `player:537x880`); check with `xrandr`. Keep the page visible and the box awake: `gsettings set org.gnome.desktop.session idle-delay 0`, `…screensaver lock-enabled false`, `…screensaver idle-activation-enabled false`, `…settings-daemon.plugins.power sleep-inactive-ac-type nothing` (and `-battery-type`). Then `xset s off; xset dpms force off`, plus `--dpms-off` in the batch. |
+| audio | mute the sink: `pactl set-sink-mute @DEFAULT_SINK@ 1` (templates and tests play sound; the batch Chrome has `--mute-audio`). |
+| bytecode | `export PYTHONDONTWRITEBYTECODE=1`; `__pycache__` is untracked since 2026-10-17, so `meta.json` `lvdc_commit.dirty` stays false. |
 | profile templates | §3 |
+
+**Before every start (and after any reboot):**
+1. The data volume is mounted at the expected path, with enough free space.
+2. `ip -6 addr show scope global` is empty.
+3. The OS timers are inactive.
+4. `tailscale status` shows the laptop link `direct`.
+5. `xrandr` shows 1920x1080, and the display settings above are applied.
 
 ## 2. Running the batch
 
-From `networkSim/` (bare imports):
+From `networkSim/` (bare imports), detached and logged to a file. The shaper also throttles an operator's ssh, and a
+foreground ssh session can drop mid-episode. A non-tty stdin is handled.
 
 ```bash
-python orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--dpms-off] [--tt-room-rotation 300] [--fixed-geometry]
+export PYTHONDONTWRITEBYTECODE=1
+setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--dpms-off] [--tt-room-rotation 300] \
+    [--fixed-geometry] < /dev/null > ../batch_$(date +%F_%H%M).log 2>&1 &
 ```
 
 **What one session does:**
@@ -86,16 +103,24 @@ python orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--dpms-off] [--tt-
 - **Build:**
   - Use the same user Chrome is launched as (`$SUDO_USER` under sudo), with the default password store. Otherwise the cookies do not decrypt in the clone.
   - Run `google-chrome --user-data-dir=<LV_DC>/profiles/<platform> --no-first-run`, then log in where needed (tt), accept consent prompts, and quit.
+- **tt login:** a fresh profile's TikTok login hits "Verify it's really you" (SMS).
+  - The account owner does the SMS step by hand at the box's screen. Automated clicking does not trigger the SMS, and bot-evasion clicking is off-limits.
+  - Then run a 120 s room check: 0 `quality_countdown` ticks in its `check.md` before the template is used.
 - **Never open Chrome on a template during a batch.** Every session records the template's sha, and a change shows.
 - **Not cloned:** locks, HTTP and service-worker caches (every session starts cold), crash dumps, session restore, other extensions. Chrome's Safe Browsing database is kept.
 - **`--empty-profile`** starts empty instead. It is a recorded deviation and check_session FAILs it.
 
 ## 4. Pause / resume protocol
 
-- **Stopping:** send SIGINT or SIGTERM to the orchestrate process group, e.g. `kill -INT -<pgid>`.
+- **Boundary pause (the default, loses nothing):** `kill -STOP <orchestrate pid>`.
+  - The running exp.py finishes its session normally (check included), and no new session starts.
+  - Copy data, do the checkpoint, or hand the box to the user.
+  - Then `kill -CONT <orchestrate pid>` to resume.
+- **Stopping (abort):** send SIGINT or SIGTERM to the orchestrate process group, e.g. `kill -INT -<pgid>`.
   - The current session finalises: labels, pcap, meta and check.
   - It is archived as FAIL (`aborted: signal:…`) because it is incomplete.
   - orchestrate exits 130.
+- **Kill patterns:** in any `pkill -f`, use the `[x]` form (e.g. `pkill -f "[r]emote-debugging-port=9222"`) or exact pids. Over ssh, a plain pattern also matches the ssh shell's own command line and kills it.
 - **Code changes:** only at a pause. Never `git pull` under a running batch, because each new exp.py would load the new code mid-batch. Pull, then rerun the same command; it resumes from the PASS sessions on disk.
 - **Copying data off the box:** tailscale (UDP, tailscaled's port) and ssh (TCP 22) bypass shaping and capture; `meta.json` `mgmt_exclusion` records this. A DERP-relayed tailscale link runs over TCP 443 and is not excluded, so check `tailscale status` shows `direct`. Without the exclusion, copy only between sessions.
 - **After copying a session to LVQoE:** run `verify_session` there once it lands (LVQoE C2, in progress). It is the t41 checks as a permanent step. Until then: `scripts/analysis/t41_ingest_verify.py --sessions chaos/<platform>/<session>`.
