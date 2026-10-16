@@ -171,9 +171,10 @@ start_chrome:
 
 kill_chrome:
 	@echo "🛑 Killing collection Chrome..."
-	@pkill -9 -f "remote-debugging-port=9222" 2>/dev/null || true
+	@# [r]: the pattern must not match this recipe's own shell, whose command line contains it (make: *** Killed)
+	@pkill -9 -f "[r]emote-debugging-port=9222" 2>/dev/null || true
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
-		pgrep -f "remote-debugging-port=9222" > /dev/null 2>&1 || break; \
+		pgrep -f "[r]emote-debugging-port=9222" > /dev/null 2>&1 || break; \
 		sleep 1; \
 	done
 	@rm -f "$(CHROME_PROFILE)/Default/Sessions" \

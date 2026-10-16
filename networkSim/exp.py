@@ -104,7 +104,8 @@ PROFILE_TEMPLATES = Path(os.environ.get("LVDC_PROFILE_TEMPLATES", str(Path(__fil
 PROFILE_CLONE_SKIP = ("Singleton*", "lockfile", "Cache", "Code Cache", "GPUCache", "ShaderCache", "GrShaderCache",
                       "GraphiteDawnCache", "DawnWebGPUCache", "DawnGraphiteCache", "Crashpad", "Crash Reports",
                       "BrowserMetrics*", "Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs",
-                      "Extensions", "Extension State", "component_crx_cache", "optimization_guide_model_store")
+                      "Extensions", "Extension State", "component_crx_cache", "optimization_guide_model_store",
+                      "CacheStorage", "ScriptCache")   # service-worker caches (yt's sw.js app shell): cold too
 
 
 def dir_sha256(root: Path) -> dict:

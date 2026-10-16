@@ -469,8 +469,10 @@ def _open_new_tab(url: str = "about:blank") -> str | None:
         return None
 
 
-LABELING_DIR = os.path.abspath(Path(__file__).parent.parent / "labeling")
+# realpath: Chrome derives an unpacked extension's id from the symlink-resolved absolute path
+LABELING_DIR = os.path.realpath(Path(__file__).parent.parent / "labeling")
 _OUR_SW_SUFFIX = "/background.js"     # our extension's MV3 service worker (manifest "background.service_worker")
+OUR_EXT_NAME = json.loads((Path(LABELING_DIR) / "manifest.json").read_text())["name"]
 EXT_ID: str | None = None              # set by ensure_extension_loaded()
 
 
@@ -492,10 +494,10 @@ def _our_sw_ws_url() -> str | None:
     """WebSocket URL of OUR extension's service worker, if it is running. Chrome also runs built-in extension
     service workers, so 'the first chrome-extension service worker' can be the wrong one. An MV3 worker stops when
     idle, so its absence does not mean the extension is not loaded (see _ext_page)."""
+    ext_id = EXT_ID or unpacked_extension_id(LABELING_DIR)   # never "any background.js": other extensions have one
     return next((t.get("webSocketDebuggerUrl") for t in _targets()
-                 if t.get("type") == "service_worker" and t.get("url", "").startswith("chrome-extension://")
-                 and t.get("url", "").endswith(_OUR_SW_SUFFIX) and t.get("webSocketDebuggerUrl")
-                 and (EXT_ID is None or f"//{EXT_ID}/" in t.get("url", ""))), None)
+                 if t.get("type") == "service_worker" and t.get("url", "").startswith(f"chrome-extension://{ext_id}/")
+                 and t.get("url", "").endswith(_OUR_SW_SUFFIX) and t.get("webSocketDebuggerUrl")), None)
 
 
 def _ext_page() -> tuple["CDPPage | None", str | None]:
@@ -529,16 +531,15 @@ def _close_target(target_id: str | None) -> None:
 
 
 def ensure_extension_loaded() -> str | None:
-    """Make sure the labeling extension is loaded; return its id. Branded Chrome >= 137 ignores --load-extension,
-    so load it over CDP (Extensions.loadUnpacked; Chrome must run with --enable-unsafe-extension-debugging, which
-    the Makefile passes). Where --load-extension works (Chromium) and CDP loading is unavailable, the id is
-    derived from the path and checked by opening the extension's page."""
+    """Load the labeling extension and return its id, verified by its manifest name. Branded Chrome >= 137 ignores
+    --load-extension, so it is loaded over CDP (Extensions.loadUnpacked; Chrome runs with
+    --enable-unsafe-extension-debugging, which the Makefile passes); loading the same path again is harmless.
+    Where CDP loading is unavailable (Chromium with --load-extension), the id is derived from the path.
+    Never "the first extension service worker named background.js": a cloned profile carries Chrome's default
+    extensions, and adopting one of their ids left ours unloaded and the export reading the wrong storage (chaos
+    captest2, t37)."""
     global EXT_ID
-    for t in _targets():
-        u = t.get("url", "")
-        if t.get("type") == "service_worker" and u.startswith("chrome-extension://") and u.endswith(_OUR_SW_SUFFIX):
-            EXT_ID = u.split("/")[2]
-            return EXT_ID
+    EXT_ID = None
     try:
         with urllib.request.urlopen(f"{CDP_BASE}/json/version", timeout=5) as r:
             browser_ws = json.loads(r.read())["webSocketDebuggerUrl"]
@@ -546,18 +547,24 @@ def ensure_extension_loaded() -> str | None:
         res = b.call("Extensions.loadUnpacked", {"path": LABELING_DIR})
         b.close()
         print(f"[browser] Extensions.loadUnpacked → {res}", flush=True)
-        if res.get("id"):
-            EXT_ID = res["id"]
-            return EXT_ID
+        EXT_ID = res.get("id")
     except Exception as exc:
         print(f"[browser] Extensions.loadUnpacked failed: {exc}", flush=True)
-    EXT_ID = unpacked_extension_id(LABELING_DIR)
+    if not EXT_ID:
+        EXT_ID = unpacked_extension_id(LABELING_DIR)
     page, tid = _ext_page()
-    ok = page is not None and page.eval("chrome.runtime && chrome.runtime.id") == EXT_ID
+    name = None
+    try:
+        name = page.eval("chrome.runtime && chrome.runtime.getManifest().name") if page else None
+    except Exception:
+        pass
     if page:
         page.close()
     _close_target(tid)
-    return EXT_ID if ok else None
+    if name != OUR_EXT_NAME:
+        print(f"[browser] extension {EXT_ID} is not ours (manifest name {name!r}, expected {OUR_EXT_NAME!r})", flush=True)
+        return None
+    return EXT_ID
 
 
 def _set_download_dir(page: CDPPage, download_path: str) -> None:
@@ -757,6 +764,7 @@ def _wait_for_load(page: CDPPage, timeout: float = 15.0) -> None:
 # ---------------------------------------------------------------------------
 
 _WALL_JS = "document.documentElement.dataset.lvqoeWall === '1'"
+TICK_STARTUP_TIMEOUT_S = 15
 
 
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
@@ -926,6 +934,19 @@ class BrowserSession:
             self.channel_url = self._page.eval("location.href")
         except Exception:
             self.channel_url = None
+
+        # fail fast if the labeling content script is not ticking (else a whole session collects with no labels:
+        # chaos captest2, t37); content.js mirrors each res_meta tick onto <html data-lvqoe-tick>
+        tick = None
+        for _ in range(TICK_STARTUP_TIMEOUT_S):
+            tick = self._page.eval("document.documentElement.dataset.lvqoeTick || null")
+            if tick:
+                break
+            time.sleep(1)
+        if not tick:
+            raise RuntimeError(f"labeling content script not ticking {TICK_STARTUP_TIMEOUT_S} s after playback started "
+                               f"(extension {EXT_ID})")
+        print(f"[browser] Content script ticking (tick {tick})", flush=True)
         if self.close_chat and self.platform in _CLOSE_CHAT_JS:
             try:
                 time.sleep(2)                       # the chat frame renders after the player
