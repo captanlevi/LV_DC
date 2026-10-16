@@ -91,6 +91,15 @@ def summarise(rows: list[dict]) -> dict:
             if lab.get("stall_share") is not None:
                 stall.append(lab["stall_share"])
         sizes = [r["pcap_mb"] for r in rs if r["pcap_mb"]]
+        # geometry draws and whether they were realised (a screen change, e.g. the HDMI monitor unplugged, shows here)
+        geo = collections.defaultdict(lambda: [0, 0])
+        for r in rs:
+            pin = r["meta"].get("player_pin") or {}
+            g = r["meta"].get("geometry_target") or pin.get("geometry_target")
+            if g:
+                geo[g][0] += 1
+                geo[g][1] += bool(pin.get("ok"))
+        screens = collections.Counter(str((r["meta"].get("geometry") or {}).get("screen")) for r in rs if r["meta"].get("geometry"))
         out[pf] = {
             "sessions": len(rs), "verdicts": dict(verdicts), "fail_reasons": dict(reasons.most_common()),
             "exogenous_share_median_max": [statistics.median(exo), max(exo)] if exo else None,
@@ -101,6 +110,8 @@ def summarise(rows: list[dict]) -> dict:
             "accepted_hours": round(wsum / 3600, 2),
             "stall_share_median": statistics.median(stall) if stall else None,
             "pcap_mb_median": statistics.median(sizes) if sizes else None, "pcap_gb_total": round(sum(sizes) / 1e3, 2),
+            "geometry_drawn_realised": {g: f"{v[1]}/{v[0]}" for g, v in sorted(geo.items())},
+            "screens": dict(screens),
         }
     return out
 
@@ -132,6 +143,9 @@ def write(data_dir: Path = DATA_DIR, day: str | None = None) -> Path:
             md.append(f"| {pf} | {v['sessions']} | {v['verdicts']} | {v['fail_reasons']} | {v['exogenous_share_median_max']} | "
                       f"{v['background_share_median_max']} | {v['accepted_hours']} | {v['class_mix_accepted']} | "
                       f"{v['stall_share_median']} | {v['pcap_mb_median']} | {v['pcap_gb_total']} |")
+        md += ["", f"Geometry ({scope}; realised / drawn) and screens:", ""]
+        for pf, v in out[scope].items():
+            md.append(f"- {pf}: {v['geometry_drawn_realised']}; screens {v['screens']}")
         md += ["", f"Background hosts ({scope}, MB summed over sessions' top-12):", ""]
         for pf, v in out[scope].items():
             md.append(f"- {pf}: " + ", ".join(f"{h['host']} ({h['category']}) {h['mb']}" for h in v["background_hosts_mb"][:10]))
