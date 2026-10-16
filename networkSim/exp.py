@@ -52,7 +52,8 @@ def make_session_dir(platform: str) -> Path:
     platform_dir = DATA_DIR / platform
     platform_dir.mkdir(parents=True, exist_ok=True)
     n = 1
-    while (platform_dir / f"{abbrev}_{n}").exists():
+    # a name is never reused, also not one whose session was archived to data/_failed (provenance stays unique)
+    while (platform_dir / f"{abbrev}_{n}").exists() or (DATA_DIR / "_failed" / platform / f"{abbrev}_{n}").exists():
         n += 1
     session_dir = platform_dir / f"{abbrev}_{n}"
     session_dir.mkdir(parents=True, exist_ok=True)

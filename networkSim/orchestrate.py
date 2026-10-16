@@ -18,6 +18,9 @@ Usage:
     # Run sessions for every platform in round-robin until N sessions each
     python orchestrate.py --all-platforms --runs 5
 
+    # Collection v2 batch (resumable; see run_batch)
+    python orchestrate.py --batch youtube=30,twitch=15,tiktok=15
+
     # Just print the current balance without collecting anything
     python orchestrate.py --platform youtube --report-only
     python orchestrate.py --all-platforms --report-only
@@ -25,9 +28,14 @@ Usage:
 import subprocess
 import sys
 import argparse
+import json
+import shutil
+import time
+import datetime as dt
 from pathlib import Path
 
 from balance import PLATFORM_TRANSITIONS, most_needed_state, balance_report
+import batch_summary
 import yt_channels
 
 _RUNS_DIR = Path(__file__).parent.parent / "data"
@@ -35,8 +43,17 @@ _RUNS_DIR = Path(__file__).parent.parent / "data"
 EXIT_LOGIN_WALL = 3   # exp.py's exit code for a session aborted at a login wall (t37)
 EXIT_STOPPED = 130    # exp.py's exit code when the operator stopped the session
 
+EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume falls below MIN_FREE_SHARE free
+
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
+
+# --batch (t37, week-long run): stop before a session when the data volume has less than this share free; pause a
+# platform after this many consecutive sessions without a PASS; a yt channel that failed to start is skipped this long
+MIN_FREE_SHARE = 0.10
+MAX_CONSECUTIVE_FAIL = 5
+NOT_LIVE_RETRY_S = 6 * 3600
+BATCH_ORDER = ("youtube", "twitch", "tiktok", "bilibili")
 
 
 def _prompt_ready(platform: str, initial_state: str | None) -> bool:
@@ -96,6 +113,89 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
         balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix)
 
 
+def accepted_sessions(platform: str) -> int:
+    """PASS sessions on disk (data/<platform>/*/check.json); a FAIL is archived to data/_failed and not counted. The
+    batch recounts these at every start, so a restart resumes where it stopped."""
+    n = 0
+    for c in (_RUNS_DIR / platform).glob("*/check.json"):
+        try:
+            n += json.loads(c.read_text()).get("verdict") == "PASS"
+        except Exception:
+            pass
+    return n
+
+
+def free_share() -> float:
+    du = shutil.disk_usage(_RUNS_DIR if _RUNS_DIR.exists() else _RUNS_DIR.parent)
+    return du.free / du.total
+
+
+def preclean() -> None:
+    """Best effort, before every batch session: undo anything a crashed session left running (shaper qdiscs, tcpdump,
+    the collection Chrome). Each target is idempotent."""
+    here = Path(__file__).parent
+    for target in ("stop-capture", "disable", "kill_chrome"):
+        subprocess.run(["make", "-s", target], cwd=here, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["sudo", "pkill", "-INT", "-f", "[t]cpdump -i ifb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _summary() -> None:
+    try:
+        print(f"  Summary → {batch_summary.write(_RUNS_DIR)}")
+    except Exception as e:
+        print(f"  (daily summary failed: {e!r})")
+
+
+def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str) -> None:
+    """Collect until every platform has its target of PASS sessions. Next platform = the one furthest behind its
+    target (accepted / target; BATCH_ORDER breaks ties), so platforms advance together over the week. Nothing here
+    changes what a session collects; it only sequences exp.py runs and recovers from failures."""
+    paused: dict[str, str] = {}
+    fails = {p: 0 for p in targets}
+    not_live: dict[str, float] = {}
+    while True:
+        todo = [p for p in BATCH_ORDER if p in targets and p not in paused and accepted_sessions(p) < targets[p]]
+        if not todo:
+            break
+        p = min(todo, key=lambda q: (accepted_sessions(q) / targets[q], BATCH_ORDER.index(q)))
+        fs = free_share()
+        if fs < MIN_FREE_SHARE:
+            print(f"\n  Data volume {fs:.1%} free < {MIN_FREE_SHARE:.0%}: stopping the batch (free space, then rerun).")
+            _summary()
+            sys.exit(EXIT_LOW_DISK)
+        before = accepted_sessions(p)
+        now = time.time()
+        skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
+        channel = yt_channels.next_channel(_RUNS_DIR, exclude=skip) if p == "youtube" else None
+        print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] {p.upper()}: {before}/{targets[p]} accepted"
+              + (f"; channel {channel['handle']} ({channel['type']}, {channel['role']})" if channel else ""))
+        preclean()
+        try:
+            rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=yt_matrix),
+                                 episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel)
+        except Exception as e:
+            print(f"  exp.py could not run: {e!r}")
+            rc = -1
+        if rc == EXIT_STOPPED:
+            print("  Session stopped by the operator (SIGINT / SIGTERM): stopping the batch.")
+            _summary()
+            sys.exit(EXIT_STOPPED)
+        if rc == EXIT_LOGIN_WALL:
+            paused[p] = "login wall (fix the profile template, then rerun)"
+        elif rc != 0 and channel:
+            not_live[channel["handle"]] = now
+        fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1
+        if fails[p] >= MAX_CONSECUTIVE_FAIL and p not in paused:
+            paused[p] = f"{fails[p]} consecutive sessions without a PASS"
+        if p in paused:
+            print(f"  PAUSED {p}: {paused[p]}")
+        _summary()
+    print("\nBatch finished." + (f" Paused: {paused}" if paused else ""))
+    for p in targets:
+        print(f"  {p}: {accepted_sessions(p)}/{targets[p]} accepted")
+    _summary()
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -105,6 +205,12 @@ if __name__ == "__main__":
         description="Orchestrate QoE data collection with automatic balance targeting"
     )
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--batch",
+        default=None,
+        help="Collection v2 batch, e.g. 'youtube=30,twitch=15,tiktok=15': PASS-session targets per platform; resumes "
+             "from what is on disk; free-space stop, failure recovery, daily summary (data/_summaries/).",
+    )
     group.add_argument(
         "--platform",
         choices=list(PLATFORM_TRANSITIONS),
@@ -148,6 +254,14 @@ if __name__ == "__main__":
         help="Print balance report without collecting.",
     )
     args = parser.parse_args()
+
+    if args.batch:
+        targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
+        unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
+        if unknown:
+            sys.exit(f"unknown platform(s) in --batch: {unknown}")
+        run_batch(targets, auto=True, yt_matrix=args.yt_matrix)
+        sys.exit(0)
 
     platforms = list(PLATFORM_TRANSITIONS) if args.all_platforms else [args.platform]
 
