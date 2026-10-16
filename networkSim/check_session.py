@@ -53,7 +53,8 @@ AD_MERGE_GAP_S, AD_PAD_S, SWAP_BOUNDARY_S = 2.0, 1.0, 2.0
 MEDIA_HOSTS = {
     "youtube": [r"(^|\.)googlevideo\.com$"],
     "twitch": [r"(^|\.)ttvnw\.net$", r"(^|\.)live-video\.net$"],
-    "tiktok": [r"(^|\.)pull-[a-z0-9-]+\.(tiktokcdn|ttlivecdn)\.com$"],
+    # t41: chaos ti_1's FLV came from <ip-dashed>.fcdnstatic-intl.com (97 % of bytes); LVQoE MEDIA_SNI_MP gets the same
+    "tiktok": [r"(^|\.)pull-[a-z0-9-]+\.(tiktokcdn|ttlivecdn)\.com$", r"(^|\.)fcdnstatic-intl\.com$"],
     "bilibili": [r"(^|\.)bilivideo\.(com|cn)$", r"(^|\.)hdslb\.com$"],
 }
 # background categories (copied from LVQoE scripts/analysis/t40_old_background.py, master 2a6e771; keep in sync).
