@@ -33,6 +33,7 @@ import yt_channels
 _RUNS_DIR = Path(__file__).parent.parent / "data"
 
 EXIT_LOGIN_WALL = 3   # exp.py's exit code for a session aborted at a login wall (t37)
+EXIT_STOPPED = 130    # exp.py's exit code when the operator stopped the session
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
@@ -81,6 +82,9 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
             continue
         rc = _run_collection(platform, initial_state=target_state, episodes=episodes_per_run, auto=auto,
                              yt_matrix=yt_matrix, channel=channel)
+        if rc == EXIT_STOPPED:
+            print("  Session stopped by the operator (SIGINT / SIGTERM): stopping the batch.")
+            sys.exit(EXIT_STOPPED)
         if rc == EXIT_LOGIN_WALL:
             print(f"  LOGIN WALL on {platform}: stopping this platform (fix the profile template, then rerun).")
             balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix)

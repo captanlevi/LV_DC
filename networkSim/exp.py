@@ -21,6 +21,7 @@ import time
 from dataclasses import asdict
 import json
 import signal
+import threading
 import argparse
 import asyncio
 
@@ -90,6 +91,7 @@ WINDOW_SIZES: dict[str, str] = {}
 
 
 EXIT_LOGIN_WALL = 3   # exp.py exit code when the session was aborted at a login wall (t37)
+EXIT_STOPPED = 130    # exp.py exit code when the operator stopped the session (SIGINT / SIGTERM)
 
 
 # v2 (LVQoE t37, rushi 2026-10-16): each session's profile is a CLONE of a per-platform template (a Chrome user-data-dir,
@@ -307,6 +309,27 @@ async def _ossilate(
         
     return True
 
+def _stdin_lines(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
+    """Daemon thread: each stdin line into `queue`, then None at EOF. Not asyncio.to_thread: asyncio.run joins its
+    executor threads on exit, so a read still pending when the last episode ended kept the process alive until stdin
+    produced a line (chaos smoke run under nohup, t37). A daemon thread never holds up the exit. Raw os.read on fd 0,
+    not sys.stdin: a daemon thread blocked inside the BufferedReader holds its lock, which can abort the interpreter at
+    shutdown ("could not acquire lock for <stdin>")."""
+    buf = b""
+    while True:
+        try:
+            chunk = os.read(0, 4096)
+        except Exception:
+            chunk = b""
+        if not chunk:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+            return
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            loop.call_soon_threadsafe(queue.put_nowait, line.decode(errors="replace") + "\n")
+
+
 async def _abort_watch(abort_check) -> str:
     """Resolves with the reason once abort_check() returns one (polled each second)."""
     while True:
@@ -343,30 +366,54 @@ async def experiment(
     osc_task = _make_task(forced_initial_state)
     abort_task = asyncio.create_task(_abort_watch(abort_check)) if abort_check else None
 
+    # SIGINT / SIGTERM stop the shaper and return like 'q', so the normal finalise path runs (installed here because a
+    # job started with `nohup ... &` from a script inherits SIGINT ignored, and SIGTERM's default kills without cleanup)
+    loop = asyncio.get_running_loop()
+    stop_requested = asyncio.Event()
+    got_signal: list[str] = []
+
+    def _on_signal(sig: signal.Signals) -> None:
+        print(f"\n{sig.name} received — stopping the session (the normal finalise path runs)")
+        got_signal.append(sig.name)
+        stop_requested.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _on_signal, sig)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
+    stop_task = asyncio.create_task(stop_requested.wait())
+
+    lines: asyncio.Queue = asyncio.Queue()
+    threading.Thread(target=_stdin_lines, args=(loop, lines), daemon=True, name="stdin").start()
+    print("[u=faster / d=slower / q=quit]")
+
     interactive = True   # False once stdin hits EOF without a terminal (nohup / batch): no prompt, run to the end
+    input_task = None
     try:
         while True:
-            input_task = (asyncio.create_task(asyncio.to_thread(input, "[u=faster / d=slower / q=quit]: "))
-                          if interactive else None)
-            waits = {osc_task} | ({input_task} if input_task else set()) | ({abort_task} if abort_task else set())
+            if interactive and input_task is None:
+                input_task = asyncio.create_task(lines.get())
+            waits = {osc_task, stop_task} | ({input_task} if input_task else set()) | ({abort_task} if abort_task else set())
             done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
 
             if abort_task in done:
-                if input_task:
-                    input_task.cancel()
                 print(f"\nAborting the session: {abort_task.result()}")
                 stop_event.set()
                 await osc_task
                 return abort_task.result()
 
-            if osc_task in done:
-                if input_task:
-                    input_task.cancel()
-                break
+            if stop_task in done:
+                stop_event.set()
+                await osc_task
+                return f"signal:{got_signal[0]}" if got_signal else "signal"
 
-            try:
-                user_input = input_task.result().strip().lower()
-            except EOFError:
+            if osc_task in done:
+                break   # max_episodes reached: the session ends here, whatever stdin is doing
+
+            line = input_task.result()
+            input_task = None
+            if line is None:
                 if not sys.stdin.isatty():
                     # no terminal (stdin is /dev/null or a closed pipe): EOF is not a quit; the session runs on
                     print("\n[stdin closed, no terminal: keyboard control off; the session runs to its episode count]")
@@ -376,6 +423,7 @@ async def experiment(
                 stop_event.set()
                 await osc_task
                 break
+            user_input = line.strip().lower()
 
             if user_input == "q":
                 stop_event.set()
@@ -398,17 +446,15 @@ async def experiment(
         osc_task.cancel()
         raise
     finally:
-        if abort_task:
-            abort_task.cancel()
+        for t in (abort_task, stop_task, input_task):
+            if t:
+                t.cancel()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.remove_signal_handler(sig)
+            except Exception:
+                pass
     return None
-
-
-
-
-
-
-
-
 
 
 def save_json(path: str | Path, data: list[NetLabel]):
@@ -486,6 +532,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     platform = args.platform
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+
+    def _term(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _term)
 
     transition_map = {
         "youtube": YOUTUBE_TRANSITIONS,
@@ -531,25 +582,27 @@ if __name__ == "__main__":
     if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform)) == False:
         raise ValueError("Cannot open chrome with SSL key log enabled")
 
-    if args.auto:
-        browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url)
-        browser.start()
-    else:
-        # Manual mode (default): wait for Chrome to be reachable, then hand off.
-        from browser import _wait_for_cdp
-        if not _wait_for_cdp(30):
-            log = Path(__file__).parent.parent / "current_data" / "chrome.log"
-            print(f"[error] Chrome CDP not available after 30s — check {log} for Chrome errors", file=sys.stderr)
-            raise ValueError("Chrome CDP not available")
-        print("\n" + "="*60)
-        print(f"Chrome is open. Navigate to a {platform} live video.")
-        print("Press ENTER when the video is playing to start collection.")
-        print("="*60 + "\n")
-        input()
-        browser = None
-
+    browser = None
     abort_reason = None
     try:
+        # inside the try: a failed start (e.g. the channel is not live) still runs the finalise path below, which stops
+        # tcpdump and the shaper (they were left running before, writing into the dead session's pcap)
+        if args.auto:
+            browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url)
+            browser.start()
+        else:
+            # Manual mode (default): wait for Chrome to be reachable, then hand off.
+            from browser import _wait_for_cdp
+            if not _wait_for_cdp(30):
+                log = Path(__file__).parent.parent / "current_data" / "chrome.log"
+                print(f"[error] Chrome CDP not available after 30s — check {log} for Chrome errors", file=sys.stderr)
+                raise ValueError("Chrome CDP not available")
+            print("\n" + "="*60)
+            print(f"Chrome is open. Navigate to a {platform} live video.")
+            print("Press ENTER when the video is playing to start collection.")
+            print("="*60 + "\n")
+            input()
+
         abort_reason = asyncio.run(experiment(
             episode_time_in_seconds=60,
             net_labels=net_labels,
@@ -560,16 +613,22 @@ if __name__ == "__main__":
         ))
 
     except KeyboardInterrupt:
-        print("\nCtrl+C received — stopping experiment")
+        print("\nInterrupted before collection started — finalising")
+        abort_reason = abort_reason or "interrupted"
+    except Exception as e:
+        print(f"[error] session failed: {e!r} — finalising")
+        abort_reason = abort_reason or f"error: {type(e).__name__}: {e}"
 
     finally:
+        # finalising (pcap, labels, meta, check) must not be cut short: signals now only print
+        for _sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(_sig, lambda *_: print("\n[finalising the session; signal deferred until it is done]"))
         channel_url = None
         meta_extra = {"window_size_flag": WINDOW_SIZES.get(platform)}
         if browser is not None:
             channel_url = browser.channel_url
             meta_extra.update(chat_action=browser.chat_action, geometry=browser.geometry, player_pin=browser.player_pin,
-                              channel_list_url=browser.list_url, abort_reason=browser.abort_reason,
-                              abort_at=browser.abort_at)
+                              channel_list_url=browser.list_url, abort_at=browser.abort_at)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)
@@ -580,6 +639,7 @@ if __name__ == "__main__":
             # Export labels from extension storage directly
             from browser import _export_via_service_worker
             _export_via_service_worker(session_dir)
+        meta_extra["abort_reason"] = (browser.abort_reason if browser is not None else None) or abort_reason
         session_meta.finish(session_dir, channel_url, **meta_extra)   # while Chrome is still up (records its version)
         kill_chrome(chrome_profile)
 
@@ -605,3 +665,7 @@ if __name__ == "__main__":
     if abort_reason == "login_wall":
         # orchestrate.py stops the platform on this code: every further logged-out session would hit the same wall
         sys.exit(EXIT_LOGIN_WALL)
+    if abort_reason and abort_reason.startswith(("signal", "interrupted")):
+        sys.exit(EXIT_STOPPED)    # orchestrate.py stops the whole batch
+    if abort_reason:
+        sys.exit(1)               # e.g. the channel was not live: orchestrate.py moves on to the next channel
