@@ -1,0 +1,152 @@
+# LV_DC: live-video QoE data collection (collection v2)
+
+LV_DC collects one live-video session at a time:
+- it plays a live stream in Chrome with a labeling extension;
+- it shapes the network through a Markov schedule of bandwidth states;
+- it captures the packets, plus the TLS keys and the decoded HTTP logs;
+- it writes a `check.md` verdict per session.
+
+The data feeds LVQoE (prediction of resolution and stalls from encrypted traffic).
+
+This README is the operator's reference. History and lessons are in `SESSION_NOTES.md`. Older notes are in `docs/archive/`.
+
+## 1. One-time setup on the collection box
+
+| step | command / rule |
+|---|---|
+| Python env | `bash setup.sh` (creates `.venv`; `network_core` comes from PyPI) |
+| Chrome | branded `google-chrome-stable`, version held for the whole batch: `sudo apt-mark hold google-chrome-stable` (unhold after). The version is recorded in every `meta.json`. |
+| IPv6 off | `sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1` (persist in `/etc/sysctl.d/`). Check that `ip -6 addr show scope global` is empty. Old data is IPv4-only; `check_session` FAILs `ipv6_media`. |
+| OS downloads off | `sudo systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer fwupd-refresh.timer`; `sudo snap refresh --hold`. Log both; undo after the batch. |
+| display | Pin and screen sizes assume 1920x1080 (geometry targets up to `player:1280x720` / `player:537x880` need it). `xrandr` before a batch. |
+| profile templates | §3 |
+
+## 2. Running the batch
+
+From `networkSim/` (bare imports):
+
+```bash
+python orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--dpms-off] [--tt-room-rotation 300] [--fixed-geometry]
+```
+
+**What one session does:**
+1. Clone the platform's template profile into a fresh Chrome profile. The template path and its sha go to `meta.json`.
+2. Start shaping and capture, then launch Chrome with the session's TLS key log.
+3. Load the labeling extension over CDP and navigate to the stream:
+   - yt: the channel rotation in `yt_channels.py`;
+   - twitch: the Just Chatting directory;
+   - tt: a room from `/live`.
+4. Fail fast if the extension's content script is not ticking within 15 s.
+5. Close yt chat, set the geometry (`geometry.py` rotation), and turn on twitch Video Stats (hidden).
+6. Run the shaper for the episodes:
+
+   | platform | episodes | matrix | low-state cap |
+   |---|---|---|---|
+   | yt | 21 | A | 6 |
+   | tt | 23 | TT-M | 4 |
+   | twitch | 23 | TW-M | 2 |
+
+7. Export labels, player stats and screenshots, stop the capture, decode the HTTP logs, and write `meta.json`.
+8. Run `check_session.py` (§5). A FAIL is moved to `data/_failed/<platform>/` and never deleted.
+
+**What the batch loop does:**
+- **Next platform:** the one furthest behind its PASS target.
+- **Resume:** PASS sessions are recounted from disk at every start.
+- **Free space:** it stops below 10 % free (exit 4).
+- **Pre-clean:** it undoes leftovers (shaping, tcpdump, Chrome) before every session.
+- **Pausing a platform:** after 5 consecutive sessions without a PASS, or on a login wall.
+- **Not-live yt channel:** skipped for 6 h.
+- **Daily summary:** `data/_summaries/summary_<day>.md / .json` after every session:
+  - PASS / FAIL by reason;
+  - background shares and hosts;
+  - class mix;
+  - geometry realised / drawn;
+  - sizes, disk and data volume;
+  - yt rotation.
+
+**Options:**
+- `--dpms-off`: blank the monitor again after each window resize.
+- `--tt-room-rotation 300`: the prereg's pre-declared tt fallback, a new room every 5 min. Only when the checkpoint QA says so.
+- `--fixed-geometry`: keep each platform's pinned player size instead of the rotation.
+- `--tt-matrix` / `--tw-matrix` / `--yt-matrix`: `current` reproduces the old schedule.
+
+**Exit codes:**
+
+| process | code | meaning |
+|---|---|---|
+| exp.py | 0 | session ran; see its `check.md` |
+| exp.py | 1 | start failed (channel not live, extension not ticking); finalised, FAIL |
+| exp.py | 3 | login wall: orchestrate pauses that platform |
+| exp.py | 130 | stopped by SIGINT / SIGTERM; finalised, FAIL, orchestrate stops |
+| orchestrate.py | 4 | less than 10 % free space on the data volume |
+
+## 3. Template profiles
+
+- **Location:** one per platform at `<LV_DC>/profiles/<platform>/` (or `$LVDC_PROFILE_TEMPLATES/<platform>`). `profiles/` is gitignored because it holds login cookies.
+- **Build:**
+  - Use the same user Chrome is launched as (`$SUDO_USER` under sudo), with the default password store. Otherwise the cookies do not decrypt in the clone.
+  - Run `google-chrome --user-data-dir=<LV_DC>/profiles/<platform> --no-first-run`, then log in where needed (tt), accept consent prompts, and quit.
+- **Never open Chrome on a template during a batch.** Every session records the template's sha, and a change shows.
+- **Not cloned:** locks, HTTP and service-worker caches (every session starts cold), crash dumps, session restore, other extensions. Chrome's Safe Browsing database is kept.
+- **`--empty-profile`** starts empty instead. It is a recorded deviation and check_session FAILs it.
+
+## 4. Pause / resume protocol
+
+- **Stopping:** send SIGINT or SIGTERM to the orchestrate process group, e.g. `kill -INT -<pgid>`.
+  - The current session finalises: labels, pcap, meta and check.
+  - It is archived as FAIL (`aborted: signal:…`) because it is incomplete.
+  - orchestrate exits 130.
+- **Code changes:** only at a pause. Never `git pull` under a running batch, because each new exp.py would load the new code mid-batch. Pull, then rerun the same command; it resumes from the PASS sessions on disk.
+- **Copying data off the box:** tailscale (UDP, tailscaled's port) and ssh (TCP 22) bypass shaping and capture; `meta.json` `mgmt_exclusion` records this. A DERP-relayed tailscale link runs over TCP 443 and is not excluded, so check `tailscale status` shows `direct`. Without the exclusion, copy only between sessions.
+- **After copying a session to LVQoE:** run `verify_session` there once it lands (LVQoE C2, in progress). It is the t41 checks as a permanent step. Until then: `scripts/analysis/t41_ingest_verify.py --sessions chaos/<platform>/<session>`.
+
+## 5. Guards: `check_session.py`
+
+It writes `check.json` and a one-screen `check.md` per session.
+
+**FAIL reasons (any one fails the session):**
+
+| reason | rule |
+|---|---|
+| `login_wall` | the platform's logged-out wall stopped playback; the session was aborted |
+| `aborted: …` | the session was stopped (signal, start error) |
+| `tt_logged_out_cap` | tt's logged-out quality countdown was on screen |
+| `no pcap / no packets` | capture missing or empty |
+| `ssl_keys.log missing or empty` | v2 keeps the TLS keys |
+| `capture gap` | a minute with zero client packets while the shaper ran |
+| `no res_meta ticks` / tick presence < `0.95` | the extension's 1 Hz tick |
+| `current_time advancing` < `0.8` | of playing, non-ad ticks |
+| `labels.csv lacks the v2 columns` | old extension loaded |
+| `usable` < `0.6` | non-ad play or stall time over the session length |
+| `ipv6_media` | any selected media bytes on IPv6 flows |
+| `exogenous background` > `0.05` | Chrome's own / OS / unnamed flows over the shaper window's downstream (platform first-party traffic is reported, not enforced) |
+| `screenshots` | fewer than half the expected cadence shots |
+| `meta.json incomplete` | a required field is missing (commit, Chrome, shaper, matrix + cap, channel handle / type on yt, login state on tt, profile template, NTP, …) |
+
+**Reported, never a FAIL:**
+- **Labels and ads:** ad ticks per signal and ad spans; stall share; tier mix and changes; yt 144 / 240 / 360p shares.
+- **Twitch swaps:** src_changed at tier changes, and swap-only ad spans.
+- **tt rooms:** room per tick, room changes, FLV tokens per room, login state / room rotation.
+- **Background traffic:**
+  - all-background and per-category shares;
+  - the top background hosts, and the top unnamed servers when the unknown share is above `0.02`;
+  - 60 s windows with exogenous > `0.25` of their downstream.
+- **IPv6:** media and all-downstream shares.
+- **Shaper QA:** binds per episode, and dwell in seconds / episodes with the longest low-state run beside the cap.
+- **Captures:** screenshots by reason; player_stats records.
+- **Geometry:** drawn vs realised.
+
+## 6. Session files (`data/<platform>/<abbrev>_N/`)
+
+| file | content |
+|---|---|
+| `merged.pcap` | ingress + egress capture (management traffic excluded) |
+| `ssl_keys.log` | TLS key log (kept) |
+| `http_v2.json`, `h1_raw.json`, `h2_raw.pdml`, `h3_raw.pdml` | decoded HTTP logs and raw decoder outputs |
+| `labels.csv` | extension ticks and events: v1 columns plus `buffered_ahead_s`, `playback_rate`, `duration_s`, `is_ad`, `ad_signals`, `src_changed`, `login_wall_text`, `login_wall`, `quality_countdown` |
+| `player_stats.jsonl` | ground truth only, never features: yt stats for nerds; twitch Video Stats |
+| `net_labels.txt` | the shaper schedule (coverage / debug record, not a data covariate) |
+| `meta.json` | provenance and covariates: commit, Chrome, extension, profile template + sha, shaper (matrix, cap, rule), channel / room, geometry, login state, room rotation, IPv6 sysctl, data volume, management exclusion, NTP, abort reason |
+| `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick and reason |
+| `ad_actions.jsonl` | what the ad skipper did |
+| `check.json`, `check.md` | the verdict |
