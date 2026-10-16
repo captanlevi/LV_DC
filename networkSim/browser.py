@@ -313,10 +313,28 @@ def _browser_call(method: str, params: dict | None = None) -> dict:
         b.close()
 
 
-def pin_player(page: "CDPPage", target: tuple[int, int], target_id: str | None, iters: int = 5) -> dict:
-    """Resize the browser window until the <video> client size is within PIN_TOLERANCE of `target` (proportional
-    steps on the window's width and height). Returns the trace for meta.json; never raises."""
-    trace = {"target": list(target), "steps": [], "ok": False}
+def _next_window_dim(samples: list[tuple[int, int]], target: int, cur_win: int) -> int:
+    """Next window size along one axis from (window, player) samples: interpolate between the closest samples on
+    either side of the target when it is bracketed (the player jumps at layout breakpoints, so proportional steps
+    oscillate: laptop run9, tt 481 -> 593 -> 492 -> 581), else a proportional step from the latest sample."""
+    below = [s for s in samples if s[1] and s[1] < target]
+    above = [s for s in samples if s[1] and s[1] > target]
+    if below and above:
+        (w0, p0), (w1, p1) = max(below, key=lambda s: s[1]), min(above, key=lambda s: s[1])
+        if p1 != p0 and w1 != w0:
+            nxt = int(round(w0 + (target - p0) * (w1 - w0) / (p1 - p0)))
+            if nxt in (w0, w1):
+                nxt = (w0 + w1) // 2
+            return nxt
+    w, pl = samples[-1]
+    return int(round(w + (target - pl) * w / max(pl, 1) * 0.9))
+
+
+def pin_player(page: "CDPPage", target: tuple[int, int], target_id: str | None, iters: int = 8) -> dict:
+    """Resize the browser window until the <video> client size is within PIN_TOLERANCE of `target`. Ends on the
+    closest window seen when the target is not reached (screen- or layout-bound). Returns the trace for meta.json;
+    never raises."""
+    trace = {"mode": "player", "target": list(target), "steps": [], "ok": False}
     try:
         win = _browser_call("Browser.getWindowForTarget", {"targetId": target_id} if target_id else {})
         wid, bounds = win.get("windowId"), dict(win.get("bounds") or {})
@@ -324,6 +342,9 @@ def pin_player(page: "CDPPage", target: tuple[int, int], target_id: str | None, 
             trace["error"] = "no window id"
             return trace
         _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+        scr = json.loads(page.eval("JSON.stringify([screen.availWidth, screen.availHeight])") or "[0, 0]")
+        trace["screen_avail"] = scr
+        sw, sh = [], []
         for _ in range(iters):
             ps = page.eval(_PLAYER_SIZE_JS)
             pw, ph = json.loads(ps) if ps else (0, 0)
@@ -333,18 +354,60 @@ def pin_player(page: "CDPPage", target: tuple[int, int], target_id: str | None, 
                 break
             if not (pw and ph and bounds.get("width") and bounds.get("height")):
                 break
-            if len(trace["steps"]) >= 2 and trace["steps"][-2]["player"] == [pw, ph]:
-                trace["error"] = "player size did not change with the window (layout- or screen-bound)"
-                break
-            scr = json.loads(page.eval("JSON.stringify([screen.availWidth, screen.availHeight])") or "[0, 0]")
-            nw = int(round(bounds["width"] + (target[0] - pw) * bounds["width"] / max(pw, 1) * 0.9))
-            nh = int(round(bounds["height"] + (target[1] - ph) * bounds["height"] / max(ph, 1) * 0.9))
+            sw.append((bounds["width"], pw))
+            sh.append((bounds["height"], ph))
+            nw, nh = _next_window_dim(sw, target[0], bounds["width"]), _next_window_dim(sh, target[1], bounds["height"])
             if scr[0] and scr[1]:                 # a window larger than the screen is not honoured; do not chase it
                 nw, nh = min(nw, scr[0]), min(nh, scr[1])
-            bounds = {"width": max(400, nw), "height": max(300, nh)}
+            nb = {"width": max(400, nw), "height": max(300, nh)}
+            if [nb["width"], nb["height"]] in [st["window"] for st in trace["steps"]]:
+                trace["error"] = "no further window size to try (layout- or screen-bound)"
+                break
+            bounds = nb
             _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": bounds})
             time.sleep(1.5)                       # the page re-lays out the player
+        if not trace["ok"] and trace["steps"]:
+            # end on the closest window seen
+            def err(st):
+                return abs(st["player"][0] - target[0]) / target[0] + abs(st["player"][1] - target[1]) / target[1]
+            best = min((st for st in trace["steps"] if st["player"][0]), key=err, default=None)
+            if best and best["window"] != [bounds.get("width"), bounds.get("height")]:
+                _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"width": best["window"][0],
+                                                                                       "height": best["window"][1]}})
+                time.sleep(1.5)
+                ps = page.eval(_PLAYER_SIZE_JS)
+                trace["steps"].append({"window": best["window"], "player": json.loads(ps) if ps else None, "best": True})
         trace["final_player"] = trace["steps"][-1]["player"] if trace["steps"] else None
+        trace["final_window"] = trace["steps"][-1]["window"] if trace["steps"] else None
+    except Exception as exc:
+        trace["error"] = repr(exc)
+    return trace
+
+
+def size_window(page: "CDPPage", target: tuple[int, int], target_id: str | None) -> dict:
+    """geometry window:WxH (t37): set the browser window to W x H (clamped to the screen; a larger window is not
+    honoured); the player takes what the layout gives it. Returns the trace for meta.json; never raises."""
+    trace = {"mode": "window", "target": list(target), "ok": False}
+    try:
+        win = _browser_call("Browser.getWindowForTarget", {"targetId": target_id} if target_id else {})
+        wid = win.get("windowId")
+        if wid is None:
+            trace["error"] = "no window id"
+            return trace
+        scr = json.loads(page.eval("JSON.stringify([screen.availWidth, screen.availHeight])") or "[0, 0]")
+        w, h = target
+        if scr[0] and scr[1]:
+            w, h = min(w, scr[0]), min(h, scr[1])
+        _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+        _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"left": 0, "top": 0, "width": w, "height": h}})
+        time.sleep(1.5)
+        got = _browser_call("Browser.getWindowBounds", {"windowId": wid}).get("bounds") or {}
+        ps = page.eval(_PLAYER_SIZE_JS)
+        trace.update(screen_avail=scr, final_window=[got.get("width"), got.get("height")],
+                     final_player=json.loads(ps) if ps else None,
+                     clamped=[w, h] != list(target),
+                     ok=abs((got.get("width") or 0) - target[0]) <= PIN_TOLERANCE * target[0]
+                        and abs((got.get("height") or 0) - target[1]) <= PIN_TOLERANCE * target[1])
     except Exception as exc:
         trace["error"] = repr(exc)
     return trace
@@ -890,8 +953,11 @@ class BrowserSession:
     """
 
     def __init__(self, platform: str, session_dir: Path | None = None, close_chat: bool | None = None,
-                 first_url: str | None = None):
+                 first_url: str | None = None, geometry: str | None = None):
         self.platform = platform
+        # t37: the drawn geometry ("player:WxH" / "window:WxH", geometry.py rotation); None = the platform's pin
+        self.geometry_target = geometry or (f"player:{PLAYER_PIN[platform][0]}x{PLAYER_PIN[platform][1]}"
+                                            if platform in PLAYER_PIN else None)
         self.first_url = first_url          # yt channel rotation: try this URL first (orchestrate.py)
         self.close_chat = CLOSE_CHAT_DEFAULT.get(platform, False) if close_chat is None else close_chat
         self._session_dir = session_dir
@@ -1015,14 +1081,20 @@ class BrowserSession:
             except Exception as exc:
                 self.video_stats = f"error: {exc}"
             print(f"[browser] Twitch Video Stats: {self.video_stats}", flush=True)
-        if self.platform in PLAYER_PIN:
+        if self.geometry_target:
             tid = None
             try:
                 tid = next((t.get("id") for t in _targets() if t.get("webSocketDebuggerUrl") == self._ws_url), None)
             except Exception:
                 pass
-            self.player_pin = pin_player(self._page, PLAYER_PIN[self.platform], tid)
-            print(f"[browser] Player pin: {self.player_pin}", flush=True)
+            from geometry import parse
+            mode, gw, gh = parse(self.geometry_target)
+            if mode == "player":
+                self.player_pin = pin_player(self._page, (gw, gh), tid)
+            else:
+                self.player_pin = size_window(self._page, (gw, gh), tid)
+            self.player_pin["geometry_target"] = self.geometry_target
+            print(f"[browser] Geometry {self.geometry_target}: {self.player_pin}", flush=True)
         try:
             self.geometry = json.loads(self._page.eval(_GEOMETRY_JS) or "null")
         except Exception:

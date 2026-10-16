@@ -514,6 +514,12 @@ if __name__ == "__main__":
         help="yt: the channel's content type from the channel list (recorded in meta.json, never inferred).",
     )
     parser.add_argument(
+        "--geometry",
+        default=None,
+        help="Window / player geometry for this session, 'player:WxH' or 'window:WxH' (orchestrate.py's rotation, "
+             "geometry.py); default: the platform's pinned player size. Recorded in meta.json.",
+    )
+    parser.add_argument(
         "--profile-template",
         type=Path,
         default=None,
@@ -590,7 +596,7 @@ if __name__ == "__main__":
         # inside the try: a failed start (e.g. the channel is not live) still runs the finalise path below, which stops
         # tcpdump and the shaper (they were left running before, writing into the dead session's pcap)
         if args.auto:
-            browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url)
+            browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url, geometry=args.geometry)
             browser.start()
         else:
             # Manual mode (default): wait for Chrome to be reachable, then hand off.
@@ -631,7 +637,7 @@ if __name__ == "__main__":
             channel_url = browser.channel_url
             meta_extra.update(chat_action=browser.chat_action, geometry=browser.geometry, player_pin=browser.player_pin,
                               channel_list_url=browser.list_url, abort_at=browser.abort_at,
-                              video_stats=browser.video_stats)
+                              video_stats=browser.video_stats, geometry_target=browser.geometry_target)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)

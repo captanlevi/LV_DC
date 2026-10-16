@@ -693,7 +693,7 @@ def main() -> int:
           f"| screenshots: cadence of ~expected / by reason | {shots['n']} of ~{shots['expected']} / {shots.get('by_reason')} |",
           f"| player_stats.jsonl records (G3; twitch: with Video Stats) | {player_stats['records']} ({player_stats['twitch_video_stats_records']}) |",
           f"| ad actions | {dict(acts)} |",
-          f"| player pin: target / realised / ok | {pin.get('target')} / {pin.get('final_player')} / {pin.get('ok')} |",
+          f"| geometry drawn / realised player / window / ok | {meta.get('geometry_target') or pin.get('geometry_target')} / {pin.get('final_player')} / {pin.get('final_window')} / {pin.get('ok')} |",
           f"| meta.json missing | {meta_missing} |"]
     if net.get("background_hosts_top"):
         md += ["", "Background hosts, shaper window (top by bytes; exogenous = chrome_service / os_service / unknown):", "",

@@ -36,6 +36,7 @@ from pathlib import Path
 
 from balance import PLATFORM_TRANSITIONS, most_needed_state, balance_report
 import batch_summary
+import geometry
 import yt_channels
 
 _RUNS_DIR = Path(__file__).parent.parent / "data"
@@ -66,7 +67,7 @@ def _prompt_ready(platform: str, initial_state: str | None) -> bool:
 
 
 def _run_collection(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
-                    yt_matrix: str | None = None, channel: dict | None = None) -> int:
+                    yt_matrix: str | None = None, channel: dict | None = None, geom: str | None = None) -> int:
     cmd = [
         sys.executable, "exp.py",
         "--platform", platform,
@@ -81,6 +82,8 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
     if channel:
         cmd += ["--channel-url", yt_channels.url_of(channel["handle"]), "--channel-handle", channel["handle"],
                 "--channel-type", channel["type"]]
+    if geom:
+        cmd += ["--geometry", geom]
     print(f"\n  Running: {' '.join(cmd)}")
     return subprocess.run(cmd).returncode
 
@@ -146,7 +149,7 @@ def _summary() -> None:
         print(f"  (daily summary failed: {e!r})")
 
 
-def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str) -> None:
+def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geometry: bool = True) -> None:
     """Collect until every platform has its target of PASS sessions. Next platform = the one furthest behind its
     target (accepted / target; BATCH_ORDER breaks ties), so platforms advance together over the week. Nothing here
     changes what a session collects; it only sequences exp.py runs and recovers from failures."""
@@ -167,12 +170,15 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str) -> None:
         now = time.time()
         skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
         channel = yt_channels.next_channel(_RUNS_DIR, exclude=skip) if p == "youtube" else None
+        geom = geometry.next_geometry(_RUNS_DIR, p) if rotate_geometry else None
         print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] {p.upper()}: {before}/{targets[p]} accepted"
-              + (f"; channel {channel['handle']} ({channel['type']}, {channel['role']})" if channel else ""))
+              + (f"; channel {channel['handle']} ({channel['type']}, {channel['role']})" if channel else "")
+              + (f"; geometry {geom}" if geom else ""))
         preclean()
         try:
             rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=yt_matrix),
-                                 episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel)
+                                 episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel,
+                                 geom=geom)
         except Exception as e:
             print(f"  exp.py could not run: {e!r}")
             rc = -1
@@ -243,6 +249,11 @@ if __name__ == "__main__":
         help="exp.py --auto: navigate to the stream and handle ads (no operator prompt). Required for v2 batches.",
     )
     parser.add_argument(
+        "--fixed-geometry",
+        action="store_true",
+        help="--batch: keep each platform's pinned player size instead of rotating geometry.py's list (rushi t37: rotate).",
+    )
+    parser.add_argument(
         "--yt-matrix",
         choices=["A", "B", "current"],
         default="A",
@@ -260,7 +271,7 @@ if __name__ == "__main__":
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
         if unknown:
             sys.exit(f"unknown platform(s) in --batch: {unknown}")
-        run_batch(targets, auto=True, yt_matrix=args.yt_matrix)
+        run_batch(targets, auto=True, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry)
         sys.exit(0)
 
     platforms = list(PLATFORM_TRANSITIONS) if args.all_platforms else [args.platform]
