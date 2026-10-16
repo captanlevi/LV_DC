@@ -358,9 +358,19 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     if run_state is not None:
         dwell[run_state].append(run_len)
     bg_eps = [e["background_share"] for e in eps if e["background_share"] is not None]
+    # the enforced share covers the shaper-running window (first episode to the end of the capture): the labelled
+    # collection. Before it, Chrome starts and the page loads cold (yt: ~10 MB from www.youtube.com in the first 10 s,
+    # laptop t37), which under matrix A alone would be >= 0.05 of a 21-min session's media bytes. The whole-capture
+    # share is reported.
+    w0 = lab[0]["timestamp"] if lab else t0
+    win = [d for d in down if d[0] >= w0]
+    win_total = sum(d[1] for d in win)
+    win_media = sum(d[1] for d in win if d[2])
     return {
         "pcap": True, "pcap_bytes": pcap.stat().st_size, "minutes": (t1 - t0) / 60.0, "client_ip": me,
-        "background_share": (1 - down_media / down_total) if down_total else None,
+        "background_share": (1 - win_media / win_total) if win_total else None,
+        "background_share_whole_capture": (1 - down_media / down_total) if down_total else None,
+        "pre_shaper_downstream_mb": (down_total - win_total) / 1e6,
         "background_share_episode_max": max(bg_eps) if bg_eps else None,
         "background_share_http_v2": (1 - down_http_media / down_total) if down_total and http_media else None,
         "flows_by_sni": sum(1 for k in media_cache if k in flow_sni), "flows": len(media_cache),
@@ -482,7 +492,8 @@ def main() -> int:
           f"| tier mix (quality time, ads masked) | {lab.get('tier_mix_quality_time')} |",
           f"| yt 144 / 240 / 360p shares | {lab.get('yt_low_tier_shares')} |",
           f"| tier changes / min | {lab.get('tier_changes_per_min')} |",
-          f"| background share by host (episode max) / by http_v2 | {net.get('background_share')} ({net.get('background_share_episode_max')}) / {net.get('background_share_http_v2')} |",
+          f"| background share by host, shaper window (episode max) / whole capture / by http_v2 | {net.get('background_share')} ({net.get('background_share_episode_max')}) / {net.get('background_share_whole_capture')} / {net.get('background_share_http_v2')} |",
+          f"| downstream before the first episode (MB; page load) | {net.get('pre_shaper_downstream_mb')} |",
           f"| shaper binds (share of episodes) | {net.get('shaper_bind_share')} |",
           f"| Addendum C: dwell per state (episodes in a row) | {net.get('dwell_episodes_per_state')} |",
           f"| matrix / low-state cap | {out['matrix']} / {out['low_state_cap']} |",

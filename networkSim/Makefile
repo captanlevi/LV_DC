@@ -155,12 +155,17 @@ CHROME_LOG := $(CAPTURE_DIR)/chrome.log
 WINDOW_SIZE ?=
 WINDOW_FLAG := $(if $(WINDOW_SIZE),--window-size=$(WINDOW_SIZE),)
 
+# one --disable-features list (Chrome honours only the last one). Optimization Guide: its on-device model download
+# ignores --disable-background-networking / --disable-component-update and took 41-42 MB in the first ~70 s of a
+# session inside the shaped link (chaos captest3; laptop: 42.3 MB with the old list, 0.0 MB with this one, t37)
+CHROME_DISABLE_FEATURES = ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel
+
 start_chrome:
 	@echo "🚀 Starting Chrome with remote debugging..."
 	@LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
 	mkdir -p $(CHROME_PROFILE); \
 	chown -R $$LAUNCH_USER $(CHROME_PROFILE) 2>/dev/null || true; \
-	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check $(WINDOW_FLAG) --load-extension=$(LABELING_DIR) about:blank"; \
+	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=$(CHROME_DISABLE_FEATURES) --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check $(WINDOW_FLAG) --load-extension=$(LABELING_DIR) about:blank"; \
 	if [ "$$LAUNCH_USER" = "$$(id -un)" ]; then \
 		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	else \
