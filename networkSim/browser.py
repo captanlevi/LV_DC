@@ -258,6 +258,37 @@ _CLOSE_CHAT_JS: dict[str, str] = {
     """,
 }
 
+# t37 (supervisor): turn on twitch's Video Stats overlay (settings > Advanced > Video Stats) so page_stats.js can log it
+# per tick into player_stats.jsonl (G3: ground truth, never features); a CSS rule hides it (it keeps updating), so
+# screenshots and the eye check are not covered by it. Read-only stats: no quality setting is touched.
+_TWITCH_VIDEO_STATS_JS = """
+(async function() {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const vis = (el) => el && el.offsetParent !== null;
+    if (!document.getElementById('lvqoe-hide-video-stats')) {
+        const st = document.createElement('style');
+        st.id = 'lvqoe-hide-video-stats';
+        st.textContent = '[data-a-target="player-overlay-video-stats"]{opacity:0 !important;pointer-events:none !important}';
+        document.head.appendChild(st);
+    }
+    if (document.querySelector('[data-a-target="player-overlay-video-stats-row"]')) return 'already-on';
+    const btn = [...document.querySelectorAll('button[data-a-target="player-settings-button"]')].find(vis)
+             || document.querySelector('button[data-a-target="player-settings-button"]');
+    if (!btn) return 'no-settings-button';
+    btn.click(); await sleep(800);
+    const adv = document.querySelector('[data-a-target="player-settings-menu-item-advanced"]');
+    if (!adv) { btn.click(); return 'no-advanced-item'; }
+    adv.click(); await sleep(800);
+    const box = document.querySelector('[data-a-target="player-settings-submenu-advanced-video-stats"] input');
+    if (!box) { btn.click(); return 'no-video-stats-toggle'; }
+    if (!box.checked) box.click();
+    await sleep(500);
+    btn.click();                                   // close the menu
+    await sleep(800);
+    return document.querySelector('[data-a-target="player-overlay-video-stats-row"]') ? 'on' : 'toggled-no-rows';
+})()
+"""
+
 # v2 (supervisor 2026-10-16): pin the player to the old collection's modal player size over the CURRENT-era sessions
 # (G6 compares to that era): yt 853x480 (30 of 47 sessions), twitch 1274x717 with chat open (tied with 794x447, 18 of
 # 102 each; supervisor's choice), tt 783x604 landscape (23 of 67). The window is resized over CDP until the player
@@ -798,16 +829,31 @@ SHOT_JPEG_QUALITY = 40
 
 
 def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> None:
-    """Every SHOT_INTERVAL_S: a small JPEG of the tab, stamped with the extension's latest tick (event_id and ts,
-    which content.js mirrors onto <html data-lvqoe-tick>), for the human label-vs-screen check."""
+    """A small JPEG of the tab every SHOT_INTERVAL_S ('cadence'), plus one at every tier change and every ad start
+    (t37: content.js raises <html data-lvqoe-shot-req="<n>|<reason>|<event_id>">, polled each second). Each shot is
+    stamped with the extension's latest tick (<html data-lvqoe-tick>) and its reason, for the human label-vs-screen
+    check. Nothing here feeds labels. The loop starts after navigation: a pre-roll that ends during navigation has no
+    event shot (laptop run8, yt), and two events within one poll second give one shot (the later reason)."""
     import base64
     shots_dir.mkdir(parents=True, exist_ok=True)
     index = shots_dir / "index.jsonl"
-    while not stop.wait(timeout=SHOT_INTERVAL_S):
+    last_cadence, last_req = time.time(), None
+    while not stop.wait(timeout=1.0):
         try:
-            tick = page.eval("JSON.stringify([document.documentElement.dataset.lvqoeTick || null, "
-                             "document.documentElement.dataset.lvqoeTickTs || null])")
-            tick_id, tick_ts = json.loads(tick) if tick else (None, None)
+            st = page.eval("JSON.stringify([document.documentElement.dataset.lvqoeTick || null, "
+                           "document.documentElement.dataset.lvqoeTickTs || null, "
+                           "document.documentElement.dataset.lvqoeShotReq || null])")
+            tick_id, tick_ts, req = json.loads(st) if st else (None, None, None)
+            reason = None
+            if req and req != last_req:
+                reason = req.split("|")[1] if "|" in req else "event"
+                last_req = req
+            if reason is None and time.time() - last_cadence >= SHOT_INTERVAL_S:
+                reason = "cadence"
+            if reason is None:
+                continue
+            if reason == "cadence":
+                last_cadence = time.time()
             m = page.call("Page.getLayoutMetrics")
             vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
             w, h = float(vp.get("clientWidth") or 1280), float(vp.get("clientHeight") or 720)
@@ -818,10 +864,12 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
             if not data:
                 continue
             ts = time.time()
-            name = f"{int(ts * 1000)}_tick{tick_id if tick_id is not None else 'na'}.jpg"
+            tag = "" if reason == "cadence" else f"_{reason}"
+            name = f"{int(ts * 1000)}_tick{tick_id if tick_id is not None else 'na'}{tag}.jpg"
             (shots_dir / name).write_bytes(base64.b64decode(data))
             with open(index, "a") as fh:
-                fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts}) + "\n")
+                fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
+                                     "request": req if reason != "cadence" else None}) + "\n")
         except Exception as exc:  # a missed shot must never stop collection
             print(f"[browser] screenshot failed: {exc}", flush=True)
 
@@ -858,6 +906,7 @@ class BrowserSession:
         self.geometry: dict | None = None        # window / player geometry after navigation (meta.json)
         self.player_pin: dict | None = None      # pin_player trace (meta.json, check.md)
         self.abort_reason: str | None = None     # set by a watcher (t37: "login_wall"); exp.py stops the session
+        self.video_stats: str | None = None      # twitch Video Stats overlay result (meta.json)
         self.abort_at: float | None = None
 
     def start(self, cdp_ready_timeout: float = 30.0) -> None:
@@ -960,6 +1009,12 @@ class BrowserSession:
             print(f"[browser] Chat: {self.chat_action}", flush=True)
         else:
             self.chat_action = "left-open (close_chat off)"
+        if self.platform == "twitch":
+            try:
+                self.video_stats = self._page.eval(_TWITCH_VIDEO_STATS_JS, await_promise=True)
+            except Exception as exc:
+                self.video_stats = f"error: {exc}"
+            print(f"[browser] Twitch Video Stats: {self.video_stats}", flush=True)
         if self.platform in PLAYER_PIN:
             tid = None
             try:

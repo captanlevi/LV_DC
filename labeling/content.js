@@ -63,6 +63,16 @@ function loginWallText(v) {
   return texts.some(t => LOGIN_WALL_RE.test(t));
 }
 
+// event screenshots (t37): browser.py takes an extra screenshot when this request changes: at every tier change
+// (consecutive non-zero res_meta video_h differ) and every ad start (is_ad false -> true)
+let shotReqN = 0;
+let shotLastH = null;
+let shotLastAd = false;
+function requestShot(reason, eventId) {
+  shotReqN += 1;
+  document.documentElement.dataset.lvqoeShotReq = `${shotReqN}|${reason}|${eventId}`;
+}
+
 // tt logged-out quality countdown (t37): "Current video quality lasts for N s. Log in to continue ..." on room pages;
 // at 0 the source resets one rendition lower (laptop run3 720p -> 540p, run4 1280 -> 1024). check_session FAILs a
 // session with any such tick (tt_logged_out_cap): the profile was not logged in.
@@ -186,6 +196,13 @@ function emit(type) {
     document.documentElement.dataset.lvqoeTick = String(evt.event_id);
     document.documentElement.dataset.lvqoeTickTs = String(evt.ts);
     if (evt.login_wall) document.documentElement.dataset.lvqoeWall = "1";   // browser.py aborts the session on it
+    const h = evt.video_h || 0;
+    if (h > 0) {
+      if (shotLastH !== null && h !== shotLastH) requestShot("tier_change", evt.event_id);
+      shotLastH = h;
+    }
+    if (evt.is_ad && !shotLastAd) requestShot("ad_start", evt.event_id);
+    shotLastAd = !!evt.is_ad;
   }
 
   if (eventBuffer.length > MAX_BUFFER_SIZE) {

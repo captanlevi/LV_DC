@@ -630,7 +630,8 @@ if __name__ == "__main__":
         if browser is not None:
             channel_url = browser.channel_url
             meta_extra.update(chat_action=browser.chat_action, geometry=browser.geometry, player_pin=browser.player_pin,
-                              channel_list_url=browser.list_url, abort_at=browser.abort_at)
+                              channel_list_url=browser.list_url, abort_at=browser.abort_at,
+                              video_stats=browser.video_stats)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)

@@ -604,7 +604,23 @@ def main() -> int:
     shot_files = list((sd / "shots").glob("*.jpg")) if (sd / "shots").exists() else []
     dur = lab.get("duration_s") or (net.get("minutes") or 0) * 60
     exp_n = int(dur / CHECKS["shot_interval_s"]) if dur else 0
-    shots = {"n": len(shot_files), "expected": exp_n, "share": (len(shot_files) / exp_n) if exp_n else None}
+    shot_reasons = collections.Counter()
+    if (sd / "shots" / "index.jsonl").exists():
+        for l in (sd / "shots" / "index.jsonl").read_text().splitlines():
+            try:
+                shot_reasons[json.loads(l).get("reason") or "cadence"] += 1
+            except Exception:
+                pass
+    # the cadence shots carry the integrity check; event shots (tier change / ad start, t37) are extra
+    n_cad = shot_reasons.get("cadence", len(shot_files)) if shot_reasons else len(shot_files)
+    shots = {"n": n_cad, "expected": exp_n, "share": (n_cad / exp_n) if exp_n else None, "by_reason": dict(shot_reasons)}
+    # G3 ground truth (never features): player_stats.jsonl records; twitch records carrying the Video Stats overlay
+    ps_n, ps_tw = 0, 0
+    if (sd / "player_stats.jsonl").exists():
+        for l in (sd / "player_stats.jsonl").read_text().splitlines():
+            ps_n += 1
+            ps_tw += '"twitch_video_stats"' in l
+    player_stats = {"records": ps_n, "twitch_video_stats_records": ps_tw}
     acts = collections.Counter()
     if (sd / "ad_actions.jsonl").exists():
         for l in (sd / "ad_actions.jsonl").read_text().splitlines():
@@ -614,7 +630,7 @@ def main() -> int:
     v, why = verdict(lab, net, shots, meta_missing, a.max_background_share, meta.get("abort_reason"))
     out = {"session": str(sd), "platform": platform, "verdict": v, "reasons": why, "thresholds": CHECKS,
            "max_background_share": a.max_background_share, "labels": lab, "traffic": net, "shots": shots,
-           "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing,
+           "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats,
            "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap")}
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# check: {platform}/{sd.name} — **{v}**", ""] + [f"- {r}" for r in why] + ["",
@@ -648,7 +664,8 @@ def main() -> int:
           f"| profile template (path / sha) | {(meta.get('profile_template') or {}).get('path')} / {(meta.get('profile_template') or {}).get('sha256', '')[:12]} |",
           f"| capture gap minutes | {net.get('capture_gap_minutes')} |",
           f"| ssl keys kept | {net.get('ssl_keys')} |",
-          f"| screenshots | {shots['n']} of ~{shots['expected']} |",
+          f"| screenshots: cadence of ~expected / by reason | {shots['n']} of ~{shots['expected']} / {shots.get('by_reason')} |",
+          f"| player_stats.jsonl records (G3; twitch: with Video Stats) | {player_stats['records']} ({player_stats['twitch_video_stats_records']}) |",
           f"| ad actions | {dict(acts)} |",
           f"| player pin: target / realised / ok | {pin.get('target')} / {pin.get('final_player')} / {pin.get('ok')} |",
           f"| meta.json missing | {meta_missing} |"]

@@ -33,7 +33,8 @@
     },
     {
       "matches": [
-        "*://www.youtube.com/*"
+        "*://www.youtube.com/*",
+        "*://www.twitch.tv/*"
       ],
       "js": [
         "page_stats.js"
