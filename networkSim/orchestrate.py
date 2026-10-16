@@ -66,6 +66,9 @@ def _prompt_ready(platform: str, initial_state: str | None) -> bool:
     return ans != "q"
 
 
+DPMS_OFF = False   # --dpms-off: pass exp.py --dpms-off (chaos: re-blank the monitor after each session's window resize)
+
+
 def _run_collection(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
                     yt_matrix: str | None = None, channel: dict | None = None, geom: str | None = None) -> int:
     cmd = [
@@ -84,6 +87,8 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
                 "--channel-type", channel["type"]]
     if geom:
         cmd += ["--geometry", geom]
+    if DPMS_OFF:
+        cmd += ["--dpms-off"]
     print(f"\n  Running: {' '.join(cmd)}")
     return subprocess.run(cmd).returncode
 
@@ -249,6 +254,11 @@ if __name__ == "__main__":
         help="exp.py --auto: navigate to the stream and handle ads (no operator prompt). Required for v2 batches.",
     )
     parser.add_argument(
+        "--dpms-off",
+        action="store_true",
+        help="exp.py --dpms-off for every session: `xset dpms force off` after the browser start (opt-in).",
+    )
+    parser.add_argument(
         "--fixed-geometry",
         action="store_true",
         help="--batch: keep each platform's pinned player size instead of rotating geometry.py's list (rushi t37: rotate).",
@@ -266,6 +276,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    DPMS_OFF = args.dpms_off
     if args.batch:
         targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]

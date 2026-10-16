@@ -520,6 +520,12 @@ if __name__ == "__main__":
              "geometry.py); default: the platform's pinned player size. Recorded in meta.json.",
     )
     parser.add_argument(
+        "--dpms-off",
+        action="store_true",
+        help="After the browser start (geometry pin, which wakes the monitor), run `xset dpms force off` (chaos "
+             "display; opt-in, recorded in meta.json). Rendering, ticks and screenshots do not depend on the display.",
+    )
+    parser.add_argument(
         "--profile-template",
         type=Path,
         default=None,
@@ -598,6 +604,13 @@ if __name__ == "__main__":
         if args.auto:
             browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url, geometry=args.geometry)
             browser.start()
+            if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
+                try:
+                    dpms = subprocess.run(["xset", "dpms", "force", "off"], capture_output=True, text=True, timeout=10)
+                    rec = {"rc": dpms.returncode, "stderr": dpms.stderr.strip()[:200]}
+                except Exception as e:
+                    rec = {"rc": None, "error": repr(e)}
+                session_meta.write(session_dir, dpms_forced_off={**rec, "at": time.time()})
         else:
             # Manual mode (default): wait for Chrome to be reachable, then hand off.
             from browser import _wait_for_cdp

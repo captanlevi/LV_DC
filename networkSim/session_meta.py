@@ -56,6 +56,27 @@ def ntp_offset() -> dict:
     return {"tool": None, "raw": None, "error": "no chronyc / ntpdate / sntp available"}
 
 
+def data_volume(path: Path) -> dict:
+    """Where a session's data physically lands (t37, rushi / supervisor): the realpath, the mount point / source /
+    fstype holding it (findmnt -T; Linux) and the free / total GB. Best effort, never fatal."""
+    import shutil
+    rp = Path(path).resolve()
+    out: dict = {"path": str(path), "realpath": str(rp)}
+    try:
+        du = shutil.disk_usage(rp)
+        out.update(free_gb=round(du.free / 1e9, 1), total_gb=round(du.total / 1e9, 1), free_share=round(du.free / du.total, 3))
+    except Exception as e:
+        out["disk_error"] = repr(e)
+    raw = _run(["findmnt", "-T", str(rp), "-J", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"])
+    try:
+        fs = json.loads(raw)["filesystems"][0] if raw else None
+    except Exception:
+        fs = None
+    out["mount"] = ({k: fs.get(k) for k in ("target", "source", "fstype", "options")} if fs
+                    else {"error": "findmnt unavailable or failed"})
+    return out
+
+
 def ipv6_state() -> dict:
     """IPv6 sysctl state per interface (Linux /proc/sys/net/ipv6/conf/<if>/disable_ipv6; 1 = disabled) and whether
     any interface holds a global IPv6 address (t37: old data is IPv4-only; IPv6 is disabled on the box)."""
@@ -108,10 +129,10 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
                                       forced_initial_state=forced_initial_state),
                  channel_url_requested=channel_url_requested, channel_type=channel_type, channel_handle=channel_handle,
                  profile_template=profile_template,
-                 ntp_offset_start=ntp_offset(), ipv6_sysctl=ipv6_state())
+                 ntp_offset_start=ntp_offset(), ipv6_sysctl=ipv6_state(), data_volume_start=data_volume(session_dir))
 
 
 def finish(session_dir: Path, channel_url: str | None, **extra) -> dict:
     """extra: e.g. chat_action, geometry (window / viewport / player size at start), window_size_flag."""
     return write(session_dir, ended_at=time.time(), channel_url=channel_url, chrome=chrome_version(),
-                 ntp_offset_end=ntp_offset(), **extra)
+                 ntp_offset_end=ntp_offset(), data_volume_end=data_volume(session_dir), **extra)

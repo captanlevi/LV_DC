@@ -122,19 +122,29 @@ def rotation(rows: list[dict]) -> dict:
     return dict(sorted(c.items()))
 
 
+def _data_volume(data_dir: Path) -> dict:
+    try:
+        from session_meta import data_volume
+        return data_volume(data_dir)
+    except Exception as e:
+        return {"error": repr(e)}
+
+
 def write(data_dir: Path = DATA_DIR, day: str | None = None) -> Path:
     day = day or dt.date.today().isoformat()
     rows = sessions(data_dir)
     du = shutil.disk_usage(data_dir)
     out = {"day": day, "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
            "disk": {"free_gb": round(du.free / 1e9, 1), "total_gb": round(du.total / 1e9, 1), "free_share": round(du.free / du.total, 3)},
+           "data_volume": _data_volume(data_dir),
            "today": summarise([r for r in rows if r["day"] == day]),
            "cumulative": summarise(rows), "yt_channel_sessions_accepted": rotation(rows)}
     dest = data_dir / "_summaries"
     dest.mkdir(parents=True, exist_ok=True)
     (dest / f"summary_{day}.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# collection v2 summary {day} (generated {out['generated_at']})", "",
-          f"disk free {out['disk']['free_gb']} GB of {out['disk']['total_gb']} GB ({out['disk']['free_share']})", ""]
+          f"disk free {out['disk']['free_gb']} GB of {out['disk']['total_gb']} GB ({out['disk']['free_share']})",
+          f"data root {out['data_volume'].get('realpath')} on {out['data_volume'].get('mount')}", ""]
     for scope in ("today", "cumulative"):
         md += [f"## {scope}", "", "| platform | sessions | verdicts | FAIL reasons | exogenous share median / max | "
                "background share median / max | accepted hours | class mix (accepted) | stall share median | pcap MB median | pcap GB |",
