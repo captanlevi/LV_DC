@@ -54,6 +54,12 @@ LIVE_URLS: dict[str, list[str]] = {
     ],
 }
 
+# JS that is true once the explore page's stream cards have rendered (polled before _PICK_STREAM_JS)
+_CARD_READY_JS: dict[str, str] = {
+    "twitch": "!!(document.querySelector('a[data-a-target=\"preview-card-image-link\"]'))",
+    "tiktok": "!!([...document.querySelectorAll('a[href*=\"/@\"][href*=\"/live\"]')].some(a => a.offsetParent !== null))",
+}
+
 # JS that clicks into the first live stream card (platform-specific post-navigation)
 _PICK_STREAM_JS: dict[str, str] = {
     "youtube": "null",  # /live URL already lands on the stream
@@ -75,8 +81,11 @@ _PICK_STREAM_JS: dict[str, str] = {
     """,
     "tiktok": """
         (function() {
-            // TikTok live explore — pick first live room tile
+            // TikTok live explore — pick the first room in the discover list (old sessions are on /@user/live room
+            // pages, LVQoE t35 check 2026-10-16); the side-nav "suggested creators" links are the last resort
             const sels = [
+                '[data-e2e="discover-list-live-card"] a[href*="/live"]',
+                '[data-e2e="discover_category-list-live-card"] a[href*="/live"]',
                 '[data-e2e="live-room-info"] a',
                 '[data-e2e="live-card-container"] a',
                 'a[href*="/@"][href*="/live"]',
@@ -221,7 +230,15 @@ _CLOSE_CHAT_JS: dict[str, str] = {
             const f = document.querySelector('ytd-live-chat-frame');
             if (!f) return 'no-chat';
             const vis = (el) => el && el.offsetParent !== null;
-            const shown = () => [...f.querySelectorAll('button')].some(b => vis(b) && /show chat/i.test(b.getAttribute('aria-label') || b.innerText || ''));
+            // closed = the chat frame is collapsed / not rendered, or the page offers to reopen it ("Show chat"; the
+            // 2026-10 layout puts a "Live chat · Open panel" card under the player instead, laptop run 2026-10-16)
+            const frameGone = () => f.hasAttribute('collapsed') || !vis(f) || f.getBoundingClientRect().height < 50;
+            const label = (b) => b.getAttribute('aria-label') || b.innerText || '';
+            const inChatCard = (b) => { let e = b; for (let i = 0; i < 6 && e; i++, e = e.parentElement)
+                if (/live chat/i.test(e.innerText || '')) return true; return false; };
+            const reopen = () => [...document.querySelectorAll('button')].some(b => vis(b) &&
+                (/show chat/i.test(label(b)) || (/open panel/i.test(label(b)) && inChatCard(b))));
+            const shown = () => frameGone() || reopen();
             if (shown()) return 'already-closed';
             let d = null;
             try { d = f.querySelector('iframe') && f.querySelector('iframe').contentDocument; } catch (e) {}
@@ -659,12 +676,12 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
         # Twitch is a heavy SPA — wait for stream cards to render after load.
         pick_js = _PICK_STREAM_JS.get(platform, "null")
         if pick_js.strip() != "null":
-            if platform == "twitch":
-                # Poll until at least one card link is visible (max 10s)
-                card_deadline = time.time() + 10
+            card_js = _CARD_READY_JS.get(platform)
+            if card_js:
+                # Poll until at least one card link is visible (max 15s); the pick otherwise runs before the list renders
+                card_deadline = time.time() + 15
                 while time.time() < card_deadline:
-                    found = page.eval("!!(document.querySelector('a[data-a-target=\"preview-card-image-link\"]'))")
-                    if found:
+                    if page.eval(card_js):
                         break
                     time.sleep(1)
             clicked = page.eval(pick_js)
