@@ -67,7 +67,9 @@ function adSignals(v) {
 }
 
 function bufferedAhead(v) {
-  if (!v || !v.buffered) return null;
+  // null = the element exposes no buffered ranges (TikTok's live player: every tick 0 in the laptop test while the
+  // playhead advanced), so "unknown" is never confused with an empty buffer; 0 = playhead outside any range (starved)
+  if (!v || !v.buffered || v.buffered.length === 0) return null;
   const t = v.currentTime;
   for (let i = 0; i < v.buffered.length; i++) {
     if (v.buffered.start(i) <= t + 0.05 && t <= v.buffered.end(i)) return v.buffered.end(i) - t;

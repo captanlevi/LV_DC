@@ -140,7 +140,10 @@ change_perm:
 # Auto-detect browser: prefer google-chrome, fall back to chromium-browser/chromium
 CHROME_BIN ?= $(shell which google-chrome chromium-browser chromium 2>/dev/null | head -1)
 # Separate profile so collection Chrome/Chromium doesn't share state with your daily browser.
-# v2: a FRESH profile per session (exp.py passes CHROME_PROFILE); no cache, cookies or state carry over.
+# v2: a FRESH profile per session (exp.py passes CHROME_PROFILE); no cache, cookies or state carry over, and no
+# user extensions, so ours is the only non-built-in one. Branded Chrome >= 137 ignores --load-extension; browser.py
+# then loads the extension over CDP (--enable-unsafe-extension-debugging). Do NOT add --disable-extensions-except:
+# on branded Chrome it keeps the CDP-loaded extension's content script from running (laptop test 2026-10-16).
 CHROME_PROFILE ?= $(CAPTURE_DIR)/chrome_profile
 
 CHROME_LOG := $(CAPTURE_DIR)/chrome.log
@@ -150,7 +153,7 @@ start_chrome:
 	@LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
 	mkdir -p $(CHROME_PROFILE); \
 	chown -R $$LAUNCH_USER $(CHROME_PROFILE) 2>/dev/null || true; \
-	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --disable-extensions-except=$(LABELING_DIR) --load-extension=$(LABELING_DIR) about:blank"; \
+	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --load-extension=$(LABELING_DIR) about:blank"; \
 	if [ "$$LAUNCH_USER" = "$$(id -un)" ]; then \
 		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	else \

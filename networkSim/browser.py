@@ -16,6 +16,7 @@ Usage from exp.py:
 """
 
 import json
+import os
 import time
 import threading
 import urllib.request
@@ -145,10 +146,12 @@ _SKIP_AD_JS: dict[str, str] = {
                              '.ytp-ad-skip-button-container button', 'button.ytp-ad-skip-button-modern'];
             for (const s of skipSel) {
                 const b = document.querySelector(s);
-                if (vis(b)) { b.click(); return 'skipped' + tag; }
+                if (vis(b) && !b.disabled) { b.click(); return 'skipped' + tag; }
             }
-            for (const b of document.querySelectorAll('button')) {
-                if (!vis(b)) continue;
+            // only buttons inside the player: the page has a "Skip navigation" a11y button that matches by text and
+            // does nothing to the ad (laptop test 2026-10-16: it was clicked every second during a 15 s ad)
+            for (const b of (mp ? mp.querySelectorAll('button') : [])) {
+                if (!vis(b) || b.disabled) continue;
                 const label = (b.textContent + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase();
                 if (label.includes('skip')) { b.click(); return 'text-skipped' + tag; }
             }
@@ -332,6 +335,97 @@ def _open_new_tab(url: str = "about:blank") -> str | None:
         return None
 
 
+LABELING_DIR = os.path.abspath(Path(__file__).parent.parent / "labeling")
+_OUR_SW_SUFFIX = "/background.js"     # our extension's MV3 service worker (manifest "background.service_worker")
+EXT_ID: str | None = None              # set by ensure_extension_loaded()
+
+
+def unpacked_extension_id(path: str) -> str:
+    """Chrome's id for an unpacked extension: the first 32 hex digits of sha256(absolute path), mapped 0-f -> a-p."""
+    import hashlib
+    return "".join(chr(ord("a") + int(c, 16)) for c in hashlib.sha256(path.encode()).hexdigest()[:32])
+
+
+def _targets() -> list[dict]:
+    try:
+        with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
+            return json.loads(r.read())
+    except Exception:
+        return []
+
+
+def _our_sw_ws_url() -> str | None:
+    """WebSocket URL of OUR extension's service worker, if it is running. Chrome also runs built-in extension
+    service workers, so 'the first chrome-extension service worker' can be the wrong one. An MV3 worker stops when
+    idle, so its absence does not mean the extension is not loaded (see _ext_page)."""
+    return next((t.get("webSocketDebuggerUrl") for t in _targets()
+                 if t.get("type") == "service_worker" and t.get("url", "").startswith("chrome-extension://")
+                 and t.get("url", "").endswith(_OUR_SW_SUFFIX) and t.get("webSocketDebuggerUrl")
+                 and (EXT_ID is None or f"//{EXT_ID}/" in t.get("url", ""))), None)
+
+
+def _ext_page() -> tuple["CDPPage | None", str | None]:
+    """A CDP handle with chrome.storage access to our extension: its service worker if running, else a tab on the
+    extension's own popup.html (opened here; the caller closes it via the returned target id)."""
+    ws = _our_sw_ws_url()
+    if ws:
+        return CDPPage(ws), None
+    if not EXT_ID:
+        return None, None
+    try:
+        req = urllib.request.Request(f"{CDP_BASE}/json/new?chrome-extension://{EXT_ID}/popup.html", method="PUT")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            t = json.loads(r.read())
+        page = CDPPage(t["webSocketDebuggerUrl"])
+        for _ in range(20):                       # wait until the extension context is live
+            if page.eval("typeof chrome !== 'undefined' && !!chrome.storage") is True:
+                break
+            time.sleep(0.25)
+        return page, t.get("id")
+    except Exception:
+        return None, None
+
+
+def _close_target(target_id: str | None) -> None:
+    if target_id:
+        try:
+            urllib.request.urlopen(urllib.request.Request(f"{CDP_BASE}/json/close/{target_id}", method="GET"), timeout=3)
+        except Exception:
+            pass
+
+
+def ensure_extension_loaded() -> str | None:
+    """Make sure the labeling extension is loaded; return its id. Branded Chrome >= 137 ignores --load-extension,
+    so load it over CDP (Extensions.loadUnpacked; Chrome must run with --enable-unsafe-extension-debugging, which
+    the Makefile passes). Where --load-extension works (Chromium) and CDP loading is unavailable, the id is
+    derived from the path and checked by opening the extension's page."""
+    global EXT_ID
+    for t in _targets():
+        u = t.get("url", "")
+        if t.get("type") == "service_worker" and u.startswith("chrome-extension://") and u.endswith(_OUR_SW_SUFFIX):
+            EXT_ID = u.split("/")[2]
+            return EXT_ID
+    try:
+        with urllib.request.urlopen(f"{CDP_BASE}/json/version", timeout=5) as r:
+            browser_ws = json.loads(r.read())["webSocketDebuggerUrl"]
+        b = CDPPage(browser_ws)
+        res = b.call("Extensions.loadUnpacked", {"path": LABELING_DIR})
+        b.close()
+        print(f"[browser] Extensions.loadUnpacked → {res}", flush=True)
+        if res.get("id"):
+            EXT_ID = res["id"]
+            return EXT_ID
+    except Exception as exc:
+        print(f"[browser] Extensions.loadUnpacked failed: {exc}", flush=True)
+    EXT_ID = unpacked_extension_id(LABELING_DIR)
+    page, tid = _ext_page()
+    ok = page is not None and page.eval("chrome.runtime && chrome.runtime.id") == EXT_ID
+    if page:
+        page.close()
+    _close_target(tid)
+    return EXT_ID if ok else None
+
+
 def _set_download_dir(page: CDPPage, download_path: str) -> None:
     """Tell Chrome to save all downloads to download_path without prompting."""
     page.call("Browser.setDownloadBehavior", {
@@ -351,18 +445,10 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
             targets = json.loads(r.read())
 
-        sw_ws_url = next(
-            (t.get("webSocketDebuggerUrl") for t in targets
-             if t.get("type") == "service_worker"
-             and "chrome-extension" in t.get("url", "")
-             and t.get("webSocketDebuggerUrl")),
-            None,
-        )
-        if not sw_ws_url:
-            print("[browser] No extension service worker target found", flush=True)
+        sw, tmp_tab = _ext_page()
+        if sw is None:
+            print("[browser] No extension context found (service worker idle and no extension page)", flush=True)
             return False
-
-        sw = CDPPage(sw_ws_url)
 
         events_json = sw.eval(
             "new Promise(r => chrome.storage.local.get({events:[]}, d => r(JSON.stringify(d.events))))",
@@ -376,6 +462,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         # Clear storage so the next run starts fresh
         sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'], r))", await_promise=True)
         sw.close()
+        _close_target(tmp_tab)
         stats = json.loads(stats_json) if stats_json else []
         if stats:
             with open(session_dir / "player_stats.jsonl", "w") as fh:
@@ -469,9 +556,15 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0) -> bo
         time.sleep(2)
         page.eval(_CLICK_PLAY_JS)  # second nudge in case first hit an ad overlay
 
-        # Verify the video is actually advancing (not just paused at t=0)
+        # Verify the video is actually advancing (not just paused at t=0). Pre-roll ads are handled here too: the
+        # ad watcher only starts after navigation, and a pre-roll would otherwise keep the content from advancing.
         deadline = time.time() + timeout
+        skip_js = _SKIP_AD_JS.get(platform, "null")
         while time.time() < deadline:
+            if skip_js.strip() != "null":
+                act = page.eval(skip_js)
+                if act:
+                    print(f"[browser] Pre-roll ad action: {act}", flush=True)
             page.eval(_CLICK_PLAY_JS)
             if _video_is_advancing(page):
                 # YouTube: confirm live badge (YouTube DVR uses finite duration, not Infinity)
@@ -605,6 +698,10 @@ class BrowserSession:
 
         # Give Chrome a moment to finish initialising all internal targets
         time.sleep(3)
+        ext = ensure_extension_loaded()
+        if not ext:
+            raise RuntimeError("labeling extension not loaded; see chrome.log")
+        print(f"[browser] Labeling extension {ext}", flush=True)
 
         # Close extra tabs (session-restored ones) but KEEP one alive so Chrome
         # doesn't exit.  Reuse the survivor tab rather than opening a new one.
@@ -634,6 +731,10 @@ class BrowserSession:
 
         print(f"[browser] Connected to CDP: {ws_url[:60]}...", flush=True)
         self._page = CDPPage(ws_url)
+        # A hidden / occluded page does not start yt playback and throttles the extension's 1 Hz timer (laptop test
+        # 2026-10-16: visibilityState hidden, player unstarted until brought to front). Keep the tab visible and focused.
+        self._page.call("Page.bringToFront")
+        self._page.call("Emulation.setFocusEmulationEnabled", {"enabled": True})
         self._start_time = time.time()
 
         # Direct extension CSV downloads into the session directory
@@ -646,14 +747,11 @@ class BrowserSession:
         try:
             with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
                 targets = json.loads(r.read())
-            sw_ws = next((t.get("webSocketDebuggerUrl") for t in targets
-                          if t.get("type") == "service_worker"
-                          and "chrome-extension" in t.get("url", "")
-                          and t.get("webSocketDebuggerUrl")), None)
-            if sw_ws:
-                sw = CDPPage(sw_ws)
+            sw, tmp_tab = _ext_page()
+            if sw is not None:
                 sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'], r))", await_promise=True)
                 sw.close()
+                _close_target(tmp_tab)
                 print("[browser] Extension storage cleared", flush=True)
         except Exception as e:
             print(f"[browser] Could not pre-clear extension storage: {e}", flush=True)
