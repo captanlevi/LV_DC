@@ -32,6 +32,8 @@ import yt_channels
 
 _RUNS_DIR = Path(__file__).parent.parent / "data"
 
+EXIT_LOGIN_WALL = 3   # exp.py's exit code for a session aborted at a login wall (t37)
+
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
 
@@ -46,7 +48,7 @@ def _prompt_ready(platform: str, initial_state: str | None) -> bool:
 
 
 def _run_collection(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
-                    yt_matrix: str | None = None, channel: dict | None = None) -> bool:
+                    yt_matrix: str | None = None, channel: dict | None = None) -> int:
     cmd = [
         sys.executable, "exp.py",
         "--platform", platform,
@@ -62,8 +64,7 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
         cmd += ["--channel-url", yt_channels.url_of(channel["handle"]), "--channel-handle", channel["handle"],
                 "--channel-type", channel["type"]]
     print(f"\n  Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd)
-    return result.returncode == 0
+    return subprocess.run(cmd).returncode
 
 
 def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: bool = False,
@@ -78,9 +79,13 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
         if not auto and not _prompt_ready(platform, target_state):
             print("  Skipped.")
             continue
-        ok = _run_collection(platform, initial_state=target_state, episodes=episodes_per_run, auto=auto,
+        rc = _run_collection(platform, initial_state=target_state, episodes=episodes_per_run, auto=auto,
                              yt_matrix=yt_matrix, channel=channel)
-        if not ok:
+        if rc == EXIT_LOGIN_WALL:
+            print(f"  LOGIN WALL on {platform}: stopping this platform (fix the profile template, then rerun).")
+            balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix)
+            return
+        if rc != 0:
             print("  Collection returned non-zero — check logs above.")
             if channel:
                 not_live.add(channel["handle"])

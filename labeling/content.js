@@ -33,6 +33,37 @@ const AD_SELECTORS = {
   ],
 };
 
+// v2 (LVQoE t37, rushi 2026-10-16): the logged-out wall ("video lasts 10 seconds, log in to continue"). login_wall =
+// a visible login prompt (in a dialog / modal / login node, or over the player) AND the playhead stalled for
+// WALL_STALL_TICKS ticks after WALL_PLAYED_MIN_S..WALL_PLAYED_MAX_S of play since the page loaded. Text alone is not
+// enough (login banners are common and harmless); a stall alone is a stall. login_wall_text reports the text alone.
+const LOGIN_WALL_RE = /\b(log ?in|sign ?up|sign ?in)\b.{0,60}\b(continue|keep watching|watch)|\blasts? \d+ ?(s|sec|seconds)\b/i;
+const LOGIN_WALL_NODES = '[role="dialog"], [aria-modal="true"], [class*="odal"], [data-e2e*="login"], [class*="ogin"]';
+const WALL_STALL_TICKS = 3;
+const WALL_PLAYED_MIN_S = 5;
+const WALL_PLAYED_MAX_S = 30;
+let playedS = 0;
+let wallLastT = null;
+let wallStallTicks = 0;
+
+function loginWallText(v) {
+  const texts = [...document.querySelectorAll(LOGIN_WALL_NODES)].filter(visible).map(e => e.innerText || "");
+  for (let e = v ? v.parentElement : null, i = 0; e && i < 4; e = e.parentElement, i++) texts.push(e.innerText || "");
+  return texts.some(t => LOGIN_WALL_RE.test(t));
+}
+
+// once per res_meta tick: play time since load (positive playhead steps up to 2 s, so a source reset adds nothing)
+// and the run of ticks with a frozen playhead
+function updateWallClock(v) {
+  const t = v ? v.currentTime : null;
+  if (t !== null && wallLastT !== null) {
+    const d = t - wallLastT;
+    if (d > 0.05 && d <= 2) playedS += d;
+    wallStallTicks = Math.abs(d) < 0.05 ? wallStallTicks + 1 : 0;
+  }
+  wallLastT = t;
+}
+
 function platformOf() {
   const h = location.hostname;
   if (h.includes("youtube.")) return "youtube";
@@ -106,6 +137,8 @@ function buildEvent(type) {
     is_ad: null,
     ad_signals: null,
     src_changed: null,
+    login_wall_text: null,
+    login_wall: null,
   };
 }
 
@@ -114,6 +147,10 @@ function withAdState(evt) {
   evt.is_ad = sig.length > 0;
   evt.ad_signals = sig.join("|");
   evt.src_changed = srcChanged(video);
+  if (evt.type === "res_meta") updateWallClock(video);
+  evt.login_wall_text = loginWallText(video);
+  evt.login_wall = evt.login_wall_text && wallStallTicks >= WALL_STALL_TICKS &&
+    playedS >= WALL_PLAYED_MIN_S && playedS <= WALL_PLAYED_MAX_S;
   return evt;
 }
 
@@ -128,6 +165,7 @@ function emit(type) {
   if (type === "res_meta" && window === window.top) {
     document.documentElement.dataset.lvqoeTick = String(evt.event_id);
     document.documentElement.dataset.lvqoeTickTs = String(evt.ts);
+    if (evt.login_wall) document.documentElement.dataset.lvqoeWall = "1";   // browser.py aborts the session on it
   }
 
   if (eventBuffer.length > MAX_BUFFER_SIZE) {

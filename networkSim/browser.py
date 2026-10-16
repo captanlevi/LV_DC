@@ -612,7 +612,8 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         # v2 (LVQoE t35): new columns appended after the v1 ones (additive; v1 readers keep working)
         header = ["ts", "type", "video_w", "video_h", "client_w", "client_h",
                   "dropped", "current_time", "tabId", "url", "event_id",
-                  "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed"]
+                  "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed",
+                  "login_wall_text", "login_wall"]
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]
@@ -755,9 +756,15 @@ def _wait_for_load(page: CDPPage, timeout: float = 15.0) -> None:
 # Ad watcher
 # ---------------------------------------------------------------------------
 
-def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None) -> None:
-    """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl)."""
+_WALL_JS = "document.documentElement.dataset.lvqoeWall === '1'"
+
+
+def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
+                     on_wall=None) -> None:
+    """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
+    Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears."""
     skip_js = _SKIP_AD_JS.get(platform, "null")
+    walled = False
     while not stop.wait(timeout=1):
         try:
             result = page.eval(skip_js)
@@ -768,6 +775,13 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                         fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": result}) + "\n")
         except Exception:
             pass
+        if on_wall is not None and not walled:
+            try:
+                if page.eval(_WALL_JS):
+                    walled = True
+                    on_wall()
+            except Exception:
+                pass
 
 
 SHOT_INTERVAL_S = 10.0
@@ -835,6 +849,8 @@ class BrowserSession:
         self.chat_action: str | None = None      # what the chat-close step did (meta.json)
         self.geometry: dict | None = None        # window / player geometry after navigation (meta.json)
         self.player_pin: dict | None = None      # pin_player trace (meta.json, check.md)
+        self.abort_reason: str | None = None     # set by a watcher (t37: "login_wall"); exp.py stops the session
+        self.abort_at: float | None = None
 
     def start(self, cdp_ready_timeout: float = 30.0) -> None:
         print("[browser] Waiting for Chrome CDP endpoint...", flush=True)
@@ -941,7 +957,7 @@ class BrowserSession:
         log_path = (self._session_dir / "ad_actions.jsonl") if self._session_dir else None
         self._watcher = threading.Thread(
             target=_ad_watcher_loop,
-            args=(self._page, self.platform, self._stop, log_path),
+            args=(self._page, self.platform, self._stop, log_path, self._on_wall),
             daemon=True,
             name="ad-watcher",
         )
@@ -957,6 +973,10 @@ class BrowserSession:
             )
             self._shooter.start()
             print(f"[browser] Screenshots every {SHOT_INTERVAL_S:.0f} s → {self._session_dir / 'shots'}", flush=True)
+
+    def _on_wall(self) -> None:
+        self.abort_reason, self.abort_at = "login_wall", time.time()
+        print("[browser] LOGIN WALL detected (content.js login_wall) — aborting the session", flush=True)
 
     def stop(self) -> None:
         # Read QoE events from the extension service worker before closing the tab

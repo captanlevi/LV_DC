@@ -13,3 +13,5 @@
 __pycache__/
 .DS_Store
 ssl_keys.log
+# Chrome profile templates (t37): login cookies, never committed
+/profiles

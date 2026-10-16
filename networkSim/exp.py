@@ -89,11 +89,50 @@ CURRENT_DATA = Path(__file__).parent.parent / "current_data"
 WINDOW_SIZES: dict[str, str] = {}
 
 
-def fresh_chrome_profile(session_dir: Path) -> Path:
-    """v2 (LVQoE t35): a new, empty Chrome profile per session; no cache, cookies or state carry over."""
+EXIT_LOGIN_WALL = 3   # exp.py exit code when the session was aborted at a login wall (t37)
+
+
+# v2 (LVQoE t37, rushi 2026-10-16): each session's profile is a CLONE of a per-platform template (a Chrome user-data-dir,
+# logged in where the platform needs it), not an empty profile: TikTok walls logged-out viewers after ~10 s. Templates
+# live at <PROFILE_TEMPLATES>/<platform>/; build one by launching Chrome once with --user-data-dir on it (as the same
+# user, with the same --password-store, that exp.py launches Chrome as, or the cookies will not decrypt), logging in,
+# and quitting Chrome. Never run Chrome on the template during a batch: its sha is recorded per session.
+PROFILE_TEMPLATES = Path(os.environ.get("LVDC_PROFILE_TEMPLATES", str(Path(__file__).resolve().parent.parent / "profiles")))
+# not copied: locks, caches (every session starts cold), crash dumps, session restore, other extensions (only ours loads)
+PROFILE_CLONE_SKIP = ("Singleton*", "lockfile", "Cache", "Code Cache", "GPUCache", "ShaderCache", "GrShaderCache",
+                      "GraphiteDawnCache", "DawnWebGPUCache", "DawnGraphiteCache", "Crashpad", "Crash Reports",
+                      "BrowserMetrics*", "Sessions", "Current Session", "Current Tabs", "Last Session", "Last Tabs",
+                      "Extensions", "Extension State", "component_crx_cache", "optimization_guide_model_store")
+
+
+def dir_sha256(root: Path) -> dict:
+    """sha256 over (relative path, file sha256) of every regular file, sorted; plus the file count and bytes."""
+    import hashlib
+    h, n, size = hashlib.sha256(), 0, 0
+    for f in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
+        fh = hashlib.sha256(f.read_bytes()).hexdigest()
+        h.update(f"{f.relative_to(root).as_posix()}\0{fh}\n".encode())
+        n += 1
+        size += f.stat().st_size
+    return {"sha256": h.hexdigest(), "files": n, "bytes": size}
+
+
+def fresh_chrome_profile(session_dir: Path, template: Path | None) -> tuple[Path, dict]:
+    """A new profile per session: a clone of `template` (PROFILE_CLONE_SKIP left out), or empty when template is None
+    (--empty-profile, a recorded deviation). Returns the profile and its meta.json record (template path and the sha
+    of what was cloned, taken before Chrome or exp.py touch the clone)."""
+    import shutil
     prof = CURRENT_DATA / "chrome_profiles" / f"{session_dir.parent.name}_{session_dir.name}_{int(time.time())}"
-    prof.mkdir(parents=True, exist_ok=False)
-    return prof
+    if template is None:
+        prof.mkdir(parents=True, exist_ok=False)
+        return prof, {"path": None, "mode": "empty"}
+    if not template.is_dir():
+        raise ValueError(f"profile template {template} missing (build it, set LVDC_PROFILE_TEMPLATES, or pass "
+                         f"--empty-profile)")
+    prof.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(template, prof, symlinks=True, ignore=shutil.ignore_patterns(*PROFILE_CLONE_SKIP))
+    return prof, {"path": str(template.resolve()), "mode": "clone", "skipped": list(PROFILE_CLONE_SKIP),
+                  **dir_sha256(prof)}
 
 
 def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window_size: str | None = None) -> bool:
@@ -268,13 +307,25 @@ async def _ossilate(
         
     return True
 
+async def _abort_watch(abort_check) -> str:
+    """Resolves with the reason once abort_check() returns one (polled each second)."""
+    while True:
+        reason = abort_check()
+        if reason:
+            return reason
+        await asyncio.sleep(1)
+
+
 async def experiment(
     episode_time_in_seconds: int,
     net_labels: list[NetLabel],
     transition_dct: dict[str, dict[str, float]],
     forced_initial_state: str | None = None,
     max_episodes: int | None = None,
+    abort_check=None,
 ):
+    """abort_check: optional callable returning an abort reason or None (t37: the browser's login-wall flag); a
+    reason stops the shaper loop like 'q' does, and is returned."""
     stop_event = asyncio.Event()
 
     def _make_task(initial_state: str | None) -> asyncio.Task:
@@ -290,19 +341,37 @@ async def experiment(
         )
 
     osc_task = _make_task(forced_initial_state)
+    abort_task = asyncio.create_task(_abort_watch(abort_check)) if abort_check else None
 
+    interactive = True   # False once stdin hits EOF without a terminal (nohup / batch): no prompt, run to the end
     try:
         while True:
-            input_task = asyncio.create_task(asyncio.to_thread(input, "[u=faster / d=slower / q=quit]: "))
-            done, _ = await asyncio.wait({osc_task, input_task}, return_when=asyncio.FIRST_COMPLETED)
+            input_task = (asyncio.create_task(asyncio.to_thread(input, "[u=faster / d=slower / q=quit]: "))
+                          if interactive else None)
+            waits = {osc_task} | ({input_task} if input_task else set()) | ({abort_task} if abort_task else set())
+            done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+
+            if abort_task in done:
+                if input_task:
+                    input_task.cancel()
+                print(f"\nAborting the session: {abort_task.result()}")
+                stop_event.set()
+                await osc_task
+                return abort_task.result()
 
             if osc_task in done:
-                input_task.cancel()
+                if input_task:
+                    input_task.cancel()
                 break
 
             try:
                 user_input = input_task.result().strip().lower()
             except EOFError:
+                if not sys.stdin.isatty():
+                    # no terminal (stdin is /dev/null or a closed pipe): EOF is not a quit; the session runs on
+                    print("\n[stdin closed, no terminal: keyboard control off; the session runs to its episode count]")
+                    interactive = False
+                    continue
                 # stdin closed (Ctrl+D)
                 stop_event.set()
                 await osc_task
@@ -328,6 +397,10 @@ async def experiment(
         stop_event.set()
         osc_task.cancel()
         raise
+    finally:
+        if abort_task:
+            abort_task.cancel()
+    return None
 
 
 
@@ -393,6 +466,18 @@ if __name__ == "__main__":
         help="yt: the channel's content type from the channel list (recorded in meta.json, never inferred).",
     )
     parser.add_argument(
+        "--profile-template",
+        type=Path,
+        default=None,
+        help="Chrome profile to clone for this session (default: $LVDC_PROFILE_TEMPLATES/<platform>, i.e. "
+             "<repo>/profiles/<platform>). Its path and sha go to meta.json.",
+    )
+    parser.add_argument(
+        "--empty-profile",
+        action="store_true",
+        help="Start from an empty profile instead of the template (a deviation, recorded in meta.json).",
+    )
+    parser.add_argument(
         "--save-dir",
         type=Path,
         default=None,
@@ -427,12 +512,14 @@ if __name__ == "__main__":
     else:
         session_dir = make_session_dir(platform)
     print(f"Session directory: {session_dir}")
-    chrome_profile = fresh_chrome_profile(session_dir)
+    template = None if args.empty_profile else (args.profile_template or PROFILE_TEMPLATES / platform)
+    chrome_profile, profile_template = fresh_chrome_profile(session_dir, template)
     configure_chrome_download_dir(session_dir, chrome_profile)
     session_meta.start(session_dir, platform, transition, episode_s=60, argv=sys.argv, chrome_profile=chrome_profile,
                        matrix_id=matrix_id, low_state_cap=low_cap, initial_state_rule=init_rule,
                        forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
-                       channel_type=args.channel_type, channel_handle=args.channel_handle)
+                       channel_type=args.channel_type, channel_handle=args.channel_handle,
+                       profile_template=profile_template)
 
     net_labels = []
     if initialize_network() == False:
@@ -461,13 +548,15 @@ if __name__ == "__main__":
         input()
         browser = None
 
+    abort_reason = None
     try:
-        asyncio.run(experiment(
+        abort_reason = asyncio.run(experiment(
             episode_time_in_seconds=60,
             net_labels=net_labels,
             transition_dct=transition,
             forced_initial_state=args.initial_state,
             max_episodes=args.episodes,
+            abort_check=(lambda: browser.abort_reason) if browser is not None else None,
         ))
 
     except KeyboardInterrupt:
@@ -479,7 +568,8 @@ if __name__ == "__main__":
         if browser is not None:
             channel_url = browser.channel_url
             meta_extra.update(chat_action=browser.chat_action, geometry=browser.geometry, player_pin=browser.player_pin,
-                              channel_list_url=browser.list_url)
+                              channel_list_url=browser.list_url, abort_reason=browser.abort_reason,
+                              abort_at=browser.abort_at)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)
@@ -511,3 +601,7 @@ if __name__ == "__main__":
         print(f"Run complete → {session_dir}")
         change_perm(session_dir)
         check_session(session_dir)
+
+    if abort_reason == "login_wall":
+        # orchestrate.py stops the platform on this code: every further logged-out session would hit the same wall
+        sys.exit(EXIT_LOGIN_WALL)

@@ -148,6 +148,9 @@ def label_checks(rows: list[dict], platform: str) -> dict:
         "tier_changes": len(tier_changes),
         "tier_changes_per_min": len(tier_changes) / (dur / 60.0) if dur > 0 else None,
         "tier_changes_with_swap_within_2s_share": (near / len(tier_changes)) if tier_changes else None,
+        # t37: content.js login-wall flags (columns absent on pre-t37 extensions → None)
+        "login_wall_ticks": sum(_true(r.get("login_wall")) for r in meta) if "login_wall" in meta[0] else None,
+        "login_wall_text_ticks": sum(_true(r.get("login_wall_text")) for r in meta) if "login_wall_text" in meta[0] else None,
     }
     if platform == "youtube":
         out["yt_low_tier_shares"] = {f"{q}p": mix.get(q, 0) / nq for q in (144, 240, 360)}
@@ -312,6 +315,9 @@ def meta_check(sd: Path) -> tuple[dict, list[str]]:
         missing.append("lvdc_commit.sha")
     if isinstance(m.get("ntp_offset_start"), dict) and not m["ntp_offset_start"].get("raw"):
         missing.append("ntp_offset_start.raw")
+    pt = m.get("profile_template") or {}
+    if pt.get("mode") != "clone" or not pt.get("sha256"):
+        missing.append("profile_template (clone + sha; t37)")
     if m.get("platform") == "youtube":
         # t38 / G5 (levi R1, R2): the matrix id, the low-state cap, and the channel handle / type from the list
         sh = m.get("shaper") or {}
@@ -320,8 +326,13 @@ def meta_check(sd: Path) -> tuple[dict, list[str]]:
     return m, missing
 
 
-def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: float) -> tuple[str, list[str]]:
+def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: float,
+            abort_reason: str | None = None) -> tuple[str, list[str]]:
     why = []
+    if abort_reason == "login_wall" or lab.get("login_wall_ticks"):
+        why.append("login_wall")   # t37: the platform's logged-out wall stopped playback; the session was aborted
+    elif abort_reason:
+        why.append(f"aborted: {abort_reason}")
     if not net.get("pcap") or not net.get("packets", 1):
         why.append("no pcap / no packets")
     if net.get("pcap") and not net.get("ssl_keys"):
@@ -374,7 +385,7 @@ def main() -> int:
             if l.strip():
                 acts[json.loads(l)["action"].split(" [")[0]] += 1
     pin = meta.get("player_pin") or {}
-    v, why = verdict(lab, net, shots, meta_missing, a.max_background_share)
+    v, why = verdict(lab, net, shots, meta_missing, a.max_background_share, meta.get("abort_reason"))
     out = {"session": str(sd), "platform": platform, "verdict": v, "reasons": why, "thresholds": CHECKS,
            "max_background_share": a.max_background_share, "labels": lab, "traffic": net, "shots": shots,
            "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing,
@@ -399,6 +410,8 @@ def main() -> int:
           f"| Addendum C: dwell per state (episodes in a row) | {net.get('dwell_episodes_per_state')} |",
           f"| matrix / low-state cap | {out['matrix']} / {out['low_state_cap']} |",
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
+          f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",
+          f"| profile template (path / sha) | {(meta.get('profile_template') or {}).get('path')} / {(meta.get('profile_template') or {}).get('sha256', '')[:12]} |",
           f"| capture gap minutes | {net.get('capture_gap_minutes')} |",
           f"| ssl keys kept | {net.get('ssl_keys')} |",
           f"| screenshots | {shots['n']} of ~{shots['expected']} |",

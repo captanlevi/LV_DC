@@ -8,8 +8,8 @@ Verified 2026-10-16 on the laptop (Chrome 155; scripts in the LVQoE t35 report):
 live badge, playback advanced, and no age or members gate appeared.
 
 Rotation: no channel gets a 3rd session until every primary has 2 (generally: always the least-collected primary,
-ties broken by list order). Sessions are counted from data/youtube/*/meta.json (channel_handle), excluding
-data/_failed (a failed session does not count).
+ties broken by list order). Sessions are counted from every youtube/<session>/meta.json under data/ (channel_handle),
+excluding data/_failed (a failed session does not count).
 """
 from __future__ import annotations
 
@@ -45,9 +45,11 @@ def by_handle(handle: str) -> dict | None:
 
 
 def collected_counts(data_dir: Path) -> dict[str, int]:
-    """Accepted yt sessions per channel handle (data/youtube/*/meta.json; data/_failed is not scanned)."""
+    """Accepted yt sessions per channel handle: every <...>/youtube/<session>/meta.json under data_dir (so both
+    data/youtube/ and data/<collector>/youtube/ count), except anything under _failed/."""
     counts = {c["handle"]: 0 for c in YT_CHANNELS}
-    for meta in sorted((data_dir / "youtube").glob("*/meta.json")):
+    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts)
+    for meta in sorted(metas):
         try:
             m = json.loads(meta.read_text())
         except Exception:

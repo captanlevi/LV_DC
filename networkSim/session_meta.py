@@ -83,7 +83,7 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
           chrome_profile: Path, matrix_id: str | None = None, low_state_cap: int | None = None,
           initial_state_rule: str | None = None, forced_initial_state: str | None = None,
           channel_url_requested: str | None = None, channel_type: str | None = None,
-          channel_handle: str | None = None) -> dict:
+          channel_handle: str | None = None, profile_template: dict | None = None) -> dict:
     return write(session_dir, schema="lvdc_session_meta_v2", platform=platform, argv=argv,
                  started_at=time.time(), hostname=socket.gethostname(), lvdc_commit=lvdc_commit(),
                  extension_version=extension_version(), chrome_profile=str(chrome_profile),
@@ -91,6 +91,7 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
                                       low_state_cap=low_state_cap, initial_state_rule=initial_state_rule,
                                       forced_initial_state=forced_initial_state),
                  channel_url_requested=channel_url_requested, channel_type=channel_type, channel_handle=channel_handle,
+                 profile_template=profile_template,
                  ntp_offset_start=ntp_offset())
 
 
