@@ -22,8 +22,9 @@ OUT_FILE       = $(SESSION_DIR)/outgoing.pcap
 MERGED_FILE    = $(SESSION_DIR)/merged.pcap
 HTTP_LOG_FILE  = $(SESSION_DIR)/http_v2.json
 
-# Temp/global files always in CAPTURE_DIR (deleted after use)
-SSL_KEY_LOG_FILE = $(CAPTURE_DIR)/ssl_keys.log
+# v2 (LVQoE t35, rushi 2026-10-16): the TLS key log is KEPT, one per session, so every session can be re-decoded
+# offline (HTTP/3 and SABR request bodies included). remove_ssl_keys / remove_http_logs are no longer called.
+SSL_KEY_LOG_FILE = $(SESSION_DIR)/ssl_keys.log
 
 .PHONY: enable disable start-capture stop-capture merge-capture clean-captures
 
@@ -138,8 +139,9 @@ change_perm:
 
 # Auto-detect browser: prefer google-chrome, fall back to chromium-browser/chromium
 CHROME_BIN ?= $(shell which google-chrome chromium-browser chromium 2>/dev/null | head -1)
-# Separate profile so collection Chrome/Chromium doesn't share state with your daily browser
-CHROME_PROFILE := $(CAPTURE_DIR)/chrome_profile
+# Separate profile so collection Chrome/Chromium doesn't share state with your daily browser.
+# v2: a FRESH profile per session (exp.py passes CHROME_PROFILE); no cache, cookies or state carry over.
+CHROME_PROFILE ?= $(CAPTURE_DIR)/chrome_profile
 
 CHROME_LOG := $(CAPTURE_DIR)/chrome.log
 
@@ -148,7 +150,7 @@ start_chrome:
 	@LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
 	mkdir -p $(CHROME_PROFILE); \
 	chown -R $$LAUNCH_USER $(CHROME_PROFILE) 2>/dev/null || true; \
-	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --load-extension=$(LABELING_DIR) about:blank"; \
+	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --disable-extensions-except=$(LABELING_DIR) --load-extension=$(LABELING_DIR) about:blank"; \
 	if [ "$$LAUNCH_USER" = "$$(id -un)" ]; then \
 		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	else \
@@ -173,6 +175,7 @@ kill_chrome:
 	@rm -f $(CAPTURE_DIR)/chrome.pid $(CAPTURE_DIR)/chrome.log
 	@echo "✅ Chrome killed, session files cleared"
 
+# v2: NOT called by exp.py any more (the keys are kept per session); left for manual use.
 remove_ssl_keys:
 	@echo "🧹 Removing existing SSL key log file..."
 	@rm -f $(SSL_KEY_LOG_FILE)
@@ -192,16 +195,17 @@ make_http_logs:
 	-e http.content_type \
 	-e http.file_data \
 	-e http.transfer_encoding \
-	-e http.content_encoding > $(CAPTURE_DIR)/h1_raw.json
+	-e http.content_encoding > $(SESSION_DIR)/h1_raw.json
 
 
-SAVE_PDML ?= 0
+# v2: raw decoder outputs stay in the session dir (h1_raw.json, h2_raw.pdml, h3_raw.pdml)
+SAVE_PDML ?= 1
 
 process_http_logs:
 	@echo "📊 Processing HTTP logs into structured format..."
 	@if [ -d "$(VENV_DIR)" ]; then \
 		bash -c "source $(VENV_DIR)/bin/activate && python3 $(MAKEFILE_DIR)/unit_extractor.py \
-			--path $(CAPTURE_DIR) \
+			--path $(SESSION_DIR) \
 			--save_path $(HTTP_LOG_FILE) \
 			--pcap $(MERGED_FILE) \
 			--ssl_keys $(SSL_KEY_LOG_FILE) \
@@ -209,15 +213,17 @@ process_http_logs:
 		echo "✅ HTTP logs processed and saved"; \
 	else \
 		python3 $(MAKEFILE_DIR)/unit_extractor.py \
-			--path $(CAPTURE_DIR) \
+			--path $(SESSION_DIR) \
 			--save_path $(HTTP_LOG_FILE) \
 			--pcap $(MERGED_FILE) \
-			--ssl_keys $(SSL_KEY_LOG_FILE) && \
+			--ssl_keys $(SSL_KEY_LOG_FILE) \
+			$(if $(filter 1,$(SAVE_PDML)),--save_pdml,) && \
 		echo "✅ HTTP logs processed and saved" || \
 		echo "⚠️  unit_extractor skipped — network_core not installed (raw JSON kept in $(CAPTURE_DIR))"; \
 	fi
 
 
+# v2: NOT called by exp.py any more (raw decoder outputs stay in the session dir); left for manual use.
 remove_http_logs:
 	@echo "🧹 Removing existing HTTP log files..."
 	@rm -f $(CAPTURE_DIR)/h1_raw.json

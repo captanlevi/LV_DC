@@ -28,6 +28,7 @@ from utils.netStat import net_episode_generator
 from utils.shaping import YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS, get_higher_state, get_lower_state
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession
+import session_meta
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -79,9 +80,20 @@ def initialize_network() -> bool:
         return False
 
 
-def open_chrome_with_ssl_key_log() -> bool:
+CURRENT_DATA = Path(__file__).parent.parent / "current_data"
+
+
+def fresh_chrome_profile(session_dir: Path) -> Path:
+    """v2 (LVQoE t35): a new, empty Chrome profile per session; no cache, cookies or state carry over."""
+    prof = CURRENT_DATA / "chrome_profiles" / f"{session_dir.parent.name}_{session_dir.name}_{int(time.time())}"
+    prof.mkdir(parents=True, exist_ok=False)
+    return prof
+
+
+def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path) -> bool:
     try:
-        run(["make", "start_chrome"])
+        # the key log goes to <session_dir>/ssl_keys.log (kept); the profile is the session's fresh one
+        run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"])
         return True
     except Exception as e:
         print(e)
@@ -116,18 +128,18 @@ def finalize_pcap(session_dir: Path) -> bool:
         return False
 
 
-def kill_chrome() -> None:
+def kill_chrome(chrome_profile: Path | None = None) -> None:
     try:
-        run(["make", "kill_chrome"])
+        run(["make", "kill_chrome"] + ([f"CHROME_PROFILE={chrome_profile}"] if chrome_profile else []))
     except Exception as e:
         print(e)
     for _f in ["chrome.pid", "chrome.log"]:
         (Path(__file__).parent.parent / "current_data" / _f).unlink(missing_ok=True)
 
 
-def configure_chrome_download_dir(session_dir: Path) -> None:
+def configure_chrome_download_dir(session_dir: Path, chrome_profile: Path) -> None:
     """Write Chrome profile Preferences so all downloads go to session_dir."""
-    prefs_dir = Path(__file__).parent.parent / "current_data" / "chrome_profile" / "Default"
+    prefs_dir = chrome_profile / "Default"
     prefs_dir.mkdir(parents=True, exist_ok=True)
     prefs_file = prefs_dir / "Preferences"
     prefs: dict = {}
@@ -171,7 +183,17 @@ def process_http_logs(session_dir: Path) -> bool:
         return False
 
 
+def check_session(session_dir: Path) -> None:
+    """v2: run check_session.py on the finished session (writes check.json / check.md; a FAIL moves the session
+    dir to data/_failed/, archive never delete)."""
+    try:
+        run([sys.executable, str(Path(__file__).parent / "check_session.py"), str(session_dir), "--move-failed"])
+    except Exception as e:
+        print(f"check_session failed to run: {e}")
+
+
 def remove_ssl_and_http_logs() -> bool:
+    """v1 only. v2 keeps the TLS keys and raw decoder outputs (rushi 2026-10-16); not called."""
     try:
         run(["make", "remove_ssl_keys"])
         run(["make", "remove_http_logs"])
@@ -366,7 +388,9 @@ if __name__ == "__main__":
     else:
         session_dir = make_session_dir(platform)
     print(f"Session directory: {session_dir}")
-    configure_chrome_download_dir(session_dir)
+    chrome_profile = fresh_chrome_profile(session_dir)
+    configure_chrome_download_dir(session_dir, chrome_profile)
+    session_meta.start(session_dir, platform, transition, episode_s=60, argv=sys.argv, chrome_profile=chrome_profile)
 
     net_labels = []
     if initialize_network() == False:
@@ -375,7 +399,7 @@ if __name__ == "__main__":
     if is_capture and initialize_pcap(session_dir) == False:
         raise ValueError("Cannot initialize pcap capture")
 
-    if open_chrome_with_ssl_key_log() == False:
+    if open_chrome_with_ssl_key_log(session_dir, chrome_profile) == False:
         raise ValueError("Cannot open chrome with SSL key log enabled")
 
     if args.auto:
@@ -408,13 +432,16 @@ if __name__ == "__main__":
         print("\nCtrl+C received — stopping experiment")
 
     finally:
+        channel_url = None
         if browser is not None:
+            channel_url = browser.channel_url
             browser.stop()
         else:
             # Export labels from extension storage directly
             from browser import _export_via_service_worker
             _export_via_service_worker(session_dir)
-        kill_chrome()
+        session_meta.finish(session_dir, channel_url)      # while Chrome is still up (records its version)
+        kill_chrome(chrome_profile)
 
         if is_capture and finalize_pcap(session_dir) == False:
             raise ValueError("Cannot finalize pcap capture")
@@ -428,10 +455,9 @@ if __name__ == "__main__":
         if not proc_ok:
             print("Could not process http logs — raw JSON kept for manual inspection")
 
-        if http_ok and proc_ok:
-            run(["make", "remove_http_logs"])
-        run(["make", "remove_ssl_keys"])
+        # v2: the TLS keys (<session_dir>/ssl_keys.log) and raw decoder outputs stay in the session dir
 
         save_json(session_dir / "net_labels.txt", net_labels)
         print(f"Run complete → {session_dir}")
         change_perm(session_dir)
+        check_session(session_dir)

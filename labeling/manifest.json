@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
   "name": "YT Video Watcher",
-  "version": "1.0",
+  "version": "2.0",
   "description": "Observe live video playback",
-  "permissions": ["storage"],
-
+  "permissions": [
+    "storage"
+  ],
   "background": {
     "service_worker": "background.js"
   },
-
   "content_scripts": [
     {
       "matches": [
@@ -17,21 +17,29 @@
         "*://m.facebook.com/*",
         "*://web.facebook.com/*",
         "*://*.cnn.com/*",
-
         "*://www.tiktok.com/*",
         "*://*.tiktok.com/*",
-
         "*://www.instagram.com/*",
         "*://*.instagram.com/*",
-
         "*://www.twitch.tv/*",
         "*://*.twitch.tv/*",
-
         "*://live.bilibili.com/*",
         "*://*.bilibili.com/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "all_frames": true
+    },
+    {
+      "matches": [
+        "*://www.youtube.com/*"
+      ],
+      "js": [
+        "page_stats.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_idle"
     }
   ]
 }

@@ -12,6 +12,77 @@ const RESOLUTION_POLL_INTERVAL_MS = 1000;
 let flushInProgress = false;
 let collecting = true;
 let inStall = false;
+// v2 (LVQoE t35): element / source identity, to report a swap on the first tick after it
+let lastSrc = null;
+let lastElement = null;
+// An ad's <video> has a short finite duration; live streams report Infinity. A DVR window can report a long finite
+// duration, so only a finite duration below this bound counts as an ad signal (raw duration is recorded too).
+const AD_MAX_DURATION_S = 600;
+
+// Ad DOM markers per platform (they rotate: keep the list, add, never remove). Visible elements only.
+const AD_SELECTORS = {
+  youtube: [
+    ".ytp-ad-player-overlay", ".ytp-ad-player-overlay-layout", ".ytp-ad-preview-container",
+    ".ytp-ad-text", ".ytp-ad-simple-ad-badge", ".ytp-ad-badge", ".ytp-ad-duration-remaining",
+    ".ytp-ad-skip-button", ".ytp-skip-ad-button", ".ytp-ad-skip-button-modern",
+  ],
+  twitch: [
+    '[data-a-target="video-ad-label"]', '[data-a-target="video-ad-countdown"]', '[data-a-target="ad-banner"]',
+    '[data-test-selector="ad-banner-default-text"]', '[data-test-selector="ad-banner"]', ".ads-manager__container",
+    ".tw-ad",
+  ],
+};
+
+function platformOf() {
+  const h = location.hostname;
+  if (h.includes("youtube.")) return "youtube";
+  if (h.includes("twitch.")) return "twitch";
+  if (h.includes("tiktok.")) return "tiktok";
+  if (h.includes("bilibili.")) return "bilibili";
+  return "other";
+}
+
+function visible(el) {
+  return !!el && el.offsetParent !== null && el.getClientRects().length > 0;
+}
+
+// Which ad signals fire now. is_ad = any of these. A <video> swap is NOT an ad signal on its own (twitch swaps the
+// element on quality changes too); it is reported separately as src_changed.
+function adSignals(v) {
+  const sig = [];
+  if (v && isFinite(v.duration) && v.duration > 0 && v.duration < AD_MAX_DURATION_S) sig.push("duration_finite");
+  const plat = platformOf();
+  if (plat === "youtube") {
+    const mp = document.getElementById("movie_player");
+    if (mp && mp.classList.contains("ad-showing")) sig.push("yt_ad_showing");
+    if (mp && mp.classList.contains("ad-interrupting")) sig.push("yt_ad_interrupting");
+  }
+  for (const sel of AD_SELECTORS[plat] || []) {
+    if ([...document.querySelectorAll(sel)].some(visible)) {
+      sig.push(plat === "youtube" ? "yt_ad_dom" : "tw_ad_dom");
+      break;
+    }
+  }
+  return sig;
+}
+
+function bufferedAhead(v) {
+  if (!v || !v.buffered) return null;
+  const t = v.currentTime;
+  for (let i = 0; i < v.buffered.length; i++) {
+    if (v.buffered.start(i) <= t + 0.05 && t <= v.buffered.end(i)) return v.buffered.end(i) - t;
+  }
+  return 0;
+}
+
+function srcChanged(v) {
+  if (!v) return false;
+  const src = v.currentSrc || v.src || null;
+  const changed = (lastElement !== null && lastElement !== v) || (lastSrc !== null && src !== lastSrc);
+  lastElement = v;
+  lastSrc = src;
+  return changed;
+}
 
 function buildEvent(type) {
   return {
@@ -26,7 +97,22 @@ function buildEvent(type) {
     // Advancing playhead proves the element is really playing; a frozen
     // current_time makes stale res_meta ticks detectable in post-processing.
     current_time: video?.currentTime ?? null,
+    // v2 (LVQoE t35): additive columns
+    buffered_ahead_s: bufferedAhead(video),
+    playback_rate: video?.playbackRate ?? null,
+    duration_s: video ? (isFinite(video.duration) ? video.duration : "inf") : null,
+    is_ad: null,
+    ad_signals: null,
+    src_changed: null,
   };
+}
+
+function withAdState(evt) {
+  const sig = adSignals(video);
+  evt.is_ad = sig.length > 0;
+  evt.ad_signals = sig.join("|");
+  evt.src_changed = srcChanged(video);
+  return evt;
 }
 
 function emit(type) {
@@ -34,8 +120,13 @@ function emit(type) {
   if (type !== "res_meta" && type === lastEventType) return;
   if (type !== "res_meta") lastEventType = type;
 
-  const evt = buildEvent(type);
+  const evt = withAdState(buildEvent(type));
   eventBuffer.push(evt);
+  // Tick id visible to the page world (shared DOM), so screenshots can be stamped with the tick they follow.
+  if (type === "res_meta" && window === window.top) {
+    document.documentElement.dataset.lvqoeTick = String(evt.event_id);
+    document.documentElement.dataset.lvqoeTickTs = String(evt.ts);
+  }
 
   if (eventBuffer.length > MAX_BUFFER_SIZE) {
     eventBuffer.shift();
@@ -159,6 +250,25 @@ const existingVideo = pickBestVideo();
 if (existingVideo) {
   attachVideo(existingVideo);
 }
+
+// yt player stats (G3, ground truth only): page_stats.js runs in the page world and posts here; forwarded as a
+// separate stream (stored apart from the label events, exported to player_stats.jsonl, never into labels.csv).
+const statsBuffer = [];
+window.addEventListener("message", (e) => {
+  if (e.source !== window || !e.data || e.data.source !== "lvqoe-page-stats") return;
+  if (!collecting) return;
+  statsBuffer.push({ ts: e.data.ts, stats: e.data.stats, url: location.href });
+  if (statsBuffer.length > 200) statsBuffer.shift();
+});
+setInterval(() => {
+  if (statsBuffer.length === 0) return;
+  const batch = statsBuffer.splice(0, statsBuffer.length);
+  try {
+    chrome.runtime.sendMessage({ kind: "player-stats-batch", payload: batch }, () => void chrome.runtime.lastError);
+  } catch (e) {
+    statsBuffer.unshift(...batch);
+  }
+}, FLUSH_INTERVAL_MS);
 
 window.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") tryFlush();

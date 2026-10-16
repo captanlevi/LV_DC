@@ -1,0 +1,92 @@
+"""session_meta.py: <session_dir>/meta.json for collection v2 (LVQoE t35).
+
+Records what produced a session: LV_DC commit (and whether the tree was dirty), Chrome and extension versions, the
+shaper configuration (scenario table, the platform's transition matrix, episode length, interface), the channel URL
+actually collected, the box hostname and its NTP offset, and start / end times. Written at start and updated at the end;
+every field is best effort (a missing value is recorded as null with the reason, never fatal).
+"""
+from __future__ import annotations
+
+import json
+import socket
+import subprocess
+import time
+import urllib.request
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _run(cmd: list[str], timeout: float = 10.0) -> str | None:
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return (out.stdout or out.stderr).strip() if out.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def lvdc_commit() -> dict:
+    sha = _run(["git", "-C", str(REPO), "rev-parse", "HEAD"])
+    dirty = _run(["git", "-C", str(REPO), "status", "--porcelain"])
+    return {"sha": sha, "dirty": bool(dirty) if dirty is not None else None}
+
+
+def chrome_version(cdp_base: str = "http://localhost:9222") -> dict:
+    try:
+        with urllib.request.urlopen(f"{cdp_base}/json/version", timeout=5) as r:
+            v = json.loads(r.read())
+        return {"browser": v.get("Browser"), "user_agent": v.get("User-Agent"), "protocol": v.get("Protocol-Version")}
+    except Exception as e:
+        return {"browser": None, "error": repr(e)}
+
+
+def extension_version() -> str | None:
+    try:
+        return json.loads((REPO / "labeling" / "manifest.json").read_text()).get("version")
+    except Exception:
+        return None
+
+
+def ntp_offset() -> dict:
+    """Clock offset vs NTP, from whichever tool the box has (chrony, ntpdate, sntp); raw output kept."""
+    for cmd in (["chronyc", "tracking"], ["ntpdate", "-q", "pool.ntp.org"], ["sntp", "pool.ntp.org"]):
+        out = _run(cmd, timeout=15)
+        if out:
+            return {"tool": cmd[0], "raw": out[-2000:]}
+    return {"tool": None, "raw": None, "error": "no chronyc / ntpdate / sntp available"}
+
+
+def shaper_config(platform: str, transitions: dict, episode_s: int) -> dict:
+    from utils.shaping import SCENARIOS
+    scen = {k: {kk: vv for kk, vv in vars(v).items()} for k, v in SCENARIOS.items()}
+    iface = None
+    try:
+        for line in (REPO / "networkSim" / "Makefile").read_text().splitlines():
+            if line.startswith("IFACE ?="):
+                iface = line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return {"platform": platform, "scenarios": scen, "transitions": transitions, "episode_s": episode_s,
+            "iface_default": iface}
+
+
+def write(session_dir: Path, **fields) -> dict:
+    """Merge `fields` into session_dir/meta.json (creating it)."""
+    p = session_dir / "meta.json"
+    meta = json.loads(p.read_text()) if p.exists() else {}
+    meta.update(fields)
+    p.write_text(json.dumps(meta, indent=1, default=str))
+    return meta
+
+
+def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, argv: list[str],
+          chrome_profile: Path) -> dict:
+    return write(session_dir, schema="lvdc_session_meta_v2", platform=platform, argv=argv,
+                 started_at=time.time(), hostname=socket.gethostname(), lvdc_commit=lvdc_commit(),
+                 extension_version=extension_version(), chrome_profile=str(chrome_profile),
+                 shaper=shaper_config(platform, transitions, episode_s), ntp_offset_start=ntp_offset())
+
+
+def finish(session_dir: Path, channel_url: str | None) -> dict:
+    return write(session_dir, ended_at=time.time(), channel_url=channel_url, chrome=chrome_version(),
+                 ntp_offset_end=ntp_offset())

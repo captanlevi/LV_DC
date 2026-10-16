@@ -118,53 +118,61 @@ _PICK_STREAM_JS: dict[str, str] = {
 
 # JS that returns 'skipped' when an ad skip button is found and clicked, else null.
 _SKIP_AD_JS: dict[str, str] = {
+    # v2 (LVQoE t35). The old version never skipped: steps 2 and 3 both required #movie_player.ad-showing, which yt
+    # does not set reliably (SESSION_NOTES). Now: an ad is detected by ANY signal (finite short duration first, then
+    # ad-showing, then ad DOM); then click a visible skip button, else jump to the end of a finite ad, else mute and
+    # wait. The label's ad mark (content.js) never depends on this succeeding.
     "youtube": """
         (function() {
-            // 1. Class-based skip buttons (YouTube rotates these)
-            const cssSel = [
-                '.ytp-ad-skip-button',
-                '.ytp-skip-ad-button',
-                '.ytp-ad-skip-button-modern',
-                '.ytp-ad-skip-button-modern .ytp-button',
-                'button.ytp-ad-skip-button-modern',
-                '.ytp-ad-skip-button-container button',
-            ];
-            for (const s of cssSel) {
-                const btn = document.querySelector(s);
-                if (btn && btn.offsetParent !== null) { btn.click(); return 'skipped'; }
+            const v = document.querySelector('#movie_player video') || document.querySelector('video');
+            const mp = document.getElementById('movie_player');
+            const sig = [];
+            if (v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d) sig.push('duration_finite');
+            if (mp && mp.classList.contains('ad-showing')) sig.push('yt_ad_showing');
+            const vis = (el) => el && el.offsetParent !== null;
+            const adDom = ['.ytp-ad-player-overlay', '.ytp-ad-player-overlay-layout', '.ytp-ad-preview-container',
+                           '.ytp-ad-text', '.ytp-ad-simple-ad-badge', '.ytp-ad-badge', '.ytp-ad-duration-remaining'];
+            if (adDom.some((s) => [...document.querySelectorAll(s)].some(vis))) sig.push('yt_ad_dom');
+            if (sig.length === 0) {
+                if (v && v.muted && v.dataset.lvqoeMutedForAd === '1') {
+                    v.muted = false; delete v.dataset.lvqoeMutedForAd; return 'unmuted';
+                }
+                return null;
             }
-            // 2. Text / aria-label fallback — only when an ad is actually showing
-            const playerEl = document.querySelector('#movie_player');
-            if (playerEl && playerEl.classList.contains('ad-showing')) {
-                for (const btn of document.querySelectorAll('button')) {
-                    if (!btn.offsetParent) continue;
-                    const label = (btn.textContent + ' ' + (btn.getAttribute('aria-label') || '')).toLowerCase();
-                    if (label.includes('skip')) { btn.click(); return 'text-skipped'; }
+            const tag = ' [' + sig.join('|') + ']';
+            // 1. a visible skip button: known classes, then any button whose text / aria-label says skip
+            const skipSel = ['.ytp-ad-skip-button', '.ytp-skip-ad-button', '.ytp-ad-skip-button-modern',
+                             '.ytp-ad-skip-button-container button', 'button.ytp-ad-skip-button-modern'];
+            for (const s of skipSel) {
+                const b = document.querySelector(s);
+                if (vis(b)) { b.click(); return 'skipped' + tag; }
+            }
+            for (const b of document.querySelectorAll('button')) {
+                if (!vis(b)) continue;
+                const label = (b.textContent + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase();
+                if (label.includes('skip')) { b.click(); return 'text-skipped' + tag; }
+            }
+            // 2. fast-forward a finite ad to its end
+            if (v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d) {
+                if (v.currentTime < v.duration - 0.25) {
+                    v.currentTime = v.duration;
+                    v.play().catch(() => {});
+                    return 'fast-forwarded' + tag;
                 }
             }
-            // 3. Fast-forward non-skippable ads; nudge player afterwards
-            const player = playerEl || document.querySelector('#movie_player');
-            if (player && player.classList.contains('ad-showing')) {
-                const vid = document.querySelector('video');
-                if (vid) {
-                    if (isFinite(vid.duration) && vid.duration > 0) {
-                        vid.currentTime = vid.duration;
-                    }
-                    // Nudge to dismiss any end-of-ad overlay
-                    vid.play().catch(() => {});
-                    player.click();
-                    return 'fast-forwarded';
-                }
-            }
-            return null;
+            // 3. mute and wait
+            if (v && !v.muted) { v.muted = true; v.dataset.lvqoeMutedForAd = '1'; return 'muted-wait' + tag; }
+            return 'waiting' + tag;
         })()
-    """,
+    """ % {"max_dur": 600},
     "twitch": """
         (function() {
             // Detect Twitch mid-roll ad
             const adEl = document.querySelector(
                 '[data-a-target="ad-banner"], .ads-manager__container, ' +
-                '[data-test-selector="ad-banner"], .tw-ad'
+                '[data-test-selector="ad-banner"], .tw-ad, ' +
+                '[data-a-target="video-ad-label"], [data-a-target="video-ad-countdown"], ' +
+                '[data-test-selector="ad-banner-default-text"]'
             );
             const v = document.querySelector('video');
             if (adEl) {
@@ -360,17 +368,30 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             "new Promise(r => chrome.storage.local.get({events:[]}, d => r(JSON.stringify(d.events))))",
             await_promise=True,
         )
+        # yt player stats (G3 ground truth): a separate file, never merged into labels.csv
+        stats_json = sw.eval(
+            "new Promise(r => chrome.storage.local.get({player_stats:[]}, d => r(JSON.stringify(d.player_stats))))",
+            await_promise=True,
+        )
         # Clear storage so the next run starts fresh
-        sw.eval("new Promise(r => chrome.storage.local.remove('events', r))", await_promise=True)
+        sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'], r))", await_promise=True)
         sw.close()
+        stats = json.loads(stats_json) if stats_json else []
+        if stats:
+            with open(session_dir / "player_stats.jsonl", "w") as fh:
+                for rec in stats:
+                    fh.write(json.dumps(rec) + "\n")
+            print(f"[browser] Player stats ({len(stats)} records) → {session_dir / 'player_stats.jsonl'}", flush=True)
 
         events: list[dict] = json.loads(events_json) if events_json else []
         if not events:
             print("[browser] Extension storage empty — no QoE events collected", flush=True)
             return False
 
+        # v2 (LVQoE t35): new columns appended after the v1 ones (additive; v1 readers keep working)
         header = ["ts", "type", "video_w", "video_h", "client_w", "client_h",
-                  "dropped", "current_time", "tabId", "url", "event_id"]
+                  "dropped", "current_time", "tabId", "url", "event_id",
+                  "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed"]
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]
@@ -503,15 +524,53 @@ def _wait_for_load(page: CDPPage, timeout: float = 15.0) -> None:
 # Ad watcher
 # ---------------------------------------------------------------------------
 
-def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event) -> None:
+def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None) -> None:
+    """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl)."""
     skip_js = _SKIP_AD_JS.get(platform, "null")
     while not stop.wait(timeout=1):
         try:
             result = page.eval(skip_js)
             if result:
                 print(f"[browser] Ad action: {result}", flush=True)
+                if log_path is not None:
+                    with open(log_path, "a") as fh:
+                        fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": result}) + "\n")
         except Exception:
             pass
+
+
+SHOT_INTERVAL_S = 10.0
+SHOT_WIDTH_PX = 640
+SHOT_JPEG_QUALITY = 40
+
+
+def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> None:
+    """Every SHOT_INTERVAL_S: a small JPEG of the tab, stamped with the extension's latest tick (event_id and ts,
+    which content.js mirrors onto <html data-lvqoe-tick>), for the human label-vs-screen check."""
+    import base64
+    shots_dir.mkdir(parents=True, exist_ok=True)
+    index = shots_dir / "index.jsonl"
+    while not stop.wait(timeout=SHOT_INTERVAL_S):
+        try:
+            tick = page.eval("JSON.stringify([document.documentElement.dataset.lvqoeTick || null, "
+                             "document.documentElement.dataset.lvqoeTickTs || null])")
+            tick_id, tick_ts = json.loads(tick) if tick else (None, None)
+            m = page.call("Page.getLayoutMetrics")
+            vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
+            w, h = float(vp.get("clientWidth") or 1280), float(vp.get("clientHeight") or 720)
+            res = page.call("Page.captureScreenshot", {
+                "format": "jpeg", "quality": SHOT_JPEG_QUALITY,
+                "clip": {"x": 0, "y": 0, "width": w, "height": h, "scale": SHOT_WIDTH_PX / w}})
+            data = res.get("data")
+            if not data:
+                continue
+            ts = time.time()
+            name = f"{int(ts * 1000)}_tick{tick_id if tick_id is not None else 'na'}.jpg"
+            (shots_dir / name).write_bytes(base64.b64decode(data))
+            with open(index, "a") as fh:
+                fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts}) + "\n")
+        except Exception as exc:  # a missed shot must never stop collection
+            print(f"[browser] screenshot failed: {exc}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +595,8 @@ class BrowserSession:
         self._page: CDPPage | None = None
         self._stop = threading.Event()
         self._watcher: threading.Thread | None = None
+        self._shooter: threading.Thread | None = None
+        self.channel_url: str | None = None      # the live page actually collected (meta.json)
 
     def start(self, cdp_ready_timeout: float = 30.0) -> None:
         print("[browser] Waiting for Chrome CDP endpoint...", flush=True)
@@ -591,7 +652,7 @@ class BrowserSession:
                           and t.get("webSocketDebuggerUrl")), None)
             if sw_ws:
                 sw = CDPPage(sw_ws)
-                sw.eval("new Promise(r => chrome.storage.local.remove('events', r))", await_promise=True)
+                sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'], r))", await_promise=True)
                 sw.close()
                 print("[browser] Extension storage cleared", flush=True)
         except Exception as e:
@@ -601,15 +662,31 @@ class BrowserSession:
         if not ok:
             raise RuntimeError(f"Failed to navigate to a live {self.platform} stream")
 
-        # Start ad-skip background thread
+        try:
+            self.channel_url = self._page.eval("location.href")
+        except Exception:
+            self.channel_url = None
+
+        # Start ad-skip background thread (actions logged to ad_actions.jsonl)
+        log_path = (self._session_dir / "ad_actions.jsonl") if self._session_dir else None
         self._watcher = threading.Thread(
             target=_ad_watcher_loop,
-            args=(self._page, self.platform, self._stop),
+            args=(self._page, self.platform, self._stop, log_path),
             daemon=True,
             name="ad-watcher",
         )
         self._watcher.start()
         print("[browser] Ad-watcher running", flush=True)
+
+        if self._session_dir:
+            self._shooter = threading.Thread(
+                target=_screenshot_loop,
+                args=(self._page, self._session_dir / "shots", self._stop),
+                daemon=True,
+                name="screenshots",
+            )
+            self._shooter.start()
+            print(f"[browser] Screenshots every {SHOT_INTERVAL_S:.0f} s → {self._session_dir / 'shots'}", flush=True)
 
     def stop(self) -> None:
         # Read QoE events from the extension service worker before closing the tab
@@ -626,6 +703,8 @@ class BrowserSession:
         self._stop.set()
         if self._watcher:
             self._watcher.join(timeout=5)
+        if self._shooter:
+            self._shooter.join(timeout=5)
         if self._page:
             self._page.close()
 
