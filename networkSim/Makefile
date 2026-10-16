@@ -22,11 +22,20 @@ OUT_FILE       = $(SESSION_DIR)/outgoing.pcap
 MERGED_FILE    = $(SESSION_DIR)/merged.pcap
 HTTP_LOG_FILE  = $(SESSION_DIR)/http_v2.json
 
+# t37 (supervisor): our own management traffic is neither shaped nor captured: tailscale's WireGuard UDP (tailscaled's
+# listening port, read at make time, default 41641) and ssh (TCP 22), both directions, IPv4 (IPv6 is off on chaos).
+# The 100.x tailscale addresses exist only inside the tunnel; on IFACE the tunnel is this UDP port. A DERP-relayed
+# tunnel runs over TCP 443 and cannot be told apart by port: exp.py records `tailscale status` in meta.json.
+TS_UDP_PORT := $(shell sudo -n ss -ulpnH 2>/dev/null | awk '/tailscaled/ {n=split($$4,a,":"); print a[n]; exit}')
+MGMT_UDP_PORT ?= $(if $(TS_UDP_PORT),$(TS_UDP_PORT),41641)
+MGMT_TCP_PORT ?= 22
+CAPTURE_BPF = not (udp port $(MGMT_UDP_PORT) or tcp port $(MGMT_TCP_PORT))
+
 # v2 (LVQoE t35, rushi 2026-10-16): the TLS key log is KEPT, one per session, so every session can be re-decoded
 # offline (HTTP/3 and SABR request bodies included). remove_ssl_keys / remove_http_logs are no longer called.
 SSL_KEY_LOG_FILE = $(SESSION_DIR)/ssl_keys.log
 
-.PHONY: enable disable start-capture stop-capture merge-capture clean-captures
+.PHONY: enable disable start-capture stop-capture merge-capture clean-captures mgmt-exclusion
 
 enable:
 	@echo "🔧 Loading ifb modules and creating interfaces..."
@@ -44,19 +53,43 @@ enable:
 
 	@echo "📥 Shaping incoming traffic (All Protocols)..."
 	sudo tc qdisc add dev $(IFACE) handle ffff: ingress
-	# Catch ALL ingress traffic and send to IFB_INGRESS
-	sudo tc filter add dev $(IFACE) parent ffff: \
+	# Management traffic first (prio 1): accepted as is, never redirected to IFB_INGRESS (not shaped, not captured)
+	sudo tc filter add dev $(IFACE) parent ffff: protocol ip prio 1 u32 \
+		match ip protocol 17 0xff match ip sport $(MGMT_UDP_PORT) 0xffff action ok
+	sudo tc filter add dev $(IFACE) parent ffff: protocol ip prio 1 u32 \
+		match ip protocol 17 0xff match ip dport $(MGMT_UDP_PORT) 0xffff action ok
+	sudo tc filter add dev $(IFACE) parent ffff: protocol ip prio 1 u32 \
+		match ip protocol 6 0xff match ip sport $(MGMT_TCP_PORT) 0xffff action ok
+	sudo tc filter add dev $(IFACE) parent ffff: protocol ip prio 1 u32 \
+		match ip protocol 6 0xff match ip dport $(MGMT_TCP_PORT) 0xffff action ok
+	# Catch ALL other ingress traffic and send to IFB_INGRESS
+	sudo tc filter add dev $(IFACE) parent ffff: prio 10 \
 		matchall action mirred egress redirect dev $(IFB_INGRESS)
 
 	sudo tc qdisc add dev $(IFB_INGRESS) root handle 1: htb default 10
 
 	@echo "📤 Shaping and mirroring outgoing traffic (All Protocols)..."
 	sudo tc qdisc add dev $(IFACE) root handle 1: htb default 10
-	# Catch ALL egress traffic and mirror to IFB_EGRESS for capture
-	sudo tc filter add dev $(IFACE) parent 1: \
+	# Management traffic first (prio 1): classified into the unshaped class 1:20; classification stops there, so the
+	# mirror below never sees it (not captured)
+	sudo tc class add dev $(IFACE) parent 1: classid 1:20 htb rate 1000mbit
+	sudo tc filter add dev $(IFACE) parent 1: protocol ip prio 1 u32 \
+		match ip protocol 17 0xff match ip sport $(MGMT_UDP_PORT) 0xffff flowid 1:20
+	sudo tc filter add dev $(IFACE) parent 1: protocol ip prio 1 u32 \
+		match ip protocol 17 0xff match ip dport $(MGMT_UDP_PORT) 0xffff flowid 1:20
+	sudo tc filter add dev $(IFACE) parent 1: protocol ip prio 1 u32 \
+		match ip protocol 6 0xff match ip sport $(MGMT_TCP_PORT) 0xffff flowid 1:20
+	sudo tc filter add dev $(IFACE) parent 1: protocol ip prio 1 u32 \
+		match ip protocol 6 0xff match ip dport $(MGMT_TCP_PORT) 0xffff flowid 1:20
+	# Catch ALL other egress traffic and mirror to IFB_EGRESS for capture
+	sudo tc filter add dev $(IFACE) parent 1: prio 10 \
 		matchall action mirred egress mirror dev $(IFB_EGRESS)
 
 	@echo "✅ Shaping ENABLED on $(IFACE) for ALL traffic (TCP/UDP/IPv4/IPv6)"
+
+# printed by exp.py into meta.json (mgmt_exclusion)
+mgmt-exclusion:
+	@echo '{"udp_port": $(MGMT_UDP_PORT), "udp_port_source": "$(if $(TS_UDP_PORT),tailscaled ss,default 41641)", "tcp_port": $(MGMT_TCP_PORT), "capture_bpf": "$(CAPTURE_BPF)", "method": "tc prio-1 u32 bypass (ingress action ok, egress class 1:20 unshaped) + tcpdump BPF"}'
 
 slow:
 	@echo "📉 Applying bandwidth limit and delay..."
@@ -91,8 +124,8 @@ start-capture:
 	@# v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails ("Couldn't change ownership of
 	@# savefile") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never
 	@# opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.
-	@sudo sh -c 'exec tcpdump -i $(IFB_INGRESS) -U -w - > "$(IN_FILE)"' & echo $$! > $(CAPTURE_DIR)/ifb0.pid
-	@sudo sh -c 'exec tcpdump -i $(IFB_EGRESS) -U -w - > "$(OUT_FILE)"' & echo $$! > $(CAPTURE_DIR)/ifb1.pid
+	@sudo sh -c 'exec tcpdump -i $(IFB_INGRESS) -U -w - "$(CAPTURE_BPF)" > "$(IN_FILE)"' & echo $$! > $(CAPTURE_DIR)/ifb0.pid
+	@sudo sh -c 'exec tcpdump -i $(IFB_EGRESS) -U -w - "$(CAPTURE_BPF)" > "$(OUT_FILE)"' & echo $$! > $(CAPTURE_DIR)/ifb1.pid
 	@echo "✅ Capture started"
 
 

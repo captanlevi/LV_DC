@@ -77,6 +77,31 @@ def data_volume(path: Path) -> dict:
     return out
 
 
+def mgmt_exclusion() -> dict:
+    """t37: the management traffic excluded from shaping and capture (Makefile mgmt-exclusion) and the tailscale link
+    state: a direct tunnel is the excluded UDP port; a DERP-relayed one (TCP 443) is not excludable by port."""
+    out: dict = {}
+    raw = _run(["make", "-s", "-C", str(REPO / "networkSim"), "mgmt-exclusion"])
+    try:
+        out["exclusion"] = json.loads(raw) if raw else None
+    except Exception:
+        out["exclusion"] = {"raw": raw}
+    ts = _run(["tailscale", "status", "--json"], timeout=10)
+    if ts:
+        try:
+            st = json.loads(ts)
+            out["tailscale"] = {
+                "self": (st.get("Self") or {}).get("HostName"),
+                "peers": [{"host": p.get("HostName"), "online": p.get("Online"), "cur_addr": p.get("CurAddr"),
+                           "relay": p.get("Relay"), "direct": bool(p.get("CurAddr"))}
+                          for p in (st.get("Peer") or {}).values() if p.get("Online")]}
+        except Exception:
+            out["tailscale"] = {"raw": ts[:500]}
+    else:
+        out["tailscale"] = None
+    return out
+
+
 def ipv6_state() -> dict:
     """IPv6 sysctl state per interface (Linux /proc/sys/net/ipv6/conf/<if>/disable_ipv6; 1 = disabled) and whether
     any interface holds a global IPv6 address (t37: old data is IPv4-only; IPv6 is disabled on the box)."""
@@ -129,7 +154,8 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
                                       forced_initial_state=forced_initial_state),
                  channel_url_requested=channel_url_requested, channel_type=channel_type, channel_handle=channel_handle,
                  profile_template=profile_template,
-                 ntp_offset_start=ntp_offset(), ipv6_sysctl=ipv6_state(), data_volume_start=data_volume(session_dir))
+                 ntp_offset_start=ntp_offset(), ipv6_sysctl=ipv6_state(), data_volume_start=data_volume(session_dir),
+                 mgmt_exclusion=mgmt_exclusion())
 
 
 def finish(session_dir: Path, channel_url: str | None, **extra) -> dict:
