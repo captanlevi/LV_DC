@@ -562,10 +562,14 @@ def meta_check(sd: Path) -> tuple[dict, list[str]]:
     pt = m.get("profile_template") or {}
     if pt.get("mode") != "clone" or not pt.get("sha256"):
         missing.append("profile_template (clone + sha; t37)")
-    if m.get("platform") == "youtube":
-        # t38 / G5 (levi R1, R2): the matrix id, the low-state cap, and the channel handle / type from the list
+    if m.get("platform") in ("youtube", "tiktok", "twitch"):
+        # t38 / addendum M: the matrix id and the low-state cap
         sh = m.get("shaper") or {}
         missing += [f"shaper.{k}" for k in ("matrix_id", "low_state_cap") if sh.get(k) in (None, "")]
+    if m.get("platform") == "tiktok" and m.get("login_state") in (None, ""):
+        missing.append("login_state (addendum M (a))")
+    if m.get("platform") == "youtube":
+        # G5 (levi R2): the channel handle / type from the list
         missing += [k for k in ("channel_handle", "channel_type") if m.get(k) in (None, "")]
     return m, missing
 
@@ -682,6 +686,7 @@ def main() -> int:
           f"| longest low-state run, episodes / low-state cap | {net.get('low_run_max_episodes')} / {out['low_state_cap']} |",
           f"| IPv6 share of media bytes (FAIL > 0) / of all downstream; IPv6 sysctl at start | {net.get('ipv6_media_share')} / {net.get('ipv6_downstream_share')}; {meta.get('ipv6_sysctl')} |",
           f"| matrix / low-state cap | {out['matrix']} / {out['low_state_cap']} |",
+          f"| login state / room rotation (addendum M) | {meta.get('login_state')} / {(meta.get('room_rotation') or {}).get('active')} ({len((meta.get('room_rotation') or {}).get('rooms') or [])} rooms) |",
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
           f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",
           f"| tt logged-out quality countdown ticks (FAIL if > 0) | {lab.get('quality_countdown_ticks')} |",

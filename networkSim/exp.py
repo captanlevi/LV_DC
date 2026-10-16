@@ -27,7 +27,8 @@ import asyncio
 
 from utils.netStat import net_episode_generator
 from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
-                           YOUTUBE_MATRICES, initial_state_stationary, get_higher_state, get_lower_state)
+                           YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
+                           get_higher_state, get_lower_state)
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession
 import session_meta
@@ -492,6 +493,27 @@ if __name__ == "__main__":
         help="Auto-navigate to a live stream and handle ads (default: manual — you navigate yourself).",
     )
     parser.add_argument(
+        "--tt-matrix",
+        choices=sorted(TIKTOK_MATRICES),
+        default="TT-M",
+        help="tt shaper config (prereg addendum M): TT-M (cap 4, stationary start) from the 2026-10-17 checkpoint; "
+             "current = before it.",
+    )
+    parser.add_argument(
+        "--tw-matrix",
+        choices=sorted(TWITCH_MATRICES),
+        default="TW-M",
+        help="twitch shaper config (prereg addendum M): TW-M (cap 2, stationary start); current = before it.",
+    )
+    parser.add_argument(
+        "--tt-room-rotation",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="tt only (addendum M pre-declared fallback): move to a new room every SECONDS (300) within the session; "
+             "rooms and times recorded in meta.json room_rotation.",
+    )
+    parser.add_argument(
         "--yt-matrix",
         choices=sorted(YOUTUBE_MATRICES),
         default="A",
@@ -560,9 +582,11 @@ if __name__ == "__main__":
     }
     transition = transition_map[platform]
     matrix_id, low_cap, init_rule = None, 2, "linear"
-    if platform == "youtube":
-        matrix_id = args.yt_matrix
-        transition, low_cap, init_rule = YOUTUBE_MATRICES[matrix_id]
+    chosen = {"youtube": (YOUTUBE_MATRICES, args.yt_matrix), "tiktok": (TIKTOK_MATRICES, args.tt_matrix),
+              "twitch": (TWITCH_MATRICES, args.tw_matrix)}.get(platform)
+    if chosen:
+        matrix_id = chosen[1]
+        transition, low_cap, init_rule = chosen[0][matrix_id]
     SHAPER_OPTS.update(max_consecutive_low=low_cap,
                        initial_state_fn=initial_state_stationary if init_rule == "stationary" else None)
 
@@ -602,7 +626,8 @@ if __name__ == "__main__":
         # inside the try: a failed start (e.g. the channel is not live) still runs the finalise path below, which stops
         # tcpdump and the shaper (they were left running before, writing into the dead session's pcap)
         if args.auto:
-            browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url, geometry=args.geometry)
+            browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url, geometry=args.geometry,
+                                     room_rotation_s=args.tt_room_rotation if platform == "tiktok" else None)
             browser.start()
             if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
                 try:
@@ -650,7 +675,8 @@ if __name__ == "__main__":
             channel_url = browser.channel_url
             meta_extra.update(chat_action=browser.chat_action, geometry=browser.geometry, player_pin=browser.player_pin,
                               channel_list_url=browser.list_url, abort_at=browser.abort_at,
-                              video_stats=browser.video_stats, geometry_target=browser.geometry_target)
+                              video_stats=browser.video_stats, geometry_target=browser.geometry_target,
+                              login_state=browser.login_state, room_rotation=browser.room_rotation)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)

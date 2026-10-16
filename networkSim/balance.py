@@ -18,6 +18,7 @@ from utils.shaping import (
     TIKTOK_TRANSITIONS,
     BILIBILI_TRANSITIONS,
     YOUTUBE_MATRICES,
+    PLATFORM_MATRICES,
 )
 
 PLATFORM_TRANSITIONS: dict[str, dict[str, dict[str, float]]] = {
@@ -94,12 +95,13 @@ def load_platform_data(platform: str, data_dir: Path) -> tuple[dict[str, float],
 # Reports
 # ---------------------------------------------------------------------------
 
-def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None) -> None:
-    transitions = PLATFORM_TRANSITIONS[platform]
-    if platform == "youtube" and yt_matrix in ("A", "B"):
-        transitions = YOUTUBE_MATRICES[yt_matrix][0]
+def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None,
+                   matrix_id: str | None = None) -> None:
+    matrix_id = matrix_id or (yt_matrix if platform == "youtube" else None)
+    m = _matrix(platform, matrix_id)
+    transitions = m[0] if m else PLATFORM_TRANSITIONS[platform]
     states = sorted(transitions.keys(), key=int)
-    targets = balance_target(platform, yt_matrix)
+    targets = balance_target(platform, matrix_id)
 
     stationary = stationary_distribution(transitions)
     actual, run_count = load_platform_data(platform, data_dir)
@@ -142,24 +144,34 @@ def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix:
     print()
 
 
-def balance_target(platform: str, yt_matrix: str | None = None) -> dict[str, float]:
-    """Per-state target share. yt under a t38 matrix (A / B): that matrix's stationary distribution (prereg
-    Addendum A); everything else: uniform (the pre-t38 rule)."""
-    if platform == "youtube" and yt_matrix in ("A", "B"):
-        return stationary_distribution(YOUTUBE_MATRICES[yt_matrix][0])
+def _matrix(platform: str, matrix_id: str | None):
+    """(transitions, cap, init rule) of the named matrix for this platform, or None (the platform default)."""
+    table = PLATFORM_MATRICES.get(platform, {})
+    return table.get(matrix_id) if matrix_id else None
+
+
+def balance_target(platform: str, matrix_id: str | None = None) -> dict[str, float]:
+    """Per-state target share. A matrix with a stationary start (yt A / B, t38; tt TT-M / twitch TW-M, addendum M):
+    its stationary distribution. Everything else: uniform (the pre-t38 rule)."""
+    m = _matrix(platform, matrix_id)
+    if m and m[2] == "stationary":
+        return stationary_distribution(m[0])
     states = sorted(PLATFORM_TRANSITIONS[platform].keys(), key=int)
     return {s: 1.0 / len(states) for s in states}
 
 
-def most_needed_state(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None) -> str | None:
+def most_needed_state(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None,
+                      matrix_id: str | None = None) -> str | None:
     """Return the state with the largest gap below its target share (balance_target), or None if balanced.
-    yt under a t38 matrix returns None (no forced start): exp.py then draws the start from the stationary
-    distribution, which is the target itself."""
-    if platform == "youtube" and yt_matrix in ("A", "B"):
+    A stationary-start matrix returns None (no forced start): exp.py draws the start from the stationary
+    distribution, which is the target itself. yt_matrix is the older name of matrix_id (yt only)."""
+    matrix_id = matrix_id or (yt_matrix if platform == "youtube" else None)
+    m = _matrix(platform, matrix_id)
+    if m and m[2] == "stationary":
         return None
     transitions = PLATFORM_TRANSITIONS[platform]
     states = sorted(transitions.keys(), key=int)
-    target = balance_target(platform, yt_matrix)
+    target = balance_target(platform, matrix_id)
 
     actual, run_count = load_platform_data(platform, data_dir)
     if not actual:

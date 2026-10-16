@@ -67,6 +67,9 @@ def _prompt_ready(platform: str, initial_state: str | None) -> bool:
 
 
 DPMS_OFF = False   # --dpms-off: pass exp.py --dpms-off (chaos: re-blank the monitor after each session's window resize)
+# shaper matrix per platform (yt t38; tt / twitch prereg addendum M) and the tt room-rotation fallback (seconds or None)
+MATRIX_IDS: dict[str, str] = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}
+TT_ROOM_ROTATION_S: float | None = None
 
 
 def _run_collection(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
@@ -82,6 +85,12 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
         cmd += ["--auto"]
     if platform == "youtube" and yt_matrix:
         cmd += ["--yt-matrix", yt_matrix]
+    if platform == "tiktok":
+        cmd += ["--tt-matrix", MATRIX_IDS["tiktok"]]
+        if TT_ROOM_ROTATION_S:
+            cmd += ["--tt-room-rotation", str(TT_ROOM_ROTATION_S)]
+    if platform == "twitch":
+        cmd += ["--tw-matrix", MATRIX_IDS["twitch"]]
     if channel:
         cmd += ["--channel-url", yt_channels.url_of(channel["handle"]), "--channel-handle", channel["handle"],
                 "--channel-type", channel["type"]]
@@ -98,7 +107,7 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
     not_live: set[str] = set()   # yt channels whose session failed to start this invocation (tried once each)
     for i in range(runs):
         print(f"\n[{platform.upper()} — run {i+1}/{runs}]")
-        target_state = most_needed_state(platform, _RUNS_DIR, yt_matrix=yt_matrix)
+        target_state = most_needed_state(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
         channel = yt_channels.next_channel(_RUNS_DIR, exclude=not_live) if platform == "youtube" else None
         if channel:
             print(f"  Channel  : {channel['handle']} ({channel['type']}, {channel['role']})")
@@ -112,13 +121,13 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
             sys.exit(EXIT_STOPPED)
         if rc == EXIT_LOGIN_WALL:
             print(f"  LOGIN WALL on {platform}: stopping this platform (fix the profile template, then rerun).")
-            balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix)
+            balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
             return
         if rc != 0:
             print("  Collection returned non-zero — check logs above.")
             if channel:
                 not_live.add(channel["handle"])
-        balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix)
+        balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
 
 
 def accepted_sessions(platform: str) -> int:
@@ -181,7 +190,7 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
               + (f"; geometry {geom}" if geom else ""))
         preclean()
         try:
-            rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=yt_matrix),
+            rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(p)),
                                  episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel,
                                  geom=geom)
         except Exception as e:
@@ -253,6 +262,13 @@ if __name__ == "__main__":
         action="store_true",
         help="exp.py --auto: navigate to the stream and handle ads (no operator prompt). Required for v2 batches.",
     )
+    parser.add_argument("--tt-matrix", choices=["TT-M", "current"], default="TT-M",
+                        help="tt shaper config (prereg addendum M; default TT-M).")
+    parser.add_argument("--tw-matrix", choices=["TW-M", "current"], default="TW-M",
+                        help="twitch shaper config (prereg addendum M; default TW-M).")
+    parser.add_argument("--tt-room-rotation", type=float, default=None, metavar="SECONDS",
+                        help="addendum M's pre-declared tt fallback: a new room every SECONDS (300) within each tt "
+                             "session. Off unless the checkpoint QA triggers it.")
     parser.add_argument(
         "--dpms-off",
         action="store_true",
@@ -277,6 +293,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     DPMS_OFF = args.dpms_off
+    MATRIX_IDS = {"youtube": args.yt_matrix, "tiktok": args.tt_matrix, "twitch": args.tw_matrix}
+    TT_ROOM_ROTATION_S = args.tt_room_rotation
     if args.batch:
         targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
@@ -289,7 +307,7 @@ if __name__ == "__main__":
 
     if args.report_only:
         for p in platforms:
-            balance_report(p, _RUNS_DIR, yt_matrix=args.yt_matrix)
+            balance_report(p, _RUNS_DIR, yt_matrix=args.yt_matrix, matrix_id=MATRIX_IDS.get(p))
         sys.exit(0)
 
     for p in platforms:

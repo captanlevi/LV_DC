@@ -289,6 +289,44 @@ _TWITCH_VIDEO_STATS_JS = """
 })()
 """
 
+# addendum M (a): the session's login state, from the page itself: a visible "Log in" / "Sign in" control against a
+# profile / avatar marker (tt profile icon, yt avatar button, twitch user menu). Raw markers are kept in meta.json.
+_LOGIN_STATE_JS = """
+(function() {
+    const vis = (el) => el && el.offsetParent !== null;
+    const label = (el) => ((el.innerText || el.getAttribute('aria-label') || '') + '').trim();
+    const loginBtn = [...document.querySelectorAll('button, a, [role="button"]')]
+        .some(el => vis(el) && /^(log in|login|sign in)$/i.test(label(el)));
+    const profile = !!document.querySelector('[data-e2e="profile-icon"], [data-e2e="nav-profile"], ' +
+        '[data-e2e="top-avatar"], #avatar-btn, [data-a-target="user-menu-toggle"]');
+    return JSON.stringify({login_button_visible: loginBtn, profile_marker: profile});
+})()
+"""
+
+
+def _pick_new_room_js(visited: list[str]) -> str:
+    """tt room rotation: click the first discover-list room not visited yet (falls back to any room link)."""
+    return """
+(function(visited) {
+    const sels = ['[data-e2e="discover-list-live-card"] a[href*="/live"]',
+                  '[data-e2e="discover_category-list-live-card"] a[href*="/live"]', 'a[href*="/@"][href*="/live"]'];
+    for (const s of sels) {
+        for (const a of document.querySelectorAll(s)) {
+            if (a.offsetParent === null) continue;
+            const href = (a.href || '').split('?')[0];
+            if (!href || visited.some(v => v.split('?')[0] === href)) continue;
+            a.click();
+            return href;
+        }
+    }
+    return null;
+})(%s)
+""" % json.dumps(visited)
+
+
+ROOM_ROTATION_LIVE_URL = "https://www.tiktok.com/live"
+
+
 # v2 (supervisor 2026-10-16): pin the player to the old collection's modal player size over the CURRENT-era sessions
 # (G6 compares to that era): yt 853x480 (30 of 47 sessions), twitch 1274x717 with chat open (tied with 794x447, 18 of
 # 102 each; supervisor's choice), tt 783x604 landscape (23 of 67). The window is resized over CDP until the player
@@ -953,8 +991,13 @@ class BrowserSession:
     """
 
     def __init__(self, platform: str, session_dir: Path | None = None, close_chat: bool | None = None,
-                 first_url: str | None = None, geometry: str | None = None):
+                 first_url: str | None = None, geometry: str | None = None, room_rotation_s: float | None = None):
         self.platform = platform
+        # addendum M: login state (meta.json) and the tt room-rotation fallback (None = off; seconds between rooms)
+        self.login_state: dict | None = None
+        self.room_rotation_s = room_rotation_s if platform == "tiktok" else None
+        self.room_rotation: dict = {"active": bool(self.room_rotation_s), "interval_s": self.room_rotation_s, "rooms": []}
+        self._rotator: threading.Thread | None = None
         # t37: the drawn geometry ("player:WxH" / "window:WxH", geometry.py rotation); None = the platform's pin
         self.geometry_target = geometry or (f"player:{PLAYER_PIN[platform][0]}x{PLAYER_PIN[platform][1]}"
                                             if platform in PLAYER_PIN else None)
@@ -989,33 +1032,47 @@ class BrowserSession:
 
         # Close extra tabs (session-restored ones) but KEEP one alive so Chrome
         # doesn't exit.  Reuse the survivor tab rather than opening a new one.
-        try:
-            with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
-                all_tabs = json.loads(r.read())
-            page_tabs = [t for t in all_tabs if t.get("type") == "page"]
-            # Keep the first tab; close the rest
-            for tab in page_tabs[1:]:
-                try:
-                    tid = tab["id"]
-                    req = urllib.request.Request(f"{CDP_BASE}/json/close/{tid}", method="GET")
-                    urllib.request.urlopen(req, timeout=3)
-                except Exception:
-                    pass
-        except Exception:
-            page_tabs = []
-        time.sleep(1)
-        # Reuse the surviving tab (or open one if Chrome had no tabs somehow)
-        ws_url = page_tabs[0].get("webSocketDebuggerUrl") if page_tabs else None
-        if not ws_url:
-            ws_url = _open_new_tab()
-        if not ws_url:
-            ws_url = _get_page_ws_url()
-        if not ws_url:
+        # Only ordinary tabs are candidates: the extension's own page (popup.html, opened and closed by
+        # ensure_extension_loaded) and devtools pages can vanish between listing and connecting ("No such target id",
+        # laptop runs 9 and 11), so they are never reused, and the connect is retried on a fresh listing.
+        def _ordinary(t: dict) -> bool:
+            u = t.get("url", "")
+            return t.get("type") == "page" and not u.startswith(("chrome-extension://", "devtools://"))
+        page = None
+        for attempt in range(5):
+            try:
+                with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
+                    all_tabs = json.loads(r.read())
+                page_tabs = [t for t in all_tabs if _ordinary(t)]
+                if attempt == 0:
+                    for tab in page_tabs[1:]:     # keep the first ordinary tab; close the rest (session-restored)
+                        try:
+                            urllib.request.urlopen(urllib.request.Request(f"{CDP_BASE}/json/close/{tab['id']}",
+                                                                          method="GET"), timeout=3)
+                        except Exception:
+                            pass
+                    time.sleep(1)
+                    page_tabs = page_tabs[:1]
+            except Exception:
+                page_tabs = []
+            ws_url = page_tabs[0].get("webSocketDebuggerUrl") if page_tabs else None
+            if not ws_url:
+                ws_url = _open_new_tab() or _get_page_ws_url()
+            if not ws_url:
+                time.sleep(1)
+                continue
+            try:
+                page = CDPPage(ws_url)
+                break
+            except Exception as exc:
+                print(f"[browser] CDP page connect failed (attempt {attempt + 1}): {exc!r}", flush=True)
+                time.sleep(1)
+        if page is None:
             raise RuntimeError("Could not get a CDP page target")
 
         print(f"[browser] Connected to CDP: {ws_url[:60]}...", flush=True)
         self._ws_url = ws_url
-        self._page = CDPPage(ws_url)
+        self._page = page
         # A hidden / occluded page does not start yt playback and throttles the extension's 1 Hz timer (laptop test
         # 2026-10-16: visibilityState hidden, player unstarted until brought to front). Keep the tab visible and focused.
         self._page.call("Page.bringToFront")
@@ -1075,6 +1132,17 @@ class BrowserSession:
             print(f"[browser] Chat: {self.chat_action}", flush=True)
         else:
             self.chat_action = "left-open (close_chat off)"
+        try:
+            raw = json.loads(self._page.eval(_LOGIN_STATE_JS) or "{}")
+            state = ("logged_in" if raw.get("profile_marker") else
+                     "logged_out" if raw.get("login_button_visible") else "unknown")
+            self.login_state = {"state": state, **raw}
+        except Exception as exc:
+            self.login_state = {"state": "unknown", "error": repr(exc)}
+        print(f"[browser] Login state: {self.login_state}", flush=True)
+        if self.platform == "tiktok":
+            self.room_rotation["rooms"].append({"t_playing": time.time(), "room": self.channel_url, "ok": True,
+                                                "first": True})
         if self.platform == "twitch":
             try:
                 self.video_stats = self._page.eval(_TWITCH_VIDEO_STATS_JS, await_promise=True)
@@ -1112,6 +1180,11 @@ class BrowserSession:
         self._watcher.start()
         print("[browser] Ad-watcher running", flush=True)
 
+        if self.room_rotation_s:
+            self._rotator = threading.Thread(target=self._room_rotation_loop, daemon=True, name="room-rotation")
+            self._rotator.start()
+            print(f"[browser] tt room rotation every {self.room_rotation_s:.0f} s", flush=True)
+
         if self._session_dir:
             self._shooter = threading.Thread(
                 target=_screenshot_loop,
@@ -1121,6 +1194,35 @@ class BrowserSession:
             )
             self._shooter.start()
             print(f"[browser] Screenshots every {SHOT_INTERVAL_S:.0f} s → {self._session_dir / 'shots'}", flush=True)
+
+    def _room_rotation_loop(self) -> None:
+        """addendum M's pre-declared tt fallback: every room_rotation_s, back to /live and into a room not visited yet;
+        each move is recorded (navigation time, playing time, room URL, ok) so room-change startups can be told apart
+        from within-room tier switches."""
+        while not self._stop.wait(timeout=self.room_rotation_s):
+            rec: dict = {"t_nav": time.time()}
+            try:
+                visited = [r.get("room") or "" for r in self.room_rotation["rooms"]]
+                self._page.navigate(ROOM_ROTATION_LIVE_URL)
+                _wait_for_load(self._page, timeout=15)
+                deadline = time.time() + 15
+                while time.time() < deadline and not self._page.eval(_CARD_READY_JS["tiktok"]):
+                    time.sleep(1)
+                picked = self._page.eval(_pick_new_room_js(visited))
+                rec["picked"] = picked
+                ok = False
+                deadline = time.time() + 30
+                while time.time() < deadline and not self._stop.is_set():
+                    self._page.eval(_CLICK_PLAY_JS)
+                    if _video_is_advancing(self._page):
+                        ok = True
+                        break
+                    time.sleep(1)
+                rec.update(t_playing=time.time() if ok else None, room=self._page.eval("location.href"), ok=ok)
+            except Exception as exc:
+                rec.update(ok=False, error=repr(exc))
+            self.room_rotation["rooms"].append(rec)
+            print(f"[browser] Room rotation: {rec}", flush=True)
 
     def _on_wall(self) -> None:
         self.abort_reason, self.abort_at = "login_wall", time.time()
@@ -1139,6 +1241,8 @@ class BrowserSession:
                 pass
 
         self._stop.set()
+        if self._rotator:
+            self._rotator.join(timeout=5)
         if self._watcher:
             self._watcher.join(timeout=5)
         if self._shooter:

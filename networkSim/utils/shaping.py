@@ -274,3 +274,42 @@ TWITCH_TRANSITIONS = {
 
 
 
+
+
+# LVQoE prereg addendum M (2026-10-17, levi; applied at the next checkpoint): tt and twitch matrices with a floor of
+# low-tier time. Literal from the addendum's table (rows = from-state); SCENARIOS rate ranges unchanged. Stationary
+# start, orchestrate target = the stationary distribution, 23 episodes of 60 s; caps: tt 4, twitch 2.
+TIKTOK_TRANSITIONS_M = {
+    "1":  {"1": 0.45, "2": 0.30, "3": 0.25},
+    "2":  {"1": 0.25, "2": 0.40, "3": 0.25, "4": 0.10},
+    "3":  {"1": 0.10, "2": 0.10, "3": 0.50, "4": 0.20, "5": 0.10},
+    "4":  {"2": 0.05, "3": 0.15, "4": 0.55, "5": 0.20, "6": 0.05},
+    "5":  {"3": 0.05, "4": 0.20, "5": 0.55, "6": 0.15, "7": 0.05},
+    "6":  {"4": 0.10, "5": 0.20, "6": 0.40, "7": 0.20, "8": 0.10},
+    "7":  {"5": 0.10, "6": 0.20, "7": 0.40, "8": 0.20, "9": 0.10},
+    "8":  {"6": 0.10, "7": 0.20, "8": 0.40, "9": 0.20, "10": 0.10},
+    "9":  {"7": 0.10, "8": 0.20, "9": 0.45, "10": 0.25},
+    "10": {"8": 0.15, "9": 0.40, "10": 0.45},
+}
+TWITCH_TRANSITIONS_M = {
+    "1":  {"1": 0.45, "2": 0.40, "3": 0.15},
+    "2":  {"1": 0.20, "2": 0.50, "3": 0.20, "4": 0.10},
+    "3":  {"1": 0.10, "2": 0.20, "3": 0.40, "4": 0.20, "5": 0.10},
+    "4":  {"2": 0.05, "3": 0.15, "4": 0.45, "5": 0.30, "6": 0.05},
+    "5":  {"3": 0.05, "4": 0.30, "5": 0.45, "6": 0.15, "7": 0.05},
+    "6":  {"4": 0.10, "5": 0.20, "6": 0.40, "7": 0.20, "8": 0.10},
+    "7":  {"5": 0.10, "6": 0.20, "7": 0.40, "8": 0.20, "9": 0.10},
+    "8":  {"6": 0.10, "7": 0.20, "8": 0.40, "9": 0.20, "10": 0.10},
+    "9":  {"7": 0.05, "8": 0.15, "9": 0.50, "10": 0.30},
+    "10": {"8": 0.10, "9": 0.45, "10": 0.45},
+}
+TIKTOK_MATRICES = {
+    "current": (TIKTOK_TRANSITIONS, 2, "linear"),
+    "TT-M": (TIKTOK_TRANSITIONS_M, 4, "stationary"),
+}
+TWITCH_MATRICES = {
+    "current": (TWITCH_TRANSITIONS, 2, "linear"),
+    "TW-M": (TWITCH_TRANSITIONS_M, 2, "stationary"),
+}
+# per platform: matrix id -> (transitions, low-state cap, initial-state rule)
+PLATFORM_MATRICES = {"youtube": YOUTUBE_MATRICES, "tiktok": TIKTOK_MATRICES, "twitch": TWITCH_MATRICES}
