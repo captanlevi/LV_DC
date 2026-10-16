@@ -25,10 +25,12 @@ import argparse
 import asyncio
 
 from utils.netStat import net_episode_generator
-from utils.shaping import YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS, get_higher_state, get_lower_state
+from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
+                           YOUTUBE_MATRICES, initial_state_stationary, get_higher_state, get_lower_state)
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession
 import session_meta
+import yt_channels
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -82,6 +84,10 @@ def initialize_network() -> bool:
 
 CURRENT_DATA = Path(__file__).parent.parent / "current_data"
 
+# v2: per-platform Chrome window size (--window-size W,H), so the player size is fixed per platform. Empty until the
+# window / player decision (supervisor 2026-10-16); the player size actually obtained is recorded in meta.json.
+WINDOW_SIZES: dict[str, str] = {}
+
 
 def fresh_chrome_profile(session_dir: Path) -> Path:
     """v2 (LVQoE t35): a new, empty Chrome profile per session; no cache, cookies or state carry over."""
@@ -90,10 +96,11 @@ def fresh_chrome_profile(session_dir: Path) -> Path:
     return prof
 
 
-def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path) -> bool:
+def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window_size: str | None = None) -> bool:
     try:
         # the key log goes to <session_dir>/ssl_keys.log (kept); the profile is the session's fresh one
-        run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"])
+        run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"]
+            + ([f"WINDOW_SIZE={window_size}"] if window_size else []))
         return True
     except Exception as e:
         print(e)
@@ -228,6 +235,9 @@ def _apply_net_stat(net_stat : NetStat):
 
 
 
+SHAPER_OPTS: dict = {}     # v2 (t38): low-state cap and initial-state rule of the active config, set in __main__
+
+
 async def _ossilate(
     episode_time_in_seconds: int,
     net_labels: list[NetLabel],
@@ -243,6 +253,7 @@ async def _ossilate(
         transition_dict=transition_dct,
         forced_initial_state=forced_initial_state,
         max_episodes=max_episodes,
+        **SHAPER_OPTS,
     ):
         _apply_net_stat(net_stat= net_stat)
         ts = time.time()
@@ -360,6 +371,28 @@ if __name__ == "__main__":
         help="Auto-navigate to a live stream and handle ads (default: manual — you navigate yourself).",
     )
     parser.add_argument(
+        "--yt-matrix",
+        choices=sorted(YOUTUBE_MATRICES),
+        default="A",
+        help="yt shaper config (t38): A = batch default, B = pre-declared fallback, current = pre-t38 (old data). "
+             "A / B use a low-state cap of 6 and a stationary-distribution start; ignored on other platforms.",
+    )
+    parser.add_argument(
+        "--channel-url",
+        default=None,
+        help="yt: the channel to collect (orchestrate.py's rotation passes it); first in the navigation list.",
+    )
+    parser.add_argument(
+        "--channel-handle",
+        default=None,
+        help="yt: the channel's handle from yt_channels.py (meta.json; the rotation counts it).",
+    )
+    parser.add_argument(
+        "--channel-type",
+        default=None,
+        help="yt: the channel's content type from the channel list (recorded in meta.json, never inferred).",
+    )
+    parser.add_argument(
         "--save-dir",
         type=Path,
         default=None,
@@ -376,6 +409,12 @@ if __name__ == "__main__":
         "bilibili": BILIBILI_TRANSITIONS,
     }
     transition = transition_map[platform]
+    matrix_id, low_cap, init_rule = None, 2, "linear"
+    if platform == "youtube":
+        matrix_id = args.yt_matrix
+        transition, low_cap, init_rule = YOUTUBE_MATRICES[matrix_id]
+    SHAPER_OPTS.update(max_consecutive_low=low_cap,
+                       initial_state_fn=initial_state_stationary if init_rule == "stationary" else None)
 
     is_capture: bool = True
 
@@ -390,7 +429,10 @@ if __name__ == "__main__":
     print(f"Session directory: {session_dir}")
     chrome_profile = fresh_chrome_profile(session_dir)
     configure_chrome_download_dir(session_dir, chrome_profile)
-    session_meta.start(session_dir, platform, transition, episode_s=60, argv=sys.argv, chrome_profile=chrome_profile)
+    session_meta.start(session_dir, platform, transition, episode_s=60, argv=sys.argv, chrome_profile=chrome_profile,
+                       matrix_id=matrix_id, low_state_cap=low_cap, initial_state_rule=init_rule,
+                       forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
+                       channel_type=args.channel_type, channel_handle=args.channel_handle)
 
     net_labels = []
     if initialize_network() == False:
@@ -399,11 +441,11 @@ if __name__ == "__main__":
     if is_capture and initialize_pcap(session_dir) == False:
         raise ValueError("Cannot initialize pcap capture")
 
-    if open_chrome_with_ssl_key_log(session_dir, chrome_profile) == False:
+    if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform)) == False:
         raise ValueError("Cannot open chrome with SSL key log enabled")
 
     if args.auto:
-        browser = BrowserSession(platform, session_dir=session_dir)
+        browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url)
         browser.start()
     else:
         # Manual mode (default): wait for Chrome to be reachable, then hand off.
@@ -433,14 +475,22 @@ if __name__ == "__main__":
 
     finally:
         channel_url = None
+        meta_extra = {"window_size_flag": WINDOW_SIZES.get(platform)}
         if browser is not None:
             channel_url = browser.channel_url
+            meta_extra.update(chat_action=browser.chat_action, geometry=browser.geometry, player_pin=browser.player_pin,
+                              channel_list_url=browser.list_url)
+            if platform == "youtube" and not args.channel_handle and browser.list_url:
+                # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
+                hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)
+                if hit:
+                    meta_extra.update(channel_handle=hit["handle"], channel_type=hit["type"])
             browser.stop()
         else:
             # Export labels from extension storage directly
             from browser import _export_via_service_worker
             _export_via_service_worker(session_dir)
-        session_meta.finish(session_dir, channel_url)      # while Chrome is still up (records its version)
+        session_meta.finish(session_dir, channel_url, **meta_extra)   # while Chrome is still up (records its version)
         kill_chrome(chrome_profile)
 
         if is_capture and finalize_pcap(session_dir) == False:

@@ -14,6 +14,8 @@ def net_episode_generator(
     transition_dict: dict[str, dict[str, float]],
     forced_initial_state: str | None = None,
     max_episodes: int | None = None,
+    max_consecutive_low: int = _MAX_CONSECUTIVE_LOW,
+    initial_state_fn=None,
 ):
     """
     Yields NetStat objects one per bandwidth sample.
@@ -22,10 +24,12 @@ def net_episode_generator(
 
     forced_initial_state: skip the weighted-random start and begin here.
     max_episodes: stop after this many state transitions (None = run forever).
+    max_consecutive_low: low-state cap (t38: yt 6 under matrices A / B; every other config 2).
+    initial_state_fn: start-state rule (t38: yt draws from the active matrix's stationary distribution).
     """
     min_state_time = episode_length / 5
     max_state_time = episode_length / 2
-    state = forced_initial_state if forced_initial_state else initial_state(transition_dict)
+    state = forced_initial_state if forced_initial_state else (initial_state_fn or initial_state)(transition_dict)
     episode_count = 0
     consecutive_low = 0
     while max_episodes is None or episode_count < max_episodes:
@@ -54,7 +58,7 @@ def net_episode_generator(
             consecutive_low = 0
 
         next_s = next_state(state, transition_dict=transition_dict)
-        if consecutive_low >= _MAX_CONSECUTIVE_LOW and int(next_s) <= _LOW_STATE_THRESHOLD:
+        if consecutive_low >= max_consecutive_low and int(next_s) <= _LOW_STATE_THRESHOLD:
             next_s = _MIN_RECOVERY_STATE
             consecutive_low = 0
 

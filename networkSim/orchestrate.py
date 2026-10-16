@@ -4,7 +4,9 @@ Orchestrate multi-session QoE data collection with adaptive state targeting.
 
 After each completed session it analyzes the state distribution and picks the
 most under-represented state as the forced starting point for the next session,
-gradually driving the dataset toward a uniform distribution across all 10 states.
+gradually driving the dataset toward a uniform distribution across all 10 states. Collection v2: yt under a t38
+matrix (A / B) is not forced (its start is drawn from the matrix's stationary distribution, which is its balance
+target), and each yt session goes to the next channel in the yt_channels.py rotation.
 
 Usage:
     # Collect one session for YouTube (prompts you to open a live stream first)
@@ -26,8 +28,12 @@ import argparse
 from pathlib import Path
 
 from balance import PLATFORM_TRANSITIONS, most_needed_state, balance_report
+import yt_channels
 
 _RUNS_DIR = Path(__file__).parent.parent / "data"
+
+# collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
+EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
 
 
 def _prompt_ready(platform: str, initial_state: str | None) -> bool:
@@ -39,7 +45,8 @@ def _prompt_ready(platform: str, initial_state: str | None) -> bool:
     return ans != "q"
 
 
-def _run_collection(platform: str, initial_state: str | None, episodes: int) -> bool:
+def _run_collection(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
+                    yt_matrix: str | None = None, channel: dict | None = None) -> bool:
     cmd = [
         sys.executable, "exp.py",
         "--platform", platform,
@@ -47,22 +54,37 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int) -> 
     ]
     if initial_state:
         cmd += ["--initial-state", initial_state]
+    if auto:
+        cmd += ["--auto"]
+    if platform == "youtube" and yt_matrix:
+        cmd += ["--yt-matrix", yt_matrix]
+    if channel:
+        cmd += ["--channel-url", yt_channels.url_of(channel["handle"]), "--channel-handle", channel["handle"],
+                "--channel-type", channel["type"]]
     print(f"\n  Running: {' '.join(cmd)}")
     result = subprocess.run(cmd)
     return result.returncode == 0
 
 
-def _collect_platform(platform: str, runs: int, episodes_per_run: int) -> None:
+def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: bool = False,
+                      yt_matrix: str | None = None) -> None:
+    not_live: set[str] = set()   # yt channels whose session failed to start this invocation (tried once each)
     for i in range(runs):
         print(f"\n[{platform.upper()} — run {i+1}/{runs}]")
-        target_state = most_needed_state(platform, _RUNS_DIR)
-        if not _prompt_ready(platform, target_state):
+        target_state = most_needed_state(platform, _RUNS_DIR, yt_matrix=yt_matrix)
+        channel = yt_channels.next_channel(_RUNS_DIR, exclude=not_live) if platform == "youtube" else None
+        if channel:
+            print(f"  Channel  : {channel['handle']} ({channel['type']}, {channel['role']})")
+        if not auto and not _prompt_ready(platform, target_state):
             print("  Skipped.")
             continue
-        ok = _run_collection(platform, initial_state=target_state, episodes=episodes_per_run)
+        ok = _run_collection(platform, initial_state=target_state, episodes=episodes_per_run, auto=auto,
+                             yt_matrix=yt_matrix, channel=channel)
         if not ok:
             print("  Collection returned non-zero — check logs above.")
-        balance_report(platform, _RUNS_DIR)
+            if channel:
+                not_live.add(channel["handle"])
+        balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix)
 
 
 # ---------------------------------------------------------------------------
@@ -93,11 +115,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "--episodes",
         type=int,
-        default=5,
+        default=None,
         help=(
-            "State transitions (episodes) per session. "
-            "Each episode is ~60 s, so 5 episodes ≈ 5 minutes (default: 5)."
+            "State transitions (episodes) per session; each episode is ~60 s. "
+            "Default: the collection v2 count per platform (EPISODES_V2: yt 21, tt 23, twitch 23). "
+            "Overriding it is a deviation from the prereg."
         ),
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="exp.py --auto: navigate to the stream and handle ads (no operator prompt). Required for v2 batches.",
+    )
+    parser.add_argument(
+        "--yt-matrix",
+        choices=["A", "B", "current"],
+        default="A",
+        help="yt shaper config (t38; default A). The yt balance target is this matrix's stationary distribution.",
     )
     parser.add_argument(
         "--report-only",
@@ -110,8 +144,9 @@ if __name__ == "__main__":
 
     if args.report_only:
         for p in platforms:
-            balance_report(p, _RUNS_DIR)
+            balance_report(p, _RUNS_DIR, yt_matrix=args.yt_matrix)
         sys.exit(0)
 
     for p in platforms:
-        _collect_platform(p, runs=args.runs, episodes_per_run=args.episodes)
+        eps = args.episodes if args.episodes is not None else EPISODES_V2.get(p, 5)
+        _collect_platform(p, runs=args.runs, episodes_per_run=eps, auto=args.auto, yt_matrix=args.yt_matrix)

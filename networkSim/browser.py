@@ -25,6 +25,8 @@ from pathlib import Path
 
 import websocket  # websocket-client
 
+from yt_channels import YT_CHANNELS, url_of
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -33,16 +35,9 @@ CDP_BASE = "http://localhost:9222"
 
 # Ordered priority list — first URL that delivers a playing video wins.
 LIVE_URLS: dict[str, list[str]] = {
-    "youtube": [
-        # 24/7 news — most reliable, support 1080p
-        "https://www.youtube.com/@AlJazeeraEnglish/live",
-        "https://www.youtube.com/@dwnews/live",
-        "https://www.youtube.com/@euronews/live",
-        "https://www.youtube.com/@SkyNews/live",
-        "https://www.youtube.com/@ABCNews/live",
-        "https://www.youtube.com/@BBCNews/live",
-        "https://www.youtube.com/@BloombergLive/live",
-    ],
+    # v2: the tagged channel list (yt_channels.py, verified 2026-10-16); orchestrate.py's rotation passes one channel
+    # per session (first_url), so this list is only the manual-mode fallback
+    "youtube": [url_of(c["handle"]) for c in YT_CHANNELS],
     "twitch": [
         # Just Chatting always has hundreds of live streams — click first card
         "https://www.twitch.tv/directory/game/Just%20Chatting",
@@ -141,19 +136,28 @@ _SKIP_AD_JS: dict[str, str] = {
                 return null;
             }
             const tag = ' [' + sig.join('|') + ']';
+            // a skip button can be visible while its countdown runs (clicks do nothing): after 2 clicks with the ad still
+            // showing, fall through to fast-forward (laptop probe 2026-10-16)
+            const tries = mp ? Number(mp.dataset.lvqoeSkipTries || 0) : 0;
+            const canFF = v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d && v.currentTime < v.duration - 0.25;
+            if (tries >= 2 && canFF) {
+                v.currentTime = v.duration; v.play().catch(() => {});
+                if (mp) mp.dataset.lvqoeSkipTries = '0';
+                return 'fast-forwarded-after-skip' + tag;
+            }
             // 1. a visible skip button: known classes, then any button whose text / aria-label says skip
             const skipSel = ['.ytp-ad-skip-button', '.ytp-skip-ad-button', '.ytp-ad-skip-button-modern',
                              '.ytp-ad-skip-button-container button', 'button.ytp-ad-skip-button-modern'];
             for (const s of skipSel) {
                 const b = document.querySelector(s);
-                if (vis(b) && !b.disabled) { b.click(); return 'skipped' + tag; }
+                if (vis(b) && !b.disabled) { b.click(); if (mp) mp.dataset.lvqoeSkipTries = String(tries + 1); return 'skipped' + tag; }
             }
             // only buttons inside the player: the page has a "Skip navigation" a11y button that matches by text and
             // does nothing to the ad (laptop test 2026-10-16: it was clicked every second during a 15 s ad)
             for (const b of (mp ? mp.querySelectorAll('button') : [])) {
                 if (!vis(b) || b.disabled) continue;
                 const label = (b.textContent + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase();
-                if (label.includes('skip')) { b.click(); return 'text-skipped' + tag; }
+                if (label.includes('skip')) { b.click(); if (mp) mp.dataset.lvqoeSkipTries = String(tries + 1); return 'text-skipped' + tag; }
             }
             // 2. fast-forward a finite ad to its end
             if (v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d) {
@@ -205,13 +209,126 @@ _SKIP_AD_JS: dict[str, str] = {
     """,
 }
 
+# v2 (LVQoE t35, supervisor 2026-10-16): close the live-chat panel after navigation (a persistent WebSocket plus chat
+# polling adds background bytes). Per platform, switchable: on twitch, collapsing chat WIDENS the player, which would
+# change the player size vs the old collection; the default keeps twitch chat open until the window/player decision.
+CLOSE_CHAT_DEFAULT: dict[str, bool] = {"youtube": True, "twitch": False, "tiktok": False, "bilibili": False}
+_CLOSE_CHAT_JS: dict[str, str] = {
+    # the chat's own close button sits in the same-origin live_chat iframe (laptop probe 2026-10-16); once closed, the
+    # outer frame shows a visible "Show chat" button, which is the confirmation
+    "youtube": """
+        (function() {
+            const f = document.querySelector('ytd-live-chat-frame');
+            if (!f) return 'no-chat';
+            const vis = (el) => el && el.offsetParent !== null;
+            const shown = () => [...f.querySelectorAll('button')].some(b => vis(b) && /show chat/i.test(b.getAttribute('aria-label') || b.innerText || ''));
+            if (shown()) return 'already-closed';
+            let d = null;
+            try { d = f.querySelector('iframe') && f.querySelector('iframe').contentDocument; } catch (e) {}
+            const b = d && (d.querySelector('#close-button button') || d.querySelector('button[aria-label="Close"]'));
+            if (b) { b.click(); return 'closed-in-iframe'; }
+            const h = [...f.querySelectorAll('button')].find(x => vis(x) && /hide chat/i.test(x.getAttribute('aria-label') || x.innerText || ''));
+            if (h) { h.click(); return 'closed-hide-button'; }
+            return 'chat-present-no-button';
+        })()
+    """,
+    "twitch": """
+        (function() {
+            const b = document.querySelector('[data-a-target="right-column__toggle-collapse-btn"]');
+            if (b && b.offsetParent !== null) { b.click(); return 'collapsed'; }
+            return 'no-chat-toggle';
+        })()
+    """,
+}
+
+# v2 (supervisor 2026-10-16): pin the player to the old collection's modal player size over the CURRENT-era sessions
+# (G6 compares to that era): yt 853x480 (30 of 47 sessions), twitch 1274x717 with chat open (tied with 794x447, 18 of
+# 102 each; supervisor's choice), tt 783x604 landscape (23 of 67). The window is resized over CDP until the player
+# matches; the target and the realised size go to meta.json and check.md. No theatre mode.
+PLAYER_PIN: dict[str, tuple[int, int]] = {"youtube": (853, 480), "twitch": (1274, 717), "tiktok": (783, 604)}
+PIN_TOLERANCE = 0.02
+
+_PLAYER_SIZE_JS = """
+(function() {
+    const v = document.querySelector('#movie_player video') || document.querySelector('video');
+    return v ? JSON.stringify([v.clientWidth, v.clientHeight]) : null;
+})()
+"""
+
+
+def _browser_call(method: str, params: dict | None = None) -> dict:
+    with urllib.request.urlopen(f"{CDP_BASE}/json/version", timeout=5) as r:
+        b = CDPPage(json.loads(r.read())["webSocketDebuggerUrl"])
+    try:
+        return b.call(method, params)
+    finally:
+        b.close()
+
+
+def pin_player(page: "CDPPage", target: tuple[int, int], target_id: str | None, iters: int = 5) -> dict:
+    """Resize the browser window until the <video> client size is within PIN_TOLERANCE of `target` (proportional
+    steps on the window's width and height). Returns the trace for meta.json; never raises."""
+    trace = {"target": list(target), "steps": [], "ok": False}
+    try:
+        win = _browser_call("Browser.getWindowForTarget", {"targetId": target_id} if target_id else {})
+        wid, bounds = win.get("windowId"), dict(win.get("bounds") or {})
+        if wid is None:
+            trace["error"] = "no window id"
+            return trace
+        _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+        for _ in range(iters):
+            ps = page.eval(_PLAYER_SIZE_JS)
+            pw, ph = json.loads(ps) if ps else (0, 0)
+            trace["steps"].append({"window": [bounds.get("width"), bounds.get("height")], "player": [pw, ph]})
+            if pw and ph and abs(pw - target[0]) <= PIN_TOLERANCE * target[0] and abs(ph - target[1]) <= PIN_TOLERANCE * target[1]:
+                trace["ok"] = True
+                break
+            if not (pw and ph and bounds.get("width") and bounds.get("height")):
+                break
+            if len(trace["steps"]) >= 2 and trace["steps"][-2]["player"] == [pw, ph]:
+                trace["error"] = "player size did not change with the window (layout- or screen-bound)"
+                break
+            scr = json.loads(page.eval("JSON.stringify([screen.availWidth, screen.availHeight])") or "[0, 0]")
+            nw = int(round(bounds["width"] + (target[0] - pw) * bounds["width"] / max(pw, 1) * 0.9))
+            nh = int(round(bounds["height"] + (target[1] - ph) * bounds["height"] / max(ph, 1) * 0.9))
+            if scr[0] and scr[1]:                 # a window larger than the screen is not honoured; do not chase it
+                nw, nh = min(nw, scr[0]), min(nh, scr[1])
+            bounds = {"width": max(400, nw), "height": max(300, nh)}
+            _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": bounds})
+            time.sleep(1.5)                       # the page re-lays out the player
+        trace["final_player"] = trace["steps"][-1]["player"] if trace["steps"] else None
+    except Exception as exc:
+        trace["error"] = repr(exc)
+    return trace
+
+
+# Window / viewport / player geometry (meta.json): the player size decides the top of yt's ladder.
+_GEOMETRY_JS = """
+(function() {
+    const v = document.querySelector('#movie_player video') || document.querySelector('video');
+    const flexy = document.querySelector('ytd-watch-flexy');
+    return JSON.stringify({
+        window_outer: [window.outerWidth, window.outerHeight], viewport: [window.innerWidth, window.innerHeight],
+        device_pixel_ratio: window.devicePixelRatio, screen: [screen.width, screen.height],
+        player_client: v ? [v.clientWidth, v.clientHeight] : null,
+        yt_theater: flexy ? flexy.hasAttribute('theater') : null,
+        yt_fullscreen: flexy ? flexy.hasAttribute('fullscreen') : null,
+    });
+})()
+"""
+
 # JS: click the video element to force playback (handles autoplay block).
+# v2: never click a PLAYING video. On yt a click on <video> toggles play / pause, so the v1 "play(); click()" paused
+# a playing stream on every call (laptop probe 2026-10-16: paused after each call). play() only when paused; a click
+# only if play() is rejected (autoplay block).
 _CLICK_PLAY_JS = """
 (function() {
-    const v = document.querySelector('video');
+    const v = document.querySelector('#movie_player video') || document.querySelector('video');
     if (!v) return false;
-    if (v.paused) { v.play(); }
-    v.click();
+    if (v.paused) {
+        const pr = v.play();
+        if (pr && pr.catch) pr.catch(() => { v.click(); });
+    }
     return true;
 })()
 """
@@ -514,13 +631,17 @@ def _video_is_advancing(page: CDPPage) -> bool:
     return t1 is not None and t1 > t0
 
 
-def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0) -> bool:
+def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first_url: str | None = None) -> str | None:
+    """Returns the list URL that delivered a playing live video (None if none did)."""
     """
     Try each URL in LIVE_URLS[platform].  For directory/discovery pages,
     execute platform-specific JS to click into a live room.  Then kick play
     via JS and verify the video timestamp is actually advancing.
     """
-    urls = LIVE_URLS[platform]
+    urls = list(LIVE_URLS[platform])
+    if first_url:
+        # the rotation's channel only: falling back to another channel would break the rotation's accounting
+        urls = [first_url]
     for url in urls:
         print(f"[browser] Navigating to {url}", flush=True)
         page.navigate(url)
@@ -597,11 +718,11 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0) -> bo
                             print(f"[browser] Twitch: no live indicator — skipping", flush=True)
                             break
                 print(f"[browser] Video is playing on {platform}", flush=True)
-                return True
+                return url
             time.sleep(2)
 
     print(f"[browser] Could not find a playing live stream for {platform}", flush=True)
-    return False
+    return None
 
 
 def _wait_for_load(page: CDPPage, timeout: float = 15.0) -> None:
@@ -681,8 +802,11 @@ class BrowserSession:
         session.stop()    # stops ad-watcher, browser stays open for PCAP
     """
 
-    def __init__(self, platform: str, session_dir: Path | None = None):
+    def __init__(self, platform: str, session_dir: Path | None = None, close_chat: bool | None = None,
+                 first_url: str | None = None):
         self.platform = platform
+        self.first_url = first_url          # yt channel rotation: try this URL first (orchestrate.py)
+        self.close_chat = CLOSE_CHAT_DEFAULT.get(platform, False) if close_chat is None else close_chat
         self._session_dir = session_dir
         self._start_time: float = 0.0
         self._page: CDPPage | None = None
@@ -690,6 +814,10 @@ class BrowserSession:
         self._watcher: threading.Thread | None = None
         self._shooter: threading.Thread | None = None
         self.channel_url: str | None = None      # the live page actually collected (meta.json)
+        self.list_url: str | None = None         # the LIVE_URLS / first_url entry that led to it
+        self.chat_action: str | None = None      # what the chat-close step did (meta.json)
+        self.geometry: dict | None = None        # window / player geometry after navigation (meta.json)
+        self.player_pin: dict | None = None      # pin_player trace (meta.json, check.md)
 
     def start(self, cdp_ready_timeout: float = 30.0) -> None:
         print("[browser] Waiting for Chrome CDP endpoint...", flush=True)
@@ -730,6 +858,7 @@ class BrowserSession:
             raise RuntimeError("Could not get a CDP page target")
 
         print(f"[browser] Connected to CDP: {ws_url[:60]}...", flush=True)
+        self._ws_url = ws_url
         self._page = CDPPage(ws_url)
         # A hidden / occluded page does not start yt playback and throttles the extension's 1 Hz timer (laptop test
         # 2026-10-16: visibilityState hidden, player unstarted until brought to front). Keep the tab visible and focused.
@@ -756,14 +885,40 @@ class BrowserSession:
         except Exception as e:
             print(f"[browser] Could not pre-clear extension storage: {e}", flush=True)
 
-        ok = _navigate_to_live(self._page, self.platform)
-        if not ok:
+        self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
+        if not self.list_url:
             raise RuntimeError(f"Failed to navigate to a live {self.platform} stream")
 
         try:
             self.channel_url = self._page.eval("location.href")
         except Exception:
             self.channel_url = None
+        if self.close_chat and self.platform in _CLOSE_CHAT_JS:
+            try:
+                time.sleep(2)                       # the chat frame renders after the player
+                self.chat_action = self._page.eval(_CLOSE_CHAT_JS[self.platform])
+                time.sleep(1.5)
+                if self.platform == "youtube" and str(self.chat_action).startswith("closed"):
+                    again = self._page.eval(_CLOSE_CHAT_JS["youtube"])
+                    self.chat_action += " (confirmed)" if again == "already-closed" else f" (not confirmed: {again})"
+            except Exception as exc:
+                self.chat_action = f"error: {exc}"
+            print(f"[browser] Chat: {self.chat_action}", flush=True)
+        else:
+            self.chat_action = "left-open (close_chat off)"
+        if self.platform in PLAYER_PIN:
+            tid = None
+            try:
+                tid = next((t.get("id") for t in _targets() if t.get("webSocketDebuggerUrl") == self._ws_url), None)
+            except Exception:
+                pass
+            self.player_pin = pin_player(self._page, PLAYER_PIN[self.platform], tid)
+            print(f"[browser] Player pin: {self.player_pin}", flush=True)
+        try:
+            self.geometry = json.loads(self._page.eval(_GEOMETRY_JS) or "null")
+        except Exception:
+            self.geometry = None
+        print(f"[browser] Geometry: {self.geometry}", flush=True)
 
         # Start ad-skip background thread (actions logged to ad_actions.jsonl)
         log_path = (self._session_dir / "ad_actions.jsonl") if self._session_dir else None

@@ -17,6 +17,7 @@ from utils.shaping import (
     TWITCH_TRANSITIONS,
     TIKTOK_TRANSITIONS,
     BILIBILI_TRANSITIONS,
+    YOUTUBE_MATRICES,
 )
 
 PLATFORM_TRANSITIONS: dict[str, dict[str, dict[str, float]]] = {
@@ -93,11 +94,12 @@ def load_platform_data(platform: str, data_dir: Path) -> tuple[dict[str, float],
 # Reports
 # ---------------------------------------------------------------------------
 
-def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR) -> None:
+def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None) -> None:
     transitions = PLATFORM_TRANSITIONS[platform]
+    if platform == "youtube" and yt_matrix in ("A", "B"):
+        transitions = YOUTUBE_MATRICES[yt_matrix][0]
     states = sorted(transitions.keys(), key=int)
-    n = len(states)
-    target = 1.0 / n
+    targets = balance_target(platform, yt_matrix)
 
     stationary = stationary_distribution(transitions)
     actual, run_count = load_platform_data(platform, data_dir)
@@ -108,6 +110,7 @@ def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR) -> None:
     print(f"  {'St':>3}  {'Stationary':>10}  {'Actual':>8}  {'Target':>8}  Status")
     print(f"  {'-'*3}  {'-'*10}  {'-'*8}  {'-'*8}  {'-'*8}")
     for s in states:
+        target = targets[s]
         stat_p = stationary.get(s, 0.0)
         act_p = actual.get(s, 0.0) if actual else 0.0
         if not actual:
@@ -123,7 +126,7 @@ def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR) -> None:
     print()
 
     # Chain-level warnings
-    chain_under = [s for s in states if stationary.get(s, 0.0) < target * 0.5]
+    chain_under = [s for s in states if stationary.get(s, 0.0) < targets[s] * 0.5]
     if chain_under:
         print(f"  Markov chain under-represents states {chain_under}")
         print(f"  → Force collection runs starting at these states to compensate.")
@@ -132,26 +135,39 @@ def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR) -> None:
 
     # Data-level warnings
     if actual:
-        data_under = [s for s in states if actual.get(s, 0.0) < target * 0.5]
+        data_under = [s for s in states if actual.get(s, 0.0) < targets[s] * 0.5]
         if data_under:
             print(f"  Collected data under-represents states {data_under}")
             print(f"  → Run more sessions targeting these states.")
     print()
 
 
-def most_needed_state(platform: str, data_dir: Path = _DEFAULT_DATA_DIR) -> str | None:
-    """Return the state with the largest gap below the uniform target, or None if balanced."""
+def balance_target(platform: str, yt_matrix: str | None = None) -> dict[str, float]:
+    """Per-state target share. yt under a t38 matrix (A / B): that matrix's stationary distribution (prereg
+    Addendum A); everything else: uniform (the pre-t38 rule)."""
+    if platform == "youtube" and yt_matrix in ("A", "B"):
+        return stationary_distribution(YOUTUBE_MATRICES[yt_matrix][0])
+    states = sorted(PLATFORM_TRANSITIONS[platform].keys(), key=int)
+    return {s: 1.0 / len(states) for s in states}
+
+
+def most_needed_state(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None) -> str | None:
+    """Return the state with the largest gap below its target share (balance_target), or None if balanced.
+    yt under a t38 matrix returns None (no forced start): exp.py then draws the start from the stationary
+    distribution, which is the target itself."""
+    if platform == "youtube" and yt_matrix in ("A", "B"):
+        return None
     transitions = PLATFORM_TRANSITIONS[platform]
     states = sorted(transitions.keys(), key=int)
-    target = 1.0 / len(states)
+    target = balance_target(platform, yt_matrix)
 
     actual, run_count = load_platform_data(platform, data_dir)
     if not actual:
         return random.choice(states[len(states) // 2:])
 
-    deficit = {s: target - actual.get(s, 0.0) for s in states}
+    deficit = {s: target[s] - actual.get(s, 0.0) for s in states}
     worst = max(deficit, key=deficit.get)
-    return worst if deficit[worst] > target * 0.2 else None
+    return worst if deficit[worst] > target[worst] * 0.2 else None
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +186,10 @@ if __name__ == "__main__":
         default=str(_DEFAULT_DATA_DIR),
         help="Root data directory containing per-platform subdirs (default: data/)",
     )
+    parser.add_argument("--yt-matrix", choices=["A", "B", "current"], default="A",
+                        help="yt: report against this matrix's stationary distribution (t38; default A)")
     args = parser.parse_args()
 
     platforms = list(PLATFORM_TRANSITIONS) if args.platform == "all" else [args.platform]
     for p in platforms:
-        balance_report(p, Path(args.data_dir))
+        balance_report(p, Path(args.data_dir), yt_matrix=args.yt_matrix)

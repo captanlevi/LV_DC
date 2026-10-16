@@ -147,6 +147,61 @@ YOUTUBE_TRANSITIONS = {
 }
 
 
+# t38 (LVQoE prereg collection_v2 Addendum A, rev 2; json t38_yt_lowtier_matrix_2026-10-16.json sha d0171456): yt
+# low-tier targeting by long dwell in states 2-4. SCENARIOS rate ranges are unchanged (state semantics match the old
+# data). Matrix A is the batch default, B the pre-declared fallback (switch rule in the prereg). Rows: from-state.
+YOUTUBE_TRANSITIONS_A = {
+    "1":  {"1": 0.60, "2": 0.30, "3": 0.10},
+    "2":  {"1": 0.15, "2": 0.65, "3": 0.15, "4": 0.05},
+    "3":  {"1": 0.05, "2": 0.15, "3": 0.65, "4": 0.15},
+    "4":  {"2": 0.10, "3": 0.20, "4": 0.55, "5": 0.10, "6": 0.05},
+    "5":  {"3": 0.10, "4": 0.25, "5": 0.30, "6": 0.25, "7": 0.10},
+    "6":  {"4": 0.10, "5": 0.25, "6": 0.30, "7": 0.25, "8": 0.10},
+    "7":  {"5": 0.10, "6": 0.25, "7": 0.30, "8": 0.25, "9": 0.10},
+    "8":  {"6": 0.10, "7": 0.25, "8": 0.30, "9": 0.25, "10": 0.10},
+    "9":  {"7": 0.10, "8": 0.25, "9": 0.40, "10": 0.25},
+    "10": {"8": 0.15, "9": 0.40, "10": 0.45},
+}
+YOUTUBE_TRANSITIONS_B = {
+    "1":  {"1": 0.60, "2": 0.30, "3": 0.10},
+    "2":  {"1": 0.10, "2": 0.70, "3": 0.15, "4": 0.05},
+    "3":  {"1": 0.05, "2": 0.15, "3": 0.70, "4": 0.10},
+    "4":  {"2": 0.10, "3": 0.20, "4": 0.65, "5": 0.05},
+    "5":  {"3": 0.10, "4": 0.25, "5": 0.35, "6": 0.20, "7": 0.10},
+    "6":  {"4": 0.10, "5": 0.25, "6": 0.30, "7": 0.25, "8": 0.10},
+    "7":  {"5": 0.10, "6": 0.25, "7": 0.30, "8": 0.25, "9": 0.10},
+    "8":  {"6": 0.10, "7": 0.25, "8": 0.30, "9": 0.25, "10": 0.10},
+    "9":  {"7": 0.10, "8": 0.25, "9": 0.40, "10": 0.25},
+    "10": {"8": 0.15, "9": 0.40, "10": 0.45},
+}
+# matrix id -> (transitions, low-state cap, initial-state rule). "current" = the pre-t38 yt config (old data).
+YOUTUBE_MATRICES = {
+    "current": (YOUTUBE_TRANSITIONS, 2, "linear"),
+    "A": (YOUTUBE_TRANSITIONS_A, 6, "stationary"),
+    "B": (YOUTUBE_TRANSITIONS_B, 6, "stationary"),
+}
+
+
+def stationary_distribution(transitions: dict[str, dict[str, float]]) -> dict[str, float]:
+    """Power iteration: pi such that pi P = pi."""
+    states = sorted(transitions.keys(), key=int)
+    pi = {s: 1.0 / len(states) for s in states}
+    for _ in range(6000):
+        new = {s: 0.0 for s in states}
+        for s in states:
+            for t, prob in transitions[s].items():
+                new[t] += pi[s] * prob
+        pi = new
+    return pi
+
+
+def initial_state_stationary(transition_dict: dict[str, dict[str, float]]) -> str:
+    """t38: the yt start state is drawn from the active matrix's stationary distribution."""
+    pi = stationary_distribution(transition_dict)
+    states = sorted(pi, key=int)
+    return random.choices(states, weights=[pi[s] for s in states], k=1)[0]
+
+
 BILIBILI_TRANSITIONS = {
     "10": {"10": 0.6, "9": 0.25, "8": 0.1, "7": 0.05},
 

@@ -147,13 +147,16 @@ CHROME_BIN ?= $(shell which google-chrome chromium-browser chromium 2>/dev/null 
 CHROME_PROFILE ?= $(CAPTURE_DIR)/chrome_profile
 
 CHROME_LOG := $(CAPTURE_DIR)/chrome.log
+# v2: optional fixed window size "W,H" (exp.py passes the platform's; the player size is recorded in meta.json)
+WINDOW_SIZE ?=
+WINDOW_FLAG := $(if $(WINDOW_SIZE),--window-size=$(WINDOW_SIZE),)
 
 start_chrome:
 	@echo "🚀 Starting Chrome with remote debugging..."
 	@LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
 	mkdir -p $(CHROME_PROFILE); \
 	chown -R $$LAUNCH_USER $(CHROME_PROFILE) 2>/dev/null || true; \
-	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --load-extension=$(LABELING_DIR) about:blank"; \
+	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check $(WINDOW_FLAG) --load-extension=$(LABELING_DIR) about:blank"; \
 	if [ "$$LAUNCH_USER" = "$$(id -un)" ]; then \
 		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	else \

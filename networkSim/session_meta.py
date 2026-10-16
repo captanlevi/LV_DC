@@ -56,7 +56,7 @@ def ntp_offset() -> dict:
     return {"tool": None, "raw": None, "error": "no chronyc / ntpdate / sntp available"}
 
 
-def shaper_config(platform: str, transitions: dict, episode_s: int) -> dict:
+def shaper_config(platform: str, transitions: dict, episode_s: int, **extra) -> dict:
     from utils.shaping import SCENARIOS
     scen = {k: {kk: vv for kk, vv in vars(v).items()} for k, v in SCENARIOS.items()}
     iface = None
@@ -67,7 +67,7 @@ def shaper_config(platform: str, transitions: dict, episode_s: int) -> dict:
     except Exception:
         pass
     return {"platform": platform, "scenarios": scen, "transitions": transitions, "episode_s": episode_s,
-            "iface_default": iface}
+            "iface_default": iface, **extra}
 
 
 def write(session_dir: Path, **fields) -> dict:
@@ -80,13 +80,21 @@ def write(session_dir: Path, **fields) -> dict:
 
 
 def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, argv: list[str],
-          chrome_profile: Path) -> dict:
+          chrome_profile: Path, matrix_id: str | None = None, low_state_cap: int | None = None,
+          initial_state_rule: str | None = None, forced_initial_state: str | None = None,
+          channel_url_requested: str | None = None, channel_type: str | None = None,
+          channel_handle: str | None = None) -> dict:
     return write(session_dir, schema="lvdc_session_meta_v2", platform=platform, argv=argv,
                  started_at=time.time(), hostname=socket.gethostname(), lvdc_commit=lvdc_commit(),
                  extension_version=extension_version(), chrome_profile=str(chrome_profile),
-                 shaper=shaper_config(platform, transitions, episode_s), ntp_offset_start=ntp_offset())
+                 shaper=shaper_config(platform, transitions, episode_s, matrix_id=matrix_id,
+                                      low_state_cap=low_state_cap, initial_state_rule=initial_state_rule,
+                                      forced_initial_state=forced_initial_state),
+                 channel_url_requested=channel_url_requested, channel_type=channel_type, channel_handle=channel_handle,
+                 ntp_offset_start=ntp_offset())
 
 
-def finish(session_dir: Path, channel_url: str | None) -> dict:
+def finish(session_dir: Path, channel_url: str | None, **extra) -> dict:
+    """extra: e.g. chat_action, geometry (window / viewport / player size at start), window_size_flag."""
     return write(session_dir, ended_at=time.time(), channel_url=channel_url, chrome=chrome_version(),
-                 ntp_offset_end=ntp_offset())
+                 ntp_offset_end=ntp_offset(), **extra)
