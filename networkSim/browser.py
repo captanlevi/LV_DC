@@ -613,7 +613,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         header = ["ts", "type", "video_w", "video_h", "client_w", "client_h",
                   "dropped", "current_time", "tabId", "url", "event_id",
                   "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed",
-                  "login_wall_text", "login_wall"]
+                  "login_wall_text", "login_wall", "quality_countdown"]
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]

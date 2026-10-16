@@ -152,8 +152,78 @@ def label_checks(rows: list[dict], platform: str) -> dict:
         "login_wall_ticks": sum(_true(r.get("login_wall")) for r in meta) if "login_wall" in meta[0] else None,
         "login_wall_text_ticks": sum(_true(r.get("login_wall_text")) for r in meta) if "login_wall_text" in meta[0] else None,
     }
+    out["quality_countdown_ticks"] = (sum(_true(r.get("quality_countdown")) for r in meta)
+                                      if "quality_countdown" in meta[0] else None)
     if platform == "youtube":
         out["yt_low_tier_shares"] = {f"{q}p": mix.get(q, 0) / nq for q in (144, 240, 360)}
+    if platform == "tiktok":
+        out.update(tt_rooms(meta, ts, h, ct))
+    return out
+
+
+TT_ROOM_RE = re.compile(r"tiktok\.com/@([^/?#]+)/live")
+TT_CAP_WINDOW_S = (55.0, 75.0)   # laptop run3 / run4: the logged-out countdown reset at 64.7 / 62.0 s into the visit
+
+
+def tt_room_of(url: str | None) -> str | None:
+    m = TT_ROOM_RE.search(url or "")
+    return m.group(1) if m else None
+
+
+def tt_rooms(meta: list[dict], ts: list[float], h: list[int], ct: list) -> dict:
+    """tt (t37): the room per tick (tab URL), room changes, explore-page ticks, and per room visit the source resets
+    (dims 0 or current_time back > 1 s) in TT_CAP_WINDOW_S after which the rendition is lower (the logged-out
+    countdown's signature; reported, not enforced: the quality_countdown ticks are the FAIL)."""
+    rooms = [tt_room_of(r.get("url")) for r in meta]
+    visits, start = [], 0
+    for i in range(1, len(rooms) + 1):
+        if i == len(rooms) or rooms[i] != rooms[start]:
+            visits.append((start, i))
+            start = i
+    cap_resets = []
+    for a, b in visits:
+        if rooms[a] is None:
+            continue
+        for i in range(a + 1, b):
+            reset = h[i] == 0 or (ct[i] is not None and ct[i - 1] is not None and ct[i] < ct[i - 1] - 1)
+            if not reset or not (TT_CAP_WINDOW_S[0] <= ts[i] - ts[a] <= TT_CAP_WINDOW_S[1]):
+                continue
+            before = next((h[j] for j in range(i - 1, a - 1, -1) if h[j] > 0), 0)
+            after = next((h[j] for j in range(i, b) if h[j] > 0), 0)
+            if 0 < after < before:
+                cap_resets.append({"room": rooms[a], "t_into_visit_s": round(ts[i] - ts[a], 1), "h": [before, after]})
+                break
+    return {
+        "tt_room_ticks": dict(collections.Counter(r for r in rooms if r)),
+        "tt_explore_ticks": sum(1 for r in meta if (r.get("url") or "").split("?")[0].rstrip("/") ==
+                                "https://www.tiktok.com/live"),
+        "tt_room_changes": sum(1 for x, y in zip(rooms, rooms[1:]) if x and y and x != y),
+        "tt_room_visits": [{"room": rooms[a], "start_ts": ts[a], "end_ts": ts[b - 1]} for a, b in visits if rooms[a]],
+        "tt_cap_resets_55_75s": cap_resets,
+    }
+
+
+TT_FLV_RE = re.compile(r"/stream-(\d+)_([A-Za-z0-9]+)\.flv")
+
+
+def tt_flv_tokens(sd: Path, visits: list[dict]) -> dict:
+    """tt (t37): FLV rendition tokens (stream-<id>_<token>.flv, e.g. ld5 / sd5 / hd560 / uhd560 / or4) per room, from
+    http_v2 request URLs, assigned to the room visit their request_start falls in; consecutive repeats collapsed."""
+    p = sd / "http_v2.json"
+    if not p.exists() or p.stat().st_size < 10:
+        return {}
+    reqs = []
+    for recs in json.load(open(p)).values():
+        for r in (recs if isinstance(recs, list) else []):
+            m = TT_FLV_RE.search(r.get("request_url") or "")
+            if m and r.get("request_start") is not None:
+                reqs.append((float(r["request_start"]), m.group(1), m.group(2)))
+    out: dict[str, list[str]] = {}
+    for t, stream, tok in sorted(reqs):
+        room = next((v["room"] for v in visits if v["start_ts"] - 5 <= t <= v["end_ts"] + 1), "(no room tick)")
+        seq = out.setdefault(room, [])
+        if not seq or seq[-1] != tok:
+            seq.append(tok)
     return out
 
 
@@ -333,6 +403,9 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
         why.append("login_wall")   # t37: the platform's logged-out wall stopped playback; the session was aborted
     elif abort_reason:
         why.append(f"aborted: {abort_reason}")
+    if lab.get("quality_countdown_ticks"):
+        # t37: the tt logged-out quality countdown was on screen: the profile is not logged in, quality gets capped
+        why.append(f"tt_logged_out_cap (quality countdown on {lab['quality_countdown_ticks']} ticks)")
     if not net.get("pcap") or not net.get("packets", 1):
         why.append("no pcap / no packets")
     if net.get("pcap") and not net.get("ssl_keys"):
@@ -374,6 +447,8 @@ def main() -> int:
     meta, meta_missing = meta_check(sd)
     platform = meta.get("platform") or sd.parent.name
     lab = label_checks(read_labels(sd), platform)
+    if platform == "tiktok":
+        lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
     net = traffic_checks(sd, platform)
     shot_files = list((sd / "shots").glob("*.jpg")) if (sd / "shots").exists() else []
     dur = lab.get("duration_s") or (net.get("minutes") or 0) * 60
@@ -411,6 +486,10 @@ def main() -> int:
           f"| matrix / low-state cap | {out['matrix']} / {out['low_state_cap']} |",
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
           f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",
+          f"| tt logged-out quality countdown ticks (FAIL if > 0) | {lab.get('quality_countdown_ticks')} |",
+          f"| tt rooms (ticks per room) / room changes / explore-page ticks | {lab.get('tt_room_ticks')} / {lab.get('tt_room_changes')} / {lab.get('tt_explore_ticks')} |",
+          f"| tt FLV rendition tokens per room (http_v2) | {lab.get('tt_flv_tokens_per_room')} |",
+          f"| tt resets 55-75 s into a visit with a lower rendition after (reported) | {lab.get('tt_cap_resets_55_75s')} |",
           f"| profile template (path / sha) | {(meta.get('profile_template') or {}).get('path')} / {(meta.get('profile_template') or {}).get('sha256', '')[:12]} |",
           f"| capture gap minutes | {net.get('capture_gap_minutes')} |",
           f"| ssl keys kept | {net.get('ssl_keys')} |",

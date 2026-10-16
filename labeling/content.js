@@ -46,10 +46,28 @@ let playedS = 0;
 let wallLastT = null;
 let wallStallTicks = 0;
 
+// visible text nodes anywhere in the page containing `phrase` (lower case); XPath is native, so a per-tick scan is cheap.
+// The toasts sit outside the dialog / player-ancestor nodes (laptop run4: "Current video quality lasts for 7 s. Log in
+// to continue your viewing experience." over the tt player, missed by the node scan)
+function visibleTextHit(phrase) {
+  const xp = `//text()[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '${phrase}')]`;
+  const r = document.evaluate(xp, document.body || document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  for (let i = 0; i < r.snapshotLength; i++) if (visible(r.snapshotItem(i).parentElement)) return true;
+  return false;
+}
+
 function loginWallText(v) {
+  if (visibleTextHit("log in to continue") || visibleTextHit("log in to keep watching")) return true;
   const texts = [...document.querySelectorAll(LOGIN_WALL_NODES)].filter(visible).map(e => e.innerText || "");
   for (let e = v ? v.parentElement : null, i = 0; e && i < 4; e = e.parentElement, i++) texts.push(e.innerText || "");
   return texts.some(t => LOGIN_WALL_RE.test(t));
+}
+
+// tt logged-out quality countdown (t37): "Current video quality lasts for N s. Log in to continue ..." on room pages;
+// at 0 the source resets one rendition lower (laptop run3 720p -> 540p, run4 1280 -> 1024). check_session FAILs a
+// session with any such tick (tt_logged_out_cap): the profile was not logged in.
+function qualityCountdown() {
+  return visibleTextHit("video quality lasts");
 }
 
 // once per res_meta tick: play time since load (positive playhead steps up to 2 s, so a source reset adds nothing)
@@ -139,6 +157,7 @@ function buildEvent(type) {
     src_changed: null,
     login_wall_text: null,
     login_wall: null,
+    quality_countdown: null,
   };
 }
 
@@ -151,6 +170,7 @@ function withAdState(evt) {
   evt.login_wall_text = loginWallText(video);
   evt.login_wall = evt.login_wall_text && wallStallTicks >= WALL_STALL_TICKS &&
     playedS >= WALL_PLAYED_MIN_S && playedS <= WALL_PLAYED_MAX_S;
+  evt.quality_countdown = qualityCountdown();
   return evt;
 }
 
