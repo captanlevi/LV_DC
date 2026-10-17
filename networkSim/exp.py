@@ -32,6 +32,7 @@ from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANS
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession
 import session_meta
+import compute_load
 import tw_categories
 import yt_channels
 
@@ -631,6 +632,8 @@ if __name__ == "__main__":
             session_meta.write(session_dir, preflight={"error": repr(e)})
     if platform == "youtube":   # Addendum P: every list change is recorded in the session's channel record
         session_meta.write(session_dir, channel_list=yt_channels.list_record(DATA_DIR, args.channel_handle))
+    # box compute load during the session (supervisor 2026-10-18): 5 s samples to compute_load.jsonl, summary in meta
+    load_sampler = compute_load.Sampler(session_dir).start()
 
     net_labels = []
     if initialize_network() == False:
@@ -725,6 +728,7 @@ if __name__ == "__main__":
             from browser import _export_via_service_worker
             _export_via_service_worker(session_dir)
         meta_extra["abort_reason"] = (browser.abort_reason if browser is not None else None) or abort_reason
+        meta_extra["compute_load"] = load_sampler.stop()
         session_meta.finish(session_dir, channel_url, **meta_extra)   # while Chrome is still up (records its version)
         kill_chrome(chrome_profile)
 
