@@ -11,6 +11,12 @@ Rotation: no channel gets a 3rd session until every primary has 2 (generally: al
 ties broken by list order). Sessions are counted from every youtube/<session>/meta.json under data/ (channel_handle),
 excluding data/_failed (a failed session does not count).
 
+List maintenance (prereg Addendum P, levi 2026-10-17): a channel leaves outright when, in a rolling LEAVE_WINDOW_S, it has
+>= LEAVE_NOT_LIVE not-live failures and 0 accepted sessions (spares too). The collector applies it at the pick and writes
+the leave to data/_summaries/yt_list_leaves.jsonl, which keeps it out after the window; the leave is then committed
+here (LIST_CHANGES, REMOVED_CHANNELS) and in Addendum P. A spare is promoted only after its live check passes. Every
+session's meta.json carries the list record (list_record: version and every change, committed or on disk).
+
 Not-live skips (shagun 2026-10-17: @Sypherpkvods, never collected, so always least-collected, failed not-live on yt_7,
 yt_12 and yt_30): read from the not-live failures archived in data/_failed, so they survive a batch restart. One in the
 last NOT_LIVE_RETRY_S skips the channel that long; NOT_LIVE_STRIKES within NOT_LIVE_OUT_S put it out for NOT_LIVE_OUT_S
@@ -34,7 +40,6 @@ YT_CHANNELS: list[dict] = [
     {"handle": "@dwnews", "type": "news", "owner": "Deutsche Welle", "role": "primary"},
     {"handle": "@MonsterJam", "type": "sport", "owner": "Feld Entertainment (Monster Jam)", "role": "primary"},
     {"handle": "@FUELTVMoto", "type": "sport", "owner": "FUEL TV", "role": "primary"},
-    {"handle": "@Sypherpkvods", "type": "gaming", "owner": "SypherPK", "role": "primary"},
     {"handle": "@RetroWorldVideos", "type": "gaming", "owner": "RetroWorld", "role": "primary"},
     {"handle": "@LofiGirl", "type": "music", "owner": "Lofi Girl", "role": "primary"},
     {"handle": "@everybodychillradio", "type": "music", "owner": "Everybody Chill Radio", "role": "primary"},
@@ -47,6 +52,20 @@ YT_CHANNELS: list[dict] = [
     {"handle": "@dakotaspond", "type": "nature_cams", "owner": "Dakota's Pond", "role": "spare"},
     {"handle": "@TipTank247", "type": "nature_cams", "owner": "TipTank247", "role": "spare"},
 ]
+
+# archive, never delete: channels taken off the list, as they were listed
+REMOVED_CHANNELS: list[dict] = [
+    {"handle": "@Sypherpkvods", "type": "gaming", "owner": "SypherPK", "role": "primary"},
+]
+# every list change after the 2026-10-16 verification (version = the number of changes)
+LIST_CHANGES: list[dict] = [
+    {"date": "2026-10-17", "change": "removed", "handle": "@Sypherpkvods", "type": "gaming", "role": "primary",
+     "rule": "prereg Addendum P (levi)",
+     "evidence": "0 accepted sessions, 3 not-live failures on chaos (yt_7, yt_12, yt_30); /live redirects to the channel page"},
+]
+LEAVE_WINDOW_S = 48 * 3600
+LEAVE_NOT_LIVE = 3
+LEAVES_FILE = Path("_summaries") / "yt_list_leaves.jsonl"
 
 
 def url_of(handle: str) -> str:
@@ -100,10 +119,64 @@ def not_live_skips(data_dir: Path, now: float) -> dict[str, str]:
     return skips
 
 
+def accepted_starts(data_dir: Path) -> dict[str, list[float]]:
+    """Start times of the accepted (not _failed) sessions per channel handle."""
+    out: dict[str, list[float]] = {}
+    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts)
+    for meta in metas:
+        try:
+            m = json.loads(meta.read_text())
+        except Exception:
+            continue
+        if m.get("channel_handle") and m.get("started_at"):
+            out.setdefault(m["channel_handle"], []).append(float(m["started_at"]))
+    return out
+
+
+def disk_leaves(data_dir: Path) -> list[dict]:
+    """Leaves the collector applied (data/_summaries/yt_list_leaves.jsonl), oldest first."""
+    p = data_dir / LEAVES_FILE
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+
+
+def apply_leave_rule(data_dir: Path, now: float) -> list[dict]:
+    """Addendum P: listed channels with >= LEAVE_NOT_LIVE not-live failures and 0 accepted sessions in the last
+    LEAVE_WINDOW_S leave; each new leave is appended to the leaves file. Returns the new leaves."""
+    gone = {r["handle"] for r in disk_leaves(data_dir)}
+    fails, ok = not_live_failures(data_dir), accepted_starts(data_dir)
+    new = []
+    for c in YT_CHANNELS:
+        h = c["handle"]
+        nl = sorted(t for t in fails.get(h, []) if now - t < LEAVE_WINDOW_S)
+        if h in gone or len(nl) < LEAVE_NOT_LIVE or any(now - t < LEAVE_WINDOW_S for t in ok.get(h, [])):
+            continue
+        new.append({"ts": now, "change": "removed", "handle": h, "type": c["type"], "role": c["role"],
+                    "rule": "prereg Addendum P (collector)",
+                    "evidence": f"{len(nl)} not-live failures and 0 accepted sessions in {LEAVE_WINDOW_S // 3600} h",
+                    "not_live_started_at": nl})
+    if new:
+        (data_dir / LEAVES_FILE).parent.mkdir(parents=True, exist_ok=True)
+        with open(data_dir / LEAVES_FILE, "a") as fh:
+            for r in new:
+                fh.write(json.dumps(r) + "\n")
+    return new
+
+
+def list_record(data_dir: Path, handle: str | None) -> dict:
+    """meta.json's channel list record: the version, the channel's role, every committed change and every leave the
+    collector applied on disk."""
+    c = by_handle(handle) if handle else None
+    leaves = disk_leaves(data_dir)
+    return {"version": len({(r["handle"], r["change"]) for r in LIST_CHANGES + leaves}), "role": c["role"] if c else None,
+            "changes": LIST_CHANGES, "collector_leaves": leaves}
+
+
 def next_channel(data_dir: Path, exclude: set[str] | None = None) -> dict:
     """The least-collected primary (list order breaks ties); a spare of the same type only when every primary of
     that type is excluded (e.g. not live right now)."""
-    exclude = exclude or set()
+    exclude = set(exclude or ()) | {r["handle"] for r in disk_leaves(data_dir)}
     counts = collected_counts(data_dir)
     prim = [c for c in YT_CHANNELS if c["role"] == "primary"]
     order = sorted(range(len(prim)), key=lambda i: (counts[prim[i]["handle"]], i))
@@ -150,13 +223,16 @@ def classify_live_page(final_url: str, html: str) -> str:
     return "unknown"
 
 
-def yt_live_state(handle: str, timeout: float = 12.0) -> str:
-    """Fetch the channel's /live page and classify it; 'unknown' on any error (fail open)."""
+def yt_live_state(handle: str, timeout: float = 12.0, errors: list | None = None) -> str:
+    """Fetch the channel's /live page and classify it; 'unknown' on any error (fail open; the error is appended to
+    `errors` when given)."""
     try:
         req = urllib.request.Request(url_of(handle), headers=PROBE_HEADERS)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return classify_live_page(r.geturl(), r.read(3_000_000).decode("utf-8", "replace"))
-    except Exception:
+    except Exception as e:
+        if errors is not None:
+            errors.append(repr(e)[:300])
         return "unknown"
 
 
@@ -185,3 +261,32 @@ def pick_live_channel(data_dir: Path, exclude: set[str] | None = None, probe=yt_
 def live_now(handle: str) -> bool | None:
     """True / False from the probe, None when unknown (fail open: treat as maybe-live)."""
     return {"live": True, "not_live": False}.get(yt_live_state(handle))
+
+
+# ---------------------------------------------------------------------------
+# Spare promotion (prereg Addendum P): a spare takes its type's open slot only after isLiveNow is true at >= 3 checks
+# >= 6 h apart spread over 24 h, logged and committed (yt_live_check.py appends to channel_checks/yt_live_checks.jsonl).
+# Reading of "spread over 24 h": the passing checks span >= 24 h, and no not-live check falls inside that span;
+# unknown probes (fail-open cases) are ignored.
+# ---------------------------------------------------------------------------
+
+PROMOTE_MIN_CHECKS = 3
+PROMOTE_MIN_GAP_S = 6 * 3600
+PROMOTE_SPAN_S = 24 * 3600
+LIVE_CHECKS_LOG = Path(__file__).resolve().parent / "channel_checks" / "yt_live_checks.jsonl"
+
+
+def promotion_status(checks: list[dict], handle: str) -> dict:
+    """{'passed': bool, 'checks': [ts of the passing live checks]} from the live-check log rows of `handle`: the live
+    checks after the last not-live one, taken greedily >= PROMOTE_MIN_GAP_S apart, pass at >= PROMOTE_MIN_CHECKS
+    spanning >= PROMOTE_SPAN_S."""
+    rows = sorted((r for r in checks if r.get("handle") == handle and r.get("state") in ("live", "not_live")),
+                  key=lambda r: r["ts"])
+    last_off = max((i for i, r in enumerate(rows) if r["state"] == "not_live"), default=-1)
+    picked: list[float] = []
+    for r in rows[last_off + 1:]:
+        if not picked or r["ts"] - picked[-1] >= PROMOTE_MIN_GAP_S:
+            picked.append(r["ts"])
+    passed = len(picked) >= PROMOTE_MIN_CHECKS and picked[-1] - picked[0] >= PROMOTE_SPAN_S
+    return {"passed": passed, "checks": picked}
+

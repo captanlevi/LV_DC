@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""yt list maintenance (prereg Addendum P): @Sypherpkvods is off the list (archived in REMOVED_CHANNELS, recorded in
+LIST_CHANGES); the collector's leave rule (>= 3 not-live failures and 0 accepted sessions in 48 h) writes the leave to
+disk and keeps the channel out after the window; meta.json's list record carries every change; a spare's promotion
+check (>= 3 live checks >= 6 h apart spanning 24 h, none not-live inside).
+
+    python3 test_yt_list.py        (exit 0 = pass)
+"""
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import yt_channels as Y  # noqa: E402
+
+NL = "error: RuntimeError: Failed to navigate to a live youtube stream"
+H = 3600.0
+
+
+def meta(d: Path, rel: str, **m):
+    (d / rel).mkdir(parents=True)
+    (d / rel / "meta.json").write_text(json.dumps(m))
+
+
+def test_list():
+    handles = [c["handle"] for c in Y.YT_CHANNELS]
+    assert "@Sypherpkvods" not in handles and [c["handle"] for c in Y.REMOVED_CHANNELS] == ["@Sypherpkvods"]
+    assert any(c["handle"] == "@Sypherpkvods" and c["change"] == "removed" for c in Y.LIST_CHANGES)
+    gaming = [c for c in Y.YT_CHANNELS if c["type"] == "gaming"]
+    assert {(c["handle"], c["role"]) for c in gaming} == {("@RetroWorldVideos", "primary"), ("@BeanBoltTV", "spare")}
+
+
+def test_leave_rule():
+    with tempfile.TemporaryDirectory() as td:
+        d, t0 = Path(td), 1_800_000_000.0
+        for i, dt in enumerate((0, 10 * H)):
+            meta(d, f"_failed/youtube/yt_{i}", channel_handle="@MonsterJam", started_at=t0 + dt, abort_reason=NL)
+        meta(d, "youtube/yt_9", channel_handle="@MonsterJam", started_at=t0 - 49 * H)        # accepted, outside 48 h
+        for i, dt in enumerate((0, 10 * H, 30 * H)):                                       # 3 not-live but accepted
+            meta(d, f"_failed/youtube/fu_{i}", channel_handle="@FUELTVMoto", started_at=t0 + dt, abort_reason=NL)
+        meta(d, "youtube/fu_ok", channel_handle="@FUELTVMoto", started_at=t0 + 20 * H)
+        assert Y.apply_leave_rule(d, t0 + 29 * H) == []                                   # 2 failures so far
+        meta(d, "_failed/youtube/yt_2", channel_handle="@MonsterJam", started_at=t0 + 30 * H, abort_reason=NL)
+        new = Y.apply_leave_rule(d, t0 + 31 * H)
+        assert [r["handle"] for r in new] == ["@MonsterJam"] and len(new[0]["not_live_started_at"]) == 3, new
+        assert Y.apply_leave_rule(d, t0 + 32 * H) == []                                   # written once
+        # out after the window too, and the list record carries it
+        later = t0 + 200 * H
+        assert Y.not_live_skips(d, later) == {}                                            # the strikes have expired
+        meta(d, "youtube/others", channel_handle="@AlJazeeraEnglish", started_at=t0)
+        for c in Y.YT_CHANNELS:                    # everyone else collected twice: MonsterJam would be least-collected
+            if c["role"] == "primary" and c["handle"] != "@MonsterJam":
+                for k in range(2):
+                    meta(d, f"youtube/{c['handle'][1:]}_{k}", channel_handle=c["handle"], started_at=t0)
+        assert Y.next_channel(d)["handle"] != "@MonsterJam"
+        rec = Y.list_record(d, "@dwnews")
+        assert rec["role"] == "primary" and rec["changes"] == Y.LIST_CHANGES
+        assert [r["handle"] for r in rec["collector_leaves"]] == ["@MonsterJam"]
+        assert rec["version"] == len(Y.LIST_CHANGES) + 1
+        assert "@MonsterJam" in {r["handle"] for r in Y.disk_leaves(d)}
+        # MonsterJam left, FUELTV excluded: the sport spare substitutes
+        ex = {c["handle"] for c in Y.YT_CHANNELS if c["role"] == "primary" and c["type"] != "sport"} | {"@FUELTVMoto"}
+        assert Y.next_channel(d, exclude=ex)["handle"] == "@FuboSports"
+
+
+def test_promotion():
+    h, t = "@BeanBoltTV", 1_800_000_000.0
+    live = lambda dt: {"ts": t + dt, "handle": h, "state": "live"}
+    P = Y.promotion_status
+    assert not P([live(0), live(6 * H), live(12 * H)], h)["passed"]                       # span 12 h < 24 h
+    assert P([live(0), live(12 * H), live(24 * H)], h)["passed"]
+    assert not P([live(0), live(3 * H), live(24 * H)], h)["passed"]                       # only 2 >= 6 h apart
+    assert P([live(0), live(3 * H), live(9 * H), live(24 * H)], h)["checks"] == [t, t + 9 * H, t + 24 * H]
+    off = {"ts": t + 13 * H, "handle": h, "state": "not_live"}
+    assert not P([live(0), live(12 * H), off, live(24 * H)], h)["passed"]                 # a not-live inside resets
+    unk = {"ts": t + 13 * H, "handle": h, "state": "unknown"}
+    assert P([live(0), live(12 * H), unk, live(24 * H)], h)["passed"]                     # unknown is ignored
+    assert not P([live(0), live(12 * H), {**live(24 * H), "handle": "@x"}], h)["passed"]
+
+
+def main() -> int:
+    test_list()
+    test_leave_rule()
+    test_promotion()
+    print("test_yt_list: ok")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

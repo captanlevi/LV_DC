@@ -166,6 +166,9 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
     for i in range(runs):
         print(f"\n[{platform.upper()} — run {i+1}/{runs}]")
         target_state = most_needed_state(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
+        if platform == "youtube":
+            for r in yt_channels.apply_leave_rule(_RUNS_DIR, time.time()):
+                print(f"  LIST: {r['handle']} leaves the yt list ({r['evidence']}; Addendum P); commit it in yt_channels.py")
         channel = (yt_channels.next_channel(_RUNS_DIR, exclude=not_live | set(yt_channels.not_live_skips(_RUNS_DIR, time.time())))
                    if platform == "youtube" else None)
         if channel:
@@ -248,6 +251,10 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         before = accepted_sessions(p)
         now = time.time()
         skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
+        if p == "youtube":
+            for r in yt_channels.apply_leave_rule(_RUNS_DIR, now):
+                print(f"  LIST: {r['handle']} ({r['type']}, {r['role']}) leaves the yt list ({r['evidence']}; Addendum P); "
+                      f"commit it in yt_channels.py")
         yt_skips = yt_channels.not_live_skips(_RUNS_DIR, now) if p == "youtube" else {}
         for h, why in yt_skips.items():
             print(f"  skip {h}: {why}")

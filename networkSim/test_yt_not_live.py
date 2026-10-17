@@ -35,11 +35,14 @@ def main() -> int:
         why = Y.not_live_skips(d, T30)
         assert set(why) == {"@Sypherpkvods"} and why["@Sypherpkvods"].startswith("2 not-live"), why
         assert Y.not_live_skips(d, T12 + Y.NOT_LIVE_OUT_S + 1) == {}
-        # the rotation: never collected, so it is the least-collected primary unless skipped
-        for i, c in enumerate(c for c in Y.YT_CHANNELS if c["role"] == "primary" and c["handle"] != "@Sypherpkvods"):
+        # the rotation (Sypherpk has since left the list, Addendum P): a never-collected primary is the least-collected
+        # one unless skipped; same timeline on @LofiGirl
+        for i, c in enumerate(c for c in Y.YT_CHANNELS if c["role"] == "primary" and c["handle"] != "@LofiGirl"):
             meta(d, f"youtube/ok_{i}", channel_handle=c["handle"], started_at=T7)
-        assert Y.next_channel(d)["handle"] == "@Sypherpkvods"
-        assert Y.next_channel(d, exclude=set(Y.not_live_skips(d, T30)))["handle"] != "@Sypherpkvods"
+        for n, t in (("lg_7", T7), ("lg_12", T12)):
+            meta(d, f"_failed/youtube/{n}", channel_handle="@LofiGirl", started_at=t, abort_reason=NL)
+        assert Y.next_channel(d)["handle"] == "@LofiGirl"
+        assert Y.next_channel(d, exclude=set(Y.not_live_skips(d, T30)))["handle"] != "@LofiGirl"
     print("test_yt_not_live: ok")
     return 0
 

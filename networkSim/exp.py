@@ -623,6 +623,8 @@ if __name__ == "__main__":
                        forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
                        channel_type=args.channel_type, channel_handle=args.channel_handle,
                        profile_template=profile_template)
+    if platform == "youtube":   # Addendum P: every list change is recorded in the session's channel record
+        session_meta.write(session_dir, channel_list=yt_channels.list_record(DATA_DIR, args.channel_handle))
 
     net_labels = []
     if initialize_network() == False:
