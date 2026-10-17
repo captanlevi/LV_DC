@@ -19,8 +19,8 @@ Acceptance is CAPTURE INTEGRITY ONLY (prereg §2, brad R1): nothing that co-vari
   frozen     player_frozen (addendum N): the longest stall-only frozen-playhead run (stall label on, non-ad tick, playhead
              within 1 s of the run's first tick) <= FROZEN_PLAYHEAD_MAX_S[platform] (1.2 x the old data's maximum,
              rounded up to the minute). browser.py's watchdog aborts a session at the same T, on the same measure.
-  latch      I10 (levi): <= 0.5 of stall ticks with the playhead advancing at 0.8-1.5 s/s (a stall label that outlives
-             playback), scored with >= 10 stall ticks
+  latch      I10 (levi): <= 0.5 of within-stall ticks (previous tick also in stall) with the playhead advancing at
+             0.8-1.5 s/s (a stall label that outlives playback), scored with >= 10 such ticks
 QA fields for the readings (levi R4): per-signal ad tick counts and ad spans per signal set; Addendum D (twitch: share
 of tier changes with a src_changed within ± 2 s; swap-only ad spans, must be 0); Addendum C (realised dwell per shaper
 state, in episodes); yt 144 / 240 / 360p shares of quality time (ads masked); ad-action summary; the player pin.
@@ -57,9 +57,9 @@ CHECKS = {
 # FAIL and by browser.py's watchdog; frozen_playhead_run() here and content.js's lvqoeFrozenS compute the same run.
 FROZEN_PLAYHEAD_MAX_S = {"youtube": 180, "twitch": 660, "tiktok": 720}
 FROZEN_PLAYHEAD_TOL_S = 1.0
-# I10 (levi, latched-stall guard; LVQoE scripts/analysis/i10_stall_advance.py): share of stall ticks whose playhead
-# advances at a playing rate, scored with >= I10_MIN_STALL_TICKS stall ticks; old data max yt 0.029 / tt 0.231 /
-# twitch 0.182 (bilibili/bili_new_17 0.947, a recorded latch candidate)
+# I10 (levi, latched-stall guard; LVQoE scripts/analysis/i10_stall_advance.py, within-stall rule): share of within-stall
+# ticks whose playhead advances at a playing rate, scored with >= I10_MIN_STALL_TICKS such ticks; old data max yt / tt /
+# twitch 0.0 (bilibili/bili_new_17 0.963, a recorded latch candidate)
 STALL_ADVANCING_RATE = (0.8, 1.5)
 STALL_ADVANCING_SHARE_MAX = 0.5
 I10_MIN_STALL_TICKS = 10
@@ -179,9 +179,11 @@ def frozen_playhead_run(rows: list[dict]) -> float:
 
 
 def stall_advancing_share(rows: list[dict]) -> float | None:
-    """I10: share of stall-labelled res_meta ticks whose playhead advanced at a rate inside STALL_ADVANCING_RATE s/s
-    since the previous tick; None (unscored) with fewer than I10_MIN_STALL_TICKS such ticks."""
-    stall, prev, n, adv, has_ct = False, None, 0, 0, False
+    """I10: over res_meta ticks in stall whose previous res_meta tick was also in stall (the rate is measured inside
+    the stall, so a sub-second stall's single tick does not read the playing tick's advance; levi 2026-10-17), the
+    share whose playhead advanced at a rate inside STALL_ADVANCING_RATE s/s; None (unscored) with fewer than
+    I10_MIN_STALL_TICKS such ticks."""
+    stall, prev, prev_stall, n, adv, has_ct = False, None, False, 0, 0, False
     for r in rows:
         ty = r.get("type")
         if ty == "stall":
@@ -191,13 +193,14 @@ def stall_advancing_share(rows: list[dict]) -> float | None:
         if ty != "res_meta":
             continue
         t, ct = _f(r.get("ts")), _f(r.get("current_time"))
-        if stall:
-            n += 1          # every stall tick counts; a tick with no rate (no previous tick / current_time) is not advancing
+        if stall and prev_stall:
+            n += 1          # every scored tick counts; a tick with no rate (no previous tick / current_time) is not advancing
             has_ct = has_ct or ct is not None
             if prev is not None and t is not None and ct is not None and t > prev[0]:
                 lo, hi = STALL_ADVANCING_RATE
                 adv += lo <= (ct - prev[1]) / ((t - prev[0]) / 1000.0) <= hi
         prev = (t, ct) if t is not None and ct is not None else None
+        prev_stall = stall
     return adv / n if n >= I10_MIN_STALL_TICKS and has_ct else None
 
 
@@ -673,7 +676,7 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
             why.append(f"player_frozen: playhead frozen {fz:.0f} s in a stall > T {T} s (addendum N)")
         sa = lab.get("stall_advancing_share")
         if sa is not None and sa > STALL_ADVANCING_SHARE_MAX:
-            why.append(f"latched_stall (I10): {sa:.2f} of stall ticks with the playhead advancing at "
+            why.append(f"latched_stall (I10): {sa:.2f} of within-stall ticks with the playhead advancing at "
                        f"{STALL_ADVANCING_RATE} s/s > {STALL_ADVANCING_SHARE_MAX}")
         if lab.get("usable_share") is not None and lab["usable_share"] < CHECKS["usable_share_min"]:
             why.append(f"usable (non-ad play or stall) {lab['usable_share']:.2f} of the session < {CHECKS['usable_share_min']}")

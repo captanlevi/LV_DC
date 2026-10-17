@@ -144,7 +144,7 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `no res_meta ticks` / tick presence < `0.95` | the extension's 1 Hz tick |
 | `current_time advancing` < `0.8` | of playing, non-ad ticks (it says nothing about stall ticks) |
 | `player_frozen` | addendum N: the longest stall-only frozen-playhead run (stall label on, non-ad, playhead within 1 s of the run's first tick) > T: yt `180` s, twitch `660` s, tt `720` s (`1.2` × the old data's max, rounded up to the minute; `FROZEN_PLAYHEAD_MAX_S`). browser.py's watchdog aborts at the same T on the same measure (content.js `data-lvqoe-frozen-s`); `test_frozen_run.py` checks the two agree |
-| `latched_stall` (I10) | more than `0.5` of stall ticks with the playhead advancing at `0.8`–`1.5` s/s, scored with ≥ `10` stall ticks (levi's `i10_stall_advance.py`) |
+| `latched_stall` (I10) | more than `0.5` of within-stall ticks (previous tick also in stall) with the playhead advancing at `0.8`–`1.5` s/s, scored with ≥ `10` such ticks (levi's `i10_stall_advance.py`) |
 | `labels.csv lacks the v2 columns` | old extension loaded |
 | `usable` < `0.6` | non-ad play or stall time over the session length |
 | `ipv6_media` | any selected media bytes on IPv6 flows |
