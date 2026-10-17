@@ -166,7 +166,8 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
     for i in range(runs):
         print(f"\n[{platform.upper()} — run {i+1}/{runs}]")
         target_state = most_needed_state(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
-        channel = yt_channels.next_channel(_RUNS_DIR, exclude=not_live) if platform == "youtube" else None
+        channel = (yt_channels.next_channel(_RUNS_DIR, exclude=not_live | set(yt_channels.not_live_skips(_RUNS_DIR, time.time())))
+                   if platform == "youtube" else None)
         if channel:
             print(f"  Channel  : {channel['handle']} ({channel['type']}, {channel['role']})")
         if not auto and not _prompt_ready(platform, target_state):
@@ -247,7 +248,10 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         before = accepted_sessions(p)
         now = time.time()
         skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
-        channel = yt_channels.next_channel(_RUNS_DIR, exclude=skip) if p == "youtube" else None
+        yt_skips = yt_channels.not_live_skips(_RUNS_DIR, now) if p == "youtube" else {}
+        for h, why in yt_skips.items():
+            print(f"  skip {h}: {why}")
+        channel = yt_channels.next_channel(_RUNS_DIR, exclude=skip | set(yt_skips)) if p == "youtube" else None
         # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
         # NOT_LIVE_RETRY_S, like a yt channel)
         category, esports_skip = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else (None, None)

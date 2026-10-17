@@ -10,11 +10,21 @@ live badge, playback advanced, and no age or members gate appeared.
 Rotation: no channel gets a 3rd session until every primary has 2 (generally: always the least-collected primary,
 ties broken by list order). Sessions are counted from every youtube/<session>/meta.json under data/ (channel_handle),
 excluding data/_failed (a failed session does not count).
+
+Not-live skips (shagun 2026-10-17: @Sypherpkvods, never collected, so always least-collected, failed not-live on yt_7,
+yt_12 and yt_30): read from the not-live failures archived in data/_failed, so they survive a batch restart. One in the
+last NOT_LIVE_RETRY_S skips the channel that long; NOT_LIVE_STRIKES within NOT_LIVE_OUT_S put it out for NOT_LIVE_OUT_S
+after the latest.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
+NOT_LIVE_MARK = "Failed to navigate to a live"   # browser.py's start failure, kept in meta.json abort_reason
+NOT_LIVE_RETRY_S = 6 * 3600
+NOT_LIVE_STRIKES = 2
+NOT_LIVE_OUT_S = 24 * 3600
 
 YT_CHANNELS: list[dict] = [
     {"handle": "@AlJazeeraEnglish", "type": "news", "owner": "Al Jazeera Media Network", "role": "primary"},
@@ -58,6 +68,33 @@ def collected_counts(data_dir: Path) -> dict[str, int]:
         if h in counts:
             counts[h] += 1
     return counts
+
+
+def not_live_failures(data_dir: Path) -> dict[str, list[float]]:
+    """Start times of the not-live failures per channel handle: data/_failed/.../youtube/<session>/meta.json."""
+    out: dict[str, list[float]] = {}
+    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" in m.parts)
+    for meta in metas:
+        try:
+            m = json.loads(meta.read_text())
+        except Exception:
+            continue
+        if NOT_LIVE_MARK in (m.get("abort_reason") or "") and m.get("channel_handle") and m.get("started_at"):
+            out.setdefault(m["channel_handle"], []).append(float(m["started_at"]))
+    return out
+
+
+def not_live_skips(data_dir: Path, now: float) -> dict[str, str]:
+    """Channels skipped now for recent not-live failures, with why (module docstring)."""
+    skips = {}
+    for h, ts in not_live_failures(data_dir).items():
+        last = max(ts)
+        n = sum(now - t < NOT_LIVE_OUT_S for t in ts)
+        if n >= NOT_LIVE_STRIKES and now - last < NOT_LIVE_OUT_S:
+            skips[h] = f"{n} not-live failures in {NOT_LIVE_OUT_S // 3600} h: out until {NOT_LIVE_OUT_S // 3600} h after the last"
+        elif now - last < NOT_LIVE_RETRY_S:
+            skips[h] = f"not live {(now - last) / 3600:.1f} h ago: retry after {NOT_LIVE_RETRY_S // 3600} h"
+    return skips
 
 
 def next_channel(data_dir: Path, exclude: set[str] | None = None) -> dict:
