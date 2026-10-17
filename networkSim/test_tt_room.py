@@ -31,7 +31,12 @@ def test_viewers():
     check(B._parse_viewers("LIVE 1.2K viewers Just chatting") == 1200, "1.2K viewers")
     check(B._parse_viewers("LIVE @tape05.tv 845 watching") == 845, "845 watching")
     check(B._parse_viewers("LIVE gaming 3M") == 3_000_000, "bare 3M token")
-    check(B._parse_viewers("LIVE no count here 2024") is None, "a year is not a viewer count")
+    check(B._parse_viewers("LIVE no count here 2024 abc") is None, "a number inside the title is not a viewer count")
+    # logged-in /live card texts recorded on chaos (ti_10, 2026-10-17)
+    for text, want in {"LIVE nivemoefaauo Nive Moefaauo 216": 216, "LIVE 2 have fun Lolita": 2,
+                       "LIVE 12 I can see you watching on FYP Rubyboo3s": 12, "LIVE 1,228 Welcome to my LIVE ZONGA": 1228,
+                       "LIVE meeyaw_143 Meeyaw Playz 9.5K": 9500, "LIVE WHAT DA HELL! i0kuny 7 watching Click to watch": 7}.items():
+        check(B._parse_viewers(text) == want, f"{text!r} -> {B._parse_viewers(text)}")
 
 
 def test_recent_rooms():

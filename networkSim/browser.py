@@ -356,6 +356,7 @@ TT_SRC_GONE_S = 10
 TT_NO_MEDIA_S = 30
 TT_ENDED_FLAT_S = 5         # the ended banner counts only with no media appended and no playhead advance this long
 TT_AUTOPLAY_GRACE_S = 5     # a room is judged only after play was clicked and this long has passed
+TT_POOL_MIN, TT_POOL_SCROLLS = 30, 8   # scroll /live for more cards until this many candidates (supervisor: ti_10 had 7)
 
 _TT_CANDIDATES_JS = """
 (function() {
@@ -411,15 +412,22 @@ def _norm_room(u: str | None) -> str:
     return (u or "").split("?")[0].rstrip("/").lower()
 
 
+_NUM = r"(\d[\d,]*(?:\.\d+)?)\s*([KkMm])?"
+
+
 def _parse_viewers(text: str) -> int | None:
-    """Viewer count from a card's text: a number (1.2K / 3M / 845) next to viewer / watching, else a K/M token."""
+    """Viewer count from a card's text. Logged-in /live cards (chaos ti_10) put it next to "watching" / "viewers",
+    right after the LIVE badge ("LIVE 2 have fun ...", "LIVE 1,228 Welcome ..."), or at the end ("LIVE <handle> <name>
+    216", "... 9.5K"); else a K / M token anywhere."""
     def num(m):
-        return int(float(m.group(1)) * {"k": 1e3, "m": 1e6}.get((m.group(2) or "").lower(), 1))
-    m = re.search(r"(\d+(?:\.\d+)?)\s*([KkMm])?\s*(?:viewers?|watching)", text or "")
-    if m:
-        return num(m)
-    m = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)([KkMm])(?![\w])", text or "")
-    return num(m) if m else None
+        return int(float(m.group(1).replace(",", "")) * {"k": 1e3, "m": 1e6}.get((m.group(2) or "").lower(), 1))
+    t = (text or "").strip()
+    for rx in (_NUM + r"\s*(?:viewers?|watching)\b", r"^LIVE\s+" + _NUM + r"(?![\w.,])", r"(?<![\w.,])" + _NUM + r"$",
+               r"(?<![\w.,])(\d+(?:\.\d+)?)([KkMm])(?![\w])"):
+        m = re.search(rx, t)
+        if m:
+            return num(m)
+    return None
 
 
 # twitch (supervisor 2026-10-17: tw_7 and tw_8 both took caseoh_, the Just Chatting top card): a directory pick skips
@@ -1599,10 +1607,23 @@ class BrowserSession:
         while time.time() < deadline and not page.eval(_CARD_READY_JS["tiktok"]):
             time.sleep(1)
         time.sleep(2)                                   # let the viewer counts render
-        try:
-            cands = json.loads(page.eval(_TT_CANDIDATES_JS) or "[]")
-        except Exception:
-            cands = []
+        cands, seen, stale, scrolls = [], set(), 0, 0
+        while True:
+            try:
+                batch = json.loads(page.eval(_TT_CANDIDATES_JS) or "[]")
+            except Exception:
+                batch = []
+            new = [c for c in batch if c.get("href") and c["href"] not in seen]
+            for c in new:
+                seen.add(c["href"])
+                cands.append(c)
+            stale = 0 if new else stale + 1
+            if len(cands) >= TT_POOL_MIN or stale >= 2 or scrolls >= TT_POOL_SCROLLS:
+                break
+            page.eval("window.scrollBy(0, Math.max(window.innerHeight, 800))")   # load more cards
+            scrolls += 1
+            time.sleep(1.5)
+        rec["pool_size"], rec["pool_scrolls"] = len(cands), scrolls
         for c in cands:
             c["viewers"] = _parse_viewers(c.get("text", ""))
             c["live_badge"] = bool(re.search(r"\bLIVE\b", c.get("text", "")))
