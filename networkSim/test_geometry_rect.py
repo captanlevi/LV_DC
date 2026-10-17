@@ -46,6 +46,30 @@ def js(src, **cfg):
     return json.loads(out.stdout)
 
 
+CAP_STUB = r"""
+const [present, pressed, sticky] = JSON.parse(process.argv[2]);
+let clicks = 0, state = pressed;
+const b = {offsetParent: {}, getAttribute: a => a === 'aria-pressed' ? String(state) : null,
+           click() { clicks++; if (!sticky) state = !state; }};
+global.document = {querySelector: s => (present && s === '#movie_player .ytp-subtitles-button') ? b : null};
+console.log(JSON.stringify({r: eval(process.argv[1]), clicks}));
+"""
+
+
+def captions(present, pressed, sticky=False):
+    out = subprocess.run([shutil.which("node"), "-e", CAP_STUB, B._CAPTIONS_OFF_JS, json.dumps([present, pressed, sticky])],
+                         capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
+
+
+def test_captions_off():
+    """brad 2026-10-17: yt live auto-captions over the player's lower band; the collector turns them off."""
+    assert captions(True, True) == {"r": "turned-off", "clicks": 1}
+    assert captions(True, False) == {"r": "already-off", "clicks": 0}      # never toggles them on
+    assert captions(False, False) == {"r": "no-button", "clicks": 0}
+    assert captions(True, True, sticky=True) == {"r": "click-failed", "clicks": 1}
+
+
 def main() -> int:
     if not shutil.which("node"):
         print("SKIP: node not found")
@@ -67,6 +91,7 @@ def main() -> int:
     assert sc["player_in_viewport_shot_px"] == [12, 40, 426.5, 240], sc
     assert sc["x11_player_shot_scale"] == round(640 / 1706, 5), sc
     assert B.geometry_scales({"player_rect": None, "viewport": [1280, 720]}) is None
+    test_captions_off()
     print("test_geometry_rect: ok")
     return 0
 

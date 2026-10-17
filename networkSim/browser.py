@@ -1269,6 +1269,19 @@ def _wait_for_load(page: CDPPage, timeout: float = 15.0) -> None:
 # ---------------------------------------------------------------------------
 
 _WALL_JS = "document.documentElement.dataset.lvqoeWall === '1'"
+# yt live auto-captions draw over the lower band of the player (brad 2026-10-17, yt_2's shots; R-O's motion crop): the
+# collector turns them off, like the chat, at start and whenever they come back (checked every CAPTIONS_CHECK_S;
+# each turn-off logged in ad_actions.jsonl as captions_off). Traffic: one timedtext request in yt_29's whole capture.
+_CAPTIONS_OFF_JS = """
+(function() {
+    const b = document.querySelector('#movie_player .ytp-subtitles-button');
+    if (!b || b.offsetParent === null) return 'no-button';
+    if (b.getAttribute('aria-pressed') !== 'true') return 'already-off';
+    b.click();
+    return b.getAttribute('aria-pressed') === 'true' ? 'click-failed' : 'turned-off';
+})()
+"""
+CAPTIONS_CHECK_S = 10
 # levi 2026-10-17 (tw_10, tw_12): no human ever pauses these players, so every pause is a self-pause, and the collector
 # presses play as a viewer would. _PLAYER_STATE_JS reads the largest visible <video> plus content.js's stall and ad
 # labels; SelfPauseResumer decides; _PLAY_JS presses. Logged in ad_actions.jsonl as resume_after_self_pause.
@@ -1348,7 +1361,18 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
     frozen_max_s = FROZEN_PLAYHEAD_MAX_S.get(platform)
     froze = False
     resumer = SelfPauseResumer()
+    n = 0
     while not stop.wait(timeout=1):
+        n += 1
+        if platform == "youtube" and n % CAPTIONS_CHECK_S == 0:
+            try:
+                cap = page.eval(_CAPTIONS_OFF_JS)
+                if cap in ("turned-off", "click-failed") and log_path is not None:
+                    with open(log_path, "a") as fh:
+                        fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": "captions_off",
+                                             "result": cap}) + "\n")
+            except Exception:
+                pass
         try:
             now = time.time()
             press = resumer.step(json.loads(page.eval(_PLAYER_STATE_JS) or "null"), now)
@@ -1594,6 +1618,7 @@ class BrowserSession:
         self.channel_url: str | None = None      # the live page actually collected (meta.json)
         self.list_url: str | None = None         # the LIVE_URLS / first_url entry that led to it
         self.chat_action: str | None = None      # what the chat-close step did (meta.json)
+        self.caption_action: str | None = None   # yt: what the captions-off step did at start (meta.json)
         self.geometry: dict | None = None        # window / player geometry after navigation (meta.json)
         self.player_pin: dict | None = None      # pin_player trace (meta.json, check.md)
         self.abort_reason: str | None = None     # set by a watcher (t37: "login_wall"); exp.py stops the session
@@ -1730,6 +1755,12 @@ class BrowserSession:
             print(f"[browser] Chat: {self.chat_action}", flush=True)
         else:
             self.chat_action = "left-open (close_chat off)"
+        if self.platform == "youtube":
+            try:
+                self.caption_action = self._page.eval(_CAPTIONS_OFF_JS)
+            except Exception as exc:
+                self.caption_action = f"error: {exc}"
+            print(f"[browser] Captions: {self.caption_action}", flush=True)
         try:
             raw = json.loads(self._page.eval(_LOGIN_STATE_JS) or "{}")
             # a visible Log In button wins: twitch keeps a user-menu node when logged out (tw_6 read "logged_in")

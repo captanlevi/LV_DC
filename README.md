@@ -66,7 +66,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
      - when `/live` renders as the LIVE feed (no room links), the old first-card path is used and recorded (`fallback`);
      - up to 5 rooms; candidates, tries and the choice go to `meta.json` `tt_room_choice`.
 4. Fail fast if the extension's content script is not ticking within 15 s.
-5. Close yt chat, set the geometry (`geometry.py` rotation), and turn on twitch Video Stats (hidden).
+5. Close yt chat, turn yt captions off (again whenever they come back; `captions_off` in ad_actions.jsonl), set the geometry (`geometry.py` rotation), and turn on twitch Video Stats (hidden).
    - A drawn player size larger than the screen can give is clamped to the largest it gives: `player_pin.clamped_to`;
      `ok` then means the clamped size was reached, and `ok` false is a real failure.
    - `video_stats` in `meta.json` says whether the overlay is hidden (`on hidden`) or not (`on VISIBLE`).

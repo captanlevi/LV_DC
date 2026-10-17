@@ -700,7 +700,8 @@ if __name__ == "__main__":
         meta_extra = {"window_size_flag": WINDOW_SIZES.get(platform)}
         if browser is not None:
             channel_url = browser.channel_url
-            meta_extra.update(chat_action=browser.chat_action, geometry=browser.geometry, player_pin=browser.player_pin,
+            meta_extra.update(chat_action=browser.chat_action, caption_action=browser.caption_action,
+                              geometry=browser.geometry, player_pin=browser.player_pin,
                               channel_list_url=browser.list_url, abort_at=browser.abort_at,
                               video_stats=browser.video_stats, geometry_target=browser.geometry_target,
                               login_state=browser.login_state, room_rotation=browser.room_rotation,
