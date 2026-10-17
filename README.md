@@ -82,7 +82,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 8. Run `check_session.py` (§5). A FAIL is moved to `data/_failed/<platform>/` and never deleted.
 
 **What the batch loop does:**
-- **Next platform:** the one furthest behind its PASS target.
+- **Next platform:** the one furthest behind its PASS target, but at most `MAX_CONSECUTIVE_SAME_PLATFORM` (2) sessions in a row on one platform, then the furthest-behind of the others.
 - **Resume:** PASS sessions are recounted from disk at every start.
 - **Free space:** it stops below 10 % free (exit 4).
 - **Pre-clean:** it undoes leftovers (shaping, tcpdump, Chrome) before every session.

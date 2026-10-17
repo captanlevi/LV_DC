@@ -63,6 +63,21 @@ MAX_CONSECUTIVE_FAIL = 5
 MAX_CONSECUTIVE_FROZEN = 5
 NOT_LIVE_RETRY_S = 6 * 3600
 BATCH_ORDER = ("youtube", "twitch", "tiktok", "bilibili")
+# furthest-behind must not starve the others (supervisor 2026-10-17: tt at 4/80 took every session for an hour): at
+# most this many sessions in a row on one platform, then the furthest-behind of the others
+MAX_CONSECUTIVE_SAME_PLATFORM = 2
+
+
+def next_platform(todo: list[str], ratio, last: str | None, streak: int,
+                  cap: int = MAX_CONSECUTIVE_SAME_PLATFORM) -> str:
+    """The furthest-behind platform (ratio(p) = accepted / target; BATCH_ORDER breaks ties), unless `last` has
+    already run `streak` >= cap sessions in a row and another platform is still to do."""
+    order = sorted(todo, key=lambda q: (ratio(q), BATCH_ORDER.index(q)))
+    if last in todo and streak >= cap:
+        others = [q for q in order if q != last]
+        if others:
+            return others[0]
+    return order[0]
 
 
 def _prompt_ready(platform: str, initial_state: str | None) -> bool:
@@ -179,18 +194,21 @@ def _summary() -> None:
 
 
 def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geometry: bool = True) -> None:
-    """Collect until every platform has its target of PASS sessions. Next platform = the one furthest behind its
-    target (accepted / target; BATCH_ORDER breaks ties), so platforms advance together over the week. Nothing here
+    """Collect until every platform has its target of PASS sessions. Next platform = next_platform(): the one furthest
+    behind its target (accepted / target; BATCH_ORDER breaks ties), at most MAX_CONSECUTIVE_SAME_PLATFORM in a row, so
+    platforms advance together over the week. Nothing here
     changes what a session collects; it only sequences exp.py runs and recovers from failures."""
     paused: dict[str, str] = {}
     fails = {p: 0 for p in targets}
     frozen = {p: 0 for p in targets}
     not_live: dict[str, float] = {}
+    last, streak = None, 0
     while True:
         todo = [p for p in BATCH_ORDER if p in targets and p not in paused and accepted_sessions(p) < targets[p]]
         if not todo:
             break
-        p = min(todo, key=lambda q: (accepted_sessions(q) / targets[q], BATCH_ORDER.index(q)))
+        p = next_platform(todo, lambda q: accepted_sessions(q) / targets[q], last, streak)
+        last, streak = p, (streak + 1 if p == last else 1)
         fs = free_share()
         if fs < MIN_FREE_SHARE:
             print(f"\n  Data volume {fs:.1%} free < {MIN_FREE_SHARE:.0%}: stopping the batch (free space, then rerun).")
