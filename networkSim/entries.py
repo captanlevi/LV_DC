@@ -107,7 +107,9 @@ def compute_entries(rows: list[dict], meta: dict, net_labels: list[dict]) -> lis
             continue
         tn = r.get("t_enter") or r["t_nav"]
         te = first_tick_at(rows, r.get("room"), after=tn) if r.get("room") else None
-        out.append({"kind": "room_reentry", "t": te or tn, "url": r.get("room"), "rotation_ok": r.get("ok")})
+        out.append({"kind": "room_reentry", "t": te or tn, "url": r.get("room"), "rotation_ok": r.get("ok"),
+                    "reason": r.get("reason", "rotation"),
+                    **({"dead_window": r.get("dead_window"), "outcome": r.get("outcome")} if r.get("reason") == "player_dead" else {})})
     # levi 2026-10-17: a tt start failure (live rooms found, none played) is a failed, unshaped stream entry, even with
     # no ticks or a room that played briefly before the picker gave up on it
     start_failed = meta.get("platform") == "tiktok" and NOT_LIVE_MARK in (meta.get("abort_reason") or "")

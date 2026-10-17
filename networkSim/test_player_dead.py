@@ -203,6 +203,65 @@ def test_ti32_dead_after_end_with_the_stream_alive():
     assert B.dead_window([(0.0, 0)], 952)["stream"] is None
 
 
+def test_one_reentry_then_the_session_ends():
+    """supervisor ruling 2026-10-18: one re-entry of the same room on player_dead, then a death ends the session; the
+    re-entry's outcome: playing -> continue, the ended banner -> room_ended (the host ended), else player_dead."""
+    assert [B.dead_action(n) for n in (0, 1, 2)] == ["reenter", "abort", "abort"]
+    assert B.reentry_outcome(True, {}) == "continue"
+    assert B.reentry_outcome(False, {"dead": "ended_page"}) == "room_ended"
+    assert B.reentry_outcome(False, {"ended_text": True, "dead": "not_playing"}) == "room_ended"
+    assert B.reentry_outcome(False, {"dead": "not_playing"}) == "player_dead"
+    assert B.reentry_outcome(False, None) == "player_dead"
+
+
+def test_reenter_room_records_an_entry(monkeypatch):
+    class Page:
+        def __init__(self):
+            self.navigated = []
+        def navigate(self, url):
+            self.navigated.append(url)
+        def eval(self, js):
+            return self.navigated[-1] if "location.href" in js else None
+    for confirm, outcome in (((True, {"rs": 4, "ct": 3.0}), "continue"), ((False, {"dead": "ended_page", "ended_text": True}), "room_ended"),
+                             ((False, {"dead": "not_playing", "rs": 0}), "player_dead")):
+        b = B.BrowserSession("tiktok")
+        b._page = Page()
+        monkeypatch.setattr(B, "_wait_for_load", lambda page, timeout=15: None)
+        monkeypatch.setattr(B, "_tt_confirm_playing", lambda page, seconds, c=confirm: c)
+        dw = {"shaped_rx_kbps": 1379.0, "shaper_kbit": 1459, "share_of_shaper": 0.945, "stream": "alive"}
+        r = b._reenter_room({"room": "https://www.tiktok.com/@room_b/live", "dead_s": 60.5, "dead_window": dw})
+        assert r["outcome"] == outcome and r["reason"] == "player_dead" and r["dead_window"] == dw, r
+        assert b._page.navigated == ["https://www.tiktok.com/@room_b/live"]
+        assert b.room_rotation["rooms"][-1] is r and b.player_dead_reentries == [r]
+        assert r["t_enter"] >= r["t_nav"] and (r["t_playing"] is not None) == (outcome == "continue")
+
+
+def test_a_player_dead_reentry_is_an_entry():
+    nl = [{"timestamp": 100.0, "speed": 1459, "state": "6"}]
+    rows = [{"type": "start", "ts": "0"}]
+    rows += [{"type": "res_meta", "ts": str(i * 1000), "current_time": str(i), "url": "a", "video_w": "720"} for i in range(0, 80)]
+    rows += [{"type": "res_meta", "ts": str(i * 1000), "current_time": str(i - 150), "url": "a", "video_w": "720"} for i in range(150, 200)]
+    dw = {"stream": "alive", "share_of_shaper": 0.945}
+    meta = {"channel_url": "a", "room_rotation": {"rooms": [{"room": "a", "first": True},
+            {"room": "a", "t_nav": 145.0, "t_enter": 148.0, "ok": True, "reason": "player_dead", "outcome": "continue", "dead_window": dw}]}}
+    ents = E.compute_entries(rows, meta, nl)
+    re_ = [e for e in ents if e["kind"] == "room_reentry"]
+    assert len(re_) == 1 and re_[0]["reason"] == "player_dead" and re_[0]["dead_window"] == dw and re_[0]["outcome"] == "continue"
+    assert re_[0]["shaper_at_entry"]["state"] == "6" and re_[0]["sustained_60s"]
+
+
+class _Patch:
+    """A minimal monkeypatch for running the tests as a script (apply_at_boundary.sh runs each test_*.py with python)."""
+    def __init__(self):
+        self.undo = []
+    def setattr(self, obj, name, value):
+        self.undo.append((obj, name, getattr(obj, name)))
+        setattr(obj, name, value)
+    def close(self):
+        for obj, name, value in reversed(self.undo):
+            setattr(obj, name, value)
+
+
 def main() -> int:
     test_ti20_replay()
     test_recovery_is_a_discontinuity()
@@ -211,6 +270,13 @@ def main() -> int:
     test_rates_and_reentry()
     test_tt_start_failure_entry()
     test_ti32_dead_after_end_with_the_stream_alive()
+    test_one_reentry_then_the_session_ends()
+    mp = _Patch()
+    try:
+        test_reenter_room_records_an_entry(mp)
+    finally:
+        mp.close()
+    test_a_player_dead_reentry_is_an_entry()
     print("test_player_dead: ok")
     return 0
 

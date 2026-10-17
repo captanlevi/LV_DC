@@ -511,6 +511,28 @@ SHAPED_IFACE = os.environ.get("LVDC_IFB_INGRESS", "ifb0")
 PLAYER_DEAD_ALIVE_SHARE = 0.5
 
 
+# recovery (supervisor ruling 2026-10-18): on player_dead, ONE re-entry of the same room, recorded as an entry (room
+# rotation's rooms list: reason player_dead, the dead_window attached); the dead interval stays labelled stall, as a
+# viewer saw it, and the session continues. A second death ends the session as before. A re-entry that lands on the
+# ended banner takes the picker's ended rule (room_ended: the host ended), which separates that from a player death
+# without a page probe. No reload anywhere else (stalls, ads, buffering).
+PLAYER_DEAD_REENTRIES = 1
+
+
+def dead_action(reentries_done: int) -> str:
+    """'reenter' while re-entries remain, else 'abort'."""
+    return "reenter" if reentries_done < PLAYER_DEAD_REENTRIES else "abort"
+
+
+def reentry_outcome(ok: bool, detail: dict | None) -> str:
+    """After a re-entry: 'continue' when playback is confirmed; 'room_ended' when the room shows the ended banner (the
+    picker's ended rule); else 'player_dead' (the player did not come back: the session ends as before)."""
+    if ok:
+        return "continue"
+    d = detail or {}
+    return "room_ended" if d.get("dead") == "ended_page" or d.get("ended_text") else "player_dead"
+
+
 def _shaped_rx_bytes() -> int | None:
     try:
         return int((Path("/sys/class/net") / SHAPED_IFACE / "statistics" / "tx_bytes").read_text())
@@ -1659,6 +1681,7 @@ class BrowserSession:
         self.tt_room_choice: dict | None = None   # tt: candidates, tries and the chosen room (meta.json)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
+        self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.tw_pick: dict | None = None          # twitch: directory candidates, recent channels excluded, the pick
         self.room_play_clicks = 0                 # tt: play clicks on a paused, flat player (room watcher)
         self.room_discontinuities: list = []      # tt: player source drops that came back (room watcher)
@@ -1964,14 +1987,47 @@ class BrowserSession:
                         rate = float(labels[-1].speed) if labels else None
                     except (ValueError, AttributeError, TypeError):
                         rate = None
-                    self.player_dead = {**rec, "dead_s": round(time.time() - (w.dead_since or time.time()), 1),
-                                        "dead_window": dead_window(w.srx, rate)}
+                    pd = {**rec, "dead_s": round(time.time() - (w.dead_since or time.time()), 1),
+                          "dead_window": dead_window(w.srx, rate)}
+                    if dead_action(len(self.player_dead_reentries)) == "reenter":
+                        r = self._reenter_room(pd)
+                        print(f"[browser] PLAYER_DEAD: re-entered the room ({r['outcome']})", flush=True)
+                        if r["outcome"] == "continue":
+                            w = TTRoomWatch()
+                            continue
+                        if r["outcome"] == "room_ended":
+                            why = "room_ended"
+                            self.room_ended = {**rec, "reason": "ended_page", "after_player_dead_reentry": True}
+                    if why == "player_dead":
+                        self.player_dead = {**pd, "reentries": len(self.player_dead_reentries)}
                 else:
                     self.room_ended = rec
                 if self.abort_reason is None:
                     self.abort_reason, self.abort_at = why, time.time()
                 print(f"[browser] {why.upper()} ({dead}) — aborting the session", flush=True)
                 return
+
+    def _reenter_room(self, pd: dict) -> dict:
+        """The one re-entry after a player_dead: navigate to the same room, confirm playback (_tt_confirm_playing:
+        play clicked, the playhead advancing within TT_QUICK_CONFIRM_S, the ended banner read), and record it as an
+        entry in room_rotation's rooms (entries.py) and in player_dead_reentries (meta.json)."""
+        room = pd.get("room") or self.channel_url
+        rec = {"t_nav": time.time(), "room": room, "reason": "player_dead", "dead_s": pd.get("dead_s"),
+               "dead_window": pd.get("dead_window")}
+        detail: dict = {}
+        try:
+            self._page.navigate(room)
+            _wait_for_load(self._page, timeout=15)
+            rec["t_enter"] = time.time()
+            ok, detail = _tt_confirm_playing(self._page, TT_QUICK_CONFIRM_S)
+            rec.update(ok=bool(ok), t_playing=time.time() if ok else None, room=self._page.eval("location.href"),
+                       confirm={k: detail.get(k) for k in ("dead", "rs", "ct", "ended_text") if k in detail})
+        except Exception as exc:
+            rec.update(ok=False, error=repr(exc))
+        rec["outcome"] = reentry_outcome(rec.get("ok", False), detail)
+        self.room_rotation["rooms"].append(rec)
+        self.player_dead_reentries.append(rec)
+        return rec
 
     def _room_rotation_loop(self) -> None:
         """addendum M's pre-declared tt fallback: every room_rotation_s, back to /live and into a room not visited yet;
