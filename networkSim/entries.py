@@ -9,6 +9,10 @@ from __future__ import annotations
 
 SUSTAIN_WINDOW_S = 60.0
 SUSTAIN_RUN_S = 5.0
+# supervisor 2026-10-18 (yt_35): a stream entry that did not sustain play while the shaper already sat at state <= 2
+# within the startup window is the shaper, not the platform: the class stays normal, check.json flags slow_start_shaped
+# (a covariate); the entry still counts as failed in startup_rates (levi)
+SLOW_START_MAX_STATE = 2
 NOT_LIVE_MARK = "Failed to navigate to a live"     # browser.py's start failure (yt / twitch: no live stream to enter)
 CLASS_PRECEDENCE = ("not_live", "login_wall", "interrupted", "startup_failure", "room_ended", "player_dead",
                     "player_frozen", "qa_fail", "normal")
@@ -155,7 +159,7 @@ def session_class(platform: str, verdict: str, abort_reason: str | None, entries
     if ab.startswith(("signal", "interrupted")):
         return "interrupted"
     stream = next((e for e in entries if e.get("kind") == "stream"), None)
-    if start_failed or (stream is not None and not stream.get("sustained_60s")):
+    if start_failed or (stream is not None and not stream.get("sustained_60s") and not slow_start_shaped(entries)):
         return "startup_failure"
     if ab == "room_ended":
         return "room_ended"
@@ -166,6 +170,23 @@ def session_class(platform: str, verdict: str, abort_reason: str | None, entries
     if verdict != "PASS":
         return "qa_fail"
     return "normal"
+
+
+def slow_start_shaped(entries: list[dict]) -> bool:
+    """The stream entry did not sustain play within SUSTAIN_WINDOW_S, and the shaper's first state after the entry, applied
+    inside that window, was <= SLOW_START_MAX_STATE: a slow start caused by the shaper, not a startup failure."""
+    s = next((e for e in entries if e.get("kind") == "stream"), None)
+    if s is None or s.get("sustained_60s"):
+        return False
+    f = s.get("first_shaped_after") or {}
+    try:
+        state = int(f.get("state"))
+    except (TypeError, ValueError):
+        return False
+    t0, tf = s.get("t"), f.get("t")
+    if t0 is not None and tf is not None and tf - t0 > SUSTAIN_WINDOW_S:
+        return False
+    return state <= SLOW_START_MAX_STATE
 
 
 def startup_rates(entries: list[dict]) -> dict:

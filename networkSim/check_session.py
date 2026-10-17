@@ -828,7 +828,9 @@ def main() -> int:
         ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_max_s"),
                               lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"))
+    slow_start = E.slow_start_shaped(ents)
     out = {"session": str(sd), "platform": platform, "verdict": v, "session_class": s_class, "entries": ents,
+           "slow_start_shaped": slow_start,
            "reasons": why, "thresholds": CHECKS,
            "max_background_share": a.max_background_share, "labels": lab, "traffic": net, "shots": shots,
            "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats, "motion": motion_s,
@@ -837,6 +839,7 @@ def main() -> int:
     md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class})", ""] + [f"- {r}" for r in why] + ["",
           "| item | value |", "|---|---|",
           f"| session class (levi's precedence; only normal counts) | {s_class} |",
+          f"| slow start under shaping (stream not sustained in 60 s, first shaped state <= {E.SLOW_START_MAX_STATE}; covariate, class stays) | {slow_start} |",
           f"| entries: kind / state at entry / first shaped state / sustained >= 5 s within 60 s | {[(x.get('kind'), (x.get('shaper_at_entry') or {}).get('state'), (x.get('first_shaped_after') or {}).get('state'), x.get('sustained_60s')) for x in ents]} |",
           f"| longest dead-player run after playback (readyState 0 / no media), s / T | {lab.get('dead_player_max_s')} / {lab.get('dead_player_T_s')} |",
           f"| duration (min) | {dur / 60:.1f} |" if dur else "| duration | — |",
