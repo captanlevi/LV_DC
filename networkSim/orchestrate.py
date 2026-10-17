@@ -49,14 +49,15 @@ EXIT_ROOM_ENDED = 6      # exp.py's exit code when a tt room died mid-session (r
 # aborts that are not failures of the platform: they do not count toward MAX_CONSECUTIVE_FAIL
 NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended"}
 
-EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume falls below MIN_FREE_SHARE free
+EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume has less than MIN_FREE_GB free
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
 
 # --batch (t37, week-long run): stop before a session when the data volume has less than this share free; pause a
 # platform after this many consecutive sessions without a PASS; a yt channel that failed to start is skipped this long
-MIN_FREE_SHARE = 0.10
+# absolute, not a share (supervisor 2026-10-17: 10 % of chaos's 932 GB disk stopped ~70 GB early at ~5 GB/h)
+MIN_FREE_GB = 25
 MAX_CONSECUTIVE_FAIL = 5
 # NOT_A_FAILURE aborts (player_frozen, room_ended) do not count toward MAX_CONSECUTIVE_FAIL; a separate cap stops a
 # platform that keeps aborting this way from looping forever
@@ -244,8 +245,9 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         p = next_platform(todo, lambda q: accepted_sessions(q) / targets[q], recent)
         recent = (recent + [p])[-10:]
         fs = free_share()
-        if fs < MIN_FREE_SHARE:
-            print(f"\n  Data volume {fs:.1%} free < {MIN_FREE_SHARE:.0%}: stopping the batch (free space, then rerun).")
+        free_gb = shutil.disk_usage(_RUNS_DIR if _RUNS_DIR.exists() else _RUNS_DIR.parent).free / 1e9
+        if free_gb < MIN_FREE_GB:
+            print(f"\n  Data volume {free_gb:.0f} GB ({fs:.1%}) free < {MIN_FREE_GB} GB: stopping the batch (free space, then rerun).")
             _summary()
             sys.exit(EXIT_LOW_DISK)
         before = accepted_sessions(p)

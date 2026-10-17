@@ -84,7 +84,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 **What the batch loop does:**
 - **Next platform:** a platform absent from the last `STALE_AFTER_SESSIONS` (4) sessions goes first; otherwise the one furthest behind its PASS target, but at most `MAX_CONSECUTIVE_SAME_PLATFORM` (2) sessions in a row on one platform. Both rules read the recent sessions from disk, so they survive a restart.
 - **Resume:** PASS sessions are recounted from disk at every start.
-- **Free space:** it stops below 10 % free (exit 4).
+- **Free space:** it stops below `MIN_FREE_GB` (25 GB) free (exit 4).
 - **Pre-clean:** it undoes leftovers (shaping, tcpdump, Chrome) before every session.
 - **Pausing a platform:** after 5 consecutive sessions without a PASS, or on a login wall. A `player_frozen` abort
   (exit 5) or `room_ended` abort (exit 6) is not counted toward the 5; a separate cap pauses the platform after 5
@@ -115,7 +115,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 | exp.py | 6 | `room_ended` (tt): the room died mid-session: the rendered "LIVE has ended" banner with no player or no progress for 5 s, or no progress for the platform's T (addendum N, 720 s) with the interfaces idle; that clock stops during a stall label, for 30 s after one and in shaper states 1-4 (under shaping tt tears its player down and reconnects for 10-15 s after a stall: recorded as `room_discontinuities`, never a cut); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session picks another room |
 | exp.py | 5 | `player_frozen`: the watchdog aborted a player frozen in a stall past T (addendum N); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session re-picks |
 | exp.py | 130 | stopped by SIGINT / SIGTERM; finalised, FAIL, orchestrate stops |
-| orchestrate.py | 4 | less than 10 % free space on the data volume |
+| orchestrate.py | 4 | less than `MIN_FREE_GB` (25 GB) free on the data volume |
 
 ## 3. Template profiles
 
