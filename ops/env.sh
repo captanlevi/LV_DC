@@ -16,6 +16,13 @@ OPS=${OPS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 : "${LVQOE_PY:=$HOME/Desktop/LV/.venv/bin/python}"       # LVQoE's interpreter (verify_loop.sh)
 : "${LVQOE_VERIFY_DIR:=$HOME/Desktop/LV_verify}"         # an LVQoE checkout with verify_session.py
 : "${LVQOE_FRAMES_DIR:=$HOME/Desktop/LV/.worktrees/shagun-frames-7cf92ae}"   # an LVQoE worktree with extract_frames.py
+# verify / frames jobs run away from the collector (shagun 2026-10-18, compute-load covariate): nice 19, pinned to the
+# upper half of the CPUs (chaos: 12-23, off the collector's P-cores); plain nice where taskset or cores are lacking
+if [ -z "${LVDC_COMPUTE_PIN+x}" ]; then
+  _n=$(nproc 2>/dev/null || echo 1)
+  if command -v taskset >/dev/null && [ "$_n" -ge 4 ]; then LVDC_COMPUTE_PIN="nice -n 19 taskset -c $((_n / 2))-$((_n - 1))"
+  else LVDC_COMPUTE_PIN="nice -n 19"; fi
+fi
 export DISPLAY=${DISPLAY:-:0} XAUTHORITY=${XAUTHORITY:-/run/user/$LVDC_UID/gdm/Xauthority}
 EVENTS=$LVDC_DATA/_summaries/resume_events.txt           # every script logs here
 ORCH_PATTERN='^../.venv/bin/python -u orchestrate.py --batch'
