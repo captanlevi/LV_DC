@@ -698,7 +698,8 @@ if __name__ == "__main__":
                               channel_list_url=browser.list_url, abort_at=browser.abort_at,
                               video_stats=browser.video_stats, geometry_target=browser.geometry_target,
                               login_state=browser.login_state, room_rotation=browser.room_rotation,
-                              tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended)
+                              tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
+                              tw_pick=browser.tw_pick)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)

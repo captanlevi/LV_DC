@@ -55,6 +55,8 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
      music-creative / IRL, least-collected first; category and type in `meta.json`), the directory's first live card;
      esports is a fixed list of league channels (riotgames, lck, lec, eslcs, valorant), drawn only when one is live
      (checked between sessions), else skipped for that session and logged in the daily summary;
+     in a directory, channels of the last 10 twitch sessions are skipped and the first other card is taken
+     (candidates, exclusions and the pick in `meta.json` `tw_pick`);
    - tt: a room from `/live`, chosen by `browser.py` (2026-10-17):
      - rooms of the last 10 tt sessions are excluded;
      - cards with a LIVE badge and ≥ 100 viewers come first, most viewers first;

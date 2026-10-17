@@ -418,6 +418,50 @@ def _parse_viewers(text: str) -> int | None:
     return num(m) if m else None
 
 
+# twitch (supervisor 2026-10-17: tw_7 and tw_8 both took caseoh_, the Just Chatting top card): a directory pick skips
+# any channel of the last TW_RECENT_CHANNELS_N twitch sessions and takes the first card not excluded; the candidates and
+# the pick go to meta.json tw_pick
+TW_RECENT_CHANNELS_N = 10
+
+
+def _norm_channel(u: str | None) -> str:
+    return (u or "").split("?")[0].rstrip("/").lower()
+
+
+def recent_tw_channels(session_dir: Path | None, n: int = TW_RECENT_CHANNELS_N) -> list[str]:
+    """Channel URLs of the last n twitch sessions (data/twitch and data/_failed/twitch, by meta.json started_at)."""
+    if session_dir is None:
+        return []
+    root = Path(session_dir).resolve().parent.parent
+    metas = []
+    for d in list((root / "twitch").glob("*")) + list((root / "_failed" / "twitch").glob("*")):
+        m = d / "meta.json"
+        if d.resolve() == Path(session_dir).resolve() or not m.exists():
+            continue
+        try:
+            meta = json.loads(m.read_text())
+        except Exception:
+            continue
+        metas.append((meta.get("started_at") or m.stat().st_mtime, meta.get("channel_url")))
+    recent = sorted(metas, key=lambda x: float(x[0]) if isinstance(x[0], (int, float)) else 0.0)[-n:]
+    return sorted({_norm_channel(u) for _, u in recent if u and "twitch.tv/" in u and "/directory" not in u})
+
+
+def _pick_twitch_js(exclude: list[str]) -> str:
+    """Click the directory's first live card whose channel is not in `exclude`; returns {pick, candidates} as JSON."""
+    return """
+(function(exclude) {
+    const norm = (h) => (h || '').split('?')[0].replace(/\\/$/, '').toLowerCase();
+    const links = [...document.querySelectorAll('a[data-a-target="preview-card-image-link"], a[data-a-target="preview-card-title-link"]')]
+        .filter(a => a.offsetParent !== null && !/\\/(directory|videos|clip)\\//.test(a.href || ''));
+    const cands = [...new Set(links.map(a => norm(a.href)))].filter(Boolean);
+    const pick = cands.find(h => !exclude.includes(h)) || null;
+    if (pick) links.find(a => norm(a.href) === pick).click();
+    return JSON.stringify({pick: pick, candidates: cands.slice(0, 20)});
+})(%s)
+""" % json.dumps(exclude)
+
+
 def recent_tt_rooms(session_dir: Path | None, n: int = TT_RECENT_ROOMS_N) -> list[str]:
     """Rooms of the last n tt sessions (data/tiktok and data/_failed/tiktok, by meta.json start time), normalised."""
     if session_dir is None:
@@ -991,7 +1035,8 @@ def _video_is_advancing(page: CDPPage) -> bool:
     return t1 is not None and t1 > t0
 
 
-def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first_url: str | None = None) -> str | None:
+def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first_url: str | None = None,
+                      exclude: list[str] | None = None, record: dict | None = None) -> str | None:
     """Returns the list URL that delivered a playing live video (None if none did)."""
     """
     Try each URL in LIVE_URLS[platform].  For directory/discovery pages,
@@ -1029,7 +1074,17 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
                     if page.eval(card_js):
                         break
                     time.sleep(1)
-            clicked = page.eval(pick_js)
+            if platform == "twitch" and exclude is not None:
+                try:
+                    res = json.loads(page.eval(_pick_twitch_js(exclude)) or "{}")
+                except Exception as exc:
+                    res = {"error": repr(exc)}
+                if record is not None:
+                    record.update(directory=url, excluded_recent=exclude, candidates=res.get("candidates"),
+                                  pick=res.get("pick"), error=res.get("error"))
+                clicked = res.get("pick") or (page.eval(pick_js) if not res.get("candidates") else None)
+            else:
+                clicked = page.eval(pick_js)
             if clicked:
                 print(f"[browser] Clicked into stream: {clicked}", flush=True)
                 _wait_for_load(page, timeout=15)
@@ -1273,6 +1328,7 @@ class BrowserSession:
         self.abort_at: float | None = None
         self.tt_room_choice: dict | None = None   # tt: candidates, tries and the chosen room (meta.json)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
+        self.tw_pick: dict | None = None          # twitch: directory candidates, recent channels excluded, the pick
         self._room_grace_until = 0.0              # tt: the room watcher pauses while the rotation moves rooms
         self._room_watcher: threading.Thread | None = None
 
@@ -1358,6 +1414,10 @@ class BrowserSession:
 
         if self.platform == "tiktok" and not self.first_url:
             self.list_url = self._tt_choose_room()
+        elif self.platform == "twitch":
+            self.tw_pick = {}
+            self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
+                                              exclude=recent_tw_channels(self._session_dir), record=self.tw_pick)
         else:
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
         if not self.list_url:
