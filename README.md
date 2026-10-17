@@ -56,8 +56,10 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
    - tt: a room from `/live`, chosen by `browser.py` (2026-10-17):
      - rooms of the last 10 tt sessions are excluded;
      - cards with a LIVE badge and ≥ 100 viewers come first, most viewers first;
-     - each tried room must play within 15 s (src set, readyState ≥ 3, playhead advancing), then pass a 60 s pre-roll
-       (media appended, playhead advancing, no dead signal) before the shaper starts;
+     - play is clicked, then after a 5 s autoplay grace each tried room must play within 15 s (readyState ≥ 3, playhead
+       advancing; tt plays through a MediaStream `srcObject`, so no currentSrc / buffered / decoded bytes), then pass a 60 s
+       pre-roll (playhead advancing ≥ 30 s, no dead signal) before the shaper starts;
+     - when `/live` renders as the LIVE feed (no room links), the old first-card path is used and recorded (`fallback`);
      - up to 5 rooms; candidates, tries and the choice go to `meta.json` `tt_room_choice`.
 4. Fail fast if the extension's content script is not ticking within 15 s.
 5. Close yt chat, set the geometry (`geometry.py` rotation), and turn on twitch Video Stats (hidden).
@@ -105,7 +107,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 | exp.py | 0 | session ran; see its `check.md` |
 | exp.py | 1 | start failed (channel not live, extension not ticking); finalised, FAIL |
 | exp.py | 3 | login wall: orchestrate pauses that platform |
-| exp.py | 6 | `room_ended` (tt): the room died mid-session (an ended page with no live player, the player's src gone 10 s, or neither media appended nor the playhead advancing for 30 s); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session picks another room |
+| exp.py | 6 | `room_ended` (tt): the room died mid-session (the rendered "LIVE has ended" banner with no player or no progress for 5 s; no player / no source / readyState 0 for 10 s; or no playhead progress for 30 s; never page text alone and never a paused player alone); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session picks another room |
 | exp.py | 5 | `player_frozen`: the watchdog aborted a player frozen in a stall past T (addendum N); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session re-picks |
 | exp.py | 130 | stopped by SIGINT / SIGTERM; finalised, FAIL, orchestrate stops |
 | orchestrate.py | 4 | less than 10 % free space on the data volume |

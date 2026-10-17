@@ -351,6 +351,8 @@ TT_QUICK_CONFIRM_S = 15
 TT_PREROLL_S = 60
 TT_SRC_GONE_S = 10
 TT_NO_MEDIA_S = 30
+TT_ENDED_FLAT_S = 5         # the ended banner counts only with no media appended and no playhead advance this long
+TT_AUTOPLAY_GRACE_S = 5     # a room is judged only after play was clicked and this long has passed
 
 _TT_CANDIDATES_JS = """
 (function() {
@@ -360,10 +362,11 @@ _TT_CANDIDATES_JS = """
         const href = (a.href || '').split('?')[0];
         if (!href || seen.has(href)) continue;
         seen.add(href);
+        // the card: the largest ancestor that still links to this room only (a shared container mixes cards' text)
+        const rooms = (el) => new Set([...el.querySelectorAll('a[href*="/@"][href*="/live"]')].map(x => (x.href || '').split('?')[0])).size;
         let card = a;
-        for (let i = 0; i < 5 && card.parentElement; i++) {
+        while (card.parentElement && card.parentElement !== document.body && rooms(card.parentElement) <= 1) {
             card = card.parentElement;
-            if ((card.innerText || '').length > 40) break;
         }
         out.push({href: href, text: (card.innerText || '').replace(/\\s+/g, ' ').slice(0, 240),
                   discover: !!a.closest('[data-e2e*="live-card"]')});
@@ -372,22 +375,30 @@ _TT_CANDIDATES_JS = """
 })()
 """
 
-# the tt player's state for the dead-room rule; ended_text: the room-ended page's visible text
+# the tt player's state for the dead-room rule; ended_text: the room-ended banner ("LIVE has ended"). Not "Recommended
+# LIVE": live room pages show that section too (31ded33 rejected 10 of 10 live rooms on it, chaos ti_4 / ti_5)
 _TT_PLAYER_STATE_JS = """
 (function() {
-    const v = document.querySelector('video');
+    // the largest visible video (a feed page can hold several)
+    const vs = [...document.querySelectorAll('video')].filter(x => x.offsetParent !== null);
+    const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0] || document.querySelector('video');
     const hit = (ph) => {
         const xp = "//text()[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + ph + "')]";
         const r = document.evaluate(xp, document.body || document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-        for (let i = 0; i < r.snapshotLength; i++) { const e = r.snapshotItem(i).parentElement; if (e && e.offsetParent !== null) return true; }
+        // rendered text only: both live and ended pages carry the phrase in a <script> JSON blob (shagun's fixtures);
+        // getClientRects, not offsetParent, so a banner inside a position: fixed overlay still counts
+        for (let i = 0; i < r.snapshotLength; i++) {
+            const e = r.snapshotItem(i).parentElement;
+            if (e && !e.closest('script, style, template, noscript') && e.getClientRects().length) return true;
+        }
         return false;
     };
     let buf = null;
     try { if (v && v.buffered.length) buf = v.buffered.end(v.buffered.length - 1); } catch (e) {}
-    return JSON.stringify({has_video: !!v, src: !!(v && (v.currentSrc || v.src)), rs: v ? v.readyState : null,
+    return JSON.stringify({has_video: !!v, src: !!(v && (v.currentSrc || v.src || v.srcObject)), rs: v ? v.readyState : null,
                            ct: v ? v.currentTime : null, paused: v ? v.paused : null, buf_end: buf,
                            decoded: v ? (v.webkitVideoDecodedByteCount || null) : null,
-                           ended_text: hit('live has ended') || hit('recommended live')});
+                           ended_text: hit('live has ended')});
 })()
 """
 
@@ -431,7 +442,9 @@ def recent_tt_rooms(session_dir: Path | None, n: int = TT_RECENT_ROOMS_N) -> lis
 
 
 class TTRoomWatch:
-    """The dead-room rule over 1 s player samples (_TT_PLAYER_STATE_JS); feed() returns the reason once dead."""
+    """The dead-room rule over 1 s player samples (_TT_PLAYER_STATE_JS); feed() returns the reason once dead. Never
+    text alone and never a paused player alone: the ended banner needs TT_ENDED_FLAT_S without media or playhead
+    progress; otherwise the player's src gone TT_SRC_GONE_S, or no progress at all TT_NO_MEDIA_S."""
 
     def __init__(self) -> None:
         self.src_gone_since: float | None = None
@@ -440,18 +453,22 @@ class TTRoomWatch:
 
     def feed(self, s: dict | None, now: float) -> str | None:
         s = s or {}
-        no_src = not s.get("has_video") or not s.get("src")
-        if s.get("ended_text") and (no_src or s.get("paused")):
-            return "ended_page"
+        # tt plays through srcObject (a MediaStream: no currentSrc, empty buffered, decoded bytes 0); a dead player has
+        # no source or readyState 0 (ti_2: currentSrc empty, readyState 0, paused, 0x0)
+        no_src = not s.get("has_video") or not s.get("src") or s.get("rs") == 0
         if no_src:
             self.src_gone_since = self.src_gone_since or now
+            if s.get("ended_text") and now - self.src_gone_since >= TT_ENDED_FLAT_S:
+                return "ended_page"                   # the banner and no player
             if now - self.src_gone_since >= TT_SRC_GONE_S:
                 return "src_gone"
             return None
         self.src_gone_since = None
-        cur = (s.get("buf_end"), s.get("ct"))
+        cur = (s.get("buf_end"), s.get("ct"), s.get("decoded"))   # progress: the playhead, or media appended / decoded
         if self.last is not None and cur == self.last:
             self.flat_since = self.flat_since or now
+            if s.get("ended_text") and now - self.flat_since >= TT_ENDED_FLAT_S:
+                return "ended_page"
             if now - self.flat_since >= TT_NO_MEDIA_S:
                 return "no_media"
         else:
@@ -470,6 +487,8 @@ def _tt_state(page: "CDPPage") -> dict:
 def _tt_confirm_playing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
     """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal)."""
     w, first_ct, s = TTRoomWatch(), None, {}
+    page.eval(_CLICK_PLAY_JS)                         # autoplay may not have started: click, then give it the grace
+    time.sleep(TT_AUTOPLAY_GRACE_S)
     deadline = time.time() + seconds
     while time.time() < deadline:
         page.eval(_CLICK_PLAY_JS)
@@ -477,7 +496,7 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
         dead = w.feed(s, time.time())
         if dead:
             return False, {"dead": dead, **s}
-        if s.get("src") and (s.get("rs") or 0) >= 3 and s.get("ct") is not None:
+        if s.get("has_video") and (s.get("rs") or 0) >= 3 and s.get("ct") is not None:
             first_ct = s["ct"] if first_ct is None else first_ct
             if s["ct"] - first_ct >= 2.0:
                 return True, s
@@ -497,9 +516,10 @@ def _tt_preroll(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
             return False, {"dead": dead, **s}
         time.sleep(1)
     adv = (s.get("ct") or 0) - (s0.get("ct") or 0)
-    grew = s.get("buf_end") is not None and s0.get("buf_end") is not None and s["buf_end"] != s0["buf_end"]
-    ok = adv >= seconds / 2 and grew
-    return ok, {"ct_advance_s": adv, "buffer_moved": grew, **({} if ok else {"dead": "preroll_short"})}
+    # media arriving = the playhead advancing at play rate (tt's MediaStream player exposes no buffer or decoded bytes)
+    ok = adv >= seconds / 2
+    return ok, {"ct_advance_s": adv, "buf_end": s.get("buf_end"), "decoded": s.get("decoded"),
+                **({} if ok else {"dead": "preroll_short"})}
 
 
 # v2 (supervisor 2026-10-16): pin the player to the old collection's modal player size over the CURRENT-era sessions
@@ -1464,13 +1484,22 @@ class BrowserSession:
         rec["candidates"] = cands
         order = sorted((c for c in cands if not c["recent"]),
                        key=lambda c: (not (c["live_badge"] and (c["viewers"] or 0) >= TT_MIN_VIEWERS), -(c["viewers"] or 0)))
-        print(f"[browser] tt rooms: {len(cands)} candidates, {len(cands) - len(order)} used in the last "
+        if not cands:
+            # /live rendered as the LIVE feed (no room links; seen logged out): the old first-card / feed path, recorded,
+            # then the same playing check and pre-roll
+            rec["fallback"] = page.eval(_PICK_STREAM_JS["tiktok"])
+            _wait_for_load(page, timeout=15)
+            href = page.eval("location.href")
+            if href and "/@" in href and _norm_room(href) not in set(recent):
+                order = [{"href": href, "viewers": None, "live_badge": None, "fallback": True}]
+        print(f"[browser] tt rooms: {len(cands)} candidates, {sum(1 for c in cands if c['recent'])} used in the last "
               f"{TT_RECENT_ROOMS_N} sessions", flush=True)
         for c in order[:TT_MAX_TRIES]:
             t: dict = {"room": c["href"], "viewers": c["viewers"], "live_badge": c["live_badge"], "t_nav": time.time()}
             try:
-                page.navigate(c["href"])
-                _wait_for_load(page, timeout=15)
+                if not c.get("fallback"):
+                    page.navigate(c["href"])
+                    _wait_for_load(page, timeout=15)
                 ok, detail = _tt_confirm_playing(page, TT_QUICK_CONFIRM_S)
                 if ok:
                     t["t_playing"] = time.time()

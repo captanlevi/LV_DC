@@ -70,12 +70,56 @@ def test_watch():
     dead = {"has_video": True, "src": False, "rs": 0, "ct": 0.0, "paused": True, "buf_end": None}
     r, t = run([play(i) for i in range(20)] + [dead] * 30)
     check(r == "src_gone" and t >= 20 + B.TT_SRC_GONE_S, f"src gone after {B.TT_SRC_GONE_S} s: {r} {t}")
-    r, _ = run([play(i) for i in range(5)] + [{**dead, "ended_text": True}])
-    check(r == "ended_page", "ended page with no live player")
-    check(run([play(i) for i in range(5)] + [{**play(i), "ended_text": True} for i in range(5, 60)])[0] is None,
-          "the ended-page text alone (a sidebar heading) while playing is not room_ended")
+    # the ended banner with no player: ended_page after TT_ENDED_FLAT_S (before src_gone's 10 s)
+    r, t = run([play(i) for i in range(5)] + [{**dead, "ended_text": True}] * 20)
+    check(r == "ended_page" and t == 5 + B.TT_ENDED_FLAT_S, f"ended banner, no player: {r} {t}")
+    # the banner with a frozen stream: ended_page after TT_ENDED_FLAT_S of no progress
+    r, t = run([play(i) for i in range(5)] + [{**play(5), "ended_text": True}] * 20)
+    check(r == "ended_page" and t == 6 + B.TT_ENDED_FLAT_S, f"ended banner, stream flat: {r} {t}")   # flat from t = 6
+    # the banner text while the room plays (31ded33's failure: a live page's "Recommended LIVE" section) is never dead
+    check(run([{**play(i), "ended_text": True} for i in range(120)])[0] is None, "banner text alone while playing")
+    # paused before autoplay (ti_4 / ti_5: the first sample came before play): flat a few seconds, then plays
+    paused = {"has_video": True, "src": True, "rs": 4, "ct": 0.0, "paused": True, "buf_end": 2.0}
+    check(run([paused] * 4 + [play(i) for i in range(60)])[0] is None, "paused before autoplay is not dead")
     r, t = run([play(i) for i in range(5)] + [play(5)] * 60)
     check(r == "no_media" and t >= 5 + B.TT_NO_MEDIA_S, f"flat stream {B.TT_NO_MEDIA_S} s: {r} {t}")
+
+
+def test_ended_phrase_on_real_pages():
+    """shagun's DOM snippets (laptop, logged out, 2026-10-17): the rendered "LIVE has ended" banner is on the ended page
+    only; "Recommended LIVE" is rendered on both, so it is not an ended signal."""
+    from html.parser import HTMLParser
+
+    class Rendered(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack, self.text = [], []
+
+        def handle_starttag(self, tag, attrs):
+            self.stack.append(tag)
+
+        def handle_endtag(self, tag):
+            if tag in self.stack:
+                while self.stack and self.stack.pop() != tag:
+                    pass
+
+        def handle_data(self, d):
+            if d.strip() and not any(t in ("script", "style", "template", "noscript") for t in self.stack):
+                self.text.append(d.strip().lower())
+
+    src = (HERE / "fixtures" / "tt_room_html_2026-10-17.html").read_text()
+    live = src[src.index("<!-- (a)"):src.index("<!-- (b)")]
+    ended = src[src.index("<!-- (b)"):src.index("<!-- (b2)")]
+    ended_rec = src[src.index("<!-- (b2)"):]
+
+    def text(h):
+        p = Rendered()
+        p.feed(h)
+        return " ".join(p.text)
+    check("live has ended" in text(ended), "the ended page renders the banner")
+    check("live has ended" not in text(live), "the live page does not render it")
+    check("recommended live" in text(live) and "recommended live" in text(ended_rec), "both render Recommended LIVE")
+    check("'recommended live'" not in B._TT_PLAYER_STATE_JS.lower(), "the state JS does not use Recommended LIVE")
 
 
 def test_js_parses():
@@ -89,6 +133,6 @@ def test_js_parses():
 
 
 if __name__ == "__main__":
-    for f in (test_viewers, test_recent_rooms, test_watch, test_js_parses):
+    for f in (test_viewers, test_recent_rooms, test_watch, test_ended_phrase_on_real_pages, test_js_parses):
         f()
         print(f"{f.__name__}: ok")
