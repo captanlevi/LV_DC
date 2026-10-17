@@ -28,7 +28,7 @@ This README is the operator's reference. History and lessons are in `SESSION_NOT
 | bytecode | `export PYTHONDONTWRITEBYTECODE=1`; `__pycache__` is untracked since 2026-10-17, so `meta.json` `lvdc_commit.dirty` stays false. |
 | profile templates | §3 |
 
-**Before every start (and after any reboot):**
+**Before every start (and after any reboot):** (orchestrate enforces 1-3 and the holds before every session: `preflight.py`, exit 8 on failure, result in `meta.json` `preflight`)
 1. The data volume is mounted at the expected path, with enough free space.
 2. `ip -6 addr show scope global` is empty.
 3. The OS timers are inactive.

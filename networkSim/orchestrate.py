@@ -25,6 +25,7 @@ Usage:
     python orchestrate.py --platform youtube --report-only
     python orchestrate.py --all-platforms --report-only
 """
+import os
 import subprocess
 import sys
 import argparse
@@ -37,6 +38,7 @@ from pathlib import Path
 from balance import PLATFORM_TRANSITIONS, most_needed_state, balance_report
 import batch_summary
 import geometry
+import preflight
 import tw_categories
 import yt_channels
 
@@ -51,6 +53,7 @@ EXIT_PLAYER_DEAD = 7     # exp.py's exit code when the tt player sat at readySta
 NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended", EXIT_PLAYER_DEAD: "player_dead"}
 
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume has less than MIN_FREE_GB free
+EXIT_PREFLIGHT = 8    # orchestrate.py's own exit code when the per-session preflight fails (preflight.py)
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
@@ -285,6 +288,18 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
               + (f"; category {category['name']} ({category['type']}{', ' + category['channel'] if category.get('channel') else ''})" if category else "")
               + (f"; geometry {geom}" if geom else ""))
         preclean()
+        # per-session preflight (supervisor 2026-10-18, after the 02:20 IPv6 incident): IPv6 re-applied and off,
+        # tc + ifb present, data volume mounted above the floor, holds intact; refuse the session otherwise
+        pf = preflight.run(_RUNS_DIR, MIN_FREE_GB)
+        (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
+        pf_path = _RUNS_DIR / "_summaries" / "preflight_last.json"
+        pf_path.write_text(json.dumps(pf, indent=1))
+        os.environ["LVDC_PREFLIGHT_JSON"] = str(pf_path)   # exp.py records it in meta.json
+        if not pf["ok"]:
+            print(f"\n  PREFLIGHT FAILED ({', '.join(pf['problems'])}): not starting the session. "
+                  f"{json.dumps({k: pf['checks'][k] for k in pf['problems']})}")
+            _summary()
+            sys.exit(EXIT_PREFLIGHT)
         try:
             rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(p)),
                                  episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel,
