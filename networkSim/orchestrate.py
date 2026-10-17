@@ -44,6 +44,9 @@ _RUNS_DIR = Path(__file__).parent.parent / "data"
 EXIT_LOGIN_WALL = 3   # exp.py's exit code for a session aborted at a login wall (t37)
 EXIT_STOPPED = 130    # exp.py's exit code when the operator stopped the session
 EXIT_PLAYER_FROZEN = 5   # exp.py's exit code when the watchdog aborted a frozen player (addendum N)
+EXIT_ROOM_ENDED = 6      # exp.py's exit code when a tt room died mid-session (room_ended)
+# aborts that are not failures of the platform: they do not count toward MAX_CONSECUTIVE_FAIL
+NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended"}
 
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume falls below MIN_FREE_SHARE free
 
@@ -54,8 +57,8 @@ EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
 # platform after this many consecutive sessions without a PASS; a yt channel that failed to start is skipped this long
 MIN_FREE_SHARE = 0.10
 MAX_CONSECUTIVE_FAIL = 5
-# addendum N: player_frozen aborts do not count toward MAX_CONSECUTIVE_FAIL; a separate cap stops a platform whose
-# player keeps freezing from looping forever
+# NOT_A_FAILURE aborts (player_frozen, room_ended) do not count toward MAX_CONSECUTIVE_FAIL; a separate cap stops a
+# platform that keeps aborting this way from looping forever
 MAX_CONSECUTIVE_FROZEN = 5
 NOT_LIVE_RETRY_S = 6 * 3600
 BATCH_ORDER = ("youtube", "twitch", "tiktok", "bilibili")
@@ -127,8 +130,8 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
             print(f"  LOGIN WALL on {platform}: stopping this platform (fix the profile template, then rerun).")
             balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
             return
-        if rc == EXIT_PLAYER_FROZEN:
-            print("  player_frozen: the player froze past T (addendum N); session kept in _failed/, next run re-picks.")
+        if rc in NOT_A_FAILURE:
+            print(f"  {NOT_A_FAILURE[rc]}: session kept in _failed/, next run re-picks.")
         elif rc != 0:
             print("  Collection returned non-zero — check logs above.")
             if channel:
@@ -209,14 +212,15 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             sys.exit(EXIT_STOPPED)
         if rc == EXIT_LOGIN_WALL:
             paused[p] = "login wall (fix the profile template, then rerun)"
-        elif rc == EXIT_PLAYER_FROZEN:
+        elif rc in NOT_A_FAILURE:
             frozen[p] += 1
-            print(f"  player_frozen on {p} ({frozen[p]} in a row): not counted as a failure; next session re-picks")
+            print(f"  {NOT_A_FAILURE[rc]} on {p} ({frozen[p]} such aborts in a row): not counted as a failure; "
+                  f"next session re-picks")
             if frozen[p] >= MAX_CONSECUTIVE_FROZEN:
-                paused[p] = f"{frozen[p]} consecutive player_frozen aborts"
+                paused[p] = f"{frozen[p]} consecutive player_frozen / room_ended aborts"
         elif rc != 0 and channel:
             not_live[channel["handle"]] = now
-        if rc != EXIT_PLAYER_FROZEN:
+        if rc not in NOT_A_FAILURE:
             frozen[p] = 0
             fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1
         if fails[p] >= MAX_CONSECUTIVE_FAIL and p not in paused:

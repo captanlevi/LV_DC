@@ -17,6 +17,7 @@ Usage from exp.py:
 
 import json
 import os
+import re
 import time
 import threading
 import urllib.request
@@ -272,7 +273,16 @@ _TWITCH_VIDEO_STATS_JS = """
         st.textContent = '[data-a-target="player-overlay-video-stats"]{opacity:0 !important;pointer-events:none !important}';
         document.head.appendChild(st);
     }
-    if (document.querySelector('[data-a-target="player-overlay-video-stats-row"]')) return 'already-on';
+    // the overlay is hidden by the CSS rule; when the container does not carry that data-a-target, the rows' box (two
+    // levels up) is hidden inline. The result says whether it is hidden: 'on hidden' / 'on VISIBLE'
+    const hidden = (row) => {
+        if (!row) return 'toggled-no-rows';
+        let box = row.closest('[data-a-target="player-overlay-video-stats"]');
+        if (!box) { box = row.parentElement && row.parentElement.parentElement || row; box.style.opacity = '0'; }
+        return getComputedStyle(box).opacity === '0' ? 'on hidden' : 'on VISIBLE';
+    };
+    const pre = document.querySelector('[data-a-target="player-overlay-video-stats-row"]');
+    if (pre) return 'already-' + hidden(pre);
     const btn = [...document.querySelectorAll('button[data-a-target="player-settings-button"]')].find(vis)
              || document.querySelector('button[data-a-target="player-settings-button"]');
     if (!btn) return 'no-settings-button';
@@ -286,7 +296,7 @@ _TWITCH_VIDEO_STATS_JS = """
     await sleep(500);
     btn.click();                                   // close the menu
     await sleep(800);
-    return document.querySelector('[data-a-target="player-overlay-video-stats-row"]') ? 'on' : 'toggled-no-rows';
+    return hidden(document.querySelector('[data-a-target="player-overlay-video-stats-row"]'));
 })()
 """
 
@@ -326,6 +336,170 @@ def _pick_new_room_js(visited: list[str]) -> str:
 
 
 ROOM_ROTATION_LIVE_URL = "https://www.tiktok.com/live"
+
+# tt room choice and dead-room handling (supervisor / shagun 2026-10-17: the picker took the ended @tape05.tv room in
+# ti_1, ti_2 and ti_3). The choice: rooms of the last TT_RECENT_ROOMS_N tt sessions are excluded; cards with a LIVE badge
+# and >= TT_MIN_VIEWERS viewers first, most viewers first; each tried room must play (src set, readyState >= 3, playhead
+# advancing) within TT_QUICK_CONFIRM_S, then pass a TT_PREROLL_S pre-roll (media appended, playhead advancing, no dead
+# signal) before the session clock and the shaper start; up to TT_MAX_TRIES rooms. Candidates, tries and the choice go
+# to meta.json tt_room_choice. Mid-session a dead room (ended page with no live player, src gone TT_SRC_GONE_S, or
+# neither media appended nor playhead advancing TT_NO_MEDIA_S) aborts the session with reason room_ended.
+TT_RECENT_ROOMS_N = 10
+TT_MIN_VIEWERS = 100
+TT_MAX_TRIES = 5
+TT_QUICK_CONFIRM_S = 15
+TT_PREROLL_S = 60
+TT_SRC_GONE_S = 10
+TT_NO_MEDIA_S = 30
+
+_TT_CANDIDATES_JS = """
+(function() {
+    const out = [], seen = new Set();
+    for (const a of document.querySelectorAll('a[href*="/@"][href*="/live"]')) {
+        if (a.offsetParent === null) continue;
+        const href = (a.href || '').split('?')[0];
+        if (!href || seen.has(href)) continue;
+        seen.add(href);
+        let card = a;
+        for (let i = 0; i < 5 && card.parentElement; i++) {
+            card = card.parentElement;
+            if ((card.innerText || '').length > 40) break;
+        }
+        out.push({href: href, text: (card.innerText || '').replace(/\\s+/g, ' ').slice(0, 240),
+                  discover: !!a.closest('[data-e2e*="live-card"]')});
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+# the tt player's state for the dead-room rule; ended_text: the room-ended page's visible text
+_TT_PLAYER_STATE_JS = """
+(function() {
+    const v = document.querySelector('video');
+    const hit = (ph) => {
+        const xp = "//text()[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '" + ph + "')]";
+        const r = document.evaluate(xp, document.body || document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        for (let i = 0; i < r.snapshotLength; i++) { const e = r.snapshotItem(i).parentElement; if (e && e.offsetParent !== null) return true; }
+        return false;
+    };
+    let buf = null;
+    try { if (v && v.buffered.length) buf = v.buffered.end(v.buffered.length - 1); } catch (e) {}
+    return JSON.stringify({has_video: !!v, src: !!(v && (v.currentSrc || v.src)), rs: v ? v.readyState : null,
+                           ct: v ? v.currentTime : null, paused: v ? v.paused : null, buf_end: buf,
+                           decoded: v ? (v.webkitVideoDecodedByteCount || null) : null,
+                           ended_text: hit('live has ended') || hit('recommended live')});
+})()
+"""
+
+
+def _norm_room(u: str | None) -> str:
+    return (u or "").split("?")[0].rstrip("/").lower()
+
+
+def _parse_viewers(text: str) -> int | None:
+    """Viewer count from a card's text: a number (1.2K / 3M / 845) next to viewer / watching, else a K/M token."""
+    def num(m):
+        return int(float(m.group(1)) * {"k": 1e3, "m": 1e6}.get((m.group(2) or "").lower(), 1))
+    m = re.search(r"(\d+(?:\.\d+)?)\s*([KkMm])?\s*(?:viewers?|watching)", text or "")
+    if m:
+        return num(m)
+    m = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)([KkMm])(?![\w])", text or "")
+    return num(m) if m else None
+
+
+def recent_tt_rooms(session_dir: Path | None, n: int = TT_RECENT_ROOMS_N) -> list[str]:
+    """Rooms of the last n tt sessions (data/tiktok and data/_failed/tiktok, by meta.json start time), normalised."""
+    if session_dir is None:
+        return []
+    root = Path(session_dir).resolve().parent.parent
+    metas = []
+    for d in list((root / "tiktok").glob("*")) + list((root / "_failed" / "tiktok").glob("*")):
+        m = d / "meta.json"
+        if d.resolve() == Path(session_dir).resolve() or not m.exists():
+            continue
+        try:
+            meta = json.loads(m.read_text())
+        except Exception:
+            continue
+        rooms = [meta.get("channel_url")] + [r.get("room") for r in (meta.get("room_rotation") or {}).get("rooms") or []]
+        rooms += [t.get("room") for t in (meta.get("tt_room_choice") or {}).get("tries") or []]
+        metas.append((meta.get("started_at") or m.stat().st_mtime, rooms))
+    out: list[str] = []
+    for _, rooms in sorted(metas, key=lambda x: float(x[0]) if isinstance(x[0], (int, float)) else 0.0)[-n:]:
+        out += [_norm_room(r) for r in rooms if r and "/@" in r]
+    return sorted(set(out))
+
+
+class TTRoomWatch:
+    """The dead-room rule over 1 s player samples (_TT_PLAYER_STATE_JS); feed() returns the reason once dead."""
+
+    def __init__(self) -> None:
+        self.src_gone_since: float | None = None
+        self.flat_since: float | None = None
+        self.last: tuple | None = None
+
+    def feed(self, s: dict | None, now: float) -> str | None:
+        s = s or {}
+        no_src = not s.get("has_video") or not s.get("src")
+        if s.get("ended_text") and (no_src or s.get("paused")):
+            return "ended_page"
+        if no_src:
+            self.src_gone_since = self.src_gone_since or now
+            if now - self.src_gone_since >= TT_SRC_GONE_S:
+                return "src_gone"
+            return None
+        self.src_gone_since = None
+        cur = (s.get("buf_end"), s.get("ct"))
+        if self.last is not None and cur == self.last:
+            self.flat_since = self.flat_since or now
+            if now - self.flat_since >= TT_NO_MEDIA_S:
+                return "no_media"
+        else:
+            self.flat_since = None
+        self.last = cur
+        return None
+
+
+def _tt_state(page: "CDPPage") -> dict:
+    try:
+        return json.loads(page.eval(_TT_PLAYER_STATE_JS) or "{}")
+    except Exception:
+        return {}
+
+
+def _tt_confirm_playing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
+    """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal)."""
+    w, first_ct, s = TTRoomWatch(), None, {}
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        page.eval(_CLICK_PLAY_JS)
+        s = _tt_state(page)
+        dead = w.feed(s, time.time())
+        if dead:
+            return False, {"dead": dead, **s}
+        if s.get("src") and (s.get("rs") or 0) >= 3 and s.get("ct") is not None:
+            first_ct = s["ct"] if first_ct is None else first_ct
+            if s["ct"] - first_ct >= 2.0:
+                return True, s
+        time.sleep(1)
+    return False, {"dead": "not_playing", **s}
+
+
+def _tt_preroll(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
+    """The pre-roll before the session clock: no dead signal for `seconds`, playhead advancing >= half of it and media
+    appended (buffered end moved)."""
+    w, s0, s = TTRoomWatch(), _tt_state(page), {}
+    end = time.time() + seconds
+    while time.time() < end:
+        s = _tt_state(page)
+        dead = w.feed(s, time.time())
+        if dead:
+            return False, {"dead": dead, **s}
+        time.sleep(1)
+    adv = (s.get("ct") or 0) - (s0.get("ct") or 0)
+    grew = s.get("buf_end") is not None and s0.get("buf_end") is not None and s["buf_end"] != s0["buf_end"]
+    ok = adv >= seconds / 2 and grew
+    return ok, {"ct_advance_s": adv, "buffer_moved": grew, **({} if ok else {"dead": "preroll_short"})}
 
 
 # v2 (supervisor 2026-10-16): pin the player to the old collection's modal player size over the CURRENT-era sessions
@@ -418,6 +592,14 @@ def pin_player(page: "CDPPage", target: tuple[int, int], target_id: str | None, 
                 trace["steps"].append({"window": best["window"], "player": json.loads(ps) if ps else None, "best": True})
         trace["final_player"] = trace["steps"][-1]["player"] if trace["steps"] else None
         trace["final_window"] = trace["steps"][-1]["window"] if trace["steps"] else None
+        # screen-bound (tw_6, supervisor 2026-10-17): the drawn size is larger than this screen can realise (the window
+        # sits at the screen's available size and the player is still smaller). The target is clamped to the largest
+        # player the screen gives, and the clamp is recorded: ok then means the clamped target was reached, and ok
+        # False is left for a real failure (layout-bound short of the screen, no player)
+        fw, fp = trace["final_window"], trace["final_player"]
+        if (not trace["ok"] and fw and fp and fp[0] and scr[0] and scr[1]
+                and (fw[0] >= scr[0] or fw[1] >= scr[1]) and fp[0] < target[0] and fp[1] < target[1]):
+            trace.update(ok=True, clamped=True, clamped_to=list(fp), drawn=list(target), clamp_bound="screen")
     except Exception as exc:
         trace["error"] = repr(exc)
     return trace
@@ -943,6 +1125,22 @@ SHOT_WIDTH_PX = 640
 SHOT_JPEG_QUALITY = 40
 
 
+def _downscale_jpeg(raw: bytes) -> bytes:
+    """The captured surface, SHOT_WIDTH_PX wide at SHOT_JPEG_QUALITY (the shots' size before the change); the raw
+    capture when Pillow is missing."""
+    try:
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        if im.width > SHOT_WIDTH_PX:
+            im = im.resize((SHOT_WIDTH_PX, round(im.height * SHOT_WIDTH_PX / im.width)), Image.BILINEAR)
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=SHOT_JPEG_QUALITY)
+        return out.getvalue()
+    except Exception:
+        return raw
+
+
 def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> None:
     """A small JPEG of the tab every SHOT_INTERVAL_S ('cadence'), plus one at every tier change and every ad start
     (t37: content.js raises <html data-lvqoe-shot-req="<n>|<reason>|<event_id>">, polled each second). Each shot is
@@ -969,19 +1167,19 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
                 continue
             if reason == "cadence":
                 last_cadence = time.time()
-            m = page.call("Page.getLayoutMetrics")
-            vp = m.get("cssLayoutViewport") or m.get("layoutViewport") or {}
-            w, h = float(vp.get("clientWidth") or 1280), float(vp.get("clientHeight") or 720)
-            res = page.call("Page.captureScreenshot", {
-                "format": "jpeg", "quality": SHOT_JPEG_QUALITY,
-                "clip": {"x": 0, "y": 0, "width": w, "height": h, "scale": SHOT_WIDTH_PX / w}})
+            # no clip / scale: a scaled clip makes Chrome emulate device metrics for the capture, a visible re-render
+            # (rushi saw the screen flicker; dropped frames per tick near shots were 0.153 vs 0.023 elsewhere on yt_10).
+            # The surface is grabbed as is and downscaled here.
+            res = page.call("Page.captureScreenshot", {"format": "jpeg", "quality": 90, "fromSurface": True,
+                                                       "captureBeyondViewport": False})
             data = res.get("data")
             if not data:
                 continue
+            data = _downscale_jpeg(base64.b64decode(data))
             ts = time.time()
             tag = "" if reason == "cadence" else f"_{reason}"
             name = f"{int(ts * 1000)}_tick{tick_id if tick_id is not None else 'na'}{tag}.jpg"
-            (shots_dir / name).write_bytes(base64.b64decode(data))
+            (shots_dir / name).write_bytes(data)
             with open(index, "a") as fh:
                 fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
                                      "request": req if reason != "cadence" else None}) + "\n")
@@ -1031,6 +1229,10 @@ class BrowserSession:
         self.abort_reason: str | None = None     # set by a watcher (t37: "login_wall"); exp.py stops the session
         self.video_stats: str | None = None      # twitch Video Stats overlay result (meta.json)
         self.abort_at: float | None = None
+        self.tt_room_choice: dict | None = None   # tt: candidates, tries and the chosen room (meta.json)
+        self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
+        self._room_grace_until = 0.0              # tt: the room watcher pauses while the rotation moves rooms
+        self._room_watcher: threading.Thread | None = None
 
     def start(self, cdp_ready_timeout: float = 30.0) -> None:
         print("[browser] Waiting for Chrome CDP endpoint...", flush=True)
@@ -1112,7 +1314,10 @@ class BrowserSession:
         except Exception as e:
             print(f"[browser] Could not pre-clear extension storage: {e}", flush=True)
 
-        self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
+        if self.platform == "tiktok" and not self.first_url:
+            self.list_url = self._tt_choose_room()
+        else:
+            self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
         if not self.list_url:
             raise RuntimeError(f"Failed to navigate to a live {self.platform} stream")
 
@@ -1148,8 +1353,9 @@ class BrowserSession:
             self.chat_action = "left-open (close_chat off)"
         try:
             raw = json.loads(self._page.eval(_LOGIN_STATE_JS) or "{}")
-            state = ("logged_in" if raw.get("profile_marker") else
-                     "logged_out" if raw.get("login_button_visible") else "unknown")
+            # a visible Log In button wins: twitch keeps a user-menu node when logged out (tw_6 read "logged_in")
+            state = ("logged_out" if raw.get("login_button_visible") else
+                     "logged_in" if raw.get("profile_marker") else "unknown")
             self.login_state = {"state": state, **raw}
         except Exception as exc:
             self.login_state = {"state": "unknown", "error": repr(exc)}
@@ -1194,6 +1400,11 @@ class BrowserSession:
         self._watcher.start()
         print("[browser] Ad-watcher running", flush=True)
 
+        if self.platform == "tiktok":
+            self._room_watcher = threading.Thread(target=self._room_watch_loop, daemon=True, name="room-watch")
+            self._room_watcher.start()
+            print("[browser] tt dead-room watcher running", flush=True)
+
         if self.room_rotation_s:
             self._rotator = threading.Thread(target=self._room_rotation_loop, daemon=True, name="room-rotation")
             self._rotator.start()
@@ -1209,14 +1420,77 @@ class BrowserSession:
             self._shooter.start()
             print(f"[browser] Screenshots every {SHOT_INTERVAL_S:.0f} s → {self._session_dir / 'shots'}", flush=True)
 
+    def _tt_choose_room(self) -> str | None:
+        """tt: pick a live, playing room that no recent session used (see TT_* above); returns the list URL or None."""
+        page = self._page
+        recent = recent_tt_rooms(self._session_dir)
+        rec: dict = {"n_recent_sessions": TT_RECENT_ROOMS_N, "recent_excluded": recent, "min_viewers": TT_MIN_VIEWERS,
+                     "candidates": [], "tries": [], "choice": None}
+        self.tt_room_choice = rec
+        page.navigate(ROOM_ROTATION_LIVE_URL)
+        _wait_for_load(page, timeout=15)
+        deadline = time.time() + 15
+        while time.time() < deadline and not page.eval(_CARD_READY_JS["tiktok"]):
+            time.sleep(1)
+        time.sleep(2)                                   # let the viewer counts render
+        try:
+            cands = json.loads(page.eval(_TT_CANDIDATES_JS) or "[]")
+        except Exception:
+            cands = []
+        for c in cands:
+            c["viewers"] = _parse_viewers(c.get("text", ""))
+            c["live_badge"] = bool(re.search(r"\bLIVE\b", c.get("text", "")))
+            c["recent"] = _norm_room(c.get("href")) in set(recent)
+        rec["candidates"] = cands
+        order = sorted((c for c in cands if not c["recent"]),
+                       key=lambda c: (not (c["live_badge"] and (c["viewers"] or 0) >= TT_MIN_VIEWERS), -(c["viewers"] or 0)))
+        print(f"[browser] tt rooms: {len(cands)} candidates, {len(cands) - len(order)} used in the last "
+              f"{TT_RECENT_ROOMS_N} sessions", flush=True)
+        for c in order[:TT_MAX_TRIES]:
+            t: dict = {"room": c["href"], "viewers": c["viewers"], "live_badge": c["live_badge"], "t_nav": time.time()}
+            try:
+                page.navigate(c["href"])
+                _wait_for_load(page, timeout=15)
+                ok, detail = _tt_confirm_playing(page, TT_QUICK_CONFIRM_S)
+                if ok:
+                    t["t_playing"] = time.time()
+                    ok, detail = _tt_preroll(page, TT_PREROLL_S)
+            except Exception as exc:
+                ok, detail = False, {"dead": "error", "error": repr(exc)}
+            t.update(ok=ok, detail=detail, t_done=time.time())
+            rec["tries"].append(t)
+            print(f"[browser] tt room {c['href']} ({c['viewers']} viewers): {'OK' if ok else detail.get('dead')}", flush=True)
+            if ok:
+                rec["choice"] = c["href"]
+                return ROOM_ROTATION_LIVE_URL
+        return None
+
+    def _room_watch_loop(self) -> None:
+        """tt: abort the session with reason room_ended when the room dies mid-session (TTRoomWatch)."""
+        w = TTRoomWatch()
+        while not self._stop.wait(timeout=1):
+            if time.time() < self._room_grace_until:
+                w = TTRoomWatch()
+                continue
+            s = _tt_state(self._page)
+            dead = w.feed(s, time.time())
+            if dead:
+                self.room_ended = {"reason": dead, "at": time.time(), "sample": s,
+                                   "room": self._page.eval("location.href") if self._page else None}
+                if self.abort_reason is None:
+                    self.abort_reason, self.abort_at = "room_ended", time.time()
+                print(f"[browser] ROOM ENDED ({dead}) — aborting the session", flush=True)
+                return
+
     def _room_rotation_loop(self) -> None:
         """addendum M's pre-declared tt fallback: every room_rotation_s, back to /live and into a room not visited yet;
         each move is recorded (navigation time, playing time, room URL, ok) so room-change startups can be told apart
         from within-room tier switches."""
         while not self._stop.wait(timeout=self.room_rotation_s):
             rec: dict = {"t_nav": time.time()}
+            self._room_grace_until = time.time() + 120     # the dead-room watcher sits out the move
             try:
-                visited = [r.get("room") or "" for r in self.room_rotation["rooms"]]
+                visited = [r.get("room") or "" for r in self.room_rotation["rooms"]] + recent_tt_rooms(self._session_dir)
                 self._page.navigate(ROOM_ROTATION_LIVE_URL)
                 _wait_for_load(self._page, timeout=15)
                 deadline = time.time() + 15
@@ -1236,6 +1510,7 @@ class BrowserSession:
             except Exception as exc:
                 rec.update(ok=False, error=repr(exc))
             self.room_rotation["rooms"].append(rec)
+            self._room_grace_until = time.time() + 15      # settle in the new room, then watch it
             print(f"[browser] Room rotation: {rec}", flush=True)
 
     def _on_wall(self) -> None:

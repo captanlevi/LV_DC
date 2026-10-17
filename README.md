@@ -52,9 +52,17 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 3. Load the labeling extension over CDP and navigate to the stream:
    - yt: the channel rotation in `yt_channels.py`;
    - twitch: the Just Chatting directory;
-   - tt: a room from `/live`.
+   - tt: a room from `/live`, chosen by `browser.py` (2026-10-17):
+     - rooms of the last 10 tt sessions are excluded;
+     - cards with a LIVE badge and ≥ 100 viewers come first, most viewers first;
+     - each tried room must play within 15 s (src set, readyState ≥ 3, playhead advancing), then pass a 60 s pre-roll
+       (media appended, playhead advancing, no dead signal) before the shaper starts;
+     - up to 5 rooms; candidates, tries and the choice go to `meta.json` `tt_room_choice`.
 4. Fail fast if the extension's content script is not ticking within 15 s.
 5. Close yt chat, set the geometry (`geometry.py` rotation), and turn on twitch Video Stats (hidden).
+   - A drawn player size larger than the screen can give is clamped to the largest it gives: `player_pin.clamped_to`;
+     `ok` then means the clamped size was reached, and `ok` false is a real failure.
+   - `video_stats` in `meta.json` says whether the overlay is hidden (`on hidden`) or not (`on VISIBLE`).
 6. Run the shaper for the episodes:
 
    | platform | episodes | matrix | low-state cap |
@@ -72,7 +80,8 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 - **Free space:** it stops below 10 % free (exit 4).
 - **Pre-clean:** it undoes leftovers (shaping, tcpdump, Chrome) before every session.
 - **Pausing a platform:** after 5 consecutive sessions without a PASS, or on a login wall. A `player_frozen` abort
-  (exit 5) is not counted toward the 5; a separate cap pauses the platform after 5 consecutive `player_frozen` aborts.
+  (exit 5) or `room_ended` abort (exit 6) is not counted toward the 5; a separate cap pauses the platform after 5
+  consecutive such aborts.
 - **Not-live yt channel:** skipped for 6 h.
 - **Daily summary:** `data/_summaries/summary_<day>.md / .json` after every session:
   - PASS / FAIL by reason;
@@ -95,6 +104,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 | exp.py | 0 | session ran; see its `check.md` |
 | exp.py | 1 | start failed (channel not live, extension not ticking); finalised, FAIL |
 | exp.py | 3 | login wall: orchestrate pauses that platform |
+| exp.py | 6 | `room_ended` (tt): the room died mid-session (an ended page with no live player, the player's src gone 10 s, or neither media appended nor the playhead advancing for 30 s); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session picks another room |
 | exp.py | 5 | `player_frozen`: the watchdog aborted a player frozen in a stall past T (addendum N); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session re-picks |
 | exp.py | 130 | stopped by SIGINT / SIGTERM; finalised, FAIL, orchestrate stops |
 | orchestrate.py | 4 | less than 10 % free space on the data volume |
@@ -176,6 +186,6 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `player_stats.jsonl` | ground truth only, never features: yt stats for nerds; twitch Video Stats |
 | `net_labels.txt` | the shaper schedule (coverage / debug record, not a data covariate) |
 | `meta.json` | provenance and covariates: commit, Chrome, extension, profile template + sha, shaper (matrix, cap, rule), channel / room, geometry, login state, room rotation, IPv6 sysctl, data volume, management exclusion, NTP, abort reason |
-| `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick and reason |
+| `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick and reason. Captured unscaled from the surface and downscaled to 640 px in Python: a scaled CDP clip re-renders the page (the flicker; more dropped frames near shots) |
 | `ad_actions.jsonl` | what the ad skipper did |
 | `check.json`, `check.md` | the verdict |

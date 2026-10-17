@@ -92,13 +92,14 @@ def summarise(rows: list[dict]) -> dict:
                 stall.append(lab["stall_share"])
         sizes = [r["pcap_mb"] for r in rs if r["pcap_mb"]]
         # geometry draws and whether they were realised (a screen change, e.g. the HDMI monitor unplugged, shows here)
-        geo = collections.defaultdict(lambda: [0, 0])
+        geo = collections.defaultdict(lambda: [0, 0, 0])     # drawn, realised (ok), of which clamped to the screen
         for r in rs:
             pin = r["meta"].get("player_pin") or {}
             g = r["meta"].get("geometry_target") or pin.get("geometry_target")
             if g:
                 geo[g][0] += 1
                 geo[g][1] += bool(pin.get("ok"))
+                geo[g][2] += bool(pin.get("clamped"))
         screens = collections.Counter(str((r["meta"].get("geometry") or {}).get("screen")) for r in rs if r["meta"].get("geometry"))
         out[pf] = {
             "sessions": len(rs), "verdicts": dict(verdicts), "fail_reasons": dict(reasons.most_common()),
@@ -110,7 +111,7 @@ def summarise(rows: list[dict]) -> dict:
             "accepted_hours": round(wsum / 3600, 2),
             "stall_share_median": statistics.median(stall) if stall else None,
             "pcap_mb_median": statistics.median(sizes) if sizes else None, "pcap_gb_total": round(sum(sizes) / 1e3, 2),
-            "geometry_drawn_realised": {g: f"{v[1]}/{v[0]}" for g, v in sorted(geo.items())},
+            "geometry_drawn_realised": {g: f"{v[1]}/{v[0]}" + (f" ({v[2]} clamped to the screen)" if v[2] else "") for g, v in sorted(geo.items())},
             "screens": dict(screens),
         }
     return out

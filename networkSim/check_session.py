@@ -650,6 +650,8 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
         why.append("login_wall")   # t37: the platform's logged-out wall stopped playback; the session was aborted
     elif abort_reason == "player_frozen":
         why.append("player_frozen (watchdog abort, addendum N)")
+    elif abort_reason == "room_ended":
+        why.append("room_ended (tt: the room died mid-session; browser.py TTRoomWatch)")
     elif abort_reason:
         why.append(f"aborted: {abort_reason}")
     if lab.get("quality_countdown_ticks"):
@@ -770,6 +772,8 @@ def main() -> int:
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
           f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",
           f"| tt logged-out quality countdown ticks (FAIL if > 0) | {lab.get('quality_countdown_ticks')} |",
+          f"| tt room choice: candidates / used in recent sessions / tries / choice | {len((meta.get('tt_room_choice') or {}).get('candidates') or [])} / {sum(1 for c in (meta.get('tt_room_choice') or {}).get('candidates') or [] if c.get('recent'))} / {[(t.get('room'), t.get('ok'), (t.get('detail') or {}).get('dead')) for t in (meta.get('tt_room_choice') or {}).get('tries') or []]} / {(meta.get('tt_room_choice') or {}).get('choice')} |",
+          f"| tt room ended mid-session (reason / at) | {(meta.get('room_ended') or {}).get('reason')} / {(meta.get('room_ended') or {}).get('at')} |",
           f"| tt rooms (ticks per room) / room changes / explore-page ticks | {lab.get('tt_room_ticks')} / {lab.get('tt_room_changes')} / {lab.get('tt_explore_ticks')} |",
           f"| tt FLV rendition tokens per room (http_v2) | {lab.get('tt_flv_tokens_per_room')} |",
           f"| tt resets 55-75 s into a visit with a lower rendition after (reported) | {lab.get('tt_cap_resets_55_75s')} |",
@@ -779,7 +783,7 @@ def main() -> int:
           f"| screenshots: cadence of ~expected / by reason | {shots['n']} of ~{shots['expected']} / {shots.get('by_reason')} |",
           f"| player_stats.jsonl records (G3; twitch: with Video Stats) | {player_stats['records']} ({player_stats['twitch_video_stats_records']}) |",
           f"| ad actions | {dict(acts)} |",
-          f"| geometry drawn / realised player / window / ok | {meta.get('geometry_target') or pin.get('geometry_target')} / {pin.get('final_player')} / {pin.get('final_window')} / {pin.get('ok')} |",
+          f"| geometry drawn / realised player / window / ok (clamped to the screen) | {meta.get('geometry_target') or pin.get('geometry_target')} / {pin.get('final_player')} / {pin.get('final_window')} / {pin.get('ok')} ({pin.get('clamped_to') if pin.get('clamped') else 'no'}) |",
           f"| meta.json missing | {meta_missing} |"]
     if net.get("background_hosts_top"):
         md += ["", "Background hosts, shaper window (top by bytes; exogenous = chrome_service / os_service / unknown):", "",
