@@ -535,6 +535,11 @@ if __name__ == "__main__":
              "directory's first live card; category and content type recorded in meta.json.",
     )
     parser.add_argument(
+        "--tw-channel",
+        default=None,
+        help="twitch esports (addendum O, levi): the live league channel the rotation picked (meta.json tw_channel).",
+    )
+    parser.add_argument(
         "--channel-handle",
         default=None,
         help="yt: the channel's handle from yt_channels.py (meta.json; the rotation counts it).",
@@ -638,9 +643,10 @@ if __name__ == "__main__":
             first_url = args.channel_url
             if platform == "twitch" and args.tw_category:
                 cat = tw_categories.by_name(args.tw_category) or {"name": args.tw_category, "type": None}
-                first_url = tw_categories.url_of(cat["name"])
+                first_url = (tw_categories.channel_url(args.tw_channel) if args.tw_channel
+                             else tw_categories.url_of(cat["name"]))
                 session_meta.write(session_dir, tw_category=cat["name"], tw_category_type=cat["type"],
-                                   tw_category_url=first_url)
+                                   tw_category_url=first_url, tw_channel=args.tw_channel)
             browser = BrowserSession(platform, session_dir=session_dir, first_url=first_url, geometry=args.geometry,
                                      room_rotation_s=args.tt_room_rotation if platform == "tiktok" else None)
             browser.start()

@@ -105,6 +105,8 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
                 "--channel-type", channel["type"]]
     if tw_category:
         cmd += ["--tw-category", tw_category["name"]]
+        if tw_category.get("channel"):
+            cmd += ["--tw-channel", tw_category["channel"]]
     if geom:
         cmd += ["--geometry", geom]
     if DPMS_OFF:
@@ -200,11 +202,16 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         channel = yt_channels.next_channel(_RUNS_DIR, exclude=skip) if p == "youtube" else None
         # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
         # NOT_LIVE_RETRY_S, like a yt channel)
-        category = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else None
+        category, esports_skip = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else (None, None)
+        if esports_skip:      # levi: no league channel live -> the next type; the skip goes to the daily summary
+            (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
+            with open(_RUNS_DIR / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
+                fh.write(json.dumps(esports_skip) + "\n")
+            print(f"  esports unavailable (none of {esports_skip['checked']} live): drawing {category['name']}")
         geom = geometry.next_geometry(_RUNS_DIR, p) if rotate_geometry else None
         print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] {p.upper()}: {before}/{targets[p]} accepted"
               + (f"; channel {channel['handle']} ({channel['type']}, {channel['role']})" if channel else "")
-              + (f"; category {category['name']} ({category['type']})" if category else "")
+              + (f"; category {category['name']} ({category['type']}{', ' + category['channel'] if category.get('channel') else ''})" if category else "")
               + (f"; geometry {geom}" if geom else ""))
         preclean()
         try:
@@ -229,7 +236,7 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         elif rc != 0 and channel:
             not_live[channel["handle"]] = now
         elif rc != 0 and category:
-            not_live[category["name"]] = now
+            not_live[category.get("channel") or category["name"]] = now
         if rc not in NOT_A_FAILURE:
             frozen[p] = 0
             fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1

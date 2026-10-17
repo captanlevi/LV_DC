@@ -1018,6 +1018,8 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
         # For directory/discovery pages, click into the first live stream.
         # Twitch is a heavy SPA — wait for stream cards to render after load.
         pick_js = _PICK_STREAM_JS.get(platform, "null")
+        if platform == "twitch" and "/directory/" not in url:
+            pick_js = "null"          # a channel page (esports rotation): no card to click; never click away from it
         if pick_js.strip() != "null":
             card_js = _CARD_READY_JS.get(platform)
             if card_js:

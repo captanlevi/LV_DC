@@ -131,6 +131,14 @@ def _data_volume(data_dir: Path) -> dict:
         return {"error": repr(e)}
 
 
+def _esports_skips(data_dir: Path, day: str) -> dict:
+    """twitch esports draws skipped because no league channel was live (orchestrate.py, levi 2026-10-17)."""
+    p = data_dir / "_summaries" / "tw_esports_skips.jsonl"
+    recs = [json.loads(ln) for ln in p.read_text().splitlines() if ln.strip()] if p.exists() else []
+    today = [r for r in recs if dt.datetime.fromtimestamp(r["ts"]).date().isoformat() == day]
+    return {"today": len(today), "total": len(recs), "checked": recs[-1]["checked"] if recs else None}
+
+
 def write(data_dir: Path = DATA_DIR, day: str | None = None) -> Path:
     day = day or dt.date.today().isoformat()
     rows = sessions(data_dir)
@@ -139,7 +147,8 @@ def write(data_dir: Path = DATA_DIR, day: str | None = None) -> Path:
            "disk": {"free_gb": round(du.free / 1e9, 1), "total_gb": round(du.total / 1e9, 1), "free_share": round(du.free / du.total, 3)},
            "data_volume": _data_volume(data_dir),
            "today": summarise([r for r in rows if r["day"] == day]),
-           "cumulative": summarise(rows), "yt_channel_sessions_accepted": rotation(rows)}
+           "cumulative": summarise(rows), "yt_channel_sessions_accepted": rotation(rows),
+           "tw_esports_unavailable": _esports_skips(data_dir, day)}
     dest = data_dir / "_summaries"
     dest.mkdir(parents=True, exist_ok=True)
     (dest / f"summary_{day}.json").write_text(json.dumps(out, indent=1, default=str))
@@ -162,6 +171,9 @@ def write(data_dir: Path = DATA_DIR, day: str | None = None) -> Path:
             md.append(f"- {pf}: " + ", ".join(f"{h['host']} ({h['category']}) {h['mb']}" for h in v["background_hosts_mb"][:10]))
         md.append("")
     md += ["## yt channel rotation (accepted sessions)", "", str(out["yt_channel_sessions_accepted"]), ""]
+    sk = out["tw_esports_unavailable"]
+    md += ["## twitch esports draws skipped (no league channel live)", "",
+           f"{sk['today']} today, {sk['total']} in all; channels checked: {sk['checked']}", ""]
     (dest / f"summary_{day}.md").write_text("\n".join(md))
     return dest / f"summary_{day}.md"
 
