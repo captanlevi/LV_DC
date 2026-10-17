@@ -35,7 +35,7 @@ def make(sd: Path, n: int, moving: bool, stall_from: int | None = None) -> None:
         b = io.BytesIO(); im.convert("RGB").save(b, "JPEG", quality=95)
         name = f"{int(t * 1000)}_tick{i}.jpg"
         (sd / "shots" / name).write_bytes(b.getvalue())
-        idx.append({"ts": t, "file": name, "tick": i, "reason": "cadence",
+        idx.append({"ts": t, "file": name, "tick": str(i), "reason": "cadence",   # the page's dataset string, as browser.py writes it
                     "player": {"rect": [0, 0, 400, 240], "inner": [640, 360], "dpr": 1}})
     (sd / "labels.csv").write_text(HDR + "\n".join(rows) + "\n")
     (sd / "shots" / "index.jsonl").write_text("\n".join(json.dumps(x) for x in idx) + "\n")

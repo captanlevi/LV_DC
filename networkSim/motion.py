@@ -55,6 +55,14 @@ def _tick_states(sd: Path) -> dict:
     return out
 
 
+def _tick_id(v) -> int | None:
+    """shots/index.jsonl stores the tick as the page's dataset string ('117'); labels.csv event ids are numbers."""
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
 def _grey(path: Path, shot: dict):
     from PIL import Image
     p = shot.get("player") or {}
@@ -89,7 +97,7 @@ def compute(sd: Path, write: bool = True) -> dict:
             else:
                 rec["mad"] = sum(abs(a - b) for a, b in zip(g, prev_g)) / (len(g) * 255.0)
                 rec["scene_cut"] = rec["mad"] > SCENE_CUT
-                a, b = ticks.get(prev.get("tick")), ticks.get(s.get("tick"))
+                a, b = ticks.get(_tick_id(prev.get("tick"))), ticks.get(_tick_id(s.get("tick")))
                 if a is None or b is None:
                     rec["why"] = "no tick"
                 elif a[1] or b[1]:

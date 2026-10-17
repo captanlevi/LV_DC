@@ -204,6 +204,36 @@ def stall_advancing_share(rows: list[dict]) -> float | None:
     return adv / n if n >= I10_MIN_STALL_TICKS and has_ct else None
 
 
+def shot_effects(rows: list[dict], sd: Path, near_s: float = 1.0) -> dict | None:
+    """Does a screenshot disturb playback? (rushi saw the screen flicker; supervisor 2026-10-17.) res_meta ticks within
+    near_s of a shot vs the rest: dropped frames per tick (the content.js dropped counter's increments) and ticks whose
+    client size is off the session's modal size. Reported, never a FAIL."""
+    idx = sd / "shots" / "index.jsonl"
+    if not idx.exists():
+        return None
+    shots = sorted(json.loads(ln)["ts"] for ln in idx.read_text().splitlines() if ln.strip())
+    meta = [r for r in rows if r.get("type") == "res_meta"]
+    ts = [(_f(r.get("ts")) or 0) / 1000.0 for r in meta]
+    if len(meta) < 2 or not shots:
+        return None
+    sizes = [(r.get("client_w"), r.get("client_h")) for r in meta]
+    mode = collections.Counter(sizes).most_common(1)[0][0]
+    dropped = [_f(r.get("dropped")) or 0.0 for r in meta]
+    import bisect
+    near = []
+    for t in ts:
+        j = bisect.bisect_left(shots, t)
+        near.append(any(0 <= k < len(shots) and abs(shots[k] - t) <= near_s for k in (j - 1, j)))
+    inc = [max(0.0, dropped[i] - dropped[i - 1]) for i in range(1, len(meta))]
+    nd = [x for x, n in zip(inc, near[1:]) if n]
+    fd = [x for x, n in zip(inc, near[1:]) if not n]
+    return {"near_s": near_s, "ticks_near": sum(near), "ticks_elsewhere": len(near) - sum(near),
+            "dropped_per_tick_near": (sum(nd) / len(nd)) if nd else None,
+            "dropped_per_tick_elsewhere": (sum(fd) / len(fd)) if fd else None,
+            "client_size_off_mode_near": sum(1 for s_, n in zip(sizes, near) if n and s_ != mode),
+            "client_size_off_mode_elsewhere": sum(1 for s_, n in zip(sizes, near) if not n and s_ != mode)}
+
+
 def label_checks(rows: list[dict], platform: str) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
@@ -703,7 +733,9 @@ def main() -> int:
     sd = a.session_dir.resolve()
     meta, meta_missing = meta_check(sd)
     platform = meta.get("platform") or sd.parent.name
-    lab = label_checks(read_labels(sd), platform)
+    label_rows = read_labels(sd)
+    lab = label_checks(label_rows, platform)
+    lab["shot_effects"] = shot_effects(label_rows, sd)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
     net = traffic_checks(sd, platform)
@@ -777,6 +809,7 @@ def main() -> int:
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
           f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",
           f"| tt logged-out quality countdown ticks (FAIL if > 0) | {lab.get('quality_countdown_ticks')} |",
+          f"| screenshot effect (ticks within 1 s of a shot vs elsewhere): dropped frames per tick / client size off mode | {(lab.get('shot_effects') or {}).get('dropped_per_tick_near')} vs {(lab.get('shot_effects') or {}).get('dropped_per_tick_elsewhere')} / {(lab.get('shot_effects') or {}).get('client_size_off_mode_near')} vs {(lab.get('shot_effects') or {}).get('client_size_off_mode_elsewhere')} |",
           f"| motion (addendum O cross-check; 10 s shots, play-only pairs): valid pairs / session / median / p90 / near-zero share / scene cuts | {(motion_s or {}).get('valid_pairs')} / {(motion_s or {}).get('session_motion')} / {(motion_s or {}).get('median')} / {(motion_s or {}).get('p90')} / {(motion_s or {}).get('share_near_zero')} / {(motion_s or {}).get('scene_cuts')} ({(motion_s or {}).get('status')}) |",
           f"| twitch category / type (addendum O) | {meta.get('tw_category')} / {meta.get('tw_category_type')} |",
           f"| twitch pick: candidates / recent channels excluded / pick | {len((meta.get('tw_pick') or {}).get('candidates') or [])} / {len((meta.get('tw_pick') or {}).get('excluded_recent') or [])} / {(meta.get('tw_pick') or {}).get('pick')} |",

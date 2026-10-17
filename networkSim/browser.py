@@ -310,7 +310,10 @@ _LOGIN_STATE_JS = """
         .some(el => vis(el) && /^(log in|login|sign in)$/i.test(label(el)));
     const profile = !!document.querySelector('[data-e2e="profile-icon"], [data-e2e="nav-profile"], ' +
         '[data-e2e="top-avatar"], #avatar-btn, [data-a-target="user-menu-toggle"]');
-    return JSON.stringify({login_button_visible: loginBtn, profile_marker: profile});
+    // tt live pages show a "Recharge" (coins) control only to a logged-in account (ti_7 read 'unknown' while logged in)
+    const recharge = [...document.querySelectorAll('button, a, [role="button"], div, span')]
+        .some(el => el.childElementCount === 0 && el.getClientRects().length && /^recharge$/i.test(label(el)));
+    return JSON.stringify({login_button_visible: loginBtn, profile_marker: profile || recharge, tt_recharge: recharge});
 })()
 """
 
