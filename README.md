@@ -161,7 +161,7 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `no res_meta ticks` / tick presence < `0.95` | the extension's 1 Hz tick |
 | `current_time advancing` < `0.8` | of playing, non-ad ticks (it says nothing about stall ticks) |
 | `player_frozen` | addendum N: the longest stall-only frozen-playhead run (stall label on, non-ad, playhead within 1 s of the run's first tick) > T: yt `180` s, twitch `660` s, tt `720` s (`1.2` × the old data's max, rounded up to the minute; `FROZEN_PLAYHEAD_MAX_S`). browser.py's watchdog aborts at the same T on the same measure (content.js `data-lvqoe-frozen-s`); `test_frozen_run.py` checks the two agree |
-| (reported) `paused_while_playing_share` | playing-labelled non-ad ticks whose element was paused (raw `paused` column); suspicious above `0.05` (levi; after the collector's resume-after-self-pause it should read about 0) |
+| (reported) `paused_while_playing_share` | playing-labelled non-ad ticks whose element was paused (raw `paused` column); suspicious above `0.05` (levi; every pause is a self-pause and the collector presses play: at once after a stall, otherwise after the pause held > `3` s on a non-ad element with readyState ≥ `3`; it should read about 0) |
 | `latched_stall` (I10) | more than `0.5` of within-stall ticks (previous tick also in stall) with the playhead advancing at `0.8`–`1.5` s/s, scored with ≥ `10` such ticks (levi's `i10_stall_advance.py`) |
 | `labels.csv lacks the v2 columns` | old extension loaded |
 | `usable` < `0.6` | non-ad play or stall time over the session length |
@@ -207,5 +207,5 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `meta.json` | provenance and covariates: commit, Chrome, extension, profile template + sha, shaper (matrix, cap, rule), channel / room, geometry, login state, room rotation, IPv6 sysctl, data volume, management exclusion, NTP, abort reason |
 | `motion.jsonl` | addendum O cross-check (ground truth, never a feature): per pair of 10 s shots, the player-crop downscaled grey MAD / 255, valid only when both ticks are play; summary in `check.md` |
 | `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick, reason, crop and per-step timing. Grabbed from the X display (Pillow ImageGrab of the player rectangle), outside Chrome's renderer; CDP is the fallback (no X, or a blank grab), recorded per shot as `capture`. Capture effect: see §6.1 |
-| `ad_actions.jsonl` | what the ad skipper did |
+| `ad_actions.jsonl` | what the ad skipper did, and each play pressed on a self-paused player (`resume_after_self_pause`, `reason` `after_stall` / `no_stall`, `paused_s`) |
 | `check.json`, `check.md` | the verdict |

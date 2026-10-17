@@ -798,7 +798,8 @@ def main() -> int:
     if (sd / "ad_actions.jsonl").exists():
         for l in (sd / "ad_actions.jsonl").read_text().splitlines():
             if l.strip():
-                acts[json.loads(l)["action"].split(" [")[0]] += 1
+                a_ = json.loads(l)
+                acts[a_["action"].split(" [")[0] + (f":{a_['reason']}" if a_.get("reason") else "")] += 1
     pin = meta.get("player_pin") or {}
     try:
         import motion

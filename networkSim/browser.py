@@ -1217,19 +1217,69 @@ def _wait_for_load(page: CDPPage, timeout: float = 15.0) -> None:
 # ---------------------------------------------------------------------------
 
 _WALL_JS = "document.documentElement.dataset.lvqoeWall === '1'"
-# levi 2026-10-17 (tw_10): a player that paused itself during a stall and has data again (readyState >= 3) is pressed
-# play, as a viewer would; returns 'resumed' when it did (logged in ad_actions.jsonl as resume_after_self_pause)
-_RESUME_SELF_PAUSE_JS = """
+# levi 2026-10-17 (tw_10, tw_12): no human ever pauses these players, so every pause is a self-pause, and the collector
+# presses play as a viewer would. _PLAYER_STATE_JS reads the largest visible <video> plus content.js's stall and ad
+# labels; SelfPauseResumer decides; _PLAY_JS presses. Logged in ad_actions.jsonl as resume_after_self_pause.
+_PLAYER_STATE_JS = """
 (function() {
-    if (document.documentElement.dataset.lvqoeStall !== '1') return null;
     const vs = [...document.querySelectorAll('video')].filter(v => v.getClientRects().length);
     const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
-    if (!v || !v.paused || v.ended || v.readyState < 3) return null;
-    const p = v.play();
-    if (p && p.catch) p.catch(() => {});
-    return 'resumed';
+    if (!v) return null;
+    const d = document.documentElement.dataset;
+    return JSON.stringify({paused: v.paused, rs: v.readyState, ended: v.ended, ad: d.lvqoeAd === '1',
+                           stall: d.lvqoeStall === '1'});
 })()
 """
+_PLAY_JS = """
+(function() {
+    const vs = [...document.querySelectorAll('video')].filter(v => v.getClientRects().length);
+    const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
+    if (!v || !v.paused) return null;
+    const p = v.play();
+    if (p && p.catch) p.catch(() => {});
+    return 'pressed';
+})()
+"""
+SELF_PAUSE_HOLD_S = 3.0
+
+
+class SelfPauseResumer:
+    """When to press play (levi 2026-10-17). Eligible = not an ad, paused, not ended, readyState >= 3.
+    - after_stall: the stall label is on (the player paused itself in a stall and has data again) -> press at once,
+      so the stall ends at the element's own playing -> start, as before;
+    - no_stall: eligible without a stall label for more than SELF_PAUSE_HOLD_S (clear of tick jitter and of the stall
+      path) -> press.
+    A press that does not take is retried only after another SELF_PAUSE_HOLD_S. Each press returns a log record with
+    the reason and paused_s, the time since the element was first seen paused."""
+
+    def __init__(self, hold_s: float = SELF_PAUSE_HOLD_S):
+        self.hold_s = hold_s
+        self.paused_since = None      # first observation of the current pause
+        self.eligible_since = None    # start of the current eligible run (or of the wait after a press)
+        self.stall_seen = False       # stall label on at any observation of the current pause
+
+    def step(self, state: dict | None, now: float) -> dict | None:
+        if not state or not state.get("paused"):
+            self.paused_since = self.eligible_since = None
+            self.stall_seen = False
+            return None
+        if self.paused_since is None:
+            self.paused_since = now
+        self.stall_seen = self.stall_seen or bool(state.get("stall"))
+        if state.get("ad") or state.get("ended") or (state.get("rs") or 0) < 3:
+            self.eligible_since = None
+            return None
+        if self.eligible_since is None:
+            self.eligible_since = now
+            if not state.get("stall"):                   # after_stall presses at once; no_stall starts its hold
+                return None
+        elif now - self.eligible_since <= self.hold_s:
+            return None
+        self.eligible_since = now                        # retry only after another hold
+        return {"action": "resume_after_self_pause", "reason": "after_stall" if self.stall_seen else "no_stall",
+                "paused_s": round(now - self.paused_since, 3)}
+
+
 # addendum N: content.js's stall-only frozen-playhead run, in seconds (same measure as check_session.frozen_playhead_run)
 _FROZEN_JS = "Number(document.documentElement.dataset.lvqoeFrozenS || 0)"
 TICK_STARTUP_TIMEOUT_S = 15
@@ -1239,17 +1289,20 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                      on_wall=None, on_frozen=None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
     Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
-    calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table)."""
+    calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table). Presses
+    play on a self-paused player (SelfPauseResumer)."""
     skip_js = _SKIP_AD_JS.get(platform, "null")
     walled = False
     frozen_max_s = FROZEN_PLAYHEAD_MAX_S.get(platform)
     froze = False
+    resumer = SelfPauseResumer()
     while not stop.wait(timeout=1):
         try:
-            resumed = page.eval(_RESUME_SELF_PAUSE_JS)
-            if resumed and log_path is not None:
+            now = time.time()
+            press = resumer.step(json.loads(page.eval(_PLAYER_STATE_JS) or "null"), now)
+            if press and page.eval(_PLAY_JS) and log_path is not None:
                 with open(log_path, "a") as fh:
-                    fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": "resume_after_self_pause"}) + "\n")
+                    fh.write(json.dumps({"ts": now, "platform": platform, **press}) + "\n")
         except Exception:
             pass
         try:

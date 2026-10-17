@@ -224,7 +224,10 @@ function emit(type) {
     if (window === window.top) {
       document.documentElement.dataset.lvqoeFrozenS = String(frozenT0 === null ? 0 : (evt.ts - frozenT0) / 1000);
       // the stall label, for browser.py's tt dead-room watcher (a stall is never a dead room; player_frozen owns it)
+      // and its self-pause resumer (after_stall)
       document.documentElement.dataset.lvqoeStall = labelStall ? "1" : "0";
+      // the ad label, so the collector never presses play on an ad (browser.py SelfPauseResumer)
+      document.documentElement.dataset.lvqoeAd = evt.is_ad ? "1" : "0";
     }
   }
   // Tick id visible to the page world (shared DOM), so screenshots can be stamped with the tick they follow.
