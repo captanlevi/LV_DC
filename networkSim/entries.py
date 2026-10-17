@@ -104,10 +104,17 @@ def compute_entries(rows: list[dict], meta: dict, net_labels: list[dict]) -> lis
         tn = r.get("t_enter") or r["t_nav"]
         te = first_tick_at(rows, r.get("room"), after=tn) if r.get("room") else None
         out.append({"kind": "room_reentry", "t": te or tn, "url": r.get("room"), "rotation_ok": r.get("ok")})
+    # levi 2026-10-17: a tt start failure (live rooms found, none played) is a failed, unshaped stream entry, even with
+    # no ticks or a room that played briefly before the picker gave up on it
+    start_failed = meta.get("platform") == "tiktok" and NOT_LIVE_MARK in (meta.get("abort_reason") or "")
+    if start_failed and not any(e["kind"] == "stream" for e in out):
+        out.insert(0, {"kind": "stream", "t": meta.get("started_at") or 0.0, "url": meta.get("channel_url")})
     for e in out:
         s = sustained_at(rows, e["t"])
         e.update(shaper_at_entry=shaper_at(net_labels, e["t"]), first_shaped_after=first_shaped_after(net_labels, e["t"]),
                  sustained_60s=s is not None, sustained_at=s)
+        if start_failed and e["kind"] == "stream":
+            e.update(sustained_60s=False, start_failed=True)
     return out
 
 

@@ -142,12 +142,29 @@ def test_rates_and_reentry():
                                      "room_reentry:2": {"entries": 1, "failed": 1, "rate": 1.0}}
 
 
+def test_tt_start_failure_entry():
+    """levi: a tt start failure is a failed entry in the unshaped row, with or without ticks."""
+    meta = {"platform": "tiktok", "abort_reason": "error: RuntimeError: Failed to navigate to a live tiktok stream",
+            "started_at": 50.0, "channel_url": None}
+    e = E.compute_entries([], meta, [])
+    assert [(x["kind"], x["shaper_at_entry"]["state"], x["sustained_60s"], x.get("start_failed")) for x in e] == \
+        [("stream", "unshaped", False, True)], e
+    rows = [{"type": "start", "ts": "0"}] + [{"type": "res_meta", "ts": str((60 + i) * 1000), "current_time": str(i),
+                                              "url": "x", "video_w": "720"} for i in range(20)]
+    e = E.compute_entries(rows, meta, [])           # a tried room played 20 s before the picker gave up
+    assert len(e) == 1 and not e[0]["sustained_60s"] and e[0]["start_failed"], e
+    assert E.startup_rates(e) == {"stream:unshaped": {"entries": 1, "failed": 1, "rate": 1.0}}
+    yt = {**meta, "platform": "youtube", "abort_reason": meta["abort_reason"].replace("tiktok", "youtube")}
+    assert E.compute_entries([], yt, []) == []     # yt / twitch: not_live, no entry made up
+
+
 def main() -> int:
     test_ti20_replay()
     test_recovery_is_a_discontinuity()
     test_entries_and_class()
     test_precedence()
     test_rates_and_reentry()
+    test_tt_start_failure_entry()
     print("test_player_dead: ok")
     return 0
 
