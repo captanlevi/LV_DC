@@ -94,6 +94,7 @@ WINDOW_SIZES: dict[str, str] = {}
 
 EXIT_LOGIN_WALL = 3   # exp.py exit code when the session was aborted at a login wall (t37)
 EXIT_STOPPED = 130    # exp.py exit code when the operator stopped the session (SIGINT / SIGTERM)
+EXIT_PLAYER_FROZEN = 5   # the player froze in a stall past T (addendum N); not a failure of the batch's 5-fail rule
 
 
 # v2 (LVQoE t37, rushi 2026-10-16): each session's profile is a CLONE of a per-platform template (a Chrome user-data-dir,
@@ -715,5 +716,7 @@ if __name__ == "__main__":
         sys.exit(EXIT_LOGIN_WALL)
     if abort_reason and abort_reason.startswith(("signal", "interrupted")):
         sys.exit(EXIT_STOPPED)    # orchestrate.py stops the whole batch
+    if abort_reason == "player_frozen":
+        sys.exit(EXIT_PLAYER_FROZEN)   # orchestrate.py re-picks; raw data kept (check_session FAILs it into _failed/)
     if abort_reason:
         sys.exit(1)               # e.g. the channel was not live: orchestrate.py moves on to the next channel

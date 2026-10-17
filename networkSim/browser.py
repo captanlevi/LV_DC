@@ -26,6 +26,7 @@ from pathlib import Path
 import websocket  # websocket-client
 
 from yt_channels import YT_CHANNELS, url_of
+from check_session import FROZEN_PLAYHEAD_MAX_S
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -896,15 +897,20 @@ def _wait_for_load(page: CDPPage, timeout: float = 15.0) -> None:
 # ---------------------------------------------------------------------------
 
 _WALL_JS = "document.documentElement.dataset.lvqoeWall === '1'"
+# addendum N: content.js's stall-only frozen-playhead run, in seconds (same measure as check_session.frozen_playhead_run)
+_FROZEN_JS = "Number(document.documentElement.dataset.lvqoeFrozenS || 0)"
 TICK_STARTUP_TIMEOUT_S = 15
 
 
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
-                     on_wall=None) -> None:
+                     on_wall=None, on_frozen=None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
-    Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears."""
+    Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
+    calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table)."""
     skip_js = _SKIP_AD_JS.get(platform, "null")
     walled = False
+    frozen_max_s = FROZEN_PLAYHEAD_MAX_S.get(platform)
+    froze = False
     while not stop.wait(timeout=1):
         try:
             result = page.eval(skip_js)
@@ -922,6 +928,14 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                     on_wall()
             except Exception:
                 pass
+        if on_frozen is not None and frozen_max_s is not None and not froze:
+            try:
+                frozen_s = float(page.eval(_FROZEN_JS) or 0)
+            except Exception:
+                frozen_s = 0.0
+            if frozen_s > frozen_max_s:
+                froze = True
+                on_frozen(frozen_s)
 
 
 SHOT_INTERVAL_S = 10.0
@@ -1173,7 +1187,7 @@ class BrowserSession:
         log_path = (self._session_dir / "ad_actions.jsonl") if self._session_dir else None
         self._watcher = threading.Thread(
             target=_ad_watcher_loop,
-            args=(self._page, self.platform, self._stop, log_path, self._on_wall),
+            args=(self._page, self.platform, self._stop, log_path, self._on_wall, self._on_frozen),
             daemon=True,
             name="ad-watcher",
         )
@@ -1227,6 +1241,14 @@ class BrowserSession:
     def _on_wall(self) -> None:
         self.abort_reason, self.abort_at = "login_wall", time.time()
         print("[browser] LOGIN WALL detected (content.js login_wall) — aborting the session", flush=True)
+
+    def _on_frozen(self, frozen_s: float) -> None:
+        # addendum N: the player froze in a stall and has not recovered within T; no reload (that would be a user
+        # action inside the session). exp.py exits EXIT_PLAYER_FROZEN, which the batch does not count as a failure.
+        if self.abort_reason is None:
+            self.abort_reason, self.abort_at = "player_frozen", time.time()
+        print(f"[browser] PLAYER FROZEN: playhead frozen {frozen_s:.0f} s in a stall > T "
+              f"{FROZEN_PLAYHEAD_MAX_S.get(self.platform)} s — aborting the session", flush=True)
 
     def stop(self) -> None:
         # Read QoE events from the extension service worker before closing the tab

@@ -71,7 +71,8 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 - **Resume:** PASS sessions are recounted from disk at every start.
 - **Free space:** it stops below 10 % free (exit 4).
 - **Pre-clean:** it undoes leftovers (shaping, tcpdump, Chrome) before every session.
-- **Pausing a platform:** after 5 consecutive sessions without a PASS, or on a login wall.
+- **Pausing a platform:** after 5 consecutive sessions without a PASS, or on a login wall. A `player_frozen` abort
+  (exit 5) is not counted toward the 5; a separate cap pauses the platform after 5 consecutive `player_frozen` aborts.
 - **Not-live yt channel:** skipped for 6 h.
 - **Daily summary:** `data/_summaries/summary_<day>.md / .json` after every session:
   - PASS / FAIL by reason;
@@ -94,6 +95,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 | exp.py | 0 | session ran; see its `check.md` |
 | exp.py | 1 | start failed (channel not live, extension not ticking); finalised, FAIL |
 | exp.py | 3 | login wall: orchestrate pauses that platform |
+| exp.py | 5 | `player_frozen`: the watchdog aborted a player frozen in a stall past T (addendum N); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session re-picks |
 | exp.py | 130 | stopped by SIGINT / SIGTERM; finalised, FAIL, orchestrate stops |
 | orchestrate.py | 4 | less than 10 % free space on the data volume |
 
@@ -140,7 +142,9 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `ssl_keys.log missing or empty` | v2 keeps the TLS keys |
 | `capture gap` | a minute with zero client packets while the shaper ran |
 | `no res_meta ticks` / tick presence < `0.95` | the extension's 1 Hz tick |
-| `current_time advancing` < `0.8` | of playing, non-ad ticks |
+| `current_time advancing` < `0.8` | of playing, non-ad ticks (it says nothing about stall ticks) |
+| `player_frozen` | addendum N: the longest stall-only frozen-playhead run (stall label on, non-ad, playhead within 1 s of the run's first tick) > T: yt `180` s, twitch `660` s, tt `720` s (`1.2` × the old data's max, rounded up to the minute; `FROZEN_PLAYHEAD_MAX_S`). browser.py's watchdog aborts at the same T on the same measure (content.js `data-lvqoe-frozen-s`); `test_frozen_run.py` checks the two agree |
+| `latched_stall` (I10) | more than `0.5` of stall ticks with the playhead advancing at `0.8`–`1.5` s/s, scored with ≥ `10` stall ticks (levi's `i10_stall_advance.py`) |
 | `labels.csv lacks the v2 columns` | old extension loaded |
 | `usable` < `0.6` | non-ad play or stall time over the session length |
 | `ipv6_media` | any selected media bytes on IPv6 flows |

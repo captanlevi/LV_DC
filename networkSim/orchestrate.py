@@ -43,6 +43,7 @@ _RUNS_DIR = Path(__file__).parent.parent / "data"
 
 EXIT_LOGIN_WALL = 3   # exp.py's exit code for a session aborted at a login wall (t37)
 EXIT_STOPPED = 130    # exp.py's exit code when the operator stopped the session
+EXIT_PLAYER_FROZEN = 5   # exp.py's exit code when the watchdog aborted a frozen player (addendum N)
 
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume falls below MIN_FREE_SHARE free
 
@@ -53,6 +54,9 @@ EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
 # platform after this many consecutive sessions without a PASS; a yt channel that failed to start is skipped this long
 MIN_FREE_SHARE = 0.10
 MAX_CONSECUTIVE_FAIL = 5
+# addendum N: player_frozen aborts do not count toward MAX_CONSECUTIVE_FAIL; a separate cap stops a platform whose
+# player keeps freezing from looping forever
+MAX_CONSECUTIVE_FROZEN = 5
 NOT_LIVE_RETRY_S = 6 * 3600
 BATCH_ORDER = ("youtube", "twitch", "tiktok", "bilibili")
 
@@ -123,7 +127,9 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
             print(f"  LOGIN WALL on {platform}: stopping this platform (fix the profile template, then rerun).")
             balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
             return
-        if rc != 0:
+        if rc == EXIT_PLAYER_FROZEN:
+            print("  player_frozen: the player froze past T (addendum N); session kept in _failed/, next run re-picks.")
+        elif rc != 0:
             print("  Collection returned non-zero — check logs above.")
             if channel:
                 not_live.add(channel["handle"])
@@ -169,6 +175,7 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
     changes what a session collects; it only sequences exp.py runs and recovers from failures."""
     paused: dict[str, str] = {}
     fails = {p: 0 for p in targets}
+    frozen = {p: 0 for p in targets}
     not_live: dict[str, float] = {}
     while True:
         todo = [p for p in BATCH_ORDER if p in targets and p not in paused and accepted_sessions(p) < targets[p]]
@@ -202,9 +209,16 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             sys.exit(EXIT_STOPPED)
         if rc == EXIT_LOGIN_WALL:
             paused[p] = "login wall (fix the profile template, then rerun)"
+        elif rc == EXIT_PLAYER_FROZEN:
+            frozen[p] += 1
+            print(f"  player_frozen on {p} ({frozen[p]} in a row): not counted as a failure; next session re-picks")
+            if frozen[p] >= MAX_CONSECUTIVE_FROZEN:
+                paused[p] = f"{frozen[p]} consecutive player_frozen aborts"
         elif rc != 0 and channel:
             not_live[channel["handle"]] = now
-        fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1
+        if rc != EXIT_PLAYER_FROZEN:
+            frozen[p] = 0
+            fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1
         if fails[p] >= MAX_CONSECUTIVE_FAIL and p not in paused:
             paused[p] = f"{fails[p]} consecutive sessions without a PASS"
         if p in paused:

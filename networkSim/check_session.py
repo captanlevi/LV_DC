@@ -16,6 +16,11 @@ Acceptance is CAPTURE INTEGRITY ONLY (prereg §2, brad R1): nothing that co-vari
              sessions, t23 / t30). The per-episode maximum and the http_v2-based share are reported, not enforced.
   artefacts  no minute with zero client packets while the shaper runs; screenshots present; meta.json complete
   keylog     recorded, never filtered
+  frozen     player_frozen (addendum N): the longest stall-only frozen-playhead run (stall label on, non-ad tick, playhead
+             within 1 s of the run's first tick) <= FROZEN_PLAYHEAD_MAX_S[platform] (1.2 x the old data's maximum,
+             rounded up to the minute). browser.py's watchdog aborts a session at the same T, on the same measure.
+  latch      I10 (levi): <= 0.5 of stall ticks with the playhead advancing at 0.8-1.5 s/s (a stall label that outlives
+             playback), scored with >= 10 stall ticks
 QA fields for the readings (levi R4): per-signal ad tick counts and ad spans per signal set; Addendum D (twitch: share
 of tier changes with a src_changed within ± 2 s; swap-only ad spans, must be 0); Addendum C (realised dwell per shaper
 state, in episodes); yt 144 / 240 / 360p shares of quality time (ads masked); ad-action summary; the player pin.
@@ -46,6 +51,18 @@ CHECKS = {
     "shots_share_min": 0.5,
     "shot_interval_s": 10.0,
 }
+# addendum N (supervisor 2026-10-17, tw_3 / tw_4): the player froze and never recovered. T per platform = 1.2 x the
+# longest stall-only frozen-playhead run in the old data (earth / fire / shadow / water), rounded up to the minute:
+# yt 116 s (water/yt_60), twitch 513 s (earth/tw-39), tt 567 s (fire/Tiktok_36). One table, read by check_session's
+# FAIL and by browser.py's watchdog; frozen_playhead_run() here and content.js's lvqoeFrozenS compute the same run.
+FROZEN_PLAYHEAD_MAX_S = {"youtube": 180, "twitch": 660, "tiktok": 720}
+FROZEN_PLAYHEAD_TOL_S = 1.0
+# I10 (levi, latched-stall guard; LVQoE scripts/analysis/i10_stall_advance.py): share of stall ticks whose playhead
+# advances at a playing rate, scored with >= I10_MIN_STALL_TICKS stall ticks; old data max yt 0.029 / tt 0.231 /
+# twitch 0.182 (bilibili/bili_new_17 0.947, a recorded latch candidate)
+STALL_ADVANCING_RATE = (0.8, 1.5)
+STALL_ADVANCING_SHARE_MAX = 0.5
+I10_MIN_STALL_TICKS = 10
 # sensor_v2's span-type ad signals (LVQoE label_policies.SPAN_TYPE_SIGNALS) and its span rule
 SPAN_TYPE_SIGNALS = ("duration_finite", "yt_ad_showing", "yt_ad_interrupting", "yt_ad_dom", "tw_ad_dom")
 AD_MERGE_GAP_S, AD_PAD_S, SWAP_BOUNDARY_S = 2.0, 1.0, 2.0
@@ -138,6 +155,52 @@ def ad_spans(meta: list[dict], signal_set=SPAN_TYPE_SIGNALS) -> tuple[list[list[
     return [[lo - AD_PAD_S, hi + AD_PAD_S] for lo, hi in spans], swap_only
 
 
+def frozen_playhead_run(rows: list[dict]) -> float:
+    """Longest stall-only frozen-playhead run, in seconds (addendum N): over res_meta ticks with the stall label on
+    (stall ... start / video_start), not an ad tick and with a parseable current_time, a run starts when there is none
+    open or the playhead has moved more than FROZEN_PLAYHEAD_TOL_S from the run's first tick; any other tick ends it."""
+    stall, t0, ct0, longest = False, None, None, 0.0
+    for r in rows:
+        ty = r.get("type")
+        if ty == "stall":
+            stall = True
+        elif ty in ("start", "video_start"):
+            stall = False
+        if ty != "res_meta":
+            continue
+        t, ct = _f(r.get("ts")), _f(r.get("current_time"))
+        if not stall or _true(r.get("is_ad")) or t is None or ct is None:
+            t0 = None
+            continue
+        if t0 is None or abs(ct - ct0) > FROZEN_PLAYHEAD_TOL_S:
+            t0, ct0 = t, ct
+        longest = max(longest, (t - t0) / 1000.0)
+    return longest
+
+
+def stall_advancing_share(rows: list[dict]) -> float | None:
+    """I10: share of stall-labelled res_meta ticks whose playhead advanced at a rate inside STALL_ADVANCING_RATE s/s
+    since the previous tick; None (unscored) with fewer than I10_MIN_STALL_TICKS such ticks."""
+    stall, prev, n, adv, has_ct = False, None, 0, 0, False
+    for r in rows:
+        ty = r.get("type")
+        if ty == "stall":
+            stall = True
+        elif ty in ("start", "video_start"):
+            stall = False
+        if ty != "res_meta":
+            continue
+        t, ct = _f(r.get("ts")), _f(r.get("current_time"))
+        if stall:
+            n += 1          # every stall tick counts; a tick with no rate (no previous tick / current_time) is not advancing
+            has_ct = has_ct or ct is not None
+            if prev is not None and t is not None and ct is not None and t > prev[0]:
+                lo, hi = STALL_ADVANCING_RATE
+                adv += lo <= (ct - prev[1]) / ((t - prev[0]) / 1000.0) <= hi
+        prev = (t, ct) if t is not None and ct is not None else None
+    return adv / n if n >= I10_MIN_STALL_TICKS and has_ct else None
+
+
 def label_checks(rows: list[dict], platform: str) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
@@ -186,6 +249,9 @@ def label_checks(rows: list[dict], platform: str) -> dict:
         "swap_only_ad_spans": swap_only,
         "src_changed_ticks": len(sw_t),
         "stall_share": sum(stalled) / len(stalled) if stalled else None,
+        "frozen_playhead_max_s": frozen_playhead_run(rows),
+        "frozen_playhead_T_s": FROZEN_PLAYHEAD_MAX_S.get(platform),
+        "stall_advancing_share": stall_advancing_share(rows),
         "tier_mix_quality_time": {str(k): v / nq for k, v in sorted(mix.items())},
         "tier_changes": len(tier_changes),
         "tier_changes_per_min": len(tier_changes) / (dur / 60.0) if dur > 0 else None,
@@ -579,6 +645,8 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
     why = []
     if abort_reason == "login_wall" or lab.get("login_wall_ticks"):
         why.append("login_wall")   # t37: the platform's logged-out wall stopped playback; the session was aborted
+    elif abort_reason == "player_frozen":
+        why.append("player_frozen (watchdog abort, addendum N)")
     elif abort_reason:
         why.append(f"aborted: {abort_reason}")
     if lab.get("quality_countdown_ticks"):
@@ -600,6 +668,13 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
             why.append(f"current_time advancing in {a:.2f} of playing ticks < {CHECKS['advancing_share_min']}")
         if not lab.get("v2_columns"):
             why.append("labels.csv lacks the v2 columns (old extension loaded?)")
+        fz, T = lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s")
+        if T is not None and fz is not None and fz > T and abort_reason != "player_frozen":
+            why.append(f"player_frozen: playhead frozen {fz:.0f} s in a stall > T {T} s (addendum N)")
+        sa = lab.get("stall_advancing_share")
+        if sa is not None and sa > STALL_ADVANCING_SHARE_MAX:
+            why.append(f"latched_stall (I10): {sa:.2f} of stall ticks with the playhead advancing at "
+                       f"{STALL_ADVANCING_RATE} s/s > {STALL_ADVANCING_SHARE_MAX}")
         if lab.get("usable_share") is not None and lab["usable_share"] < CHECKS["usable_share_min"]:
             why.append(f"usable (non-ad play or stall) {lab['usable_share']:.2f} of the session < {CHECKS['usable_share_min']}")
     if net.get("ipv6_media_share"):
@@ -673,6 +748,8 @@ def main() -> int:
           f"| Addendum D: swap-only ad spans (must be 0) | {lab.get('swap_only_ad_spans')} |",
           f"| Addendum D: tier changes with src_changed within ± 2 s | {lab.get('tier_changes_with_swap_within_2s_share')} (of {lab.get('tier_changes')}) |",
           f"| stall share | {lab.get('stall_share')} |",
+          f"| longest frozen-playhead stall run, s / T (FAIL above; addendum N) | {lab.get('frozen_playhead_max_s')} / {lab.get('frozen_playhead_T_s')} |",
+          f"| I10: stall ticks with the playhead advancing (FAIL > {STALL_ADVANCING_SHARE_MAX}; >= {I10_MIN_STALL_TICKS} stall ticks) | {lab.get('stall_advancing_share')} |",
           f"| tier mix (quality time, ads masked) | {lab.get('tier_mix_quality_time')} |",
           f"| yt 144 / 240 / 360p shares | {lab.get('yt_low_tier_shares')} |",
           f"| tier changes / min | {lab.get('tier_changes_per_min')} |",

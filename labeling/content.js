@@ -15,6 +15,14 @@ let inStall = false;
 // v2 (LVQoE t35): element / source identity, to report a swap on the first tick after it
 let lastSrc = null;
 let lastElement = null;
+// addendum N (LVQoE, 2026-10-17): the stall-only frozen-playhead run, computed on the emitted stream exactly as
+// check_session.frozen_playhead_run() does (stall label on from a "stall" event to a "start" / "video_start" event;
+// non-ad tick; playhead within FROZEN_TOL_S of the run's first tick). The top frame publishes its length in seconds as
+// <html data-lvqoe-frozen-s>; browser.py's watchdog aborts the session past the platform's T (check_session table).
+const FROZEN_TOL_S = 1.0;
+let labelStall = false;
+let frozenT0 = null;
+let frozenCt0 = null;
 // An ad's <video> has a short finite duration; live streams report Infinity. A DVR window can report a long finite
 // duration, so only a finite duration below this bound counts as an ad signal (raw duration is recorded too).
 const AD_MAX_DURATION_S = 600;
@@ -191,6 +199,20 @@ function emit(type) {
 
   const evt = withAdState(buildEvent(type));
   eventBuffer.push(evt);
+  if (type === "stall") labelStall = true;
+  else if (type === "start" || type === "video_start") labelStall = false;
+  if (type === "res_meta") {
+    const ct = evt.current_time;
+    if (!labelStall || evt.is_ad || ct === null || ct === undefined || !isFinite(ct)) {
+      frozenT0 = null;
+    } else if (frozenT0 === null || Math.abs(ct - frozenCt0) > FROZEN_TOL_S) {
+      frozenT0 = evt.ts;
+      frozenCt0 = ct;
+    }
+    if (window === window.top) {
+      document.documentElement.dataset.lvqoeFrozenS = String(frozenT0 === null ? 0 : (evt.ts - frozenT0) / 1000);
+    }
+  }
   // Tick id visible to the page world (shared DOM), so screenshots can be stamped with the tick they follow.
   if (type === "res_meta" && window === window.top) {
     document.documentElement.dataset.lvqoeTick = String(evt.event_id);
@@ -284,6 +306,9 @@ function attachVideo(v) {
 
   video = v;
   lastEventType = null;
+  // stall state belongs to the element: re-evaluate it on the new one (the safety net emits "stall" if it is
+  // buffering), instead of carrying the old element's flag past the "video_start" that clears the label
+  inStall = false;
 
   console.log("[YT] Video detected");
   emit("video_start");
