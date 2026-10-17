@@ -10,7 +10,8 @@ started_at), plus the cumulative totals:
     is cut);
   - class mix of accepted sessions: tier shares of quality time (ads masked), weighted by session duration; stall share;
   - sizes: pcap MB per session, total GB, disk free on the data volume;
-  - yt channel rotation counts.
+  - yt channel rotation counts;
+  - session classes (levi's precedence) and the startup-failure rate per entry, by kind and shaper state at entry.
 Nothing here gates anything.
 
 Usage: python batch_summary.py [--date YYYY-MM-DD] [--data-dir ../data]
@@ -101,6 +102,15 @@ def summarise(rows: list[dict]) -> dict:
                 geo[g][1] += bool(pin.get("ok"))
                 geo[g][2] += bool(pin.get("clamped"))
         screens = collections.Counter(str((r["meta"].get("geometry") or {}).get("screen")) for r in rs if r["meta"].get("geometry"))
+        # levi 2026-10-17: one session class each (only normal counts toward quotas); the startup-failure rate per
+        # entry, by kind and shaper state at entry (failed / entries), from check.json's entries
+        classes = collections.Counter((r["check"] or {}).get("session_class", "no_class") for r in rs)
+        ent = collections.defaultdict(lambda: [0, 0])
+        for c in checks:
+            for e in c.get("entries") or []:
+                k = f"{e.get('kind')}:{(e.get('shaper_at_entry') or {}).get('state')}"
+                ent[k][0] += 1
+                ent[k][1] += not e.get("sustained_60s")
         out[pf] = {
             "sessions": len(rs), "verdicts": dict(verdicts), "fail_reasons": dict(reasons.most_common()),
             "exogenous_share_median_max": [statistics.median(exo), max(exo)] if exo else None,
@@ -113,6 +123,8 @@ def summarise(rows: list[dict]) -> dict:
             "pcap_mb_median": statistics.median(sizes) if sizes else None, "pcap_gb_total": round(sum(sizes) / 1e3, 2),
             "geometry_drawn_realised": {g: f"{v[1]}/{v[0]}" + (f" ({v[2]} clamped to the screen)" if v[2] else "") for g, v in sorted(geo.items())},
             "screens": dict(screens),
+            "session_classes": dict(classes.most_common()),
+            "startup_failure_per_entry": {k: {"entries": n, "failed": f, "rate": round(f / n, 3)} for k, (n, f) in sorted(ent.items())},
         }
     return out
 
@@ -163,6 +175,10 @@ def write(data_dir: Path = DATA_DIR, day: str | None = None) -> Path:
             md.append(f"| {pf} | {v['sessions']} | {v['verdicts']} | {v['fail_reasons']} | {v['exogenous_share_median_max']} | "
                       f"{v['background_share_median_max']} | {v['accepted_hours']} | {v['class_mix_accepted']} | "
                       f"{v['stall_share_median']} | {v['pcap_mb_median']} | {v['pcap_gb_total']} |")
+        md += ["", f"Session classes and startup failures per entry ({scope}; levi's precedence, only normal counts):", ""]
+        for pf, v in out[scope].items():
+            md.append(f"- {pf}: {v['session_classes']}; startup failures per entry (kind:state failed/entries): "
+                      + ", ".join(f"{k} {d['failed']}/{d['entries']}" for k, d in v["startup_failure_per_entry"].items()))
         md += ["", f"Geometry ({scope}; realised / drawn) and screens:", ""]
         for pf, v in out[scope].items():
             md.append(f"- {pf}: {v['geometry_drawn_realised']}; screens {v['screens']}")

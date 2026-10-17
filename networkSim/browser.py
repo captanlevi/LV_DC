@@ -27,7 +27,7 @@ from pathlib import Path
 import websocket  # websocket-client
 
 from yt_channels import YT_CHANNELS, url_of
-from check_session import FROZEN_PLAYHEAD_MAX_S
+from check_session import FROZEN_PLAYHEAD_MAX_S, PLAYER_DEAD_MAX_S
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -524,10 +524,17 @@ class TTRoomWatch:
       (b) there has been no progress (no source, or neither playhead nor media moving) for the platform's T (addendum N,
           FROZEN_PLAYHEAD_MAX_S) and the interfaces received under TT_RX_IDLE_BYTES over the last TT_RX_WINDOW_S;
     (b)'s clock does not run while the stall label is on, within TT_STALL_GRACE_S after it, or in shaper states 1-4.
-    A source drop that comes back is recorded as a discontinuity (meta.json room_discontinuities), not a cut."""
+    A source drop that comes back is recorded as a discontinuity (meta.json room_discontinuities), not a cut.
+    Separately, player_dead (supervisor 2026-10-17, ti_20 / ti_21: 0x0, readyState 0, playhead 0 under the stall label
+    for 8-12 min, media not arriving): readyState 0 (or no element) with no media appended or decoded for
+    PLAYER_DEAD_MAX_S["tiktok"] -> "player_dead". No exemption: a reconnecting player gets its first bytes within
+    seconds (old data: every 0x0 run that recovered was <= 20 s); one that recovers inside the limit is a discontinuity."""
 
     def __init__(self, t_max_s: float | None = None) -> None:
         self.t_max_s = t_max_s if t_max_s is not None else FROZEN_PLAYHEAD_MAX_S.get("tiktok", 720)
+        self.t_dead_s = PLAYER_DEAD_MAX_S.get("tiktok", 60)
+        self.dead_since: float | None = None          # player_dead clock
+        self.last_media: tuple | None = None
         self.flat_since: float | None = None          # banner rule: no progress since
         self.no_progress_since: float | None = None   # rule (b) clock
         self.last: tuple | None = None
@@ -558,6 +565,16 @@ class TTRoomWatch:
             self.gone_since = None
         if not no_src:
             self.last = cur
+        # player_dead: readyState 0 (or no element) and no media appended / decoded since the last sample
+        media = (s.get("buf_end"), s.get("decoded"))
+        dead_now = (not s.get("has_video") or s.get("rs") == 0) and media == self.last_media
+        self.last_media = media
+        if not dead_now:
+            self.dead_since = None
+        elif self.dead_since is None:
+            self.dead_since = now
+        elif now - self.dead_since >= self.t_dead_s:
+            return "player_dead"
         # (a) the banner with no player or no progress
         if progressed:
             self.flat_since = None
@@ -1060,7 +1077,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         header = ["ts", "type", "video_w", "video_h", "client_w", "client_h",
                   "dropped", "current_time", "tabId", "url", "event_id",
                   "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed",
-                  "login_wall_text", "login_wall", "quality_countdown", "paused", "playhead_still_s"]
+                  "login_wall_text", "login_wall", "quality_countdown", "paused", "playhead_still_s", "ready_state"]
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]
@@ -1546,6 +1563,7 @@ class BrowserSession:
         self.abort_at: float | None = None
         self.tt_room_choice: dict | None = None   # tt: candidates, tries and the chosen room (meta.json)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
+        self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.tw_pick: dict | None = None          # twitch: directory candidates, recent channels excluded, the pick
         self.room_play_clicks = 0                 # tt: play clicks on a paused, flat player (room watcher)
         self.room_discontinuities: list = []      # tt: player source drops that came back (room watcher)
@@ -1811,7 +1829,8 @@ class BrowserSession:
         return None
 
     def _room_watch_loop(self) -> None:
-        """tt: abort the session with reason room_ended when the room dies mid-session (TTRoomWatch)."""
+        """tt: abort the session with reason room_ended when the room dies mid-session, or player_dead when the player
+        sits at readyState 0 with no media (TTRoomWatch)."""
         w = TTRoomWatch()
         while not self._stop.wait(timeout=1):
             if time.time() < self._room_grace_until:
@@ -1834,11 +1853,16 @@ class BrowserSession:
             dead = w.feed(s, time.time(), shaper_state=state, rx_bytes=_rx_bytes())
             self.room_discontinuities = w.discontinuities
             if dead:
-                self.room_ended = {"reason": dead, "at": time.time(), "sample": s, "shaper_state": state,
-                                   "room": self._page.eval("location.href") if self._page else None}
+                rec = {"reason": dead, "at": time.time(), "sample": s, "shaper_state": state,
+                       "room": self._page.eval("location.href") if self._page else None}
+                why = "player_dead" if dead == "player_dead" else "room_ended"
+                if why == "player_dead":
+                    self.player_dead = {**rec, "dead_s": round(time.time() - (w.dead_since or time.time()), 1)}
+                else:
+                    self.room_ended = rec
                 if self.abort_reason is None:
-                    self.abort_reason, self.abort_at = "room_ended", time.time()
-                print(f"[browser] ROOM ENDED ({dead}) — aborting the session", flush=True)
+                    self.abort_reason, self.abort_at = why, time.time()
+                print(f"[browser] {why.upper()} ({dead}) — aborting the session", flush=True)
                 return
 
     def _room_rotation_loop(self) -> None:
@@ -1856,7 +1880,7 @@ class BrowserSession:
                 while time.time() < deadline and not self._page.eval(_CARD_READY_JS["tiktok"]):
                     time.sleep(1)
                 picked = self._page.eval(_pick_new_room_js(visited))
-                rec["picked"] = picked
+                rec["picked"], rec["t_enter"] = picked, time.time()
                 ok = False
                 deadline = time.time() + 30
                 while time.time() < deadline and not self._stop.is_set():

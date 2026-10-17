@@ -56,6 +56,10 @@ CHECKS = {
 # yt 116 s (water/yt_60), twitch 513 s (earth/tw-39), tt 567 s (fire/Tiktok_36). One table, read by check_session's
 # FAIL and by browser.py's watchdog; frozen_playhead_run() here and content.js's lvqoeFrozenS compute the same run.
 FROZEN_PLAYHEAD_MAX_S = {"youtube": 180, "twitch": 660, "tiktok": 720}
+# player_dead (supervisor 2026-10-17, ti_20 / ti_21): same T-table family, a separate reason: readyState 0 with no media
+# for this long after the player had played. tt only (browser.py TTRoomWatch aborts on it live). Old tt data: every 0x0 /
+# playhead-0 run that recovered was <= 20 s (21 sessions on chaos, 2026-10-17)
+PLAYER_DEAD_MAX_S = {"tiktok": 60}
 FROZEN_PLAYHEAD_TOL_S = 1.0
 # I10 (levi, latched-stall guard; LVQoE scripts/analysis/i10_stall_advance.py, within-stall rule): share of within-stall
 # ticks whose playhead advances at a playing rate, scored with >= I10_MIN_STALL_TICKS such ticks; old data max yt / tt /
@@ -115,6 +119,9 @@ def flow_category(names: set, platform: str) -> str:
 MEDIA_URL_PATTERNS = ("/videoplayback", ".ts", ".m4s", ".flv", "/v1/segment/")
 META_REQUIRED = ("lvdc_commit", "extension_version", "chrome", "shaper", "channel_url", "hostname", "ntp_offset_start")
 TSHARK = shutil.which("tshark") or "tshark"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import entries as E   # noqa: E402  (session_class, entries, dead-player run; levi 2026-10-17)
 
 
 def _f(x):
@@ -316,6 +323,8 @@ def label_checks(rows: list[dict], platform: str) -> dict:
         "frozen_playhead_max_s": frozen_playhead_run(rows),
         "paused_while_playing_share": paused_while_playing_share(rows),
         "frozen_playhead_T_s": FROZEN_PLAYHEAD_MAX_S.get(platform),
+        "dead_player_max_s": E.dead_player_run(rows),
+        "dead_player_T_s": PLAYER_DEAD_MAX_S.get(platform),
         "stall_advancing_share": stall_advancing_share(rows),
         "tier_mix_quality_time": {str(k): v / nq for k, v in sorted(mix.items())},
         "tier_changes": len(tier_changes),
@@ -714,6 +723,8 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
         why.append("player_frozen (watchdog abort, addendum N)")
     elif abort_reason == "room_ended":
         why.append("room_ended (tt: the room died mid-session; browser.py TTRoomWatch)")
+    elif abort_reason == "player_dead":
+        why.append("player_dead (tt: readyState 0 with no media for T; browser.py TTRoomWatch)")
     elif abort_reason:
         why.append(f"aborted: {abort_reason}")
     if lab.get("quality_countdown_ticks"):
@@ -738,6 +749,9 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
         fz, T = lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s")
         if T is not None and fz is not None and fz > T and abort_reason != "player_frozen":
             why.append(f"player_frozen: playhead frozen {fz:.0f} s in a stall > T {T} s (addendum N)")
+        dr, DT = lab.get("dead_player_max_s"), lab.get("dead_player_T_s")
+        if DT is not None and dr is not None and dr >= DT and abort_reason != "player_dead":
+            why.append(f"player_dead: no media (readyState 0) for {dr:.0f} s after playback >= T {DT} s")
         sa = lab.get("stall_advancing_share")
         if sa is not None and sa > STALL_ADVANCING_SHARE_MAX:
             why.append(f"latched_stall (I10): {sa:.2f} of within-stall ticks with the playhead advancing at "
@@ -807,13 +821,24 @@ def main() -> int:
     except Exception as e:
         motion_s = {"status": "error", "why": repr(e)}
     v, why = verdict(lab, net, shots, meta_missing, a.max_background_share, meta.get("abort_reason"))
-    out = {"session": str(sd), "platform": platform, "verdict": v, "reasons": why, "thresholds": CHECKS,
+    # levi 2026-10-17: entries (from meta.json, else computed here for older sessions) and one session class by the
+    # fixed precedence; only `normal` counts toward quotas
+    ents = meta.get("entries")
+    if ents is None:
+        ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
+    s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_max_s"),
+                              lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"))
+    out = {"session": str(sd), "platform": platform, "verdict": v, "session_class": s_class, "entries": ents,
+           "reasons": why, "thresholds": CHECKS,
            "max_background_share": a.max_background_share, "labels": lab, "traffic": net, "shots": shots,
            "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats, "motion": motion_s,
            "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap")}
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
-    md = [f"# check: {platform}/{sd.name} — **{v}**", ""] + [f"- {r}" for r in why] + ["",
+    md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class})", ""] + [f"- {r}" for r in why] + ["",
           "| item | value |", "|---|---|",
+          f"| session class (levi's precedence; only normal counts) | {s_class} |",
+          f"| entries: kind / state at entry / first shaped state / sustained >= 5 s within 60 s | {[(x.get('kind'), (x.get('shaper_at_entry') or {}).get('state'), (x.get('first_shaped_after') or {}).get('state'), x.get('sustained_60s')) for x in ents]} |",
+          f"| longest dead-player run after playback (readyState 0 / no media), s / T | {lab.get('dead_player_max_s')} / {lab.get('dead_player_T_s')} |",
           f"| duration (min) | {dur / 60:.1f} |" if dur else "| duration | — |",
           f"| res_meta tick presence (share of seconds) | {lab.get('tick_presence')} |",
           f"| current_time advancing (playing, non-ad) | {lab.get('advancing_share_while_playing')} |",

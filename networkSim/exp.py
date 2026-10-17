@@ -97,6 +97,7 @@ EXIT_LOGIN_WALL = 3   # exp.py exit code when the session was aborted at a login
 EXIT_STOPPED = 130    # exp.py exit code when the operator stopped the session (SIGINT / SIGTERM)
 EXIT_PLAYER_FROZEN = 5   # the player froze in a stall past T (addendum N); not a failure of the batch's 5-fail rule
 EXIT_ROOM_ENDED = 6      # tt: the room died mid-session (browser.py TTRoomWatch); not a failure either, the next re-picks
+EXIT_PLAYER_DEAD = 7     # tt: readyState 0 with no media for PLAYER_DEAD_MAX_S (TTRoomWatch); not a failure, room re-picked
 
 
 # v2 (LVQoE t37, rushi 2026-10-16): each session's profile is a CLONE of a per-platform template (a Chrome user-data-dir,
@@ -704,6 +705,7 @@ if __name__ == "__main__":
                               video_stats=browser.video_stats, geometry_target=browser.geometry_target,
                               login_state=browser.login_state, room_rotation=browser.room_rotation,
                               tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
+                              player_dead=browser.player_dead,
                               tw_pick=browser.tw_pick, room_play_clicks=browser.room_play_clicks,
                               room_discontinuities=browser.room_discontinuities)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
@@ -742,6 +744,11 @@ if __name__ == "__main__":
             print(f"motion: {motion.compute(session_dir)}")
         except Exception as e:
             print(f"motion failed: {e!r}")
+        try:   # levi 2026-10-17: per entry, the shaper state at entry, the first shaped state after it, sustained (60 s)
+            import entries
+            print(f"entries: {[(x['kind'], x['shaper_at_entry']['state'], x['sustained_60s']) for x in entries.write_entries(session_dir)]}")
+        except Exception as e:
+            print(f"entries failed: {e!r}")
         check_session(session_dir)
 
     if abort_reason == "login_wall":
@@ -753,5 +760,7 @@ if __name__ == "__main__":
         sys.exit(EXIT_PLAYER_FROZEN)   # orchestrate.py re-picks; raw data kept (check_session FAILs it into _failed/)
     if abort_reason == "room_ended":
         sys.exit(EXIT_ROOM_ENDED)      # orchestrate.py re-picks a room next session (the ended one is now recent)
+    if abort_reason == "player_dead":
+        sys.exit(EXIT_PLAYER_DEAD)     # likewise: the dead room is now recent, the next session re-picks
     if abort_reason:
         sys.exit(1)               # e.g. the channel was not live: orchestrate.py moves on to the next channel

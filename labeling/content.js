@@ -183,6 +183,7 @@ function buildEvent(type) {
     quality_countdown: null,
     paused: video ? video.paused : null,
     playhead_still_s: null,
+    ready_state: video ? video.readyState : null,   // raw QA (player_dead: 0 = no media at all)
   };
 }
 

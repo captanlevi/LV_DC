@@ -1,0 +1,231 @@
+{
+ "source": "chaos _failed/tiktok/ti_20 (2026-10-17), read only; room URL replaced, tabId dropped",
+ "abort_reason": "player_frozen",
+ "abort_at": 1792233091.1920068,
+ "started_at": 1792232247.9135113,
+ "channel_url": "https://www.tiktok.com/@room_a/live",
+ "room_rotation": {
+  "active": false,
+  "interval_s": null,
+  "rooms": [
+   {
+    "t_playing": 1792232330.4992898,
+    "room": "https://www.tiktok.com/@room_a/live",
+    "ok": true,
+    "first": true
+   }
+  ]
+ },
+ "net_labels": [
+  {
+   "timestamp": 1792232332.1574407,
+   "speed": 540,
+   "state": "3"
+  },
+  {
+   "timestamp": 1792232345.3139584,
+   "speed": 491,
+   "state": "3"
+  },
+  {
+   "timestamp": 1792232371.385463,
+   "speed": 563,
+   "state": "3"
+  },
+  {
+   "timestamp": 1792232389.7415106,
+   "speed": 653,
+   "state": "3"
+  },
+  {
+   "timestamp": 1792232393.0385094,
+   "speed": 795,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232411.6440878,
+   "speed": 930,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232436.866781,
+   "speed": 864,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232453.6146808,
+   "speed": 744,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232482.5030649,
+   "speed": 851,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232506.783023,
+   "speed": 887,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232514.2536957,
+   "speed": 307,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232531.3902137,
+   "speed": 444,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232561.6530468,
+   "speed": 296,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232574.996574,
+   "speed": 419,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232597.7743251,
+   "speed": 361,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232619.4793277,
+   "speed": 433,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232632.1020234,
+   "speed": 430,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232635.8253994,
+   "speed": 376,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232659.8922935,
+   "speed": 411,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232674.3516862,
+   "speed": 404,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232696.4228013,
+   "speed": 284,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232715.561957,
+   "speed": 293,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232731.4120908,
+   "speed": 309,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232749.9734857,
+   "speed": 326,
+   "state": "2"
+  },
+  {
+   "timestamp": 1792232757.152523,
+   "speed": 955,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232779.3439603,
+   "speed": 753,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232804.7041621,
+   "speed": 778,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232817.8842988,
+   "speed": 977,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232844.4466105,
+   "speed": 919,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232856.6466563,
+   "speed": 992,
+   "state": "4"
+  },
+  {
+   "timestamp": 1792232878.4755254,
+   "speed": 1112,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792232903.8172765,
+   "speed": 1380,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792232926.5739918,
+   "speed": 1002,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792232939.0035868,
+   "speed": 1316,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792232958.5550406,
+   "speed": 1321,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792232971.3724902,
+   "speed": 1117,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792232989.2901168,
+   "speed": 1050,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792232999.8118212,
+   "speed": 1150,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792233024.2823625,
+   "speed": 1200,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792233038.4096408,
+   "speed": 1126,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792233060.4193385,
+   "speed": 1256,
+   "state": "5"
+  },
+  {
+   "timestamp": 1792233082.8283753,
+   "speed": 1280,
+   "state": "5"
+  }
+ ]
+}

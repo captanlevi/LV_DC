@@ -46,8 +46,9 @@ EXIT_LOGIN_WALL = 3   # exp.py's exit code for a session aborted at a login wall
 EXIT_STOPPED = 130    # exp.py's exit code when the operator stopped the session
 EXIT_PLAYER_FROZEN = 5   # exp.py's exit code when the watchdog aborted a frozen player (addendum N)
 EXIT_ROOM_ENDED = 6      # exp.py's exit code when a tt room died mid-session (room_ended)
+EXIT_PLAYER_DEAD = 7     # exp.py's exit code when the tt player sat at readyState 0 with no media (player_dead)
 # aborts that are not failures of the platform: they do not count toward MAX_CONSECUTIVE_FAIL
-NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended"}
+NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended", EXIT_PLAYER_DEAD: "player_dead"}
 
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume has less than MIN_FREE_GB free
 
@@ -59,7 +60,7 @@ EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
 # absolute, not a share (supervisor 2026-10-17: 10 % of chaos's 932 GB disk stopped ~70 GB early at ~5 GB/h)
 MIN_FREE_GB = 25
 MAX_CONSECUTIVE_FAIL = 5
-# NOT_A_FAILURE aborts (player_frozen, room_ended) do not count toward MAX_CONSECUTIVE_FAIL; a separate cap stops a
+# NOT_A_FAILURE aborts (player_frozen, room_ended, player_dead) do not count toward MAX_CONSECUTIVE_FAIL; a separate cap stops a
 # platform that keeps aborting this way from looping forever
 MAX_CONSECUTIVE_FROZEN = 5
 NOT_LIVE_RETRY_S = 6 * 3600
@@ -302,7 +303,7 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             print(f"  {NOT_A_FAILURE[rc]} on {p} ({frozen[p]} such aborts in a row): not counted as a failure; "
                   f"next session re-picks")
             if frozen[p] >= MAX_CONSECUTIVE_FROZEN:
-                paused[p] = f"{frozen[p]} consecutive player_frozen / room_ended aborts"
+                paused[p] = f"{frozen[p]} consecutive player_frozen / room_ended / player_dead aborts"
         elif rc != 0 and channel:
             not_live[channel["handle"]] = now
         elif rc != 0 and category:
