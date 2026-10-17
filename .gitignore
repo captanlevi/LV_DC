@@ -15,3 +15,6 @@ __pycache__/
 ssl_keys.log
 # Chrome profile templates (t37): login cookies, never committed
 /profiles
+
+# ops/: box-local overrides of ops/env.sh
+/ops/env.local.sh

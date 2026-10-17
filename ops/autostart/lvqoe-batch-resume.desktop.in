@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=LVQoE batch resume
+Comment=After login: data volume mount, IPv6 off, holds, guards; resume the collection batch iff BATCH_GO. Remove after the collection.
+Exec=/bin/bash -c "setsid nohup @OPS@/resume_after_login.sh >/dev/null 2>&1 </dev/null &"
+X-GNOME-Autostart-enabled=true
+NoDisplay=true

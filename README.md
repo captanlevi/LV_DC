@@ -16,19 +16,17 @@ This README is the operator's reference. History and lessons are in `SESSION_NOT
 |---|---|
 | Python env | `bash setup.sh` (creates `.venv`; `network_core` comes from PyPI) |
 | Chrome | branded `google-chrome-stable`, version held for the whole batch: `sudo apt-mark hold google-chrome-stable` (unhold after). The version is recorded in every `meta.json`. |
-| IPv6 off | `sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1` (persist in `/etc/sysctl.d/`). Check that `ip -6 addr show scope global` is empty. Old data is IPv4-only; `check_session` FAILs `ipv6_media`. |
-| OS downloads off | `sudo systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer fwupd-refresh.timer`; `sudo snap refresh --hold`. Log both; undo after the batch. |
-| data volume | `data/` may be a symlink to an external disk (chaos: exFAT USB HDD at `/media/<user>/<label>/LV_DC_v2_data`). exFAT has no chown (the capture writes through a root shell), is case-insensitive and allows no symlinks inside. Check `mountpoint /media/<user>/<label>` and free space before a batch; `meta.json` records the realpath, mount and fstype per session. |
+| IPv6 off | Old data is IPv4-only; `check_session` FAILs `ipv6_media`. Persist `net.ipv6.conf.all.disable_ipv6=1`, `net.ipv6.conf.default.disable_ipv6=1` **and** `net.ipv6.conf.<iface>.disable_ipv6=1` in `/etc/sysctl.d/` (chaos: `99-lvqoe-collection-noipv6.conf`). The interface line fails at boot, before Wi-Fi exists, so re-apply `sudo sysctl -p /etc/sysctl.d/<file>` after every boot / login. A **Wi-Fi reconnect** undoes the sysctl: NetworkManager re-applies the connection's `ipv6.method auto` (chaos 2026-10-18 02:20: four global v6 addresses, then tw_19 / tw_20 FAIL `ipv6_media`, tw_18 a capture gap, yt_34 aborted). So for the batch also run `sudo nmcli con modify <wifi-connection> ipv6.method disabled` (undo after: `ipv6.method auto`). orchestrate's preflight re-applies the sysctl and requires `ip -6 addr show scope global` empty before every session. |
+| OS downloads off | `sudo systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer fwupd-refresh.timer`; `sudo snap refresh --hold`. `stop` does not survive a reboot: re-stop after every boot (chaos: the login hook, `ops/resume_after_login.sh`), or use `disable --now` for the batch window. Log both; undo after the batch. The preflight requires the timers inactive before every session. |
+| data volume | `data/` may be a symlink to an external disk (chaos: exFAT USB HDD at `/media/<user>/<label>/LV_DC_v2_data`). exFAT has no chown (the capture writes through a root shell), is case-insensitive and allows no symlinks inside. Check `mountpoint /media/<user>/<label>` and free space before a batch; `meta.json` records the realpath, mount and fstype per session.. Deleting from the GUI on an exFAT volume moves files to `<vol>/.Trash-<uid>` on the **same** disk: no space is freed until the trash is emptied (2026-10-17: 234 GB sat there). |
 | mount-path trap | after a manual `sudo mount`, the empty `/media/<user>/<label>` dir stays, so at the next login udisks mounts at `<label>1` and `data/` dangles. Fix: `sudo umount /media/<user>/<label>1; sudo rmdir` the stale dir(s); remount at `/media/<user>/<label>`. |
-| IPv6 off across reboots | persist `net.ipv6.conf.all.disable_ipv6=1`, `net.ipv6.conf.default.disable_ipv6=1` **and** `net.ipv6.conf.<iface>.disable_ipv6=1` in `/etc/sysctl.d/`. The interface line fails at boot, before Wi-Fi exists, so re-apply `sudo sysctl -p /etc/sysctl.d/<file>` after every boot / login. |
-| OS downloads across reboots | `systemctl stop` does not survive a reboot. For the batch window, run `sudo systemctl disable --now unattended-upgrades apt-daily.timer apt-daily-upgrade.timer fwupd-refresh.timer`; re-enable after. |
 | launch environment = cookie store | Chrome picks gnome-keyring when `XDG_CURRENT_DESKTOP` / `DESKTOP_SESSION` are set (desktop session), and `basic` when they are not (ssh). Build the templates and run the batch from the **same** environment (chaos: both from ssh). A login-autostart relaunch must `env -i` to the ssh variable set, or the tt login cookie does not decrypt. |
-| display | Geometry targets need 1920x1080 (`player:1280x720`, `player:537x880`); check with `xrandr`. Keep the page visible and the box awake: `gsettings set org.gnome.desktop.session idle-delay 0`, `…screensaver lock-enabled false`, `…screensaver idle-activation-enabled false`, `…settings-daemon.plugins.power sleep-inactive-ac-type nothing` (and `-battery-type`). Then `xset s off; xset dpms force off`, plus `--dpms-off` in the batch. |
+| display | Geometry targets need 1920x1080 (`player:1280x720`, `player:537x880`); check with `xrandr`. Keep the page visible and the box awake: `gsettings set org.gnome.desktop.session idle-delay 0`, `…screensaver lock-enabled false`, `…screensaver idle-activation-enabled false`, `…settings-daemon.plugins.power sleep-inactive-ac-type nothing` (and `-battery-type`). Two modes: **screen on** (the operator watches playback): `xset s off; xset -dpms`, no `--dpms-off`; **screen off** (night): `xset s off; xset dpms force off`, `--dpms-off` in the batch, and `ops/keep_display_off.sh`. x11 shots work with the monitor dark (ti_23: every shot x11; blanks only at readyState < 3). |
 | audio | mute the sink: `pactl set-sink-mute @DEFAULT_SINK@ 1` (templates and tests play sound; the batch Chrome has `--mute-audio`). |
 | bytecode | `export PYTHONDONTWRITEBYTECODE=1`; `__pycache__` is untracked since 2026-10-17, so `meta.json` `lvdc_commit.dirty` stays false. |
 | profile templates | §3 |
 
-**Before every start (and after any reboot):** (orchestrate enforces 1-3 and the holds before every session: `preflight.py`, exit 8 on failure, result in `meta.json` `preflight`)
+**Before every start (and after any reboot):** orchestrate enforces 1-3 and the Chrome hold before every session (`preflight.py`: exit 8 on failure, result in `data/_summaries/preflight_last.json` and `meta.json` `preflight`); 4-5 stay manual.
 1. The data volume is mounted at the expected path, with enough free space.
 2. `ip -6 addr show scope global` is empty.
 3. The OS timers are inactive.
@@ -42,9 +40,11 @@ foreground ssh session can drop mid-episode. A non-tty stdin is handled.
 
 ```bash
 export PYTHONDONTWRITEBYTECODE=1
-setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--dpms-off] [--tt-room-rotation 300] \
+setsid nohup python -u orchestrate.py --batch youtube=100,twitch=80,tiktok=80 --dpms-off [--tt-room-rotation 300] \
     [--fixed-geometry] < /dev/null > ../batch_$(date +%F_%H%M).log 2>&1 &
 ```
+
+The targets are floors (rushi): when a platform reaches its floor, it is raised by the same step and the batch goes on. Start the batch in the screen mode you need (§1 display).
 
 **What one session does:**
 1. Clone the platform's template profile into a fresh Chrome profile. The template path and its sha go to `meta.json`.
@@ -117,6 +117,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 | exp.py | 5 | `player_frozen`: the watchdog aborted a player frozen in a stall past T (addendum N); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session re-picks |
 | exp.py | 130 | stopped by SIGINT / SIGTERM; finalised, FAIL, orchestrate stops |
 | orchestrate.py | 4 | less than `MIN_FREE_GB` (25 GB) free on the data volume |
+| orchestrate.py | 8 | the per-session preflight failed (`preflight.py`: IPv6, shaper, data volume, holds); result in `data/_summaries/preflight_last.json`; no session started |
 
 ## 3. Template profiles
 
@@ -133,6 +134,8 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 
 ## 4. Pause / resume protocol
 
+The on-box scripts for every step below are in `ops/` (`ops/README.md`; paths in `ops/env.sh`).
+
 - **Boundary pause (the default, loses nothing):** `kill -STOP <orchestrate pid>`.
   - The running exp.py finishes its session normally (check included), and no new session starts.
   - Copy data, do the checkpoint, or hand the box to the user.
@@ -142,9 +145,13 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
   - It is archived as FAIL (`aborted: signal:…`) because it is incomplete.
   - orchestrate exits 130.
 - **Kill patterns:** in any `pkill -f`, use the `[x]` form (e.g. `pkill -f "[r]emote-debugging-port=9222"`) or exact pids. Over ssh, a plain pattern also matches the ssh shell's own command line and kills it.
-- **Code changes:** only at a pause. Never `git pull` under a running batch, because each new exp.py would load the new code mid-batch. Pull, then rerun the same command; it resumes from the PASS sessions on disk.
+- **Code changes:** only at a pause. Never `git pull` under a running batch, because each new exp.py would load the new code mid-batch. A boundary pause (`SIGSTOP`) keeps the old code in memory, so to load new code:
+  - at the boundary: `kill -TERM <orchestrate pid>; kill -CONT <orchestrate pid>` (the TERM is delivered on CONT, with no session running), then get the code, then rerun the same command; it resumes from the PASS sessions on disk;
+  - **get code onto the box only while no capture runs**: at a pause, or by pushing a ref from the laptop over ssh (`git push <box>:<repo> <ref>:refs/heads/<name>`). A `git fetch` from GitHub during a session would be shaped and captured as background; there is no exclusion for it, by design (fetch is boundary-only);
+  - **one boundary script per pause** (`ops/apply_at_boundary.sh`): two at once (one CONTs, the other TERMs) killed the next session's Chrome (tw_15, an operator artifact).
+- **Waiting for a session to end under a paused orchestrate:** a finished exp.py is a zombie while its parent is stopped, so `kill -0 <pid>` stays true. Wait for the pid to exit **or** show state `Z` (`ps -o stat= -p <pid>`).
 - **Copying data off the box:** tailscale (UDP, tailscaled's port) and ssh (TCP 22) bypass shaping and capture; `meta.json` `mgmt_exclusion` records this. A DERP-relayed tailscale link runs over TCP 443 and is not excluded, so check `tailscale status` shows `direct`. Without the exclusion, copy only between sessions.
-- **After copying a session to LVQoE:** run `verify_session` there once it lands (LVQoE C2, in progress). It is the t41 checks as a permanent step. Until then: `scripts/analysis/t41_ingest_verify.py --sessions chaos/<platform>/<session>`.
+- **Per-session verify and frames:** on the box, every PASS is verified as it lands: `verify_session.py --ingest` and `extract_frames.py` (`ops/verify_loop.sh`; chaos-built caches are QA only, never cited). The canonical caches are built on the laptop after the copy (LVQoE `verify_session`, the frozen-manifest rules).
 
 ## 5. Guards: `check_session.py`
 
@@ -196,8 +203,13 @@ It writes `check.json` and a one-screen `check.md` per session.
   early version that pooled cadence and event shots read as a capture effect. Split by shot type, cadence shots on
   twitch show no excess under any capture (tw_6 / tw_9 / tw_10 / tw_11). The one real effect was the scaled CDP clip
   (yt_10), which made Chrome emulate device metrics on every shot; it was removed.
-- **Settled.** 10 s cadence plus event shots, x11 player-rectangle grab. The 30 s fallback was withdrawn. The yt check
-  on x11 is pending its first session.
+- **Settled.** 10 s cadence plus event shots, x11 player-rectangle grab. The 30 s fallback was withdrawn. yt on x11
+  (shagun, 2026-10-18), dropped frames per tick near a cadence shot vs elsewhere:
+
+| session | near cadence shot | elsewhere | x11 shots |
+|---|---|---|---|
+| yt_31 | 0.0 | 0.0 | all |
+| yt_32 | 0.032 | 0.043 | 133 of 133 |
 
 ## 6. Session files (`data/<platform>/<abbrev>_N/`)
 
@@ -206,7 +218,7 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `merged.pcap` | ingress + egress capture (management traffic excluded) |
 | `ssl_keys.log` | TLS key log (kept) |
 | `http_v2.json`, `h1_raw.json`, `h2_raw.pdml`, `h3_raw.pdml` | decoded HTTP logs and raw decoder outputs |
-| `labels.csv` | extension ticks and events: v1 columns plus `buffered_ahead_s`, `playback_rate`, `duration_s`, `is_ad`, `ad_signals`, `src_changed`, `login_wall_text`, `login_wall`, `quality_countdown` |
+| `labels.csv` | extension ticks and events: v1 columns plus `buffered_ahead_s`, `playback_rate`, `duration_s`, `is_ad`, `ad_signals`, `src_changed`, `login_wall_text`, `login_wall`, `quality_countdown`, `paused`, `playhead_still_s` (from a99384f), `ready_state` (from 9a01fce) |
 | `player_stats.jsonl` | ground truth only, never features: yt stats for nerds; twitch Video Stats |
 | `net_labels.txt` | the shaper schedule (coverage / debug record, not a data covariate) |
 | `meta.json` | provenance and covariates: commit, Chrome, extension, profile template + sha, shaper (matrix, cap, rule), channel / room, geometry, login state, room rotation, IPv6 sysctl, data volume, management exclusion, NTP, abort reason; geometry also carries `player_rect` (the largest visible video's bounding rect, viewport CSS px), `control_band` (yt / twitch control bar rect and whether it showed; tt none) and `shot` (the rect in device px and in screenshot px, with the shot scales; Addendum O amendment 2), at session start and after each tt room move |
