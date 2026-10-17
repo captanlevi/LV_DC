@@ -55,43 +55,50 @@ def test_recent_rooms():
         check("https://www.tiktok.com/@tape05.tv/live" in B.recent_tt_rooms(cur, n=10), "query string normalised")
 
 
-def run(samples, dt=1.0):
+def run(samples, dt=1.0, state=None, rx=None):
     w, t = B.TTRoomWatch(), 0.0
-    for s in samples:
-        r = w.feed(s, t)
+    for k, smp in enumerate(samples):
+        r = w.feed(smp, t, shaper_state=state, rx_bytes=None if rx is None else rx(k))
         if r:
-            return r, t
+            return r, t, w
         t += dt
-    return None, t
+    return None, t, w
 
 
 def test_watch():
     play = lambda i: {"has_video": True, "src": True, "rs": 4, "ct": float(i), "paused": False, "buf_end": i + 3.0}
-    check(run([play(i) for i in range(300)])[0] is None, "a healthy room never ends")
-    # a stall: playhead frozen while media is still appended (buffer end moves): not a dead room
-    stall = [{**play(10), "ct": 10.0, "buf_end": 10.0 + 0.01 * i} for i in range(200)]
-    check(run([play(i) for i in range(10)] + stall)[0] is None, "a long stall with media arriving is not room_ended")
-    # ti_2's signature: the player's src goes away (readyState 0, paused, 0x0)
     dead = {"has_video": True, "src": False, "rs": 0, "ct": 0.0, "paused": True, "buf_end": None}
-    r, t = run([play(i) for i in range(20)] + [dead] * 30)
-    check(r == "src_gone" and t >= 20 + B.TT_SRC_GONE_S, f"src gone after {B.TT_SRC_GONE_S} s: {r} {t}")
-    # the ended banner with no player: ended_page after TT_ENDED_FLAT_S (before src_gone's 10 s)
-    r, t = run([play(i) for i in range(5)] + [{**dead, "ended_text": True}] * 20)
-    check(r == "ended_page" and t == 5 + B.TT_ENDED_FLAT_S, f"ended banner, no player: {r} {t}")
-    # the banner with a frozen stream: ended_page after TT_ENDED_FLAT_S of no progress
-    r, t = run([play(i) for i in range(5)] + [{**play(5), "ended_text": True}] * 20)
-    check(r == "ended_page" and t == 6 + B.TT_ENDED_FLAT_S, f"ended banner, stream flat: {r} {t}")   # flat from t = 6
-    # the banner text while the room plays (31ded33's failure: a live page's "Recommended LIVE" section) is never dead
+    T = B.TTRoomWatch().t_max_s
+    check(run([play(i) for i in range(300)])[0] is None, "a healthy room never ends")
+    # a dead player with idle interfaces (ti_2's signature) ends only after T (addendum N), never in seconds
+    r, t, _ = run([play(i) for i in range(20)] + [dead] * int(T + 30), rx=lambda k: 1000)
+    check(r == "no_progress" and T + 19 <= t <= T + 21, f"dead player ends after T: {r} {t}")
+    check(run([play(i) for i in range(20)] + [dead] * int(T + 30), rx=lambda k: 1000 + 5000 * k)[0] is None,
+          "a player without a source while media keeps arriving is not ended")
+    check(run([play(i) for i in range(20)] + [dead] * int(T + 30), state=3, rx=lambda k: 1000)[0] is None,
+          "never ended in shaper states 1-4")
+    # the rendered banner with no player: ended_page after TT_ENDED_FLAT_S
+    r, t, _ = run([play(i) for i in range(5)] + [{**dead, "ended_text": True}] * 20)
+    check(r == "ended_page" and t <= 5 + B.TT_ENDED_FLAT_S + 1, f"ended banner, no player: {r} {t}")
     check(run([{**play(i), "ended_text": True} for i in range(120)])[0] is None, "banner text alone while playing")
-    # a labelled stall longer than TT_NO_MEDIA_S (tt exposes no buffer) is never a dead room (shagun 2026-10-17)
-    stall = {**play(10), "stall_label": True}
-    check(run([play(i) for i in range(10)] + [stall] * 200 + [play(i) for i in range(11, 20)])[0] is None,
-          "a 200 s labelled stall is not room_ended")
-        # paused before autoplay (ti_4 / ti_5: the first sample came before play): flat a few seconds, then plays
     paused = {"has_video": True, "src": True, "rs": 4, "ct": 0.0, "paused": True, "buf_end": 2.0}
     check(run([paused] * 4 + [play(i) for i in range(60)])[0] is None, "paused before autoplay is not dead")
-    r, t = run([play(i) for i in range(5)] + [play(5)] * 60)
-    check(r == "no_media" and t >= 5 + B.TT_NO_MEDIA_S, f"flat stream {B.TT_NO_MEDIA_S} s: {r} {t}")
+    stall = {**play(10), "stall_label": True}
+    check(run([play(i) for i in range(10)] + [stall] * 900 + [play(i) for i in range(11, 20)], rx=lambda k: 1000)[0] is None,
+          "a 900 s labelled stall is not room_ended")
+
+
+def test_ti12_reconnects_are_discontinuities():
+    """chaos ti_12's ticks (fixture): tt tears its player down and reconnects (~10-15 s with no source) right after
+    stalls in shaping state 3; 31ded33-fb2cfb5 cut the session as src_gone. Now: no end, three discontinuities."""
+    fx = json.loads((HERE / "fixtures" / "tt_ti12_src_drops.json").read_text())
+    samples = [{"has_video": True, "src": h > 0, "rs": 4 if h > 0 else 0, "ct": ct, "paused": False, "buf_end": None,
+                "stall_label": st} for _, ct, h, st in fx["ticks"]]
+    for state in (fx["shaper_state"], None):          # also without the low-state exemption: the stall grace holds
+        r, _, w = run(samples, state=state, rx=lambda k: 1000)
+        check(r is None, f"ti_12 is not ended (state {state}): {r}")
+        drops = [d for d in w.discontinuities if d["duration_s"] >= 5]
+        check(len(drops) >= 2 and all(d["stall_recent"] for d in drops), f"reconnects recorded: {w.discontinuities}")
 
 
 def test_ended_phrase_on_real_pages():
@@ -142,6 +149,7 @@ def test_js_parses():
 
 
 if __name__ == "__main__":
-    for f in (test_viewers, test_recent_rooms, test_watch, test_ended_phrase_on_real_pages, test_js_parses):
+    for f in (test_viewers, test_recent_rooms, test_watch, test_ti12_reconnects_are_discontinuities,
+              test_ended_phrase_on_real_pages, test_js_parses):
         f()
         print(f"{f.__name__}: ok")

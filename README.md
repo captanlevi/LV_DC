@@ -111,7 +111,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 | exp.py | 0 | session ran; see its `check.md` |
 | exp.py | 1 | start failed (channel not live, extension not ticking); finalised, FAIL |
 | exp.py | 3 | login wall: orchestrate pauses that platform |
-| exp.py | 6 | `room_ended` (tt): the room died mid-session (the rendered "LIVE has ended" banner with no player or no progress for 5 s; no player / no source / readyState 0 for 10 s; or no playhead progress for 30 s; never page text alone and never a paused player alone); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session picks another room |
+| exp.py | 6 | `room_ended` (tt): the room died mid-session: the rendered "LIVE has ended" banner with no player or no progress for 5 s, or no progress for the platform's T (addendum N, 720 s) with the interfaces idle; that clock stops during a stall label, for 30 s after one and in shaper states 1-4 (under shaping tt tears its player down and reconnects for 10-15 s after a stall: recorded as `room_discontinuities`, never a cut); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session picks another room |
 | exp.py | 5 | `player_frozen`: the watchdog aborted a player frozen in a stall past T (addendum N); finalised, FAIL, kept in `_failed/`; not a failure for the 5-fail pause; the next session re-picks |
 | exp.py | 130 | stopped by SIGINT / SIGTERM; finalised, FAIL, orchestrate stops |
 | orchestrate.py | 4 | less than 10 % free space on the data volume |

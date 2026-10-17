@@ -649,6 +649,7 @@ if __name__ == "__main__":
                                    tw_category_url=first_url, tw_channel=args.tw_channel)
             browser = BrowserSession(platform, session_dir=session_dir, first_url=first_url, geometry=args.geometry,
                                      room_rotation_s=args.tt_room_rotation if platform == "tiktok" else None)
+            browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)
             browser.start()
             if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
                 try:
@@ -699,7 +700,8 @@ if __name__ == "__main__":
                               video_stats=browser.video_stats, geometry_target=browser.geometry_target,
                               login_state=browser.login_state, room_rotation=browser.room_rotation,
                               tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
-                              tw_pick=browser.tw_pick, room_play_clicks=browser.room_play_clicks)
+                              tw_pick=browser.tw_pick, room_play_clicks=browser.room_play_clicks,
+                              room_discontinuities=browser.room_discontinuities)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)

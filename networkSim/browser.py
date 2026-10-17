@@ -345,15 +345,13 @@ ROOM_ROTATION_LIVE_URL = "https://www.tiktok.com/live"
 # and >= TT_MIN_VIEWERS viewers first, most viewers first; each tried room must play (src set, readyState >= 3, playhead
 # advancing) within TT_QUICK_CONFIRM_S, then pass a TT_PREROLL_S pre-roll (media appended, playhead advancing, no dead
 # signal) before the session clock and the shaper start; up to TT_MAX_TRIES rooms. Candidates, tries and the choice go
-# to meta.json tt_room_choice. Mid-session a dead room (ended page with no live player, src gone TT_SRC_GONE_S, or
-# neither media appended nor playhead advancing TT_NO_MEDIA_S) aborts the session with reason room_ended.
+# to meta.json tt_room_choice. Mid-session a dead room aborts the session with reason room_ended (TTRoomWatch: the
+# rendered ended banner, or no progress for the platform's T with idle interfaces, outside stalls and low states).
 TT_RECENT_ROOMS_N = 10
 TT_MIN_VIEWERS = 100
 TT_MAX_TRIES = 5
 TT_QUICK_CONFIRM_S = 15
 TT_PREROLL_S = 60
-TT_SRC_GONE_S = 10
-TT_NO_MEDIA_S = 30
 TT_ENDED_FLAT_S = 5         # the ended banner counts only with no media appended and no playhead advance this long
 TT_AUTOPLAY_GRACE_S = 5     # a room is judged only after play was clicked and this long has passed
 TT_POOL_MIN, TT_POOL_SCROLLS = 30, 8   # scroll /live for more cards until this many candidates (supervisor: ti_10 had 7)
@@ -497,44 +495,87 @@ def recent_tt_rooms(session_dir: Path | None, n: int = TT_RECENT_ROOMS_N) -> lis
     return sorted(set(out))
 
 
+TT_STALL_GRACE_S = 30          # src drops within this long after a stall label are the player reconnecting
+TT_RX_IDLE_BYTES = 60_000      # "no media bytes": less than this received over the last TT_RX_WINDOW_S
+TT_RX_WINDOW_S = 60
+TT_LOW_STATES = {1, 2, 3, 4}   # shaper states in which a dead-looking player is the shaping, never a dead room
+
+
+def _rx_bytes() -> int | None:
+    """Bytes received on every non-loopback interface (Linux /sys; None elsewhere): the media-bytes signal tt's
+    MediaStream player does not expose."""
+    total, seen = 0, False
+    for f in Path("/sys/class/net").glob("*/statistics/rx_bytes"):
+        if f.parts[-3] == "lo":
+            continue
+        try:
+            total += int(f.read_text())
+            seen = True
+        except (OSError, ValueError):
+            pass
+    return total if seen else None
+
+
 class TTRoomWatch:
-    """The dead-room rule over 1 s player samples (_TT_PLAYER_STATE_JS); feed() returns the reason once dead. Never
-    text alone and never a paused player alone: the ended banner needs TT_ENDED_FLAT_S without media or playhead
-    progress; otherwise the player's src gone TT_SRC_GONE_S, or no progress at all TT_NO_MEDIA_S."""
+    """The tt dead-room rule over 1 s player samples (_TT_PLAYER_STATE_JS) (supervisor 2026-10-17, after ti_12 / 13 / 14:
+    under shaping tt tears its player down and reconnects for 10-15 s right after a stall, and a fast src_gone cut
+    exactly the impaired sessions). A room has ended only when
+      (a) the rendered "LIVE has ended" banner shows with no player or no progress for TT_ENDED_FLAT_S, or
+      (b) there has been no progress (no source, or neither playhead nor media moving) for the platform's T (addendum N,
+          FROZEN_PLAYHEAD_MAX_S) and the interfaces received under TT_RX_IDLE_BYTES over the last TT_RX_WINDOW_S;
+    (b)'s clock does not run while the stall label is on, within TT_STALL_GRACE_S after it, or in shaper states 1-4.
+    A source drop that comes back is recorded as a discontinuity (meta.json room_discontinuities), not a cut."""
 
-    def __init__(self) -> None:
-        self.src_gone_since: float | None = None
-        self.flat_since: float | None = None
+    def __init__(self, t_max_s: float | None = None) -> None:
+        self.t_max_s = t_max_s if t_max_s is not None else FROZEN_PLAYHEAD_MAX_S.get("tiktok", 720)
+        self.flat_since: float | None = None          # banner rule: no progress since
+        self.no_progress_since: float | None = None   # rule (b) clock
         self.last: tuple | None = None
+        self.last_stall: float | None = None
+        self.gone_since: float | None = None
+        self.gone_ctx: dict = {}
+        self.discontinuities: list[dict] = []
+        self.rx: list[tuple[float, int]] = []
 
-    def feed(self, s: dict | None, now: float) -> str | None:
+    def feed(self, s: dict | None, now: float, shaper_state: int | None = None, rx_bytes: int | None = None) -> str | None:
         s = s or {}
-        # tt plays through srcObject (a MediaStream: no currentSrc, empty buffered, decoded bytes 0); a dead player has
-        # no source or readyState 0 (ti_2: currentSrc empty, readyState 0, paused, 0x0)
-        no_src = not s.get("has_video") or not s.get("src") or s.get("rs") == 0
-        if no_src:
-            self.src_gone_since = self.src_gone_since or now
-            if s.get("ended_text") and now - self.src_gone_since >= TT_ENDED_FLAT_S:
-                return "ended_page"                   # the banner and no player
-            if now - self.src_gone_since >= TT_SRC_GONE_S:
-                return "src_gone"
-            return None
-        self.src_gone_since = None
-        cur = (s.get("buf_end"), s.get("ct"), s.get("decoded"))   # progress: the playhead, or media appended / decoded
         if s.get("stall_label"):
-            # a labelled stall is never a dead room: tt's player exposes no buffer, so a long shaping stall would read as
-            # "no media"; player_frozen (T = 720 s on the stall-only run) owns frozen stalls (shagun 2026-10-17)
-            self.flat_since, self.last = None, cur
-            return None
-        if self.last is not None and cur == self.last:
-            self.flat_since = self.flat_since or now
-            if s.get("ended_text") and now - self.flat_since >= TT_ENDED_FLAT_S:
-                return "ended_page"
-            if now - self.flat_since >= TT_NO_MEDIA_S:
-                return "no_media"
-        else:
+            self.last_stall = now
+        if rx_bytes is not None:
+            self.rx.append((now, rx_bytes))
+            self.rx = [x for x in self.rx if now - x[0] <= TT_RX_WINDOW_S]
+        no_src = not s.get("has_video") or not s.get("src") or s.get("rs") == 0
+        cur = (s.get("buf_end"), s.get("ct"), s.get("decoded"))
+        progressed = not no_src and self.last is not None and cur != self.last
+        if no_src:
+            if self.gone_since is None:
+                self.gone_since = now
+                self.gone_ctx = {"stall_recent": self.last_stall is not None and now - self.last_stall <= TT_STALL_GRACE_S,
+                                 "shaper_state": shaper_state}
+        elif self.gone_since is not None and progressed:
+            self.discontinuities.append({"start": self.gone_since, "end": now, "duration_s": round(now - self.gone_since, 1),
+                                         **self.gone_ctx})
+            self.gone_since = None
+        if not no_src:
+            self.last = cur
+        # (a) the banner with no player or no progress
+        if progressed:
             self.flat_since = None
-        self.last = cur
+        elif self.flat_since is None:
+            self.flat_since = now
+        if s.get("ended_text") and (no_src or not progressed) and now - self.flat_since >= TT_ENDED_FLAT_S:
+            return "ended_page"
+        # (b) no progress for T with idle interfaces, outside stalls / their grace / low shaper states
+        exempt = (s.get("stall_label") or (self.last_stall is not None and now - self.last_stall <= TT_STALL_GRACE_S)
+                  or (shaper_state in TT_LOW_STATES))
+        if progressed or exempt:
+            self.no_progress_since = None
+            return None
+        if self.no_progress_since is None:
+            self.no_progress_since = now
+        rx_idle = (len(self.rx) >= 2 and self.rx[-1][1] - self.rx[0][1] < TT_RX_IDLE_BYTES) if self.rx else True
+        if now - self.no_progress_since >= self.t_max_s and rx_idle:
+            return "no_progress"
         return None
 
 
@@ -568,15 +609,18 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
 def _tt_preroll(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
     """The pre-roll before the session clock: no dead signal for `seconds`, playhead advancing >= half of it and media
     appended (buffered end moved)."""
-    w, s0, s = TTRoomWatch(), _tt_state(page), {}
+    w, s, adv, prev = TTRoomWatch(), {}, 0.0, _tt_state(page).get("ct")
     end = time.time() + seconds
     while time.time() < end:
         s = _tt_state(page)
         dead = w.feed(s, time.time())
         if dead:
             return False, {"dead": dead, **s}
+        ct = s.get("ct")
+        if ct is not None and prev is not None and ct > prev:
+            adv += ct - prev                          # cumulative: a player reconnect restarts the playhead at 0
+        prev = ct if ct is not None else prev
         time.sleep(1)
-    adv = (s.get("ct") or 0) - (s0.get("ct") or 0)
     # media arriving = the playhead advancing at play rate (tt's MediaStream player exposes no buffer or decoded bytes)
     ok = adv >= seconds / 2
     return ok, {"ct_advance_s": adv, "buf_end": s.get("buf_end"), "decoded": s.get("decoded"),
@@ -1401,6 +1445,8 @@ class BrowserSession:
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.tw_pick: dict | None = None          # twitch: directory candidates, recent channels excluded, the pick
         self.room_play_clicks = 0                 # tt: play clicks on a paused, flat player (room watcher)
+        self.room_discontinuities: list = []      # tt: player source drops that came back (room watcher)
+        self.net_labels: list = []                # exp.py's shaper episodes (the current state for the room watcher)
         self._room_grace_until = 0.0              # tt: the room watcher pauses while the rotation moves rooms
         self._room_watcher: threading.Thread | None = None
 
@@ -1669,6 +1715,11 @@ class BrowserSession:
                 w = TTRoomWatch()
                 continue
             s = _tt_state(self._page)
+            labels = getattr(self, "net_labels", None)
+            try:
+                state = int(labels[-1].state) if labels else None
+            except (ValueError, AttributeError, TypeError):
+                state = None
             # tt can pause itself (ti_8: a "pause" event, then flat until room_ended): click play while paused and flat,
             # before the no-media rule can fire; each click is counted in meta.json room_play_clicks
             if s.get("paused") and w.flat_since is not None and time.time() - w.flat_since >= TT_AUTOPLAY_GRACE_S:
@@ -1677,9 +1728,10 @@ class BrowserSession:
                     self.room_play_clicks += 1
                 except Exception:
                     pass
-            dead = w.feed(s, time.time())
+            dead = w.feed(s, time.time(), shaper_state=state, rx_bytes=_rx_bytes())
+            self.room_discontinuities = w.discontinuities
             if dead:
-                self.room_ended = {"reason": dead, "at": time.time(), "sample": s,
+                self.room_ended = {"reason": dead, "at": time.time(), "sample": s, "shaper_state": state,
                                    "room": self._page.eval("location.href") if self._page else None}
                 if self.abort_reason is None:
                     self.abort_reason, self.abort_at = "room_ended", time.time()
