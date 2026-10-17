@@ -68,6 +68,12 @@ def main():
         r = P.check_holds(sh)
         ok &= check(not r["ok"] and r["held_missing"] and r["timers_active"] == ["apt-daily.timer"],
                     "hold dropped + a timer active -> not ok")
+    # rootfs floor (supervisor 2026-10-18): chaos's root fell to 3.3 GB free
+    r = P.check_rootfs(0.0)
+    ok &= check(r["ok"] and r["free_gb"] is not None, f"root fs above a 0 GB floor -> ok ({r['free_gb']} GB)")
+    r = P.check_rootfs(1e9)
+    ok &= check(not r["ok"], "root fs below the floor -> not ok")
+    ok &= check(P.ROOT_MIN_FREE_GB == 5.0 or "LVDC_ROOT_MIN_FREE_GB" in __import__("os").environ, "default floor 5 GB")
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 

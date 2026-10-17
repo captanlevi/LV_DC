@@ -8,6 +8,8 @@ path (ipv6_media FAIL) before anyone looked. The README's "before every start" l
   volume   the data root resolves to a mounted volume (not the root filesystem when data/ is a symlink) with at least
            MIN_FREE_GB free
   holds    google-chrome-stable is apt-held and the OS download timers are inactive (Linux / apt only)
+  rootfs   the root filesystem (Chrome's per-session profile clones, logs, tmp) has at least ROOT_MIN_FREE_GB free
+           (supervisor 2026-10-18: chaos's root fell to 3.3 GB while the data volume had hundreds)
 
 run() returns {"ok", "problems", "checks", "at"}; orchestrate refuses to start a session when ok is False (exit 8),
 writes the result to data/_summaries/preflight_last.json and hands it to exp.py, which records it in meta.json. A
@@ -25,6 +27,7 @@ from pathlib import Path
 
 SYSCTL_FILE = Path(os.environ.get("LVDC_NOIPV6_SYSCTL", "/etc/sysctl.d/99-lvqoe-collection-noipv6.conf"))
 IFACE = os.environ.get("LVDC_IFACE", "wlp0s20f3")
+ROOT_MIN_FREE_GB = float(os.environ.get("LVDC_ROOT_MIN_FREE_GB", "5"))
 HELD_PACKAGES = ("google-chrome-stable",)
 OS_TIMERS = ("unattended-upgrades", "apt-daily.timer", "apt-daily-upgrade.timer", "fwupd-refresh.timer")
 
@@ -89,9 +92,17 @@ def check_holds(sh=_sh) -> dict:
     return {"applicable": True, "held_missing": missing, "timers_active": active, "ok": not missing and not active}
 
 
+def check_rootfs(min_free_gb: float = ROOT_MIN_FREE_GB, path: str = "/") -> dict:
+    try:
+        free = round(shutil.disk_usage(path).free / 1e9, 1)
+    except Exception:
+        free = None
+    return {"path": path, "free_gb": free, "min_free_gb": min_free_gb, "ok": free is not None and free >= min_free_gb}
+
+
 def run(data_dir: Path, min_free_gb: float, sh=_sh) -> dict:
     checks = {"ipv6": check_ipv6(sh), "shaper": check_shaper(sh), "volume": check_volume(data_dir, min_free_gb, sh),
-              "holds": check_holds(sh)}
+              "holds": check_holds(sh), "rootfs": check_rootfs()}
     problems = [k for k, v in checks.items() if not v.get("ok")]
     return {"ok": not problems, "problems": problems, "checks": checks, "at": time.time()}
 

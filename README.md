@@ -26,7 +26,7 @@ This README is the operator's reference. History and lessons are in `SESSION_NOT
 | bytecode | `export PYTHONDONTWRITEBYTECODE=1`; `__pycache__` is untracked since 2026-10-17, so `meta.json` `lvdc_commit.dirty` stays false. |
 | profile templates | §3 |
 
-**Before every start (and after any reboot):** orchestrate enforces 1-3 and the Chrome hold before every session (`preflight.py`: exit 8 on failure, result in `data/_summaries/preflight_last.json` and `meta.json` `preflight`); 4-5 stay manual.
+**Before every start (and after any reboot):** orchestrate enforces 1-3, the Chrome hold and a root-filesystem floor (`ROOT_MIN_FREE_GB`, 5 GB: per-session Chrome profile clones live on the root fs) before every session (`preflight.py`: exit 8 on failure, result in `data/_summaries/preflight_last.json` and `meta.json` `preflight`); 4-5 stay manual.
 1. The data volume is mounted at the expected path, with enough free space.
 2. `ip -6 addr show scope global` is empty.
 3. The OS timers are inactive.
