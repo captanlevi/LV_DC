@@ -264,7 +264,7 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             channel, pre_skips = yt_channels.pick_live_channel(_RUNS_DIR, exclude=skip | set(yt_skips))
             if pre_skips:
                 (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
-                with open(_RUNS_DIR / "_summaries" / "yt_precheck_skips.jsonl", "a") as fh:
+                with open(_RUNS_DIR / yt_channels.PRECHECK_SKIPS_FILE, "a") as fh:
                     for s in pre_skips:
                         fh.write(json.dumps(s) + "\n")
                         print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")

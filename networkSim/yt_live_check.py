@@ -4,6 +4,8 @@
 (commit it), and prints each handle's promotion status (yt_channels.promotion_status).
 
     python3 yt_live_check.py @BeanBoltTV        (run >= 6 h apart; commit the log after each run)
+    python3 yt_live_check.py --needed --leaves <data>/_summaries/yt_list_leaves.jsonl
+                                                (the spares of every type left with < 2 owners)
 
 An unknown row (e.g. a Python without a CA bundle: SSL_CERT_FILE=$(python -m certifi)) is logged with its error and
 ignored by the promotion rule.
@@ -21,9 +23,18 @@ import yt_channels as Y  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("handles", nargs="+")
+    ap.add_argument("handles", nargs="*")
+    ap.add_argument("--needed", action="store_true", help="also every spare needing promotion (Addendum P)")
+    ap.add_argument("--leaves", type=Path, help="the collector's yt_list_leaves.jsonl (with --needed)")
     ap.add_argument("--log", type=Path, default=Y.LIVE_CHECKS_LOG)
     a = ap.parse_args()
+    if a.needed:
+        leaves = ([json.loads(l) for l in a.leaves.read_text().splitlines() if l.strip()]
+                  if a.leaves and a.leaves.exists() else [])
+        a.handles = list(dict.fromkeys(a.handles + Y.spares_needing_promotion(leaves)))
+    if not a.handles:
+        print("no handle to check")
+        return 0
     a.log.parent.mkdir(parents=True, exist_ok=True)
     for h in a.handles:
         errors: list = []

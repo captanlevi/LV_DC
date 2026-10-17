@@ -12,7 +12,8 @@ ties broken by list order). Sessions are counted from every youtube/<session>/me
 excluding data/_failed (a failed session does not count).
 
 List maintenance (prereg Addendum P, levi 2026-10-17): a channel leaves outright when, in a rolling LEAVE_WINDOW_S, it has
->= LEAVE_NOT_LIVE not-live failures and 0 accepted sessions (spares too). The collector applies it at the pick and writes
+>= LEAVE_NOT_LIVE not-live observations >= LEAVE_MIN_GAP_S apart (start failures, or pre-checks that found it off air)
+and 0 accepted sessions (spares too). A type left with fewer than 2 owners gets its spare promoted through the live check. The collector applies it at the pick and writes
 the leave to data/_summaries/yt_list_leaves.jsonl, which keeps it out after the window; the leave is then committed
 here (LIST_CHANGES, REMOVED_CHANNELS) and in Addendum P. A spare is promoted only after its live check passes. Every
 session's meta.json carries the list record (list_record: version and every change, committed or on disk).
@@ -65,7 +66,9 @@ LIST_CHANGES: list[dict] = [
 ]
 LEAVE_WINDOW_S = 48 * 3600
 LEAVE_NOT_LIVE = 3
+LEAVE_MIN_GAP_S = 6 * 3600
 LEAVES_FILE = Path("_summaries") / "yt_list_leaves.jsonl"
+PRECHECK_SKIPS_FILE = Path("_summaries") / "yt_precheck_skips.jsonl"
 
 
 def url_of(handle: str) -> str:
@@ -141,27 +144,66 @@ def disk_leaves(data_dir: Path) -> list[dict]:
     return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
 
 
+def not_live_observations(data_dir: Path) -> dict[str, list[float]]:
+    """Times each channel was seen off air: not-live start failures (data/_failed) and pre-checks that found it not live
+    (_summaries/yt_precheck_skips.jsonl, state not_live)."""
+    out = {h: list(ts) for h, ts in not_live_failures(data_dir).items()}
+    p = data_dir / PRECHECK_SKIPS_FILE
+    if p.exists():
+        for l in p.read_text().splitlines():
+            try:
+                r = json.loads(l)
+            except Exception:
+                continue
+            if r.get("state") == "not_live" and r.get("handle") and r.get("ts"):
+                out.setdefault(r["handle"], []).append(float(r["ts"]))
+    return out
+
+
+def _spaced(ts: list[float], gap: float) -> list[float]:
+    """The times taken greedily, oldest first, each >= gap after the previous one taken."""
+    out: list[float] = []
+    for t in sorted(ts):
+        if not out or t - out[-1] >= gap:
+            out.append(t)
+    return out
+
+
 def apply_leave_rule(data_dir: Path, now: float) -> list[dict]:
-    """Addendum P: listed channels with >= LEAVE_NOT_LIVE not-live failures and 0 accepted sessions in the last
-    LEAVE_WINDOW_S leave; each new leave is appended to the leaves file. Returns the new leaves."""
+    """Addendum P: listed channels with >= LEAVE_NOT_LIVE not-live observations >= LEAVE_MIN_GAP_S apart and 0 accepted
+    sessions in the last LEAVE_WINDOW_S leave; each new leave is appended to the leaves file. Returns the new leaves."""
     gone = {r["handle"] for r in disk_leaves(data_dir)}
-    fails, ok = not_live_failures(data_dir), accepted_starts(data_dir)
+    obs, ok = not_live_observations(data_dir), accepted_starts(data_dir)
     new = []
     for c in YT_CHANNELS:
         h = c["handle"]
-        nl = sorted(t for t in fails.get(h, []) if now - t < LEAVE_WINDOW_S)
-        if h in gone or len(nl) < LEAVE_NOT_LIVE or any(now - t < LEAVE_WINDOW_S for t in ok.get(h, [])):
+        nl = _spaced([t for t in obs.get(h, []) if 0 <= now - t < LEAVE_WINDOW_S], LEAVE_MIN_GAP_S)
+        if h in gone or len(nl) < LEAVE_NOT_LIVE or any(0 <= now - t < LEAVE_WINDOW_S for t in ok.get(h, [])):
             continue
         new.append({"ts": now, "change": "removed", "handle": h, "type": c["type"], "role": c["role"],
                     "rule": "prereg Addendum P (collector)",
-                    "evidence": f"{len(nl)} not-live failures and 0 accepted sessions in {LEAVE_WINDOW_S // 3600} h",
-                    "not_live_started_at": nl})
+                    "evidence": f"{len(nl)} not-live observations >= {LEAVE_MIN_GAP_S // 3600} h apart and 0 accepted "
+                                f"sessions in {LEAVE_WINDOW_S // 3600} h",
+                    "not_live_at": nl})
     if new:
         (data_dir / LEAVES_FILE).parent.mkdir(parents=True, exist_ok=True)
         with open(data_dir / LEAVES_FILE, "a") as fh:
             for r in new:
                 fh.write(json.dumps(r) + "\n")
     return new
+
+
+def spares_needing_promotion(leaves: list[dict]) -> list[str]:
+    """Spares of each content type left with fewer than 2 primary owners (committed list minus the collector's leaves):
+    these get the promotion live check (Addendum P)."""
+    gone = {r["handle"] for r in leaves}
+    out = []
+    for t in dict.fromkeys(c["type"] for c in YT_CHANNELS):
+        owners = {c["owner"] for c in YT_CHANNELS if c["type"] == t and c["role"] == "primary" and c["handle"] not in gone}
+        if len(owners) < 2:
+            out += [c["handle"] for c in YT_CHANNELS if c["type"] == t and c["role"] == "spare" and c["handle"] not in gone
+                    and c["owner"] not in owners]
+    return out
 
 
 def list_record(data_dir: Path, handle: str | None) -> dict:

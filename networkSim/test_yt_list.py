@@ -43,7 +43,7 @@ def test_leave_rule():
         assert Y.apply_leave_rule(d, t0 + 29 * H) == []                                   # 2 failures so far
         meta(d, "_failed/youtube/yt_2", channel_handle="@MonsterJam", started_at=t0 + 30 * H, abort_reason=NL)
         new = Y.apply_leave_rule(d, t0 + 31 * H)
-        assert [r["handle"] for r in new] == ["@MonsterJam"] and len(new[0]["not_live_started_at"]) == 3, new
+        assert [r["handle"] for r in new] == ["@MonsterJam"] and len(new[0]["not_live_at"]) == 3, new
         assert Y.apply_leave_rule(d, t0 + 32 * H) == []                                   # written once
         # out after the window too, and the list record carries it
         later = t0 + 200 * H
@@ -64,6 +64,28 @@ def test_leave_rule():
         assert Y.next_channel(d, exclude=ex)["handle"] == "@FuboSports"
 
 
+def test_precheck_observations():
+    """levi: not-live pre-checks count; >= 3 observations >= 6 h apart (failures or pre-checks), 0 accepted, 48 h."""
+    with tempfile.TemporaryDirectory() as td:
+        d, t0 = Path(td), 1_800_000_000.0
+        (d / "_summaries").mkdir()
+        rows = [{"ts": t0 + dt, "handle": "@dwnews", "type": "news", "role": "primary", "state": st}
+                for dt, st in ((0, "not_live"), (2 * H, "not_live"), (7 * H, "not_live"), (8 * H, "unknown"))]
+        (d / Y.PRECHECK_SKIPS_FILE).write_text("".join(json.dumps(r) + "\n" for r in rows))
+        assert Y.apply_leave_rule(d, t0 + 9 * H) == []                 # 2 h apart counts once; unknown never
+        meta(d, "_failed/youtube/yt_5", channel_handle="@dwnews", started_at=t0 + 13 * H, abort_reason=NL)
+        new = Y.apply_leave_rule(d, t0 + 14 * H)
+        assert [(r["handle"], r["not_live_at"]) for r in new] == [("@dwnews", [t0, t0 + 7 * H, t0 + 13 * H])], new
+        # a leave that leaves news with one owner puts its spare up for the live check
+        assert Y.spares_needing_promotion(Y.disk_leaves(d)) == ["@channelnewsasia", "@BeanBoltTV"]
+
+
+def test_spares_needing_promotion():
+    assert Y.spares_needing_promotion([]) == ["@BeanBoltTV"]                    # gaming lost Sypherpk
+    two = [{"handle": "@MonsterJam"}, {"handle": "@FUELTVMoto"}]
+    assert Y.spares_needing_promotion(two) == ["@FuboSports", "@BeanBoltTV"]
+
+
 def test_promotion():
     h, t = "@BeanBoltTV", 1_800_000_000.0
     live = lambda dt: {"ts": t + dt, "handle": h, "state": "live"}
@@ -82,6 +104,8 @@ def test_promotion():
 def main() -> int:
     test_list()
     test_leave_rule()
+    test_precheck_observations()
+    test_spares_needing_promotion()
     test_promotion()
     print("test_yt_list: ok")
     return 0
