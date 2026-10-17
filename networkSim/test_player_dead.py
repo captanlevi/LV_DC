@@ -227,13 +227,15 @@ def test_reenter_room_records_an_entry(monkeypatch):
         b = B.BrowserSession("tiktok")
         b._page = Page()
         monkeypatch.setattr(B, "_wait_for_load", lambda page, timeout=15: None)
-        monkeypatch.setattr(B, "_tt_confirm_playing", lambda page, seconds, c=confirm: c)
+        seen = []
+        monkeypatch.setattr(B, "_tt_confirm_playing", lambda page, seconds, trace=None, c=confirm: seen.append(seconds) or c)
         dw = {"shaped_rx_kbps": 1379.0, "shaper_kbit": 1459, "share_of_shaper": 0.945, "stream": "alive"}
         r = b._reenter_room({"room": "https://www.tiktok.com/@room_b/live", "dead_s": 60.5, "dead_window": dw})
         assert r["outcome"] == outcome and r["reason"] == "player_dead" and r["dead_window"] == dw, r
         assert b._page.navigated == ["https://www.tiktok.com/@room_b/live"]
         assert b.room_rotation["rooms"][-1] is r and b.player_dead_reentries == [r]
         assert r["t_enter"] >= r["t_nav"] and (r["t_playing"] is not None) == (outcome == "continue")
+        assert seen == [B.TT_REENTRY_CONFIRM_S] == [60] and r["confirm_s"] == 60
 
 
 def test_a_player_dead_reentry_is_an_entry():
@@ -248,6 +250,57 @@ def test_a_player_dead_reentry_is_an_entry():
     re_ = [e for e in ents if e["kind"] == "room_reentry"]
     assert len(re_) == 1 and re_[0]["reason"] == "player_dead" and re_[0]["dead_window"] == dw and re_[0]["outcome"] == "continue"
     assert re_[0]["shaper_at_entry"]["state"] == "6" and re_[0]["sustained_60s"]
+
+
+def test_ti33_reentry_window(monkeypatch):
+    """chaos ti_33 (2026-10-18, fixture): after the re-entry the room page loaded in about 8 s (video_start) and the new
+    player sat at readyState 0 until the 15 s window ended it (abort 28 s after the navigation; the shots: tt's loader
+    on a blank page). The real confirm loop, on a fake clock and page: the ti_33 timeline (no data at all) still ends as
+    player_dead within the 60 s window; a room whose data arrives at 40 s now continues; loading samples are counted."""
+    fx = json.loads((FX / "tt_ti33_reentry_2026-10-18.json").read_text())
+    rows = [dict(zip(fx["columns"], r)) for r in fx["rows"]]
+    tn = fx["reentry"]["t_nav"]
+    vs = min(float(r["ts"]) / 1000 - tn for r in rows if r["type"] == "video_start" and float(r["ts"]) / 1000 > tn)
+    assert 5 <= vs <= 12 and fx["reentry"]["outcome"] == "player_dead" and fx["reentry"]["confirm"]["rs"] == 0
+    assert all(r["ready_state"] == "0" for r in rows if r["type"] == "res_meta" and float(r["ts"]) / 1000 > tn)
+
+    class Clock:
+        def __init__(self):
+            self.t = 1000.0
+        def time(self):
+            return self.t
+        def sleep(self, dt):
+            self.t += dt
+
+    def run(data_at):
+        clock = Clock()
+        t0 = clock.t
+
+        class Page:
+            def navigate(self, url):
+                pass
+            def eval(self, js):
+                if js == B._TT_PLAYER_STATE_JS:
+                    el = clock.t - t0
+                    if el < vs:                                      # the page still loading: no player yet
+                        return json.dumps({"has_video": False, "loading": True})
+                    if data_at is None or el < data_at:              # the new player without data
+                        return json.dumps({"has_video": True, "src": True, "rs": 0, "ct": 0, "buf_end": None,
+                                           "decoded": None, "paused": True, "loading": True, "ended_text": False})
+                    ct = el - data_at
+                    return json.dumps({"has_video": True, "src": True, "rs": 4, "ct": ct, "buf_end": ct + 3,
+                                       "decoded": int(ct * 1e4), "paused": False, "loading": False, "ended_text": False})
+                return "https://www.tiktok.com/@room_c/live" if "location.href" in js else None
+        monkeypatch.setattr(B, "time", clock)
+        monkeypatch.setattr(B, "_wait_for_load", lambda page, timeout=15: None)
+        b = B.BrowserSession("tiktok")
+        b._page = Page()
+        return b._reenter_room({"room": "https://www.tiktok.com/@room_c/live", "dead_s": 60.4,
+                                "dead_window": fx["reentry"]["dead_window"]})
+    r = run(None)                                    # ti_33 as recorded: no data at all
+    assert r["outcome"] == "player_dead" and r["s_to_data"] is None and r["samples_loading"] > 0, r
+    r = run(40)                                      # a slow room: data at 40 s (beyond the old 15 s window)
+    assert r["outcome"] == "continue" and 39 <= r["s_to_data"] <= 42, r
 
 
 class _Patch:
@@ -271,11 +324,12 @@ def main() -> int:
     test_tt_start_failure_entry()
     test_ti32_dead_after_end_with_the_stream_alive()
     test_one_reentry_then_the_session_ends()
-    mp = _Patch()
-    try:
-        test_reenter_room_records_an_entry(mp)
-    finally:
-        mp.close()
+    for t in (test_reenter_room_records_an_entry, test_ti33_reentry_window):
+        mp = _Patch()
+        try:
+            t(mp)
+        finally:
+            mp.close()
     test_a_player_dead_reentry_is_an_entry()
     print("test_player_dead: ok")
     return 0

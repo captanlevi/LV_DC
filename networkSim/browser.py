@@ -401,6 +401,10 @@ _TT_PLAYER_STATE_JS = """
                            ct: v ? v.currentTime : null, paused: v ? v.paused : null, buf_end: buf,
                            decoded: v ? (v.webkitVideoDecodedByteCount || null) : null,
                            ended_text: hit('live has ended'),
+                           // a visible loading indicator (heuristic, diagnostics only: tt's two-dot loader on a blank
+                           // room after a re-entry, ti_33); never part of a decision
+                           loading: [...document.querySelectorAll('[class*="oading"], [class*="pinner"], [role="progressbar"], [data-e2e*="loading"]')]
+                               .some(e => e.getClientRects().length > 0),
                            stall_label: document.documentElement.dataset.lvqoeStall === '1'});
 })()
 """
@@ -517,6 +521,10 @@ PLAYER_DEAD_ALIVE_SHARE = 0.5
 # ended banner takes the picker's ended rule (room_ended: the host ended), which separates that from a player death
 # without a page probe. No reload anywhere else (stalls, ads, buffering).
 PLAYER_DEAD_REENTRIES = 1
+# the re-entry's playback confirmation window (supervisor 2026-10-18, ti_33: the room page took about 8 s to load and the
+# new player sat at readyState 0 through the 15 s quick window, a spinner on a blank page): 60 s, the ended banner still
+# ending it early; each sample's readyState / video / loading indicator is recorded
+TT_REENTRY_CONFIRM_S = 60
 
 
 def dead_action(reentries_done: int) -> str:
@@ -657,8 +665,9 @@ def _tt_state(page: "CDPPage") -> dict:
         return {}
 
 
-def _tt_confirm_playing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
-    """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal)."""
+def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = None) -> tuple[bool, dict]:
+    """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal). With `trace`, one
+    (t, rs, has_video, loading) per sample is appended (re-entry diagnostics)."""
     w, first_ct, s = TTRoomWatch(), None, {}
     page.eval(_CLICK_PLAY_JS)                         # autoplay may not have started: click, then give it the grace
     time.sleep(TT_AUTOPLAY_GRACE_S)
@@ -666,6 +675,8 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
     while time.time() < deadline:
         page.eval(_CLICK_PLAY_JS)
         s = _tt_state(page)
+        if trace is not None:
+            trace.append((round(time.time(), 2), s.get("rs"), bool(s.get("has_video")), bool(s.get("loading"))))
         dead = w.feed(s, time.time())
         if dead:
             return False, {"dead": dead, **s}
@@ -2009,7 +2020,7 @@ class BrowserSession:
 
     def _reenter_room(self, pd: dict) -> dict:
         """The one re-entry after a player_dead: navigate to the same room, confirm playback (_tt_confirm_playing:
-        play clicked, the playhead advancing within TT_QUICK_CONFIRM_S, the ended banner read), and record it as an
+        play clicked, the playhead advancing within TT_REENTRY_CONFIRM_S, the ended banner read), and record it as an
         entry in room_rotation's rooms (entries.py) and in player_dead_reentries (meta.json)."""
         room = pd.get("room") or self.channel_url
         rec = {"t_nav": time.time(), "room": room, "reason": "player_dead", "dead_s": pd.get("dead_s"),
@@ -2019,9 +2030,15 @@ class BrowserSession:
             self._page.navigate(room)
             _wait_for_load(self._page, timeout=15)
             rec["t_enter"] = time.time()
-            ok, detail = _tt_confirm_playing(self._page, TT_QUICK_CONFIRM_S)
+            trace: list = []
+            ok, detail = _tt_confirm_playing(self._page, TT_REENTRY_CONFIRM_S, trace=trace)
+            rs3 = next((t for t, rs, _, _ in trace if (rs or 0) >= 3), None)
             rec.update(ok=bool(ok), t_playing=time.time() if ok else None, room=self._page.eval("location.href"),
-                       confirm={k: detail.get(k) for k in ("dead", "rs", "ct", "ended_text") if k in detail})
+                       confirm={k: detail.get(k) for k in ("dead", "rs", "ct", "ended_text") if k in detail},
+                       confirm_s=TT_REENTRY_CONFIRM_S, samples=len(trace),
+                       samples_loading=sum(1 for *_, ld in trace if ld),
+                       samples_no_video=sum(1 for _, _, hv, _ in trace if not hv),
+                       s_to_data=None if rs3 is None else round(rs3 - rec["t_enter"], 1))
         except Exception as exc:
             rec.update(ok=False, error=repr(exc))
         rec["outcome"] = reentry_outcome(rec.get("ok", False), detail)
