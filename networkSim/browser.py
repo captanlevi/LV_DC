@@ -776,20 +776,55 @@ def size_window(page: "CDPPage", target: tuple[int, int], target_id: str | None)
     return trace
 
 
-# Window / viewport / player geometry (meta.json): the player size decides the top of yt's ladder.
+# Window / viewport / player geometry (meta.json): the player size decides the top of yt's ladder. player_rect is the
+# largest visible <video>'s bounding rect in viewport CSS px [x, y, w, h] (supervisor 2026-10-17, brad's R-O audit: the
+# motion crop is derived per session from it, without detection); control_band is the player's own control bar where
+# it exposes one (yt .ytp-chrome-bottom, twitch [data-a-target=player-controls]; tt none: the inset rule applies), with
+# its rect and whether it was showing (both auto-hide).
 _GEOMETRY_JS = """
 (function() {
     const v = document.querySelector('#movie_player video') || document.querySelector('video');
+    const vs = [...document.querySelectorAll('video')].filter(x => x.offsetParent !== null);
+    const pv = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0] || v;
+    const rect = el => { if (!el) return null; const r = el.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; };
     const flexy = document.querySelector('ytd-watch-flexy');
+    const yb = document.querySelector('#movie_player .ytp-chrome-bottom');
+    const tb = document.querySelector('[data-a-target="player-controls"]');
+    const mp = document.querySelector('#movie_player');
+    const band = yb ? {source: 'yt .ytp-chrome-bottom', rect: rect(yb), height: rect(yb)[3],
+                       showing: mp ? !mp.classList.contains('ytp-autohide') : null}
+               : tb ? {source: 'twitch [data-a-target=player-controls]', rect: rect(tb), height: rect(tb)[3],
+                       showing: tb.dataset.aVisible === 'true'} : null;
     return JSON.stringify({
         window_outer: [window.outerWidth, window.outerHeight], viewport: [window.innerWidth, window.innerHeight],
         device_pixel_ratio: window.devicePixelRatio, screen: [screen.width, screen.height],
         player_client: v ? [v.clientWidth, v.clientHeight] : null,
+        player_rect: rect(pv), control_band: band, at: Date.now() / 1000,
         yt_theater: flexy ? flexy.hasAttribute('theater') : null,
         yt_fullscreen: flexy ? flexy.hasAttribute('fullscreen') : null,
     });
 })()
 """
+
+def geometry_scales(geom: dict | None) -> dict | None:
+    """levi 2026-10-17 (Addendum O amendment 2, R-O's MAD crop): the player's position and size in the screenshots'
+    pixels beside its CSS-px rect. Device px = CSS px x device_pixel_ratio. A viewport shot (CDP) is the viewport in
+    device px scaled to SHOT_WIDTH_PX wide: the player sits at player_in_viewport_shot_px. An x11 shot is the player
+    rectangle itself scaled to SHOT_WIDTH_PX wide (x11_player_shot_scale; position 0, 0). Each shot's own scale is
+    shot_px / capture_px in shots/index.jsonl."""
+    try:
+        x, y, w, h = geom["player_rect"]
+        dpr = float(geom.get("device_pixel_ratio") or 1)
+        vw = geom["viewport"][0] * dpr
+        k = min(1.0, SHOT_WIDTH_PX / vw)
+        return {"source": SHOT_SOURCE, "width_px": SHOT_WIDTH_PX, "dpr": dpr,
+                "player_rect_device_px": [round(v * dpr, 1) for v in (x, y, w, h)],
+                "viewport_shot_scale": round(k, 5),
+                "player_in_viewport_shot_px": [round(v * dpr * k, 1) for v in (x, y, w, h)],
+                "x11_player_shot_scale": round(min(1.0, SHOT_WIDTH_PX / (w * dpr)), 5) if w else None}
+    except (TypeError, KeyError, ValueError, IndexError, ZeroDivisionError):
+        return None
+
 
 # JS: click the video element to force playback (handles autoplay block).
 # v2: never click a PLAYING video. On yt a click on <video> toggles play / pause, so the v1 "play(); click()" paused
@@ -1423,15 +1458,16 @@ def _downscale_jpeg(raw: bytes) -> tuple[bytes, list | None, list | None]:
 
 
 # the player's rectangle in CSS px and the viewport, recorded with each shot (addendum O: motion is computed on the
-# player crop, chat / side panes outside it)
+# player crop, chat / side panes outside it); the viewport size and dpr come back even with no player (supervisor
+# 2026-10-17: every shot carries the viewport at capture). One eval, so the shot loop adds no extra page call.
 _PLAYER_RECT_JS = """
 (function() {
     const vs = [...document.querySelectorAll('video')].filter(v => v.offsetParent !== null);
     const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
-    if (!v) return null;
-    const r = v.getBoundingClientRect();
-    return JSON.stringify({rect: [r.x, r.y, r.width, r.height], inner: [window.innerWidth, window.innerHeight],
-                           dpr: window.devicePixelRatio || 1});
+    const inner = [window.innerWidth, window.innerHeight], dpr = window.devicePixelRatio || 1;
+    let player = null;
+    if (v) { const r = v.getBoundingClientRect(); player = {rect: [r.x, r.y, r.width, r.height], inner, dpr}; }
+    return JSON.stringify({player, viewport: inner, dpr});
 })()
 """
 
@@ -1467,9 +1503,10 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
             # The surface is grabbed as is and downscaled here.
             t_decide = time.time()
             try:
-                player = json.loads(page.eval(_PLAYER_RECT_JS) or "null")
+                pr_ = json.loads(page.eval(_PLAYER_RECT_JS) or "null") or {}
             except Exception:
-                player = None
+                pr_ = {}
+            player, viewport = pr_.get("player"), {"inner": pr_.get("viewport"), "dpr": pr_.get("dpr")}
             data, capture, capture_px, shot_px, region, crop = None, None, None, None, None, "viewport"
             t_js = t_grab = None
             if SHOT_SOURCE == "x11":
@@ -1508,6 +1545,7 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
             with open(index, "a") as fh:
                 fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
                                      "request": req if reason != "cadence" else None, "player": player,
+                                     "viewport": viewport,
                                      "capture_px": capture_px, "shot_px": shot_px, "capture": capture,
                                      "screen_region": region, "crop": crop,
                                      # per-step timing (tw_10: the near-shot dropped frames sit on the tick about
@@ -1726,6 +1764,8 @@ class BrowserSession:
             print(f"[browser] Geometry {self.geometry_target}: {self.player_pin}", flush=True)
         try:
             self.geometry = json.loads(self._page.eval(_GEOMETRY_JS) or "null")
+            if self.geometry:
+                self.geometry["shot"] = geometry_scales(self.geometry)
         except Exception:
             self.geometry = None
         print(f"[browser] Geometry: {self.geometry}", flush=True)
@@ -1892,6 +1932,12 @@ class BrowserSession:
                 rec.update(t_playing=time.time() if ok else None, room=self._page.eval("location.href"), ok=ok)
             except Exception as exc:
                 rec.update(ok=False, error=repr(exc))
+            try:
+                rec["geometry"] = json.loads(self._page.eval(_GEOMETRY_JS) or "null")
+                if rec["geometry"]:
+                    rec["geometry"]["shot"] = geometry_scales(rec["geometry"])
+            except Exception:
+                rec["geometry"] = None
             self.room_rotation["rooms"].append(rec)
             self._room_grace_until = time.time() + 15      # settle in the new room, then watch it
             print(f"[browser] Room rotation: {rec}", flush=True)
