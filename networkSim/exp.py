@@ -646,7 +646,9 @@ if __name__ == "__main__":
                 first_url = (tw_categories.channel_url(args.tw_channel) if args.tw_channel
                              else tw_categories.url_of(cat["name"]))
                 session_meta.write(session_dir, tw_category=cat["name"], tw_category_type=cat["type"],
-                                   tw_category_url=first_url, tw_channel=args.tw_channel)
+                                   tw_category_url=first_url, tw_channel=args.tw_channel,
+                                   tw_category_previous=tw_categories.last_category(session_dir.parent.parent, skip=session_dir),
+                                   tw_category_counts=tw_categories.collected_counts(session_dir.parent.parent))
             browser = BrowserSession(platform, session_dir=session_dir, first_url=first_url, geometry=args.geometry,
                                      room_rotation_s=args.tt_room_rotation if platform == "tiktok" else None)
             browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)

@@ -29,6 +29,11 @@ def main() -> int:
         (f / "meta.json").write_text(json.dumps({"tw_category": "Music"}))          # _failed does not count
         counts = T.collected_counts(d)
         assert counts["Just Chatting"] == 2 and counts["Counter-Strike"] == 1 and counts["Music"] == 0, counts
+        # the latest session (by started_at) was Chess: never drawn twice in a row, even when least-collected
+        (d / "twitch" / "tw_3" / "meta.json").write_text(json.dumps({"tw_category": "Chess", "started_at": 5}))
+        assert T.last_category(d) == "Chess"
+        assert T.next_category(d, live_check=lambda ch: False)[0]["name"] != "Chess"
+        (d / "twitch" / "tw_3" / "meta.json").write_text(json.dumps({"tw_category": "Chess"}))
         c, sk = T.next_category(d, live_check=lambda ch: ch == "lck")
         assert c["type"] == "esports" and c["channel"] == "lck" and sk is None, (c, sk)
         c, sk = T.next_category(d, live_check=lambda ch: False)

@@ -183,6 +183,17 @@ It writes `check.json` and a one-screen `check.md` per session.
 - **Captures:** screenshots by reason; player_stats records.
 - **Geometry:** drawn vs realised.
 
+## 6.1 Screenshot capture and dropped frames (measured; settled 2026-10-17)
+
+- **Measure.** `shot_effects.py` (also a check.md row) compares dropped frames per tick within 1 s of a **cadence**
+  shot with the rest of the session.
+- **The confound, resolved.** Event shots fire at tier changes and ad starts, which drop frames by themselves, so an
+  early version that pooled cadence and event shots read as a capture effect. Split by shot type, cadence shots on
+  twitch show no excess under any capture (tw_6 / tw_9 / tw_10 / tw_11). The one real effect was the scaled CDP clip
+  (yt_10), which made Chrome emulate device metrics on every shot; it was removed.
+- **Settled.** 10 s cadence plus event shots, x11 player-rectangle grab. The 30 s fallback was withdrawn. The yt check
+  on x11 is pending its first session.
+
 ## 6. Session files (`data/<platform>/<abbrev>_N/`)
 
 | file | content |
@@ -195,6 +206,6 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `net_labels.txt` | the shaper schedule (coverage / debug record, not a data covariate) |
 | `meta.json` | provenance and covariates: commit, Chrome, extension, profile template + sha, shaper (matrix, cap, rule), channel / room, geometry, login state, room rotation, IPv6 sysctl, data volume, management exclusion, NTP, abort reason |
 | `motion.jsonl` | addendum O cross-check (ground truth, never a feature): per pair of 10 s shots, the player-crop downscaled grey MAD / 255, valid only when both ticks are play; summary in `check.md` |
-| `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick and reason. Grabbed from the X display (Pillow ImageGrab, the page viewport from window metrics), outside Chrome's renderer: any CDP capture costs dropped frames near shots (`shot_effects.py`); CDP is the fallback (no X, or a blank grab), recorded per shot as `capture` |
+| `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick, reason, crop and per-step timing. Grabbed from the X display (Pillow ImageGrab of the player rectangle), outside Chrome's renderer; CDP is the fallback (no X, or a blank grab), recorded per shot as `capture`. Capture effect: see §6.1 |
 | `ad_actions.jsonl` | what the ad skipper did |
 | `check.json`, `check.md` | the verdict |

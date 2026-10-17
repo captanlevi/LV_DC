@@ -72,13 +72,33 @@ def collected_counts(data_dir: Path) -> dict[str, int]:
     return counts
 
 
+def last_category(data_dir: Path, skip: Path | None = None) -> str | None:
+    """The category of the latest twitch session (data/twitch and data/_failed/twitch, by meta.json started_at)."""
+    best = (None, -1.0)
+    for m in list((data_dir / "twitch").glob("*/meta.json")) + list((data_dir / "_failed" / "twitch").glob("*/meta.json")):
+        if skip is not None and m.parent.resolve() == Path(skip).resolve():
+            continue
+        try:
+            meta = json.loads(m.read_text())
+        except Exception:
+            continue
+        t = float(meta.get("started_at") or 0)
+        if t > best[1]:
+            best = (meta.get("tw_category") or PRE_ROTATION_CATEGORY, t)
+    return best[0]
+
+
 def next_category(data_dir: Path, exclude: set[str] | None = None, live_check=twitch_live) -> tuple[dict, dict | None]:
     """(category, esports skip record or None): the least-collected category not in `exclude` (a category or channel
     with no playable stream just now). esports is taken only with a live league channel (category["channel"]);
     otherwise it is skipped and the next one drawn."""
-    exclude = exclude or set()
+    exclude = set(exclude or ())
     counts = collected_counts(data_dir)
-    pool = [c for c in TW_CATEGORIES if c["name"] not in exclude] or TW_CATEGORIES
+    # never the previous session's category (supervisor 2026-10-17: a failed tw_10 left Chess least-collected, and tw_11
+    # drew it again), unless it is the only one left
+    prev = last_category(data_dir)
+    pool = ([c for c in TW_CATEGORIES if c["name"] not in exclude | {prev}]
+            or [c for c in TW_CATEGORIES if c["name"] not in exclude] or TW_CATEGORIES)
     skipped = None
     for c in sorted(pool, key=lambda c: (counts[c["name"]], TW_CATEGORIES.index(c))):
         if c["type"] != "esports":

@@ -231,8 +231,12 @@ def shot_effects(rows: list[dict], sd: Path, near_s: float = 1.0) -> dict | None
     idx = sd / "shots" / "index.jsonl"
     if not idx.exists():
         return None
-    # the shot's start (t_decide: its JS reads, then the grab) when recorded, else the write time
-    shots = sorted(x.get("t_decide") or x["ts"] for x in (json.loads(ln) for ln in idx.read_text().splitlines() if ln.strip()))
+    # cadence shots only (2026-10-17): event shots are triggered by tier changes and ad starts, which drop frames by
+    # themselves, so pooling them read as a capture effect (tw_11: cadence 0.010 vs 0.013 elsewhere, event shots 0.469);
+    # the shot's start (t_decide) when recorded, else its write time
+    recs = [json.loads(ln) for ln in idx.read_text().splitlines() if ln.strip()]
+    shots = sorted(x.get("t_decide") or x["ts"] for x in recs if (x.get("reason") or "cadence") == "cadence")
+    events = sorted(x.get("t_decide") or x["ts"] for x in recs if (x.get("reason") or "cadence") != "cadence")
     meta = [r for r in rows if r.get("type") == "res_meta"]
     ts = [(_f(r.get("ts")) or 0) / 1000.0 for r in meta]
     if len(meta) < 2 or not shots:
@@ -248,7 +252,13 @@ def shot_effects(rows: list[dict], sd: Path, near_s: float = 1.0) -> dict | None
     inc = [max(0.0, dropped[i] - dropped[i - 1]) for i in range(1, len(meta))]
     nd = [x for x, n in zip(inc, near[1:]) if n]
     fd = [x for x, n in zip(inc, near[1:]) if not n]
-    return {"near_s": near_s, "ticks_near": sum(near), "ticks_elsewhere": len(near) - sum(near),
+    ev_near = [False] * len(ts)
+    for i, t in enumerate(ts):
+        j = bisect.bisect_left(events, t)
+        ev_near[i] = any(0 <= k < len(events) and abs(events[k] - t) <= near_s for k in (j - 1, j))
+    en = [x for x, n in zip(inc, ev_near[1:]) if n]
+    return {"near_s": near_s, "shots": "cadence", "ticks_near": sum(near), "ticks_elsewhere": len(near) - sum(near),
+            "event_shots": len(events), "dropped_per_tick_near_event_shots": (sum(en) / len(en)) if en else None,
             "dropped_per_tick_near": (sum(nd) / len(nd)) if nd else None,
             "dropped_per_tick_elsewhere": (sum(fd) / len(fd)) if fd else None,
             "client_size_off_mode_near": sum(1 for s_, n in zip(sizes, near) if n and s_ != mode),
@@ -832,7 +842,7 @@ def main() -> int:
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
           f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",
           f"| tt logged-out quality countdown ticks (FAIL if > 0) | {lab.get('quality_countdown_ticks')} |",
-          f"| screenshot effect (ticks within 1 s of a shot vs elsewhere): dropped frames per tick / client size off mode | {(lab.get('shot_effects') or {}).get('dropped_per_tick_near')} vs {(lab.get('shot_effects') or {}).get('dropped_per_tick_elsewhere')} / {(lab.get('shot_effects') or {}).get('client_size_off_mode_near')} vs {(lab.get('shot_effects') or {}).get('client_size_off_mode_elsewhere')} |",
+          f"| screenshot effect (ticks within 1 s of a cadence shot vs elsewhere): dropped frames per tick / client size off mode | {(lab.get('shot_effects') or {}).get('dropped_per_tick_near')} vs {(lab.get('shot_effects') or {}).get('dropped_per_tick_elsewhere')} / {(lab.get('shot_effects') or {}).get('client_size_off_mode_near')} vs {(lab.get('shot_effects') or {}).get('client_size_off_mode_elsewhere')} |",
           f"| motion (addendum O cross-check; 10 s shots, play-only pairs): valid pairs / session / median / p90 / near-zero share / scene cuts | {(motion_s or {}).get('valid_pairs')} / {(motion_s or {}).get('session_motion')} / {(motion_s or {}).get('median')} / {(motion_s or {}).get('p90')} / {(motion_s or {}).get('share_near_zero')} / {(motion_s or {}).get('scene_cuts')} ({(motion_s or {}).get('status')}) |",
           f"| twitch category / type (addendum O) | {meta.get('tw_category')} / {meta.get('tw_category_type')} |",
           f"| twitch pick: candidates / recent channels excluded / pick | {len((meta.get('tw_pick') or {}).get('candidates') or [])} / {len((meta.get('tw_pick') or {}).get('excluded_recent') or [])} / {(meta.get('tw_pick') or {}).get('pick')} |",
