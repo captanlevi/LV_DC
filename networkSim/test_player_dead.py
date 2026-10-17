@@ -10,7 +10,6 @@
 
     python3 test_player_dead.py        (exit 0 = pass)
 """
-import csv
 import json
 import sys
 import types
@@ -26,7 +25,8 @@ import browser as B  # noqa: E402
 import entries as E  # noqa: E402
 
 FX = HERE / "fixtures"
-ROWS = list(csv.DictReader(open(FX / "tt_ti20_ticks_2026-10-17.csv", newline="")))
+_TICKS = json.loads((FX / "tt_ti20_ticks_2026-10-17.json").read_text())
+ROWS = [dict(zip(_TICKS["columns"], r)) for r in _TICKS["rows"]]
 SESS = json.loads((FX / "tt_ti20_session_2026-10-17.json").read_text())
 
 
