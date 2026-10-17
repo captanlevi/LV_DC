@@ -158,6 +158,51 @@ def test_tt_start_failure_entry():
     assert E.compute_entries([], yt, []) == []     # yt / twitch: not_live, no entry made up
 
 
+def test_ti32_dead_after_end_with_the_stream_alive():
+    """chaos ti_32 (2026-10-18, fixture: the last 130 s of ticks, per-second shaped downstream from the pcap, the shaper):
+    sustained play, the element's 'end' + 'pause', then readyState 0 / 0x0 / playhead 0 while the media flow kept
+    arriving at about the shaper rate. player_dead fires 60 s into the run (no shaped stall precedes it: the
+    supervisor's hypothesis does not fit), and the dead window reads stream "alive"."""
+    fx = json.loads((FX / "tt_ti32_player_dead_2026-10-18.json").read_text())
+    rows = [dict(zip(fx["columns"], r)) for r in fx["rows"]]
+    at = fx["abort_at"]
+    ev = [(float(r["ts"]) / 1000 - at, r["type"]) for r in rows if r["type"] != "res_meta"]
+    end_t = max(t for t, ty in ev if ty == "end")
+    assert any(ty == "pause" and 0 <= t - end_t < 1 for t, ty in ev)
+    cum, srx_by_s = 0, {}
+    for k in range(-130, 1):
+        cum += fx["rx_bytes_per_s"][str(k)]
+        srx_by_s[k] = cum
+    w, fired = B.TTRoomWatch(), None
+    stall = False
+    for r in rows:
+        stall = True if r["type"] == "stall" else False if r["type"] in ("start", "video_start") else stall
+        if r["type"] != "res_meta":
+            continue
+        t = float(r["ts"]) / 1000
+        rs = int(float(r["ready_state"])) if r.get("ready_state") not in (None, "", "None") else None
+        ct = E._f(r["current_time"])
+        s = {"has_video": True, "src": True, "rs": rs, "ct": ct, "buf_end": None if rs == 0 else (ct or 0) + 3,
+             "decoded": None, "stall_label": stall}
+        if w.feed(s, t, shaped_rx_bytes=srx_by_s.get(int(t - at))) == "player_dead":
+            fired = t - at
+            break
+    # the ticks stop 1.2 s before the abort; the watcher's own samples (meta sample: the same dead state) run on to it
+    t = float(rows[-1]["ts"]) / 1000
+    while fired is None and t < at + 1:
+        t += 1.0
+        if w.feed(s, t, shaped_rx_bytes=srx_by_s.get(min(int(t - at), 0))) == "player_dead":
+            fired = t - at
+    # 60 s into the dead run (the replay's 1 Hz sampling adds up to 2 s), about 2 s after the element's 'end'
+    assert fired is not None and -3 <= fired <= 2 and 58 <= fired - end_t <= 64, (fired, end_t)
+    shaper = fx["shaper"][-1][1]
+    dw = B.dead_window(w.srx, shaper)
+    assert dw["stream"] == "alive" and dw["share_of_shaper"] > 0.8, dw
+    # the same run with only chat-level bytes arriving (ti_21: about 122 kbit/s at 952) reads no_media
+    assert B.dead_window([(0.0, 0), (60.0, int(122 * 1000 / 8 * 60))], 952)["stream"] == "no_media"
+    assert B.dead_window([(0.0, 0)], 952)["stream"] is None
+
+
 def main() -> int:
     test_ti20_replay()
     test_recovery_is_a_discontinuity()
@@ -165,6 +210,7 @@ def main() -> int:
     test_precedence()
     test_rates_and_reentry()
     test_tt_start_failure_entry()
+    test_ti32_dead_after_end_with_the_stream_alive()
     print("test_player_dead: ok")
     return 0
 

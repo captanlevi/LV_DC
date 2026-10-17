@@ -501,6 +501,33 @@ TT_RX_WINDOW_S = 60
 TT_LOW_STATES = {1, 2, 3, 4}   # shaper states in which a dead-looking player is the shaping, never a dead room
 
 
+# player_dead diagnostics (supervisor / shagun 2026-10-18, ti_29 / ti_30 / ti_32): the shaped downstream over the dead
+# run, read on the ingress IFB's tx counter (post-shaping; _rx_bytes below sums every interface, so it counts the
+# downstream about twice: wlp0 rx + ifb0 rx + ifb1). At the abort, a dead run whose shaped downstream is at least
+# PLAYER_DEAD_ALIVE_SHARE of the shaper rate had the stream still arriving ("alive": the player stopped consuming a
+# live stream; ti_32: about 0.9 of the shaper rate, the media flow at full rate, the element's 'end' 2 s before the
+# run), else "no_media" (ti_21: about 0.13). Recorded in meta.json player_dead.dead_window; detection is unchanged.
+SHAPED_IFACE = os.environ.get("LVDC_IFB_INGRESS", "ifb0")
+PLAYER_DEAD_ALIVE_SHARE = 0.5
+
+
+def _shaped_rx_bytes() -> int | None:
+    try:
+        return int((Path("/sys/class/net") / SHAPED_IFACE / "statistics" / "tx_bytes").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def dead_window(srx: list[tuple[float, int]], shaper_kbit: float | None) -> dict:
+    """The shaped downstream over the window in kbit/s, its share of the shaper rate, and the stream verdict."""
+    kbps = ((srx[-1][1] - srx[0][1]) * 8 / 1000 / (srx[-1][0] - srx[0][0])
+            if len(srx) >= 2 and srx[-1][0] > srx[0][0] else None)
+    share = kbps / shaper_kbit if kbps is not None and shaper_kbit else None
+    return {"shaped_rx_kbps": None if kbps is None else round(kbps, 1), "shaper_kbit": shaper_kbit,
+            "share_of_shaper": None if share is None else round(share, 3),
+            "stream": None if share is None else ("alive" if share >= PLAYER_DEAD_ALIVE_SHARE else "no_media")}
+
+
 def _rx_bytes() -> int | None:
     """Bytes received on every non-loopback interface (Linux /sys; None elsewhere): the media-bytes signal tt's
     MediaStream player does not expose."""
@@ -543,9 +570,14 @@ class TTRoomWatch:
         self.gone_ctx: dict = {}
         self.discontinuities: list[dict] = []
         self.rx: list[tuple[float, int]] = []
+        self.srx: list[tuple[float, int]] = []        # shaped downstream (diagnostics only)
 
-    def feed(self, s: dict | None, now: float, shaper_state: int | None = None, rx_bytes: int | None = None) -> str | None:
+    def feed(self, s: dict | None, now: float, shaper_state: int | None = None, rx_bytes: int | None = None,
+             shaped_rx_bytes: int | None = None) -> str | None:
         s = s or {}
+        if shaped_rx_bytes is not None:
+            self.srx.append((now, shaped_rx_bytes))
+            self.srx = [x for x in self.srx if now - x[0] <= TT_RX_WINDOW_S]
         if s.get("stall_label"):
             self.last_stall = now
         if rx_bytes is not None:
@@ -1921,14 +1953,19 @@ class BrowserSession:
                     self.room_play_clicks += 1
                 except Exception:
                     pass
-            dead = w.feed(s, time.time(), shaper_state=state, rx_bytes=_rx_bytes())
+            dead = w.feed(s, time.time(), shaper_state=state, rx_bytes=_rx_bytes(), shaped_rx_bytes=_shaped_rx_bytes())
             self.room_discontinuities = w.discontinuities
             if dead:
                 rec = {"reason": dead, "at": time.time(), "sample": s, "shaper_state": state,
                        "room": self._page.eval("location.href") if self._page else None}
                 why = "player_dead" if dead == "player_dead" else "room_ended"
                 if why == "player_dead":
-                    self.player_dead = {**rec, "dead_s": round(time.time() - (w.dead_since or time.time()), 1)}
+                    try:
+                        rate = float(labels[-1].speed) if labels else None
+                    except (ValueError, AttributeError, TypeError):
+                        rate = None
+                    self.player_dead = {**rec, "dead_s": round(time.time() - (w.dead_since or time.time()), 1),
+                                        "dead_window": dead_window(w.srx, rate)}
                 else:
                     self.room_ended = rec
                 if self.abort_reason is None:
