@@ -54,12 +54,18 @@ play(10); frozen(40);
 v.duration = 15; frozen(5); v.duration = Infinity;   // an ad: is_ad ticks end the run
 frozen(30);
 v.currentTime += 0.5; frozen(10);                    // a sub-tolerance nudge keeps the run
+// levi (tw_10): a player paused during a stall that has data again (readyState 4) gets no "start" until it plays
+const startsBefore = sent.filter(e => e.type === "start").length;
+v.paused = true; frozen(2); v.readyState = 4; tick(); tick();
+const startWhilePaused = sent.filter(e => e.type === "start").length - startsBefore;
+v.paused = false; tick();
+const startAfterPlay = sent.filter(e => e.type === "start").length - startsBefore;
 play(5); frozen(3);
 // the platform swaps in a replacement element that is still buffering, mid-stall: video_start clears the stall label,
 // so the new element's own "stall" must be emitted (stall state is per element, re-evaluated on attach)
 const w = mkVideo(); w.readyState = 2; videos = [w, v]; v.isConnected = false;
 ctx.__attach(w); tick(); tick();
-fs.writeFileSync(process.argv[3], JSON.stringify({ frozen_s: out, events: sent }));
+fs.writeFileSync(process.argv[3], JSON.stringify({ frozen_s: out, events: sent, startWhilePaused, startAfterPlay }));
 """
 
 
@@ -79,9 +85,10 @@ def main() -> int:
     js_max = max(d["frozen_s"])
     types = [e["type"] for e in d["events"]]
     after_swap = types[types.index("video_start", 1):] if types.count("video_start") > 1 else []
-    ok = abs(py - js_max) < 1e-6 and py > 0 and "stall" in after_swap
+    ok = abs(py - js_max) < 1e-6 and py > 0 and "stall" in after_swap and d["startWhilePaused"] == 0 and d["startAfterPlay"] >= 1
     print(json.dumps({"python_frozen_s": py, "content_js_max_frozen_s": js_max, "events": len(rows),
-                      "stall_after_swap": "stall" in after_swap, "pass": ok}))
+                      "stall_after_swap": "stall" in after_swap, "start_while_paused": d["startWhilePaused"],
+                      "start_after_play": d["startAfterPlay"], "pass": ok}))
     return 0 if ok else 1
 
 

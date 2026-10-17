@@ -178,6 +178,26 @@ def frozen_playhead_run(rows: list[dict]) -> float:
     return longest
 
 
+PAUSED_WHILE_PLAYING_MAX = 0.05     # levi 2026-10-17 (tw_10): reported; above it the session is suspicious
+
+
+def paused_while_playing_share(rows: list[dict]) -> float | None:
+    """Playing-labelled, non-ad res_meta ticks whose element was paused, over playing-labelled non-ad ticks (raw
+    `paused` column, sessions from a99384f on; None before)."""
+    stall, n, k = False, 0, 0
+    for r in rows:
+        ty = r.get("type")
+        if ty == "stall":
+            stall = True
+        elif ty in ("start", "video_start"):
+            stall = False
+        if ty != "res_meta" or stall or _true(r.get("is_ad")) or r.get("paused") in (None, "", "None"):
+            continue
+        n += 1
+        k += _true(r.get("paused"))
+    return k / n if n else None
+
+
 def stall_advancing_share(rows: list[dict]) -> float | None:
     """I10: over res_meta ticks in stall whose previous res_meta tick was also in stall (the rate is measured inside
     the stall, so a sub-second stall's single tick does not read the playing tick's advance; levi 2026-10-17), the
@@ -284,6 +304,7 @@ def label_checks(rows: list[dict], platform: str) -> dict:
         "src_changed_ticks": len(sw_t),
         "stall_share": sum(stalled) / len(stalled) if stalled else None,
         "frozen_playhead_max_s": frozen_playhead_run(rows),
+        "paused_while_playing_share": paused_while_playing_share(rows),
         "frozen_playhead_T_s": FROZEN_PLAYHEAD_MAX_S.get(platform),
         "stall_advancing_share": stall_advancing_share(rows),
         "tier_mix_quality_time": {str(k): v / nq for k, v in sorted(mix.items())},
@@ -792,6 +813,7 @@ def main() -> int:
           f"| Addendum D: tier changes with src_changed within ± 2 s | {lab.get('tier_changes_with_swap_within_2s_share')} (of {lab.get('tier_changes')}) |",
           f"| stall share | {lab.get('stall_share')} |",
           f"| longest frozen-playhead stall run, s / T (FAIL above; addendum N) | {lab.get('frozen_playhead_max_s')} / {lab.get('frozen_playhead_T_s')} |",
+          f"| paused while labelled playing (share of playing ticks; suspicious > {PAUSED_WHILE_PLAYING_MAX}) | {lab.get('paused_while_playing_share')} |",
           f"| I10: stall ticks with the playhead advancing (FAIL > {STALL_ADVANCING_SHARE_MAX}; >= {I10_MIN_STALL_TICKS} stall ticks) | {lab.get('stall_advancing_share')} |",
           f"| tier mix (quality time, ads masked) | {lab.get('tier_mix_quality_time')} |",
           f"| yt 144 / 240 / 360p shares | {lab.get('yt_low_tier_shares')} |",

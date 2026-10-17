@@ -1217,6 +1217,19 @@ def _wait_for_load(page: CDPPage, timeout: float = 15.0) -> None:
 # ---------------------------------------------------------------------------
 
 _WALL_JS = "document.documentElement.dataset.lvqoeWall === '1'"
+# levi 2026-10-17 (tw_10): a player that paused itself during a stall and has data again (readyState >= 3) is pressed
+# play, as a viewer would; returns 'resumed' when it did (logged in ad_actions.jsonl as resume_after_self_pause)
+_RESUME_SELF_PAUSE_JS = """
+(function() {
+    if (document.documentElement.dataset.lvqoeStall !== '1') return null;
+    const vs = [...document.querySelectorAll('video')].filter(v => v.getClientRects().length);
+    const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
+    if (!v || !v.paused || v.ended || v.readyState < 3) return null;
+    const p = v.play();
+    if (p && p.catch) p.catch(() => {});
+    return 'resumed';
+})()
+"""
 # addendum N: content.js's stall-only frozen-playhead run, in seconds (same measure as check_session.frozen_playhead_run)
 _FROZEN_JS = "Number(document.documentElement.dataset.lvqoeFrozenS || 0)"
 TICK_STARTUP_TIMEOUT_S = 15
@@ -1232,6 +1245,13 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
     frozen_max_s = FROZEN_PLAYHEAD_MAX_S.get(platform)
     froze = False
     while not stop.wait(timeout=1):
+        try:
+            resumed = page.eval(_RESUME_SELF_PAUSE_JS)
+            if resumed and log_path is not None:
+                with open(log_path, "a") as fh:
+                    fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": "resume_after_self_pause"}) + "\n")
+        except Exception:
+            pass
         try:
             result = page.eval(skip_js)
             if result:

@@ -423,7 +423,10 @@ setInterval(() => {
     emit("stall");
   }
 
-  if (!isBuffering && inStall) {
+  // "start" means playback resumed: never while the element is paused (levi 2026-10-17, chaos tw_10: twitch pauses its
+  // player on a stall and stayed paused; a start here labelled 250 s of a frozen playhead as playing). The collector
+  // (browser.py) presses play on such a self-pause, and the element's own "playing" event then emits start.
+  if (!isBuffering && inStall && !video.paused) {
     inStall = false;
     emit("start");
   }
