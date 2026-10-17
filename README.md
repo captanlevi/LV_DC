@@ -131,6 +131,7 @@ The targets are floors (rushi): when a platform reaches its floor, it is raised 
 - **Never open Chrome on a template during a batch.** Every session records the template's sha, and a change shows.
 - **Not cloned:** locks, HTTP and service-worker caches (every session starts cold), crash dumps, session restore, other extensions. Chrome's Safe Browsing database is kept.
 - **`--empty-profile`** starts empty instead. It is a recorded deviation and check_session FAILs it.
+- **Per-session clones are removed, not archived** (supervisor 2026-10-18): each session's clone (`current_data/chrome_profiles/<platform>_<session>_<t>`) is ephemeral runtime state holding login cookies, not a data product. The template is the reproducible state, and the TLS keys and logs live in the session dir. exp.py removes its clone at session end, after check_session has run (`profile_clone.py`: only a direct child of `chrome_profiles/`, never a template). Clones left from before (102 held 13 GB on chaos's root fs) are removed at a pause, with no Chrome running.
 
 ## 4. Pause / resume protocol
 

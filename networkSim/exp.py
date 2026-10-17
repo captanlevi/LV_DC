@@ -760,6 +760,10 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"entries failed: {e!r}")
         check_session(session_dir)
+        # the profile clone is ephemeral runtime state with login cookies: removed after check_session (supervisor
+        # 2026-10-18; profile_clone.py); the template stays the reproducible state
+        from profile_clone import remove_profile_clone
+        print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
 
     if abort_reason == "login_wall":
         # orchestrate.py stops the platform on this code: every further logged-out session would hit the same wall
