@@ -251,7 +251,16 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         yt_skips = yt_channels.not_live_skips(_RUNS_DIR, now) if p == "youtube" else {}
         for h, why in yt_skips.items():
             print(f"  skip {h}: {why}")
-        channel = yt_channels.next_channel(_RUNS_DIR, exclude=skip | set(yt_skips)) if p == "youtube" else None
+        channel = None
+        if p == "youtube":
+            # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
+            channel, pre_skips = yt_channels.pick_live_channel(_RUNS_DIR, exclude=skip | set(yt_skips))
+            if pre_skips:
+                (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
+                with open(_RUNS_DIR / "_summaries" / "yt_precheck_skips.jsonl", "a") as fh:
+                    for s in pre_skips:
+                        fh.write(json.dumps(s) + "\n")
+                        print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")
         # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
         # NOT_LIVE_RETRY_S, like a yt channel)
         category, esports_skip = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else (None, None)

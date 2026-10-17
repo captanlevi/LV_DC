@@ -19,6 +19,9 @@ after the latest.
 from __future__ import annotations
 
 import json
+import re
+import time
+import urllib.request
 from pathlib import Path
 
 NOT_LIVE_MARK = "Failed to navigate to a live"   # browser.py's start failure, kept in meta.json abort_reason
@@ -114,3 +117,71 @@ def next_channel(data_dir: Path, exclude: set[str] | None = None) -> dict:
         if spares:
             return sorted(spares, key=lambda s: counts[s["handle"]])[0]
     raise RuntimeError("no live channel left in the list")
+
+
+# ---------------------------------------------------------------------------
+# Pre-session liveness probe (shagun 2026-10-17, rushi: "smooth collection"; peter's notes). orchestrate runs it between
+# sessions, outside capture and shaping, so a channel that is off air costs a page fetch instead of a FAIL session.
+# Fail open: only positive not-live evidence skips a channel; an HTTP error, a consent redirect or a page without the
+# markers runs the session as before (a probe outage must not empty the rotation). Pre-check skips are logged to
+# _summaries/yt_precheck_skips.jsonl and do not count as not-live strikes (re-probing is free); strikes keep counting
+# only the start failures the probe missed.
+# ---------------------------------------------------------------------------
+
+PROBE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def classify_live_page(final_url: str, html: str) -> str:
+    """'live' / 'not_live' / 'unknown' for a fetched /@handle/live page. Live: "isLiveNow":true. Not live: (a)
+    "isLiveNow":false, or (b) no isLiveNow and the canonical link is the channel page (/channel/UC..., the off-air
+    redirect). Anything else (consent wall, unexpected page) is unknown."""
+    if "consent.youtube.com" in (final_url or ""):
+        return "unknown"
+    if re.search(r'"isLiveNow"\s*:\s*true', html):
+        return "live"
+    if re.search(r'"isLiveNow"\s*:\s*false', html):
+        return "not_live"
+    canon = re.search(r'<link rel="canonical" href="([^"]+)"', html)
+    if canon and "/channel/" in canon.group(1) and "/watch" not in canon.group(1):
+        return "not_live"
+    return "unknown"
+
+
+def yt_live_state(handle: str, timeout: float = 12.0) -> str:
+    """Fetch the channel's /live page and classify it; 'unknown' on any error (fail open)."""
+    try:
+        req = urllib.request.Request(url_of(handle), headers=PROBE_HEADERS)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return classify_live_page(r.geturl(), r.read(3_000_000).decode("utf-8", "replace"))
+    except Exception:
+        return "unknown"
+
+
+def pick_live_channel(data_dir: Path, exclude: set[str] | None = None, probe=yt_live_state) -> tuple[dict, list[dict]]:
+    """next_channel(), re-drawn while the probe says the pick is positively not live. Returns (channel, pre-check
+    skips). If every remaining channel probes not live, falls back to the first pick (the session then fails as
+    before and counts a strike)."""
+    exclude = set(exclude or ())
+    first, skips = None, []
+    for _ in range(len(YT_CHANNELS)):
+        try:
+            c = next_channel(data_dir, exclude=exclude)
+        except RuntimeError:
+            break
+        first = first or c
+        state = probe(c["handle"])
+        if state != "not_live":
+            return c, skips
+        skips.append({"ts": time.time(), "handle": c["handle"], "type": c["type"], "role": c["role"], "state": state})
+        exclude.add(c["handle"])
+    if first is None:
+        raise RuntimeError("no live channel left in the list")
+    return first, skips
+
+
+def live_now(handle: str) -> bool | None:
+    """True / False from the probe, None when unknown (fail open: treat as maybe-live)."""
+    return {"live": True, "not_live": False}.get(yt_live_state(handle))

@@ -89,7 +89,7 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 - **Pausing a platform:** after 5 consecutive sessions without a PASS, or on a login wall. A `player_frozen` abort
   (exit 5) or `room_ended` abort (exit 6) is not counted toward the 5; a separate cap pauses the platform after 5
   consecutive such aborts.
-- **Not-live yt channel:** skipped for 6 h; 2 not-live failures within 24 h put it out for 24 h after the latest. Read from the failures in `data/_failed`, so a restart keeps the skip (`yt_channels.not_live_skips`).
+- **Not-live yt channel:** skipped for 6 h; 2 not-live failures within 24 h put it out for 24 h after the latest. Read from the failures in `data/_failed`, so a restart keeps the skip (`yt_channels.not_live_skips`). Before each yt session a liveness probe (`yt_channels.yt_live_state` / `live_now`, a page fetch between sessions, outside capture) re-draws past a channel that is positively off air; fail open on errors; such pre-check skips go to `_summaries/yt_precheck_skips.jsonl` and are not strikes.
 - **Daily summary:** `data/_summaries/summary_<day>.md / .json` after every session:
   - PASS / FAIL by reason;
   - background shares and hosts;
