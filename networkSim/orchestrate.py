@@ -66,18 +66,48 @@ BATCH_ORDER = ("youtube", "twitch", "tiktok", "bilibili")
 # furthest-behind must not starve the others (supervisor 2026-10-17: tt at 4/80 took every session for an hour): at
 # most this many sessions in a row on one platform, then the furthest-behind of the others
 MAX_CONSECUTIVE_SAME_PLATFORM = 2
+# staleness floor (supervisor 2026-10-17: with tt and twitch both far behind, the cap alternated them and yt did not run
+# for 7.5 h): a platform absent from the last STALE_AFTER_SESSIONS sessions goes next
+STALE_AFTER_SESSIONS = 4
 
 
-def next_platform(todo: list[str], ratio, last: str | None, streak: int,
-                  cap: int = MAX_CONSECUTIVE_SAME_PLATFORM) -> str:
-    """The furthest-behind platform (ratio(p) = accepted / target; BATCH_ORDER breaks ties), unless `last` has
-    already run `streak` >= cap sessions in a row and another platform is still to do."""
+def next_platform(todo: list[str], ratio, recent: list[str], cap: int = MAX_CONSECUTIVE_SAME_PLATFORM,
+                  stale_after: int = STALE_AFTER_SESSIONS) -> str:
+    """Next platform from `todo`, given `recent` (the platforms of the latest sessions, oldest first):
+    1. staleness floor: a platform absent from the last `stale_after` sessions goes first (the furthest behind of them);
+    2. otherwise the furthest-behind platform (ratio(p) = accepted / target; BATCH_ORDER breaks ties), unless it has just
+       run `cap` sessions in a row and another platform is still to do."""
     order = sorted(todo, key=lambda q: (ratio(q), BATCH_ORDER.index(q)))
+    if len(recent) >= stale_after:
+        stale = [q for q in order if q not in recent[-stale_after:]]
+        if stale:
+            return stale[0]
+    last = recent[-1] if recent else None
+    streak = 0
+    for q in reversed(recent):
+        if q != last:
+            break
+        streak += 1
     if last in todo and streak >= cap:
         others = [q for q in order if q != last]
         if others:
             return others[0]
     return order[0]
+
+
+def recent_platforms(runs_dir: Path, n: int = 10) -> list[str]:
+    """Platforms of the last n sessions on disk (PASS and _failed, by meta.json started_at), oldest first, so the cap
+    and the staleness floor survive an orchestrate restart."""
+    rows = []
+    for plat in BATCH_ORDER:
+        for d in list((runs_dir / plat).glob("*")) + list((runs_dir / "_failed" / plat).glob("*")):
+            m = d / "meta.json"
+            try:
+                t = float(json.loads(m.read_text()).get("started_at") or m.stat().st_mtime)
+            except Exception:
+                continue
+            rows.append((t, plat))
+    return [p for _, p in sorted(rows)[-n:]]
 
 
 def _prompt_ready(platform: str, initial_state: str | None) -> bool:
@@ -202,13 +232,13 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
     fails = {p: 0 for p in targets}
     frozen = {p: 0 for p in targets}
     not_live: dict[str, float] = {}
-    last, streak = None, 0
+    recent = recent_platforms(_RUNS_DIR)
     while True:
         todo = [p for p in BATCH_ORDER if p in targets and p not in paused and accepted_sessions(p) < targets[p]]
         if not todo:
             break
-        p = next_platform(todo, lambda q: accepted_sessions(q) / targets[q], last, streak)
-        last, streak = p, (streak + 1 if p == last else 1)
+        p = next_platform(todo, lambda q: accepted_sessions(q) / targets[q], recent)
+        recent = (recent + [p])[-10:]
         fs = free_share()
         if fs < MIN_FREE_SHARE:
             print(f"\n  Data volume {fs:.1%} free < {MIN_FREE_SHARE:.0%}: stopping the batch (free space, then rerun).")
