@@ -401,7 +401,8 @@ _TT_PLAYER_STATE_JS = """
     return JSON.stringify({has_video: !!v, src: !!(v && (v.currentSrc || v.src || v.srcObject)), rs: v ? v.readyState : null,
                            ct: v ? v.currentTime : null, paused: v ? v.paused : null, buf_end: buf,
                            decoded: v ? (v.webkitVideoDecodedByteCount || null) : null,
-                           ended_text: hit('live has ended')});
+                           ended_text: hit('live has ended'),
+                           stall_label: document.documentElement.dataset.lvqoeStall === '1'});
 })()
 """
 
@@ -512,6 +513,11 @@ class TTRoomWatch:
             return None
         self.src_gone_since = None
         cur = (s.get("buf_end"), s.get("ct"), s.get("decoded"))   # progress: the playhead, or media appended / decoded
+        if s.get("stall_label"):
+            # a labelled stall is never a dead room: tt's player exposes no buffer, so a long shaping stall would read as
+            # "no media"; player_frozen (T = 720 s on the stall-only run) owns frozen stalls (shagun 2026-10-17)
+            self.flat_since, self.last = None, cur
+            return None
         if self.last is not None and cur == self.last:
             self.flat_since = self.flat_since or now
             if s.get("ended_text") and now - self.flat_since >= TT_ENDED_FLAT_S:
@@ -1332,6 +1338,7 @@ class BrowserSession:
         self.tt_room_choice: dict | None = None   # tt: candidates, tries and the chosen room (meta.json)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.tw_pick: dict | None = None          # twitch: directory candidates, recent channels excluded, the pick
+        self.room_play_clicks = 0                 # tt: play clicks on a paused, flat player (room watcher)
         self._room_grace_until = 0.0              # tt: the room watcher pauses while the rotation moves rooms
         self._room_watcher: threading.Thread | None = None
 
@@ -1587,6 +1594,14 @@ class BrowserSession:
                 w = TTRoomWatch()
                 continue
             s = _tt_state(self._page)
+            # tt can pause itself (ti_8: a "pause" event, then flat until room_ended): click play while paused and flat,
+            # before the no-media rule can fire; each click is counted in meta.json room_play_clicks
+            if s.get("paused") and w.flat_since is not None and time.time() - w.flat_since >= TT_AUTOPLAY_GRACE_S:
+                try:
+                    self._page.eval(_CLICK_PLAY_JS)
+                    self.room_play_clicks += 1
+                except Exception:
+                    pass
             dead = w.feed(s, time.time())
             if dead:
                 self.room_ended = {"reason": dead, "at": time.time(), "sample": s,

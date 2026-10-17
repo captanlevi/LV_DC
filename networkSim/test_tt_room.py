@@ -78,7 +78,11 @@ def test_watch():
     check(r == "ended_page" and t == 6 + B.TT_ENDED_FLAT_S, f"ended banner, stream flat: {r} {t}")   # flat from t = 6
     # the banner text while the room plays (31ded33's failure: a live page's "Recommended LIVE" section) is never dead
     check(run([{**play(i), "ended_text": True} for i in range(120)])[0] is None, "banner text alone while playing")
-    # paused before autoplay (ti_4 / ti_5: the first sample came before play): flat a few seconds, then plays
+    # a labelled stall longer than TT_NO_MEDIA_S (tt exposes no buffer) is never a dead room (shagun 2026-10-17)
+    stall = {**play(10), "stall_label": True}
+    check(run([play(i) for i in range(10)] + [stall] * 200 + [play(i) for i in range(11, 20)])[0] is None,
+          "a 200 s labelled stall is not room_ended")
+        # paused before autoplay (ti_4 / ti_5: the first sample came before play): flat a few seconds, then plays
     paused = {"has_video": True, "src": True, "rs": 4, "ct": 0.0, "paused": True, "buf_end": 2.0}
     check(run([paused] * 4 + [play(i) for i in range(60)])[0] is None, "paused before autoplay is not dead")
     r, t = run([play(i) for i in range(5)] + [play(5)] * 60)
