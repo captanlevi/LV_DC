@@ -1,0 +1,18 @@
+{
+ "paused": true,
+ "ended": false,
+ "rs": 4,
+ "ct": 250.167454,
+ "ad": false,
+ "lvqoe": {
+  "jsFocusVisible": "",
+  "lvqoeFrozenS": "0",
+  "lvqoeStall": "0",
+  "lvqoeTick": "281",
+  "lvqoeTickTs": "1792227346018.2002",
+  "lvqoeShotReq": "10|tier_change|147"
+ },
+ "shaper_state": 2,
+ "saved_at": 1792227346.2558212,
+ "by": "shagun tw_selfpause_dom.py (one-off)"
+}

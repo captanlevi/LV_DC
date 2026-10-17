@@ -37,6 +37,18 @@ def run(stall, paused, rs, ended=False):
     return json.loads(out.stdout)
 
 
+def test_real_twitch_self_pause_fixture():
+    """shagun's capture on chaos tw_12 (2026-10-17): the real player DOM has one <video> (the one the resume JS picks),
+    and twitch paused it with readyState 4 while the stall label was off and its own button still read "playing". By
+    levi's ruling (resume a self-pause after a stall) the collector leaves that one alone."""
+    html = (HERE / "fixtures" / "tw_player_dom_self_pause_2026-10-17.html").read_text()
+    assert html.count("<video") == 1 and 'aria-label="Twitch video player"' in html
+    st = json.loads((HERE / "fixtures" / "tw_player_state_self_pause_2026-10-17.json").read_text())
+    stall = str((st.get("lvqoe") or {}).get("lvqoeStall", "0")) == "1"
+    r = run(stall, bool(st["paused"]), int(st["rs"]), bool(st.get("ended")))
+    assert r["played"] == 0 and not stall, (st, r)
+
+
 def main() -> int:
     if not shutil.which("node"):
         print("SKIP: node not found")
@@ -46,6 +58,7 @@ def main() -> int:
     assert run(False, True, 4)["played"] == 0         # not in a stall: never press play
     assert run(True, False, 4)["played"] == 0         # already playing
     assert run(True, True, 4, ended=True)["played"] == 0
+    test_real_twitch_self_pause_fixture()
     print("test_resume: ok")
     return 0
 
