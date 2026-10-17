@@ -1209,6 +1209,42 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
 SHOT_INTERVAL_S = 10.0
 SHOT_WIDTH_PX = 640
 SHOT_JPEG_QUALITY = 40
+# shots are grabbed from the X display, outside Chrome's renderer (supervisor 2026-10-17: a CDP capture costs dropped
+# frames near every shot -- tw_9 0.061 per tick within 1 s of a shot vs 0.0038 elsewhere -- and yt's ABR watches dropped
+# frames); CDP is the fallback when there is no X display, Pillow lacks X support, or the grab is blank (a dark screen)
+SHOT_SOURCE = os.environ.get("LVQOE_SHOT_SOURCE", "x11")
+_VIEWPORT_JS = ("JSON.stringify({sx: window.screenX, sy: window.screenY, ow: window.outerWidth, oh: window.outerHeight, "
+                "iw: window.innerWidth, ih: window.innerHeight, dpr: window.devicePixelRatio || 1})")
+
+
+def _viewport_on_screen(v: dict) -> tuple[int, int, int, int] | None:
+    """The page viewport's (x, y, w, h) on the X screen from window metrics: the browser frame is the same width on
+    both sides and below, the tab strip / toolbar take the rest of the top."""
+    try:
+        dpr = float(v.get("dpr") or 1)
+        side = max(0, (v["ow"] - v["iw"]) // 2)
+        top = max(0, v["oh"] - v["ih"] - side)
+        return (round((v["sx"] + side) * dpr), round((v["sy"] + top) * dpr), round(v["iw"] * dpr), round(v["ih"] * dpr))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _grab_x11(region: tuple[int, int, int, int]) -> bytes | None:
+    """The region of the X display as a SHOT_WIDTH_PX JPEG; None when it cannot be grabbed or comes back blank."""
+    try:
+        import io
+        from PIL import Image, ImageGrab, ImageStat
+        x, y, w, h = region
+        im = ImageGrab.grab(bbox=(x, y, x + w, y + h), xdisplay=os.environ.get("DISPLAY") or ":0").convert("RGB")
+        if max(ImageStat.Stat(im.convert("L").resize((64, 36))).stddev) < 1.0:
+            return None                               # blank (monitor off / not rendered): fall back to CDP
+        if im.width > SHOT_WIDTH_PX:
+            im = im.resize((SHOT_WIDTH_PX, round(im.height * SHOT_WIDTH_PX / im.width)), Image.BILINEAR)
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=SHOT_JPEG_QUALITY)
+        return out.getvalue()
+    except Exception:
+        return None
 
 
 def _downscale_jpeg(raw: bytes) -> tuple[bytes, list | None, list | None]:
@@ -1275,12 +1311,29 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
                 player = json.loads(page.eval(_PLAYER_RECT_JS) or "null")
             except Exception:
                 player = None
-            res = page.call("Page.captureScreenshot", {"format": "jpeg", "quality": 90, "fromSurface": True,
-                                                       "captureBeyondViewport": False})
-            data = res.get("data")
-            if not data:
-                continue
-            data, capture_px, shot_px = _downscale_jpeg(base64.b64decode(data))
+            data, capture, capture_px, shot_px, region = None, None, None, None, None
+            if SHOT_SOURCE == "x11":
+                try:
+                    region = _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
+                except Exception:
+                    region = None
+                data = _grab_x11(region) if region else None
+                if data:
+                    capture, capture_px = "x11", [region[2], region[3]]
+                    try:
+                        from PIL import Image
+                        import io
+                        shot_px = list(Image.open(io.BytesIO(data)).size)
+                    except Exception:
+                        shot_px = None
+            if data is None:
+                res = page.call("Page.captureScreenshot", {"format": "jpeg", "quality": 90, "fromSurface": True,
+                                                           "captureBeyondViewport": False})
+                raw = res.get("data")
+                if not raw:
+                    continue
+                data, capture_px, shot_px = _downscale_jpeg(base64.b64decode(raw))
+                capture = "cdp" if SHOT_SOURCE == "cdp" else "cdp_fallback"
             ts = time.time()
             tag = "" if reason == "cadence" else f"_{reason}"
             name = f"{int(ts * 1000)}_tick{tick_id if tick_id is not None else 'na'}{tag}.jpg"
@@ -1288,7 +1341,8 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
             with open(index, "a") as fh:
                 fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
                                      "request": req if reason != "cadence" else None, "player": player,
-                                     "capture_px": capture_px, "shot_px": shot_px}) + "\n")
+                                     "capture_px": capture_px, "shot_px": shot_px, "capture": capture,
+                                     "screen_region": region}) + "\n")
         except Exception as exc:  # a missed shot must never stop collection
             print(f"[browser] screenshot failed: {exc}", flush=True)
 

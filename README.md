@@ -194,6 +194,6 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `net_labels.txt` | the shaper schedule (coverage / debug record, not a data covariate) |
 | `meta.json` | provenance and covariates: commit, Chrome, extension, profile template + sha, shaper (matrix, cap, rule), channel / room, geometry, login state, room rotation, IPv6 sysctl, data volume, management exclusion, NTP, abort reason |
 | `motion.jsonl` | addendum O cross-check (ground truth, never a feature): per pair of 10 s shots, the player-crop downscaled grey MAD / 255, valid only when both ticks are play; summary in `check.md` |
-| `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick and reason. Captured unscaled from the surface and downscaled to 640 px in Python: a scaled CDP clip re-renders the page (the flicker; more dropped frames near shots) |
+| `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick and reason. Grabbed from the X display (Pillow ImageGrab, the page viewport from window metrics), outside Chrome's renderer: any CDP capture costs dropped frames near shots (`shot_effects.py`); CDP is the fallback (no X, or a blank grab), recorded per shot as `capture` |
 | `ad_actions.jsonl` | what the ad skipper did |
 | `check.json`, `check.md` | the verdict |
