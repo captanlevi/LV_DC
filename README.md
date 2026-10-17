@@ -51,7 +51,8 @@ setsid nohup python -u orchestrate.py --batch youtube=30,twitch=15,tiktok=15 [--
 2. Start shaping and capture, then launch Chrome with the session's TLS key log.
 3. Load the labeling extension over CDP and navigate to the stream:
    - yt: the channel rotation in `yt_channels.py`;
-   - twitch: the Just Chatting directory;
+   - twitch: the category rotation in `tw_categories.py` (addendum O: talk / fast gaming / slow gaming / esports /
+     music-creative / IRL, least-collected first; category and type in `meta.json`), the directory's first live card;
    - tt: a room from `/live`, chosen by `browser.py` (2026-10-17):
      - rooms of the last 10 tt sessions are excluded;
      - cards with a LIVE badge and ≥ 100 viewers come first, most viewers first;
@@ -186,6 +187,7 @@ It writes `check.json` and a one-screen `check.md` per session.
 | `player_stats.jsonl` | ground truth only, never features: yt stats for nerds; twitch Video Stats |
 | `net_labels.txt` | the shaper schedule (coverage / debug record, not a data covariate) |
 | `meta.json` | provenance and covariates: commit, Chrome, extension, profile template + sha, shaper (matrix, cap, rule), channel / room, geometry, login state, room rotation, IPv6 sysctl, data volume, management exclusion, NTP, abort reason |
+| `motion.jsonl` | addendum O cross-check (ground truth, never a feature): per pair of 10 s shots, the player-crop downscaled grey MAD / 255, valid only when both ticks are play; summary in `check.md` |
 | `shots/` | JPEGs every 10 s, plus one at every tier change and ad start; `index.jsonl` with tick and reason. Captured unscaled from the surface and downscaled to 640 px in Python: a scaled CDP clip re-renders the page (the flicker; more dropped frames near shots) |
 | `ad_actions.jsonl` | what the ad skipper did |
 | `check.json`, `check.md` | the verdict |

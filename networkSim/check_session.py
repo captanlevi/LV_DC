@@ -736,10 +736,15 @@ def main() -> int:
             if l.strip():
                 acts[json.loads(l)["action"].split(" [")[0]] += 1
     pin = meta.get("player_pin") or {}
+    try:
+        import motion
+        motion_s = motion.read_summary(sd)
+    except Exception as e:
+        motion_s = {"status": "error", "why": repr(e)}
     v, why = verdict(lab, net, shots, meta_missing, a.max_background_share, meta.get("abort_reason"))
     out = {"session": str(sd), "platform": platform, "verdict": v, "reasons": why, "thresholds": CHECKS,
            "max_background_share": a.max_background_share, "labels": lab, "traffic": net, "shots": shots,
-           "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats,
+           "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats, "motion": motion_s,
            "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap")}
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# check: {platform}/{sd.name} — **{v}**", ""] + [f"- {r}" for r in why] + ["",
@@ -772,6 +777,8 @@ def main() -> int:
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
           f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",
           f"| tt logged-out quality countdown ticks (FAIL if > 0) | {lab.get('quality_countdown_ticks')} |",
+          f"| motion (addendum O cross-check; 10 s shots, play-only pairs): valid pairs / session / median / p90 / near-zero share / scene cuts | {(motion_s or {}).get('valid_pairs')} / {(motion_s or {}).get('session_motion')} / {(motion_s or {}).get('median')} / {(motion_s or {}).get('p90')} / {(motion_s or {}).get('share_near_zero')} / {(motion_s or {}).get('scene_cuts')} ({(motion_s or {}).get('status')}) |",
+          f"| twitch category / type (addendum O) | {meta.get('tw_category')} / {meta.get('tw_category_type')} |",
           f"| tt room choice: candidates / used in recent sessions / tries / choice | {len((meta.get('tt_room_choice') or {}).get('candidates') or [])} / {sum(1 for c in (meta.get('tt_room_choice') or {}).get('candidates') or [] if c.get('recent'))} / {[(t.get('room'), t.get('ok'), (t.get('detail') or {}).get('dead')) for t in (meta.get('tt_room_choice') or {}).get('tries') or []]} / {(meta.get('tt_room_choice') or {}).get('choice')} |",
           f"| tt room ended mid-session (reason / at) | {(meta.get('room_ended') or {}).get('reason')} / {(meta.get('room_ended') or {}).get('at')} |",
           f"| tt rooms (ticks per room) / room changes / explore-page ticks | {lab.get('tt_room_ticks')} / {lab.get('tt_room_changes')} / {lab.get('tt_explore_ticks')} |",

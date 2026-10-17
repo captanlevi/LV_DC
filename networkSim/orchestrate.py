@@ -37,6 +37,7 @@ from pathlib import Path
 from balance import PLATFORM_TRANSITIONS, most_needed_state, balance_report
 import batch_summary
 import geometry
+import tw_categories
 import yt_channels
 
 _RUNS_DIR = Path(__file__).parent.parent / "data"
@@ -80,7 +81,8 @@ TT_ROOM_ROTATION_S: float | None = None
 
 
 def _run_collection(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
-                    yt_matrix: str | None = None, channel: dict | None = None, geom: str | None = None) -> int:
+                    yt_matrix: str | None = None, channel: dict | None = None, geom: str | None = None,
+                    tw_category: dict | None = None) -> int:
     cmd = [
         sys.executable, "exp.py",
         "--platform", platform,
@@ -101,6 +103,8 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
     if channel:
         cmd += ["--channel-url", yt_channels.url_of(channel["handle"]), "--channel-handle", channel["handle"],
                 "--channel-type", channel["type"]]
+    if tw_category:
+        cmd += ["--tw-category", tw_category["name"]]
     if geom:
         cmd += ["--geometry", geom]
     if DPMS_OFF:
@@ -194,15 +198,19 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         now = time.time()
         skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
         channel = yt_channels.next_channel(_RUNS_DIR, exclude=skip) if p == "youtube" else None
+        # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
+        # NOT_LIVE_RETRY_S, like a yt channel)
+        category = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else None
         geom = geometry.next_geometry(_RUNS_DIR, p) if rotate_geometry else None
         print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] {p.upper()}: {before}/{targets[p]} accepted"
               + (f"; channel {channel['handle']} ({channel['type']}, {channel['role']})" if channel else "")
+              + (f"; category {category['name']} ({category['type']})" if category else "")
               + (f"; geometry {geom}" if geom else ""))
         preclean()
         try:
             rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(p)),
                                  episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel,
-                                 geom=geom)
+                                 geom=geom, tw_category=category)
         except Exception as e:
             print(f"  exp.py could not run: {e!r}")
             rc = -1
@@ -220,6 +228,8 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
                 paused[p] = f"{frozen[p]} consecutive player_frozen / room_ended aborts"
         elif rc != 0 and channel:
             not_live[channel["handle"]] = now
+        elif rc != 0 and category:
+            not_live[category["name"]] = now
         if rc not in NOT_A_FAILURE:
             frozen[p] = 0
             fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1

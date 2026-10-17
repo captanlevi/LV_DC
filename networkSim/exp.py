@@ -32,6 +32,7 @@ from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANS
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession
 import session_meta
+import tw_categories
 import yt_channels
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -528,6 +529,12 @@ if __name__ == "__main__":
         help="yt: the channel to collect (orchestrate.py's rotation passes it); first in the navigation list.",
     )
     parser.add_argument(
+        "--tw-category",
+        default=None,
+        help="twitch: the category to collect (tw_categories.py, addendum O; orchestrate.py's rotation passes it): its "
+             "directory's first live card; category and content type recorded in meta.json.",
+    )
+    parser.add_argument(
         "--channel-handle",
         default=None,
         help="yt: the channel's handle from yt_channels.py (meta.json; the rotation counts it).",
@@ -628,7 +635,13 @@ if __name__ == "__main__":
         # inside the try: a failed start (e.g. the channel is not live) still runs the finalise path below, which stops
         # tcpdump and the shaper (they were left running before, writing into the dead session's pcap)
         if args.auto:
-            browser = BrowserSession(platform, session_dir=session_dir, first_url=args.channel_url, geometry=args.geometry,
+            first_url = args.channel_url
+            if platform == "twitch" and args.tw_category:
+                cat = tw_categories.by_name(args.tw_category) or {"name": args.tw_category, "type": None}
+                first_url = tw_categories.url_of(cat["name"])
+                session_meta.write(session_dir, tw_category=cat["name"], tw_category_type=cat["type"],
+                                   tw_category_url=first_url)
+            browser = BrowserSession(platform, session_dir=session_dir, first_url=first_url, geometry=args.geometry,
                                      room_rotation_s=args.tt_room_rotation if platform == "tiktok" else None)
             browser.start()
             if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
@@ -711,6 +724,11 @@ if __name__ == "__main__":
         save_json(session_dir / "net_labels.txt", net_labels)
         print(f"Run complete → {session_dir}")
         change_perm(session_dir)
+        try:   # addendum O: the screenshot motion cross-check (ground truth, motion.jsonl); never fatal
+            import motion
+            print(f"motion: {motion.compute(session_dir)}")
+        except Exception as e:
+            print(f"motion failed: {e!r}")
         check_session(session_dir)
 
     if abort_reason == "login_wall":

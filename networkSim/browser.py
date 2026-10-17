@@ -1125,20 +1125,35 @@ SHOT_WIDTH_PX = 640
 SHOT_JPEG_QUALITY = 40
 
 
-def _downscale_jpeg(raw: bytes) -> bytes:
-    """The captured surface, SHOT_WIDTH_PX wide at SHOT_JPEG_QUALITY (the shots' size before the change); the raw
-    capture when Pillow is missing."""
+def _downscale_jpeg(raw: bytes) -> tuple[bytes, list | None, list | None]:
+    """The captured surface, SHOT_WIDTH_PX wide at SHOT_JPEG_QUALITY (the shots' size before the change), with the
+    capture's and the shot's pixel sizes; the raw capture when Pillow is missing."""
     try:
         import io
         from PIL import Image
         im = Image.open(io.BytesIO(raw)).convert("RGB")
+        orig = [im.width, im.height]
         if im.width > SHOT_WIDTH_PX:
             im = im.resize((SHOT_WIDTH_PX, round(im.height * SHOT_WIDTH_PX / im.width)), Image.BILINEAR)
         out = io.BytesIO()
         im.save(out, format="JPEG", quality=SHOT_JPEG_QUALITY)
-        return out.getvalue()
+        return out.getvalue(), orig, [im.width, im.height]
     except Exception:
-        return raw
+        return raw, None, None
+
+
+# the player's rectangle in CSS px and the viewport, recorded with each shot (addendum O: motion is computed on the
+# player crop, chat / side panes outside it)
+_PLAYER_RECT_JS = """
+(function() {
+    const vs = [...document.querySelectorAll('video')].filter(v => v.offsetParent !== null);
+    const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
+    if (!v) return null;
+    const r = v.getBoundingClientRect();
+    return JSON.stringify({rect: [r.x, r.y, r.width, r.height], inner: [window.innerWidth, window.innerHeight],
+                           dpr: window.devicePixelRatio || 1});
+})()
+"""
 
 
 def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> None:
@@ -1170,19 +1185,24 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
             # no clip / scale: a scaled clip makes Chrome emulate device metrics for the capture, a visible re-render
             # (rushi saw the screen flicker; dropped frames per tick near shots were 0.153 vs 0.023 elsewhere on yt_10).
             # The surface is grabbed as is and downscaled here.
+            try:
+                player = json.loads(page.eval(_PLAYER_RECT_JS) or "null")
+            except Exception:
+                player = None
             res = page.call("Page.captureScreenshot", {"format": "jpeg", "quality": 90, "fromSurface": True,
                                                        "captureBeyondViewport": False})
             data = res.get("data")
             if not data:
                 continue
-            data = _downscale_jpeg(base64.b64decode(data))
+            data, capture_px, shot_px = _downscale_jpeg(base64.b64decode(data))
             ts = time.time()
             tag = "" if reason == "cadence" else f"_{reason}"
             name = f"{int(ts * 1000)}_tick{tick_id if tick_id is not None else 'na'}{tag}.jpg"
             (shots_dir / name).write_bytes(data)
             with open(index, "a") as fh:
                 fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
-                                     "request": req if reason != "cadence" else None}) + "\n")
+                                     "request": req if reason != "cadence" else None, "player": player,
+                                     "capture_px": capture_px, "shot_px": shot_px}) + "\n")
         except Exception as exc:  # a missed shot must never stop collection
             print(f"[browser] screenshot failed: {exc}", flush=True)
 
