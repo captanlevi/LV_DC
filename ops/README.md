@@ -5,7 +5,8 @@ repo alone. Every script sources `env.sh`: box-specific paths and names are vari
 defaults (override in the environment or in `ops/env.local.sh`, gitignored). Each logs to
 `data/_summaries/resume_events.txt` (`verify_loop.sh`: `verify_events.txt`). Flags live in `current_data/`
 (gitignored): `BATCH_GO` (relaunch after a reboot), `RESUME_HOLD` (resume is a no-op), `SCREEN_OFF` (night mode), and
-`batch_spec` (the batch targets, written by `apply_at_boundary.sh`; nothing edits a tracked file, so
+`batch_spec` / `batch_opts` (the batch targets and options, e.g. `--dpms-off` at night and none by day, written by
+`apply_at_boundary.sh`; nothing edits a tracked file, so
 `meta.json` `lvdc_commit.dirty` stays false).
 
 | script | what it does | invoked by |
@@ -14,7 +15,7 @@ defaults (override in the environment or in `ops/env.local.sh`, gitignored). Eac
 | `pause_batch.sh [now]` | boundary pause: removes `BATCH_GO`, SIGSTOPs orchestrate; `now` also TERMs the running exp.py (archived as user_pause); waits for the session to end (zombie-aware), undoes the shaping, logs "box free" | operator, `apply_at_boundary.sh` |
 | `resume_batch.sh` | re-applies IPv6-off, stops the OS timers, checks the mount, starts the guards, touches `BATCH_GO`, SIGCONTs orchestrate or relaunches the wrapper; a no-op while `RESUME_HOLD` exists | operator, boundary scripts |
 | `resume_after_login.sh` | after a reboot and graphical login: waits for the data disk, fixes the mount-path trap, IPv6-off, timers, mute, guards; relaunches iff `BATCH_GO` | the autostart entry (`install_autostart.sh`; `--remove` after the batch) |
-| `apply_at_boundary.sh [ref] [spec]` | ONE script per code change: pause, TERM + CONT the stopped orchestrate, `git merge --ff-only <ref>`, every `test_*.py` but the live `test_browser`, optional new spec, resume; a failed test leaves the batch paused | operator |
+| `apply_at_boundary.sh [ref] [spec] [opts]` | ONE script per code change: pause, TERM + CONT the stopped orchestrate, `git merge --ff-only <ref>`, every `test_*.py` but the live `test_browser`, optional new spec / options (`none` = screen on), resume; a failed test leaves the batch paused | operator |
 | `apply_during_pause.sh "<trigger>" [ref]` | merge + tests while another job holds the pause; **never alongside another chain that resumes** (tw_15) | operator |
 | `verify_loop.sh` | every 60 s: each PASS without `verify.json` gets LVQoE `verify_session.py --ingest` (QA only), without `frames.jsonl` gets `extract_frames.py` (nice 10) | started once; restart if it dies |
 | `ipv6_watchdog.sh` | every 30 s: any global IPv6 -> re-apply the sysctl file and the interface key (the preflight does it per session too) | the resume scripts |
