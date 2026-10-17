@@ -21,6 +21,11 @@ let lastElement = null;
 // <html data-lvqoe-frozen-s>; browser.py's watchdog aborts the session past the platform's T (check_session table).
 const FROZEN_TOL_S = 1.0;
 let labelStall = false;
+// raw playhead state per tick (supervisor 2026-10-17, chaos tw_10: twitch pauses its player on a stall; the safety net's
+// "start" at readyState >= 3 came while the element stayed paused, and 250 s of a frozen playhead read as playing).
+// Label semantics stay with the label policy (levi); these columns only record what the element did.
+let stillSinceTs = null;
+let stillCt = null;
 let frozenT0 = null;
 let frozenCt0 = null;
 // An ad's <video> has a short finite duration; live streams report Infinity. A DVR window can report a long finite
@@ -176,6 +181,8 @@ function buildEvent(type) {
     login_wall_text: null,
     login_wall: null,
     quality_countdown: null,
+    paused: video ? video.paused : null,
+    playhead_still_s: null,
   };
 }
 
@@ -203,6 +210,11 @@ function emit(type) {
   else if (type === "start" || type === "video_start") labelStall = false;
   if (type === "res_meta") {
     const ct = evt.current_time;
+    if (ct === null || ct === undefined || stillCt === null || Math.abs(ct - stillCt) > 0.05) {
+      stillCt = ct;
+      stillSinceTs = evt.ts;
+    }
+    evt.playhead_still_s = stillSinceTs === null ? null : (evt.ts - stillSinceTs) / 1000;
     if (!labelStall || evt.is_ad || ct === null || ct === undefined || !isFinite(ct)) {
       frozenT0 = null;
     } else if (frozenT0 === null || Math.abs(ct - frozenCt0) > FROZEN_TOL_S) {
@@ -311,6 +323,8 @@ function attachVideo(v) {
   // stall state belongs to the element: re-evaluate it on the new one (the safety net emits "stall" if it is
   // buffering), instead of carrying the old element's flag past the "video_start" that clears the label
   inStall = false;
+  stillCt = null;
+  stillSinceTs = null;
 
   console.log("[YT] Video detected");
   emit("video_start");

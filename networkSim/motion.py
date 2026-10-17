@@ -65,11 +65,13 @@ def _tick_id(v) -> int | None:
 
 def _grey(path: Path, shot: dict):
     from PIL import Image
+    im = Image.open(io.BytesIO(path.read_bytes())).convert("L")
+    if shot.get("crop") == "player":                  # the shot is the player rectangle already (x11 grab)
+        return list(im.resize(GRID, Image.BILINEAR).getdata())
     p = shot.get("player") or {}
     rect, inner = p.get("rect"), p.get("inner")
     if not rect or not inner or not inner[0]:
         return None
-    im = Image.open(io.BytesIO(path.read_bytes())).convert("L")
     k = im.width / float(inner[0])
     x0, y0 = max(0, round(rect[0] * k)), max(0, round(rect[1] * k))
     x1, y1 = min(im.width, round((rect[0] + rect[2]) * k)), min(im.height, round((rect[1] + rect[3]) * k))

@@ -211,7 +211,8 @@ def shot_effects(rows: list[dict], sd: Path, near_s: float = 1.0) -> dict | None
     idx = sd / "shots" / "index.jsonl"
     if not idx.exists():
         return None
-    shots = sorted(json.loads(ln)["ts"] for ln in idx.read_text().splitlines() if ln.strip())
+    # the shot's start (t_decide: its JS reads, then the grab) when recorded, else the write time
+    shots = sorted(x.get("t_decide") or x["ts"] for x in (json.loads(ln) for ln in idx.read_text().splitlines() if ln.strip()))
     meta = [r for r in rows if r.get("type") == "res_meta"]
     ts = [(_f(r.get("ts")) or 0) / 1000.0 for r in meta]
     if len(meta) < 2 or not shots:

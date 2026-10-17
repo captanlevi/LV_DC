@@ -24,6 +24,11 @@ def main() -> int:
     v2 = {"sx": 0, "sy": 0, "ow": 1290, "oh": 900, "iw": 1280, "ih": 780, "dpr": 2}   # a 5 px frame, HiDPI
     assert B._viewport_on_screen(v2) == (10, 2 * 115, 2560, 1560)
     assert B._viewport_on_screen({}) is None
+    # the player rectangle on screen: viewport origin + the <video> rect, clipped to the viewport
+    vp = (54, 202, 1850, 868)
+    assert B._player_on_screen(vp, {"rect": [10, 20, 1238, 696], "inner": [1850, 868]}) == (64, 222, 1238, 696)
+    assert B._player_on_screen(vp, {"rect": [1800, 0, 400, 300], "inner": [1850, 868]}) == (1854, 202, 50, 300)
+    assert B._player_on_screen(vp, None) is None
     if sys.platform == "darwin":
         assert B._grab_x11((0, 0, 100, 100)) is None   # no X display here: the CDP fallback takes the shot
     print("test_shots: ok")

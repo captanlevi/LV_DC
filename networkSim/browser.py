@@ -1060,7 +1060,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         header = ["ts", "type", "video_w", "video_h", "client_w", "client_h",
                   "dropped", "current_time", "tabId", "url", "event_id",
                   "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed",
-                  "login_wall_text", "login_wall", "quality_countdown"]
+                  "login_wall_text", "login_wall", "quality_countdown", "paused", "playhead_still_s"]
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]
@@ -1281,6 +1281,22 @@ def _viewport_on_screen(v: dict) -> tuple[int, int, int, int] | None:
         return None
 
 
+def _player_on_screen(viewport: tuple[int, int, int, int], player: dict | None) -> tuple[int, int, int, int] | None:
+    """The player rectangle on the X screen: the viewport's screen origin plus the <video> rect (CSS px x dpr),
+    clipped to the viewport."""
+    try:
+        vx, vy, vw, vh = viewport
+        x, y, w, h = player["rect"]
+        k = vw / float(player["inner"][0])
+        x0, y0 = max(0, round(x * k)), max(0, round(y * k))
+        x1, y1 = min(vw, round((x + w) * k)), min(vh, round((y + h) * k))
+        if x1 - x0 < 16 or y1 - y0 < 16:
+            return None
+        return vx + x0, vy + y0, x1 - x0, y1 - y0
+    except (TypeError, KeyError, ValueError, ZeroDivisionError, IndexError):
+        return None
+
+
 def _grab_x11(region: tuple[int, int, int, int]) -> bytes | None:
     """The region of the X display as a SHOT_WIDTH_PX JPEG; None when it cannot be grabbed or comes back blank."""
     try:
@@ -1359,17 +1375,25 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
             # no clip / scale: a scaled clip makes Chrome emulate device metrics for the capture, a visible re-render
             # (rushi saw the screen flicker; dropped frames per tick near shots were 0.153 vs 0.023 elsewhere on yt_10).
             # The surface is grabbed as is and downscaled here.
+            t_decide = time.time()
             try:
                 player = json.loads(page.eval(_PLAYER_RECT_JS) or "null")
             except Exception:
                 player = None
-            data, capture, capture_px, shot_px, region = None, None, None, None, None
+            data, capture, capture_px, shot_px, region, crop = None, None, None, None, None, "viewport"
+            t_js = t_grab = None
             if SHOT_SOURCE == "x11":
                 try:
                     region = _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
                 except Exception:
                     region = None
+                t_js = time.time()
+                # the player rectangle only (supervisor 2026-10-17: the smallest XGetImage), else the viewport
+                pr = _player_on_screen(region, player) if region else None
+                if pr:
+                    region, crop = pr, "player"
                 data = _grab_x11(region) if region else None
+                t_grab = time.time()
                 if data:
                     capture, capture_px = "x11", [region[2], region[3]]
                     try:
@@ -1385,7 +1409,8 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
                 if not raw:
                     continue
                 data, capture_px, shot_px = _downscale_jpeg(base64.b64decode(raw))
-                capture = "cdp" if SHOT_SOURCE == "cdp" else "cdp_fallback"
+                capture, crop = ("cdp" if SHOT_SOURCE == "cdp" else "cdp_fallback"), "viewport"
+                t_grab = time.time()
             ts = time.time()
             tag = "" if reason == "cadence" else f"_{reason}"
             name = f"{int(ts * 1000)}_tick{tick_id if tick_id is not None else 'na'}{tag}.jpg"
@@ -1394,7 +1419,12 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
                 fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
                                      "request": req if reason != "cadence" else None, "player": player,
                                      "capture_px": capture_px, "shot_px": shot_px, "capture": capture,
-                                     "screen_region": region}) + "\n")
+                                     "screen_region": region, "crop": crop,
+                                     # per-step timing (tw_10: the near-shot dropped frames sit on the tick about
+                                     # 1 s before ts; these say which step that is)
+                                     "t_decide": t_decide, "js_s": None if t_js is None else round(t_js - t_decide, 4),
+                                     "grab_s": None if t_grab is None else round(t_grab - (t_js or t_decide), 4),
+                                     "encode_save_s": round(ts - (t_grab or t_decide), 4)}) + "\n")
         except Exception as exc:  # a missed shot must never stop collection
             print(f"[browser] screenshot failed: {exc}", flush=True)
 

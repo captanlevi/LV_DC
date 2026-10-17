@@ -48,6 +48,17 @@ def main() -> int:
         make(b, 40, moving=False)
         make(c, 40, moving=True, stall_from=20)
         sa, sb, sc = motion.compute(a), motion.compute(b), motion.compute(c)
+        # a player-only shot (x11 crop) is used whole
+        import io as _io
+        pd = Path(td, "p"); make(pd, 40, moving=True)
+        idx = [json.loads(l) for l in (pd / "shots" / "index.jsonl").read_text().splitlines()]
+        for x in idx:
+            im = Image.open(_io.BytesIO((pd / "shots" / x["file"]).read_bytes())).crop((0, 0, 400, 240))
+            b2 = _io.BytesIO(); im.save(b2, "JPEG", quality=95); (pd / "shots" / x["file"]).write_bytes(b2.getvalue())
+            x["crop"] = "player"
+        (pd / "shots" / "index.jsonl").write_text("\n".join(json.dumps(x) for x in idx) + "\n")
+        sp = motion.compute(pd)
+        assert sp["status"] == "ok" and abs(sp["session_motion"] - sa["session_motion"]) < 0.02, (sp, sa)
         assert sa["status"] == "ok" and sa["valid_pairs"] == 39, sa
         assert sb["status"] == "ok" and sb["session_motion"] < 0.002 < sa["session_motion"], (sa, sb)  # chat ignored
         assert sc["invalid_by_reason"].get("stall", 0) + sc["invalid_by_reason"].get("playhead not advancing", 0) >= 19, sc
