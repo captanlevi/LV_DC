@@ -6,7 +6,7 @@ Writes <session_dir>/check.json and a one-screen check.md. Verdict PASS / FAIL w
 moves the session dir to data/_failed/<platform>/ (archive, never delete).
 
 Acceptance is CAPTURE INTEGRITY ONLY (prereg §2, brad R1): nothing that co-varies with impairment filters a session.
-  ticks      res_meta present in >= 0.95 of the session's seconds (integrity). `current_time` advancing in >= 0.8 of
+  ticks      res_meta present in >= 0.95 of the session's seconds (integrity; a second is covered unless a gap > 1.5 s spans it). `current_time` advancing in >= 0.8 of
              playing ticks is a documented deviation from the prereg's 0.95: it couples to stall detection, and a strict
              value would select on impairment (levi R3c).
   usable     non-ad labelled time, play OR stall, >= 0.6 of the session length (ads by the sensor_v2 span rule)
@@ -40,6 +40,7 @@ from pathlib import Path
 
 CHECKS = {
     "tick_presence_min": 0.95,
+    "tick_gap_s": 1.5,                     # presence: only a gap between ticks longer than this uncovers time (t37)
     "advancing_share_min": 0.8,
     "usable_share_min": 0.6,
     "shaper_ratio_max": 1.1,
@@ -331,6 +332,18 @@ def shot_effects(rows: list[dict], sd: Path, near_s: float = 1.0) -> dict | None
             "client_size_off_mode_elsewhere": sum(1 for s_, n in zip(sizes, near) if not n and s_ != mode)}
 
 
+def tick_presence(ts: list[float], gap_s: float = CHECKS["tick_gap_s"]) -> float:
+    """The share of the session's seconds the res_meta ticks cover, phase-free: a tick covers +- 0.5 s, so only a gap
+    between consecutive ticks longer than gap_s uncovers time, its length beyond 1 s (t37, shagun 2026-10-19: the
+    int(t - t0) bins lost a second whenever jitter moved a tick sitting near an integer offset across the boundary;
+    tw_38, 1402 ticks over 1402 s with no gap > 1.5 s, read 0.934)."""
+    ts = sorted(ts)
+    if len(ts) < 2:
+        return 1.0 if ts else 0.0
+    uncovered = sum(b - a - 1.0 for a, b in zip(ts, ts[1:]) if b - a > gap_s)
+    return max(0.0, 1.0 - uncovered / (ts[-1] - ts[0] + 1.0))
+
+
 def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
                  frozen_reentries: list[dict] | None = None) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
@@ -340,7 +353,6 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
     t0, t1 = min(ts), max(ts)
     dur = t1 - t0
     seconds = max(1, int(dur) + 1)
-    present = len({int(t - t0) for t in ts})
     has_v2 = "ad_signals" in meta[0]
     spans, swap_only = ad_spans(meta) if has_v2 else ([], 0)
     in_ad = [any(lo <= t <= hi for lo, hi in spans) for t in ts]
@@ -374,7 +386,7 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
         dp = {**dp, "max_s": dp["max_all_s"], "recovered": None}   # one recovery of either kind per session (am. 6)
     out = {
         "n_res_meta": len(meta), "duration_s": dur,
-        "tick_presence": present / seconds,
+        "tick_presence": tick_presence(ts),
         "advancing_share_while_playing": (sum(adv_play) / len(adv_play)) if adv_play else None,
         "v2_columns": has_v2,
         "usable_share": usable / seconds,

@@ -87,8 +87,25 @@ def test_dead_recovery_revoked_by_a_frozen_continue() -> None:
     assert CS.label_checks(rows, "tiktok", re_, stalled)["recovered_dead"]
 
 
+def test_tick_presence_is_phase_free() -> None:
+    """t37 (shagun 2026-10-19, tw_38): 1402 ticks at 1 Hz sitting ~0.05 s from integer offsets with jitter read 0.934
+    under int(t - t0) bins; presence from the gaps reads them as covered, still sees a real hole, and 2 Hz is full."""
+    import random
+    rng = random.Random(38)
+    t0 = 1_792_000_000.0
+    ts = [t0 + k + 0.05 * (1 if k % 2 else -1) * rng.random() for k in range(1402)]       # tw_38's phase and jitter
+    old = len({int(t - min(ts)) for t in ts}) / (int(max(ts) - min(ts)) + 1)
+    assert old < CS.CHECKS["tick_presence_min"] <= CS.tick_presence(ts) == 1.0, (old, CS.tick_presence(ts))
+    hole = [t for t in ts if not t0 + 500 <= t < t0 + 600]                                 # 100 s without a tick
+    assert abs(CS.tick_presence(hole) - (1 - 99.0 / 1402.0)) < 0.002, CS.tick_presence(hole)
+    assert CS.tick_presence([t0 + 0.5 * k for k in range(200)]) == 1.0                        # 2 Hz
+    assert CS.tick_presence([t0 + 1.6 * k for k in range(100)]) < 1.0                          # every gap > 1.5 s
+    assert CS.tick_presence([t0]) == 1.0 and CS.tick_presence([]) == 0.0
+
+
 def main() -> int:
     test_check_json_schema()
+    test_tick_presence_is_phase_free()
     test_dead_recovery_revoked_by_a_frozen_continue()
     print("test_check_schema: ok")
     return 0

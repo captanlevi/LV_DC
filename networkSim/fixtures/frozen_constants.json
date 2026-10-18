@@ -705,6 +705,7 @@
    "shaper_ratio_max": 1.1,
    "shot_interval_s": 10.0,
    "shots_share_min": 0.5,
+   "tick_gap_s": 1.5,
    "tick_presence_min": 0.95,
    "unknown_list_share": 0.02,
    "usable_share_min": 0.6,
