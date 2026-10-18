@@ -64,6 +64,15 @@ def main() -> int:
     r = T.per_second_ratio([(0.0, 0), (1.0, 25000), (2.0, 50000), (3.0, 100000)], 200.0)   # 200 kbit = 25 kB/s
     assert (r["n"], r["p50"], r["max"], r["mean"]) == (3, 1.0, 2.0, 1.333), r
     assert T.per_second_ratio([(0.0, 0)], 200.0) == {"n": 0}
+    # a missed counter read (None) is skipped, never read as 0 (pilot-0b's -12.8 artefact)
+    assert T.per_second_ratio([(0.0, 0), (1.0, None), (2.0, 50000)], 200.0)["n"] == 1
+    import shlex as _sh
+    cmd = T.bulk_cmd("http://x/y.iso", 60)
+    assert cmd.startswith("sh -c ") and "--max-time" in _sh.split(cmd)[2] and "http://x/y.iso" in cmd
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "a.log").write_text("1000\n2000\n")
+        (Path(d) / "b.log").write_text("")
+        assert T.logged_bytes([Path(d) / "a.log", Path(d) / "b.log"]) == 3000 and T.logged_bytes([Path(d) / "b.log"]) is None
     print("test_trio_dry_run: ok")
     return 0
 

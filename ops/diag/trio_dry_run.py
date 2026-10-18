@@ -327,6 +327,8 @@ def run(a) -> dict:
         for s in SESSIONS:
             for c in rate_cmds(a.iface, s, state_params(states[s][0])):
                 sh(c)
+        if not NO_IFB:      # levi item 2: the per-slot ingress HTB classes as the kernel holds them (every state: timeline)
+            rep["tree"]["ingress_classes"] = {s: tc_detail(f"lvi_{s}") for s in SESSIONS}
         rep["cross_class_fetch"] = cross_class_fetch(a, out)
         idle = []                                     # levi (1): every class at each of its states, no bulk anywhere
         for k in range(max(len(v) for v in states.values())):
@@ -348,8 +350,8 @@ def run(a) -> dict:
             for c in rate_cmds(a.iface, s, state_params(states[s][0])):
                 sh(c)
         for s in SESSIONS:
-            procs.append(start(in_cgroup(s, f"curl -s -o /dev/null -w '%{{size_download}}' --max-time "
-                                            f"{a.state_s * len(states[s]) - 1} {shlex.quote(a.url)}"), out / f"curl_{s}.log"))
+            for i in range(a.bulk_streams):
+                procs.append(start(in_cgroup(s, bulk_cmd(a.url, a.state_s * len(states[s]) - 1)), out / f"curl_{s}_{i}.log"))
             procs.append(start(in_cgroup(s, f"ping -n -i {a.ping_interval} {a.ping_host}"), out / f"ping_{s}.log"))
         samples, timeline = [], []
         t0 = time.time()
@@ -497,20 +499,21 @@ def single_mode_reference(a, states: dict, out: Path) -> dict:
                f"PLR={p['loss_pct']}%", check=False)
             time.sleep(2)
             idle = ping_many([None], a, out, f"single_{st}")["root"]
-            pr = start(f"curl -s -o /dev/null --max-time {a.ref_state_s + 5} {shlex.quote(a.url)}", out / f"curl_single_{st}.log")
+            prs = [start(bulk_cmd(a.url, a.ref_state_s), out / f"curl_single_{st}_{i}.log") for i in range(a.bulk_streams)]
             time.sleep(3.0)
             c0, n0, t0 = (class_stats("ifb0").get("1:10") or {}), netem_stats("ifb0").get("1:10") or {}, time.time()
-            bound, k, series = 0, 0, [(t0, c0.get("bytes") or 0)]
+            bound, k, series = 0, 0, [(t0, c0.get("bytes"))]
             while time.time() < t0 + a.ref_state_s - 3:
                 cs = class_stats("ifb0").get("1:10") or {}
-                series.append((time.time(), cs.get("bytes") or 0))
+                series.append((time.time(), cs.get("bytes")))
                 bound += bool(cs.get("backlog"))
                 k += 1
                 time.sleep(1.0)
             detail = tc_detail("ifb0")
             c1, n1, t1 = (class_stats("ifb0").get("1:10") or {}), netem_stats("ifb0").get("1:10") or {}, time.time()
-            stop([pr])
-            kbit = ((c1.get("bytes") or 0) - (c0.get("bytes") or 0)) * 8 / 1000 / (t1 - t0)
+            stop(prs)
+            ok = [x for x in series if x[1] is not None]             # the first and last good counter reads
+            kbit = ((ok[-1][1] - ok[0][1]) * 8 / 1000 / (ok[-1][0] - ok[0][0])) if len(ok) >= 2 and ok[-1][0] > ok[0][0] else 0.0
             dp, dd = (n1.get("packets", 0) - n0.get("packets", 0)), (n1.get("drops", 0) - n0.get("drops", 0))
             rows.append({"state": st, "set": p, "realised_ingress_kbit": round(kbit, 1),
                          "ratio_to_set": round(kbit / p["rate_kbit"], 3), "shaper_bound_share": round(bound / k, 3) if k else None,
@@ -521,11 +524,34 @@ def single_mode_reference(a, states: dict, out: Path) -> dict:
     return {"tree": "single mode's Makefile enable / slow / disable", "states": rows}
 
 
+def bulk_cmd(url: str, seconds: float) -> str:
+    """One bulk stream for `seconds`: curl again whenever a transfer ends (pilot-0b: a single download stalled at
+    state 1 in both trees and the class sat idle); each transfer's bytes on its own line."""
+    loop = (f'end=$(( $(date +%s) + {int(seconds)} )); while :; do rem=$(( end - $(date +%s) )); '
+            f'[ "$rem" -gt 0 ] || break; curl -s -o /dev/null -w "%{{size_download}}\\n" --max-time "$rem" '
+            f'{shlex.quote(url)}; done')
+    return "sh -c " + shlex.quote(loop)
+
+
+def logged_bytes(paths) -> int | None:
+    """The bytes the bulk streams' logs record (one integer per finished transfer)."""
+    tot, seen = 0, False
+    for p in paths:
+        try:
+            for line in Path(p).read_text().split():
+                if line.isdigit():
+                    tot, seen = tot + int(line), True
+        except OSError:
+            continue
+    return tot if seen else None
+
+
 def per_second_ratio(series: list[tuple[float, int]], rate_kbit: float) -> dict:
     """Per second (consecutive samples), the class's delivered kbit / its set rate: n, p50, p95, max, mean (pilot-0,
     levi 4: the per-second p95 at twitch's low states against single mode's, the mean the long-run delivery)."""
+    series = [(t, b) for t, b in series if b is not None]           # a missed counter read is skipped, never 0
     r = [((b1 - b0) * 8 / 1000 / (t1 - t0)) / rate_kbit for (t0, b0), (t1, b1) in zip(series, series[1:])
-         if t1 > t0 and rate_kbit]
+         if t1 > t0 and rate_kbit and b1 >= b0]
     if not r:
         return {"n": 0}
     v = np.array(r)
@@ -601,7 +627,7 @@ def summarise(samples, timeline, states, a, out) -> dict:
             bound = sum(1 for x in samples if t0 <= x["t"] <= t1
                         and ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("backlog"))
             n = sum(1 for x in samples if t0 <= x["t"] <= t1)
-            ser = [(x["t"], ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("bytes") or 0)
+            ser = [(x["t"], ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("bytes"))
                    for x in samples if t0 <= x["t"] <= t1]
             rows.append({"state": st, "set": p, "seconds": round(t1 - t0, 1),
                          "per_second_ratio": per_second_ratio(ser, p["rate_kbit"]),
@@ -611,10 +637,10 @@ def summarise(samples, timeline, states, a, out) -> dict:
                          "netem_drop_share_under_bulk": netem_loss, "set_loss_share": round(p["loss_pct"] / 100, 5),
                          "other_sessions_bytes_same_window": others, "default_class_bytes_same_window": default_in})
         pings = ping_stats(out / f"ping_{s}.log")
-        curl = (out / f"curl_{s}.log").read_text().strip() if (out / f"curl_{s}.log").exists() else ""
+        curl_b = logged_bytes(sorted(out.glob(f"curl_{s}_*.log")))
         m = f"{SESSIONS[s]:#x}"
         ing = [x["ingress_by_mark"] for x in samples if "ingress_by_mark" in x]
-        res[s] = {"per_state": rows, "curl_bytes": int(curl) if curl.isdigit() else None,
+        res[s] = {"per_state": rows, "curl_bytes": curl_b,
                   "ingress_mark_bytes_total": (ing[-1].get(m, 0) - ing[0].get(m, 0)) if len(ing) >= 2 else None,
                   "class_bytes_total": _delta(samples, f"lvi_{s}", "1:10", 0, 1e9),
                   "egress_class_bytes_total": _delta(samples, a.iface, f"1:{SESSIONS[s]:x}", 0, 1e9),
@@ -639,6 +665,7 @@ def main(argv=None) -> int:
     ap.add_argument("--data", type=Path, default=None, help="the data dir: single-mode check.json ratios per state")
     ap.add_argument("--page-url", default="https://www.wikipedia.org/", help="the cross-class page fetch")
     ap.add_argument("--streams", type=int, default=6)
+    ap.add_argument("--bulk-streams", type=int, default=3, help="parallel, self-restarting bulk downloads per class")
     ap.add_argument("--url", default=BULK_URL)
     ap.add_argument("--ping-host", default="1.1.1.1")
     ap.add_argument("--ping-interval", default="0.2")

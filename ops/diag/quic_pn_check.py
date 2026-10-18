@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""QUIC packet numbers per connection and direction, from a session's merged.pcap decrypted with its ssl_keys.log
+(t53 pilot-0b, supervisor: yt_100002's media bodies collapsed in the frames extractor while http_v2 decrypted its
+responses; would an egress-mirror duplicate or an IFB reorder break reassembly?). Per QUIC connection (udp.stream) and
+direction: packets, distinct packet numbers, duplicates (a number captured twice), gaps (numbers missing between the
+first and the last: the shaper's netem loss and real loss show here, in both modes), reorders (a number below the
+previous one in capture order), packets left undecrypted; the media connections (googlevideo / ttvnw / tiktok SNI)
+summed apart. Read-only; packet numbers and counts only, never payloads.
+
+    python3 ops/diag/quic_pn_check.py <session dir> [<session dir> ...] [--out report.json]
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import json
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+MEDIA = re.compile(r"(googlevideo\.com|ttvnw\.net|live-video\.net|tiktokcdn\.com|ttlivecdn\.com|fcdnstatic-intl\.com)$")
+FIELDS = ["frame.time_epoch", "udp.stream", "ip.src", "quic.header_form", "quic.packet_number",
+          "tls.handshake.extensions_server_name", "quic.remaining_payload"]
+
+
+def rows(pcap: Path, keylog: Path | None, tshark: str) -> list[list[str]]:
+    cmd = [tshark, "-n", "-r", str(pcap), "-Y", "quic", "-T", "fields", "-E", "separator=\t", "-E", "occurrence=a",
+           "-E", "aggregator=,"] + (["-o", f"tls.keylog_file:{keylog}"] if keylog and keylog.exists() else []) \
+        + [x for f in FIELDS for x in ("-e", f)]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+    return [line.split("\t") for line in out.splitlines() if line]
+
+
+def pn_stats(pns: list[int]) -> dict:
+    """Duplicates, gaps and reorders of one direction's packet numbers, in capture order."""
+    if not pns:
+        return {"packets": 0}
+    c = collections.Counter(pns)
+    u = sorted(c)
+    return {"packets": len(pns), "distinct": len(u), "duplicates": sum(v - 1 for v in c.values() if v > 1),
+            "gaps": (u[-1] - u[0] + 1) - len(u), "reorders": sum(1 for a, b in zip(pns, pns[1:]) if b < a)}
+
+
+def session(sd: Path, tshark: str) -> dict:
+    rs = rows(sd / "merged.pcap", sd / "ssl_keys.log", tshark)
+    cnt = collections.Counter(r[2] for r in rs if len(r) > 2)
+    me = cnt.most_common(1)[0][0] if cnt else None
+    conns: dict = {}
+    for r in rs:
+        r = r + [""] * (len(FIELDS) - len(r))
+        st = r[1]
+        d = conns.setdefault(st, {"sni": "", "up": [], "down": [], "undecrypted": 0, "packets": 0})
+        d["packets"] += 1
+        if r[5]:
+            d["sni"] = r[5].split(",")[0].lower()
+        if r[6]:
+            d["undecrypted"] += 1
+        for pn in [x for x in r[4].split(",") if x.isdigit()]:     # coalesced packets carry several numbers
+            (d["up"] if r[2] == me else d["down"]).append(int(pn))
+    per = {}
+    tot = {"media": collections.Counter(), "other": collections.Counter()}
+    for st, d in conns.items():
+        kind = "media" if MEDIA.search(d["sni"] or "") else "other"
+        up, down = pn_stats(d["up"]), pn_stats(d["down"])
+        per[st] = {"sni": d["sni"], "kind": kind, "packets": d["packets"], "undecrypted": d["undecrypted"],
+                   "up": up, "down": down}
+        for side, s in (("up", up), ("down", down)):
+            for k in ("packets", "duplicates", "gaps", "reorders"):
+                tot[kind][f"{side}_{k}"] += s.get(k, 0)
+        tot[kind]["undecrypted"] += d["undecrypted"]
+        tot[kind]["connections"] += 1
+    media = sorted((v for v in per.values() if v["kind"] == "media"), key=lambda v: -v["packets"])
+    return {"session": str(sd), "client": me, "quic_packets": len(rs), "connections": len(conns),
+            "totals": {k: dict(v) for k, v in tot.items()}, "media_connections": media[:40]}
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("sessions", nargs="+", type=Path)
+    ap.add_argument("--tshark", default=shutil.which("tshark") or "tshark")
+    ap.add_argument("--out", type=Path, default=None)
+    a = ap.parse_args(argv)
+    out = []
+    for sd in a.sessions:
+        try:
+            out.append(session(sd, a.tshark))
+        except Exception as e:  # noqa: BLE001 -- one session's failure is reported
+            out.append({"session": str(sd), "error": repr(e)[:300]})
+        r = out[-1]
+        print(json.dumps({"session": r["session"], "totals": r.get("totals"), "error": r.get("error")}), flush=True)
+    if a.out:
+        a.out.write_text(json.dumps({"what": __doc__.split("\n\n")[0], "sessions": out}, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
