@@ -103,7 +103,19 @@ The targets are floors (rushi): when a platform reaches its floor, it is raised 
 - `--dpms-off`: blank the monitor again after each window resize.
 - `--tt-room-rotation 300`: the prereg's pre-declared tt fallback, a new room every 5 min. Only when the checkpoint QA says so.
 - `--fixed-geometry`: keep each platform's pinned player size instead of the rotation.
-- `--tt-matrix` / `--tw-matrix` / `--yt-matrix`: `current` reproduces the old schedule.
+- `--tt-matrix` / `--tw-matrix` / `--yt-matrix`: `current` reproduces the old schedule. In `--batch` they apply only with `--matrix-rule fixed`.
+- `--matrix-rule coverage` (the `--batch` default; prereg Addendum Q): each session's shaper matrix comes from the coverage snapshot of the accepted sessions' labels (`coverage_report.py`). The rule:
+  - the target is the largest deficit to the floors: 5 sessions with at least 2 min of each class (tt tier classes count HEVC sessions only), the stall band, and 5 tt entries per state;
+  - then the matrix: first one with fewer than 2 accepted sessions; otherwise the highest yield for the target; ties go to the first matrix id.
+  - The record (snapshot, deficits, yields, choice, rule version) is written to meta.json `coverage`. Its `applied` field says whether the session ran that matrix.
+  - `--coverage-allowed 'tiktok=TT-M|current,...'` narrows the allowed set (default: every defined matrix).
+- Coverage report on demand: `python3 networkSim/coverage_report.py` writes `data/_summaries/coverage_<date>.json` and `.md`:
+  - per class: the sessions and minutes;
+  - the stall share against its band;
+  - tt: entries per state and codec sessions;
+  - the deficits;
+  - per session: buffer p10 / median / p90 during play, and for twitch the latency mode and latency to broadcaster.
+  The daily summary carries the same table.
 
 **Exit codes:**
 

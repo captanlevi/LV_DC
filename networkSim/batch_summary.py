@@ -11,7 +11,9 @@ started_at), plus the cumulative totals:
   - class mix of accepted sessions: tier shares of quality time (ads masked), weighted by session duration; stall share;
   - sizes: pcap MB per session, total GB, disk free on the data volume;
   - yt channel rotation counts;
-  - session classes (levi's precedence) and the startup-failure rate per entry, by kind and shaper state at entry.
+  - session classes (levi's precedence) and the startup-failure rate per entry, by kind and shaper state at entry;
+  - coverage (prereg Addendum Q; coverage_report.py): per class the accepted sessions with >= 2 min of it, the pooled
+    stall share against its band, tt entries per state, the deficits.
 Nothing here gates anything.
 
 Usage: python batch_summary.py [--date YYYY-MM-DD] [--data-dir ../data]
@@ -25,6 +27,8 @@ import json
 import shutil
 import statistics
 from pathlib import Path
+
+import coverage_report
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 PLATFORMS = ("youtube", "twitch", "tiktok", "bilibili")
@@ -161,6 +165,10 @@ def write(data_dir: Path = DATA_DIR, day: str | None = None) -> Path:
            "today": summarise([r for r in rows if r["day"] == day]),
            "cumulative": summarise(rows), "yt_channel_sessions_accepted": rotation(rows),
            "tw_esports_unavailable": _esports_skips(data_dir, day)}
+    try:
+        out["coverage"] = coverage_report.report(data_dir)
+    except Exception as e:
+        out["coverage"] = {"error": repr(e)}
     dest = data_dir / "_summaries"
     dest.mkdir(parents=True, exist_ok=True)
     (dest / f"summary_{day}.json").write_text(json.dumps(out, indent=1, default=str))
@@ -190,6 +198,7 @@ def write(data_dir: Path = DATA_DIR, day: str | None = None) -> Path:
     sk = out["tw_esports_unavailable"]
     md += ["## twitch esports draws skipped (no league channel live)", "",
            f"{sk['today']} today, {sk['total']} in all; channels checked: {sk['checked']}", ""]
+    md += coverage_report.markdown(out["coverage"]) if "error" not in out["coverage"] else [f"## Coverage: {out['coverage']['error']}"]
     (dest / f"summary_{day}.md").write_text("\n".join(md))
     return dest / f"summary_{day}.md"
 

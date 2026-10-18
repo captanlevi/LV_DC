@@ -37,6 +37,7 @@ from pathlib import Path
 
 from balance import PLATFORM_TRANSITIONS, most_needed_state, balance_report
 import batch_summary
+import coverage_report
 import geometry
 import preflight
 import tw_categories
@@ -127,12 +128,17 @@ def _prompt_ready(platform: str, initial_state: str | None) -> bool:
 DPMS_OFF = False   # --dpms-off: pass exp.py --dpms-off (chaos: re-blank the monitor after each session's window resize)
 # shaper matrix per platform (yt t38; tt / twitch prereg addendum M) and the tt room-rotation fallback (seconds or None)
 MATRIX_IDS: dict[str, str] = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}
+# --batch matrix per session (prereg Addendum Q, 2026-10-18): "coverage" = coverage_report.choose() on the accepted
+# sessions' labels (deterministic rule, recorded in meta.json coverage); "fixed" = MATRIX_IDS. Allowed set per platform:
+# every defined matrix (with Addendum M's alone, tt and twitch would have a single matrix and no choice)
+MATRIX_RULE = "coverage"
+COVERAGE_ALLOWED: dict[str, list[str]] = {}
 TT_ROOM_ROTATION_S: float | None = None
 
 
 def _run_collection(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
                     yt_matrix: str | None = None, channel: dict | None = None, geom: str | None = None,
-                    tw_category: dict | None = None) -> int:
+                    tw_category: dict | None = None, matrix: str | None = None) -> int:
     cmd = [
         sys.executable, "exp.py",
         "--platform", platform,
@@ -142,14 +148,14 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
         cmd += ["--initial-state", initial_state]
     if auto:
         cmd += ["--auto"]
-    if platform == "youtube" and yt_matrix:
-        cmd += ["--yt-matrix", yt_matrix]
+    if platform == "youtube" and (matrix or yt_matrix):
+        cmd += ["--yt-matrix", matrix or yt_matrix]
     if platform == "tiktok":
-        cmd += ["--tt-matrix", MATRIX_IDS["tiktok"]]
+        cmd += ["--tt-matrix", matrix or MATRIX_IDS["tiktok"]]
         if TT_ROOM_ROTATION_S:
             cmd += ["--tt-room-rotation", str(TT_ROOM_ROTATION_S)]
     if platform == "twitch":
-        cmd += ["--tw-matrix", MATRIX_IDS["twitch"]]
+        cmd += ["--tw-matrix", matrix or MATRIX_IDS["twitch"]]
     if channel:
         cmd += ["--channel-url", yt_channels.url_of(channel["handle"]), "--channel-handle", channel["handle"],
                 "--channel-type", channel["type"]]
@@ -223,6 +229,24 @@ def preclean() -> None:
     for target in ("stop-capture", "disable", "kill_chrome"):
         subprocess.run(["make", "-s", target], cwd=here, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["sudo", "pkill", "-INT", "-f", "[t]cpdump -i ifb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def session_matrix(p: str) -> str | None:
+    """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
+    LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such."""
+    rec = {"platform": p, "rule": "fixed", "matrix": MATRIX_IDS.get(p)}
+    if MATRIX_RULE == "coverage" and p in coverage_report.CLASSES:
+        try:
+            rec = coverage_report.choose(_RUNS_DIR, p, COVERAGE_ALLOWED.get(p))
+            print(f"  coverage : matrix {rec['matrix']} (target {(rec['target'] or {}).get('key')}, {rec['why']})")
+        except Exception as e:
+            rec["rule_error"] = repr(e)
+            print(f"  coverage rule failed ({e!r}): matrix {rec['matrix']} (fixed)")
+    path = _RUNS_DIR / coverage_report.SUMMARY_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rec, indent=1, default=str))
+    os.environ["LVDC_COVERAGE_JSON"] = str(path)
+    return rec["matrix"]
 
 
 def _summary() -> None:
@@ -300,10 +324,11 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
                   f"{json.dumps({k: pf['checks'][k] for k in pf['problems']})}")
             _summary()
             sys.exit(EXIT_PREFLIGHT)
+        mid = session_matrix(p)
         try:
-            rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(p)),
+            rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
                                  episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel,
-                                 geom=geom, tw_category=category)
+                                 geom=geom, tw_category=category, matrix=mid)
         except Exception as e:
             print(f"  exp.py could not run: {e!r}")
             rc = -1
@@ -406,6 +431,12 @@ if __name__ == "__main__":
         default="A",
         help="yt shaper config (t38; default A). The yt balance target is this matrix's stationary distribution.",
     )
+    parser.add_argument("--matrix-rule", choices=["coverage", "fixed"], default="coverage",
+                        help="--batch: the shaper matrix per session from the coverage snapshot (prereg Addendum Q; "
+                             "default) or fixed (--yt-matrix / --tt-matrix / --tw-matrix).")
+    parser.add_argument("--coverage-allowed", default=None, metavar="P=ID|ID,...",
+                        help="--matrix-rule coverage: the allowed matrices per platform, e.g. 'tiktok=TT-M|current' "
+                             "(default: every defined matrix).")
     parser.add_argument(
         "--report-only",
         action="store_true",
@@ -416,6 +447,13 @@ if __name__ == "__main__":
     DPMS_OFF = args.dpms_off
     MATRIX_IDS = {"youtube": args.yt_matrix, "tiktok": args.tt_matrix, "twitch": args.tw_matrix}
     TT_ROOM_ROTATION_S = args.tt_room_rotation
+    MATRIX_RULE = args.matrix_rule
+    if args.coverage_allowed:
+        COVERAGE_ALLOWED = {k.strip(): v.split("|") for k, v in (x.split("=") for x in args.coverage_allowed.split(","))}
+        from utils.shaping import PLATFORM_MATRICES
+        bad = {k: v for k, v in COVERAGE_ALLOWED.items() if k not in PLATFORM_MATRICES or set(v) - set(PLATFORM_MATRICES[k])}
+        if bad:
+            sys.exit(f"unknown platform / matrix in --coverage-allowed: {bad}")
     if args.batch:
         targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
