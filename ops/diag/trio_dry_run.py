@@ -59,7 +59,8 @@ CG_ROOT = Path("/sys/fs/cgroup")
 SLICE = "lvdc.slice"
 SESSIONS = {"yt": 0x11, "tw": 0x12, "tt": 0x13}            # session -> fw mark (also its egress class minor)
 NFT_TABLE = "lvdc_trio"
-DEFAULT_STATES = {"yt": ["3", "7", "10"], "tw": ["5", "9", "2"], "tt": ["8", "4", "6"]}
+# tw holds states 1 and 2 (pilot-0: twitch's per-second rate p95 at its two lowest states, against single mode's)
+DEFAULT_STATES = {"yt": ["3", "7", "10"], "tw": ["1", "2", "9"], "tt": ["8", "4", "6"]}
 MGMT_UDP_PORT, MGMT_TCP_PORT = 41641, 22
 BULK_URL = "http://mirror.aarnet.edu.au/pub/ubuntu/releases/24.04/ubuntu-24.04.5-live-server-amd64.iso"   # ~3 GB
 MARK_BY = "cgroup"  # "uid" only for a test kernel without nft socket cgroupv2 (each session a user lvdc_<p>)
@@ -351,7 +352,8 @@ def run(a) -> dict:
                     if k:
                         for c in rate_cmds(a.iface, s, p):
                             sh(c)
-                    timeline.append({"t": round(time.time() - t0, 2), "session": s, "state": states[s][k], **p})
+                    timeline.append({"t": round(time.time() - t0, 2), "session": s, "state": states[s][k], **p,
+                                     "tc_detail": None if NO_IFB else tc_detail(f"lvi_{s}")})
             t_end = time.time() + a.state_s
             while time.time() < t_end:
                 samples.append({"t": round(time.time() - t0, 2), "classes": {d: class_stats(d) for d in devs},
@@ -489,22 +491,45 @@ def single_mode_reference(a, states: dict, out: Path) -> dict:
             pr = start(f"curl -s -o /dev/null --max-time {a.ref_state_s + 5} {shlex.quote(a.url)}", out / f"curl_single_{st}.log")
             time.sleep(3.0)
             c0, n0, t0 = (class_stats("ifb0").get("1:10") or {}), netem_stats("ifb0").get("1:10") or {}, time.time()
-            bound, k = 0, 0
+            bound, k, series = 0, 0, [(t0, c0.get("bytes") or 0)]
             while time.time() < t0 + a.ref_state_s - 3:
                 cs = class_stats("ifb0").get("1:10") or {}
+                series.append((time.time(), cs.get("bytes") or 0))
                 bound += bool(cs.get("backlog"))
                 k += 1
                 time.sleep(1.0)
+            detail = tc_detail("ifb0")
             c1, n1, t1 = (class_stats("ifb0").get("1:10") or {}), netem_stats("ifb0").get("1:10") or {}, time.time()
             stop([pr])
             kbit = ((c1.get("bytes") or 0) - (c0.get("bytes") or 0)) * 8 / 1000 / (t1 - t0)
             dp, dd = (n1.get("packets", 0) - n0.get("packets", 0)), (n1.get("drops", 0) - n0.get("drops", 0))
             rows.append({"state": st, "set": p, "realised_ingress_kbit": round(kbit, 1),
                          "ratio_to_set": round(kbit / p["rate_kbit"], 3), "shaper_bound_share": round(bound / k, 3) if k else None,
-                         "netem_drop_share_under_bulk": round(dd / (dp + dd), 5) if dp + dd else None, "idle_ping": idle})
+                         "netem_drop_share_under_bulk": round(dd / (dp + dd), 5) if dp + dd else None, "idle_ping": idle,
+                         "per_second_ratio": per_second_ratio(series, p["rate_kbit"]), "tc_detail": detail})
     finally:
         sh(f"make -s -C {nsim} disable IFACE={a.iface}", check=False)
     return {"tree": "single mode's Makefile enable / slow / disable", "states": rows}
+
+
+def per_second_ratio(series: list[tuple[float, int]], rate_kbit: float) -> dict:
+    """Per second (consecutive samples), the class's delivered kbit / its set rate: n, p50, p95, max, mean (pilot-0,
+    levi 4: the per-second p95 at twitch's low states against single mode's, the mean the long-run delivery)."""
+    import numpy as np
+    r = [((b1 - b0) * 8 / 1000 / (t1 - t0)) / rate_kbit for (t0, b0), (t1, b1) in zip(series, series[1:])
+         if t1 > t0 and rate_kbit]
+    if not r:
+        return {"n": 0}
+    v = np.array(r)
+    return {"n": len(r), "p50": round(float(np.median(v)), 3), "p95": round(float(np.percentile(v, 95)), 3),
+            "max": round(float(v.max()), 3), "mean": round(float(v.mean()), 3)}
+
+
+def tc_detail(dev: str) -> str:
+    """`tc -s -d` class and qdisc of a device (L-A1: the realised HTB rate / ceil / burst / cburst / quantum and netem
+    limit, as the kernel holds them)."""
+    return (sh(f"tc -s -d class show dev {dev}", capture=True, check=False) + "\n"
+            + sh(f"tc -s -d qdisc show dev {dev}", capture=True, check=False))
 
 
 def check_session_reference(data: Path, states: dict) -> dict:
@@ -568,7 +593,10 @@ def summarise(samples, timeline, states, a, out) -> dict:
             bound = sum(1 for x in samples if t0 <= x["t"] <= t1
                         and ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("backlog"))
             n = sum(1 for x in samples if t0 <= x["t"] <= t1)
+            ser = [(x["t"], ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("bytes") or 0)
+                   for x in samples if t0 <= x["t"] <= t1]
             rows.append({"state": st, "set": p, "seconds": round(t1 - t0, 1),
+                         "per_second_ratio": per_second_ratio(ser, p["rate_kbit"]),
                          "realised_ingress_kbit": round(own * 8 / 1000 / (t1 - t0), 1),
                          "ratio_to_set": round(own * 8 / 1000 / (t1 - t0) / p["rate_kbit"], 3) if p["rate_kbit"] else None,
                          "class_drops": drops, "shaper_bound_share": round(bound / n, 3) if n else None,

@@ -60,6 +60,14 @@ def main() -> int:
                  "/T/outgoing.pcap", "rm /T/incoming.pcap"):
         assert want in slot, want
     assert "9222" not in slot and "ifb0" not in slot and "chrome.pid" not in slot
+    # L-A1 (pilot-0, levi 4): a slot's shaper is single mode's `make slow`, command for command: the same htb rate (so the
+    # same burst / cburst / quantum tc derives from it) and netem, only the device and the egress class differ
+    for st in (["BANDWIDTH=179kbit", "DELAY=45ms", "PLR=0.5%"], ["BANDWIDTH=296kbit", "DELAY=30ms", "PLR=0.2%"]):
+        one = subprocess.run(["make", "-s", "-n", "slow", *VARS, *st], cwd=HERE, capture_output=True, text=True).stdout
+        tw = trio_slots.slot_of("tw")
+        trio = subprocess.run(["make", "-s", "-n", "slow", *VARS, *st, *trio_slots.make_vars(tw)], cwd=HERE,
+                              capture_output=True, text=True).stdout
+        assert one and trio.replace(tw.ifb_in, "ifb0").replace(tw.egress_class, "1:10") == one, (one, trio)
     print("test_make_single_mode: ok")
     return 0
 

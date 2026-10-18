@@ -61,6 +61,9 @@ def main() -> int:
         ref = T.check_session_reference(d, {"yt": ["3", "7"], "tw": ["5"]})["per_session_state"]
         assert ref["yt"]["3"] == {"n_sessions": 2, "n_episodes": 3, "min": 0.7, "max": 0.95, "median": 0.9, "enough": False}
         assert ref["yt"]["7"]["n_episodes"] == 1 and ref["tw"]["5"]["n_sessions"] == 0
+    r = T.per_second_ratio([(0.0, 0), (1.0, 25000), (2.0, 50000), (3.0, 100000)], 200.0)   # 200 kbit = 25 kB/s
+    assert (r["n"], r["p50"], r["max"], r["mean"]) == (3, 1.0, 2.0, 1.333), r
+    assert T.per_second_ratio([(0.0, 0)], 200.0) == {"n": 0}
     print("test_trio_dry_run: ok")
     return 0
 
