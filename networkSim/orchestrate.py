@@ -479,14 +479,19 @@ class _TrioStop(Exception):
         self.rc = rc
 
 
+def free_gb(path: Path) -> float:
+    """The free space of path's volume in GB (the trio's low-disk stop; a function so tests set it, not the disk)."""
+    return shutil.disk_usage(path).free / 1e9
+
+
 def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused: dict, not_live: dict,
                  rotate_geometry: bool, yt_matrix: str, capacity_kbit: float | None, run_id: str, summaries: Path,
                  spawn, floor: dict | None = None, stop_signal: list | None = None) -> bool:
     """Start the next session in p's slot (run_trio); False when its preflight failed (the trio drains)."""
     s, troot = T.SLOTS[p], _RUNS_DIR / T.TRIO_DIR
-    free_gb = shutil.disk_usage(_RUNS_DIR).free / 1e9
-    if free_gb < MIN_FREE_GB:
-        print(f"\n  Data volume {free_gb:.0f} GB free < {MIN_FREE_GB} GB: draining the trio.")
+    gb = free_gb(_RUNS_DIR)
+    if gb < MIN_FREE_GB:
+        print(f"\n  Data volume {gb:.0f} GB free < {MIN_FREE_GB} GB: draining the trio.")
         raise _TrioStop(EXIT_LOW_DISK)
     floor = floor or T.trio_root_floor_gb(_RUNS_DIR, preflight.ROOT_MIN_FREE_GB)
     pf = {**preflight.run(_RUNS_DIR, MIN_FREE_GB, root_min_free_gb=floor["floor_gb"]), "trio_root_floor": floor}

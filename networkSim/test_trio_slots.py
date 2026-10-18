@@ -400,10 +400,11 @@ class FakeProc:
 
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
-          xrandr=None, trio_pf=None):
+          xrandr=None, trio_pf=None, disk_gb=1000.0):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
-                                        "_summary", "preclean", "most_needed_state", "coupled_geometry")}
+                                        "_summary", "preclean", "most_needed_state", "coupled_geometry", "free_gb")}
+    O.free_gb = lambda path: disk_gb            # the test's disk, not the machine's (flaky at 23 GB free on the laptop)
     saved_pf, saved_nft, saved_stage, saved_tpf = O.preflight.run, T.nft_handle_of, T.STAGING, T.trio_preflight
     saved_ct = T.conntrack_timeouts
     T.conntrack_timeouts = lambda proc=None: {"nf_conntrack_udp_timeout_stream": 120}
@@ -486,6 +487,12 @@ def test_run_trio():
         assert rc == 0 and len(spawned) >= 2 and all("--slot" in c for c, _, _ in spawned)
         assert not (tmp / T.TRIO_DIR / O.TRIO_DRAIN_FILE).exists()
         assert list((tmp / T.TRIO_DIR / "_summaries").glob("trio_drain.done_*"))
+
+        # low disk: nothing starts, the trio ends with EXIT_LOW_DISK, the tree still comes down
+        spawned.clear()
+        rc, calls = _trio(tmp, {"youtube": 5}, spawn, disk_gb=O.MIN_FREE_GB - 1)
+        assert rc == O.EXIT_LOW_DISK and not spawned
+        assert [c for c in calls if c[0] == "apply" and not c[1].startswith("sysctl")][-1][1].startswith("tc qdisc del")
 
         # preflight failure: nothing starts, the trio ends with EXIT_PREFLIGHT, the tree still comes down
         spawned.clear()
