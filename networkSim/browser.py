@@ -1488,6 +1488,7 @@ TICK_STARTUP_TIMEOUT_S = 15
 _USHER_RE = re.compile(r"usher\.ttvnw\.net/api/(?:v2/)?channel/hls/[^/?]+\.m3u8")
 
 
+LADDER_PROBE_FROZEN_S = 60.0   # twitch, master unread: the quality menu is read only inside a frozen run this long
 MEDIA_EVENTS_FILE = "media_events.jsonl"
 MEDIA_MESSAGE_LEVELS = ("error", "warning", "info")   # playerMessagesLogged kept (debug dropped: volume)
 MEDIA_RECENT_N = 40
@@ -2433,7 +2434,7 @@ class BrowserSession:
             print(f"[browser] Room rotation: {rec}", flush=True)
 
     # ------------------------------------------------------------------ the stuck-player rule (Addendum Q am. 6)
-    def _current_rung(self) -> dict:
+    def _current_rung(self, frozen_s: float = 0.0) -> dict:
         """The lowest-rung record (stuck.rung_record): twitch from the master listener, yt / tt from page JS (retried
         every 30 s while only the fallback is known)."""
         kbit, src, detail = None, None, None
@@ -2441,15 +2442,17 @@ class BrowserSession:
             kbit, src, detail = self._master.latest["kbit"], "hls_master_lowest_bandwidth", \
                 {"path": self._master.latest["path"], "from_worker": self._master.latest.get("from_worker")}
         elif self.platform == "twitch":
-            # no master read: the player's own quality menu (read, not changed; every 30 s) decides the one exception
+            # no master read: the player's own quality menu decides the one exception. Reading it opens the settings
+            # menu (entry_quality.Driver.state; closed again after the read), so it runs only inside a frozen run of
+            # >= LADDER_PROBE_FROZEN_S, retried every 30 s until it reads (supervisor's condition on d40e263)
             if self.lowest_rung and self.lowest_rung.get("source") == "ladder_160p_transcode":
                 return self.lowest_rung
-            if time.time() - self._rung_probe_at >= 30:
+            if frozen_s >= LADDER_PROBE_FROZEN_S and time.time() - self._rung_probe_at >= 30:
                 self._rung_probe_at = time.time()
                 try:
                     import entry_quality as EQ
                     opts = [i.get("label") for i in (EQ.Driver(self._page, "twitch").state().get("items") or [])]
-                    self.player_ladder = {"options": opts, "t": time.time()}
+                    self.player_ladder = {"options": opts, "t": time.time(), "frozen_s": round(frozen_s, 1)}
                     if any(EQ.option_height(o) == 160 for o in opts):
                         kbit, src, detail = stuck.TWITCH_160P_TRANSCODE_KBIT, "ladder_160p_transcode", {"options": opts}
                 except Exception as exc:
@@ -2478,7 +2481,7 @@ class BrowserSession:
         if self.abort_reason is not None or frozen_s <= 0:
             return
         now = time.time()
-        rung = self._current_rung()
+        rung = self._current_rung(frozen_s)
         labels = getattr(self, "net_labels", None) or []
         read = stuck.t2_rung(rung)
         if read is None:          # only the fallback: no T2 (supervisor 2026-10-18, tw_34); logged once per frozen run

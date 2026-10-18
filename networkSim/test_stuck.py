@@ -215,9 +215,14 @@ def test_stuck_tick():
         s6._master = types.SimpleNamespace(latest=None)
         s6._reenter_frozen = types.MethodType(fake_reenter, s6)
         calls.clear()
+        reads = []
+        EQ.Driver.state = lambda self: reads.append(1) or {"items": [{"label": "Auto"}, {"label": "1080p60\n(Source)"}, {"label": "160p30"}]}
+        s6._stuck_tick(30)                                       # under 60 s frozen: the menu is not touched
+        assert not reads and s6.player_ladder is None
         s6._stuck_tick(95)
         assert s6.lowest_rung["source"] == "ladder_160p_transcode" and s6.lowest_rung["kbit"] == S.TWITCH_160P_TRANSCODE_KBIT
-        assert len(calls) == 1 and not s6.t2_skipped and s6.player_ladder["options"][-1] == "160p30"
+        assert len(calls) == 1 and not s6.t2_skipped and s6.player_ladder["options"][-1] == "160p30" and len(reads) == 1
+        assert s6.player_ladder["frozen_s"] == 95.0
         EQ.Driver.state = lambda self: {"items": [{"label": "Auto"}, {"label": "720p60"}, {"label": "480p"}]}
         s7 = _session()
         s7._master = types.SimpleNamespace(latest=None)
