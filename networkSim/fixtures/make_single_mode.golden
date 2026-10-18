@@ -14,16 +14,16 @@ echo "📥 Shaping incoming traffic (All Protocols)..."
 sudo tc qdisc add dev wlp0s20f3 handle ffff: ingress
 # Management traffic first (prio 1): accepted as is, never redirected to IFB_INGRESS (not shaped, not captured)
 sudo tc filter add dev wlp0s20f3 parent ffff: protocol ip prio 1 u32 \
-		match ip protocol 17 0xff match ip sport 41641 0xffff action ok
+match ip protocol 17 0xff match ip sport 41641 0xffff action ok
 sudo tc filter add dev wlp0s20f3 parent ffff: protocol ip prio 1 u32 \
-		match ip protocol 17 0xff match ip dport 41641 0xffff action ok
+match ip protocol 17 0xff match ip dport 41641 0xffff action ok
 sudo tc filter add dev wlp0s20f3 parent ffff: protocol ip prio 1 u32 \
-		match ip protocol 6 0xff match ip sport 22 0xffff action ok
+match ip protocol 6 0xff match ip sport 22 0xffff action ok
 sudo tc filter add dev wlp0s20f3 parent ffff: protocol ip prio 1 u32 \
-		match ip protocol 6 0xff match ip dport 22 0xffff action ok
+match ip protocol 6 0xff match ip dport 22 0xffff action ok
 # Catch ALL other ingress traffic and send to IFB_INGRESS
 sudo tc filter add dev wlp0s20f3 parent ffff: prio 10 \
-		matchall action mirred egress redirect dev ifb0
+matchall action mirred egress redirect dev ifb0
 sudo tc qdisc add dev ifb0 root handle 1: htb default 10
 echo "📤 Shaping and mirroring outgoing traffic (All Protocols)..."
 sudo tc qdisc add dev wlp0s20f3 root handle 1: htb default 10
@@ -31,16 +31,16 @@ sudo tc qdisc add dev wlp0s20f3 root handle 1: htb default 10
 # mirror below never sees it (not captured)
 sudo tc class add dev wlp0s20f3 parent 1: classid 1:20 htb rate 1000mbit
 sudo tc filter add dev wlp0s20f3 parent 1: protocol ip prio 1 u32 \
-		match ip protocol 17 0xff match ip sport 41641 0xffff flowid 1:20
+match ip protocol 17 0xff match ip sport 41641 0xffff flowid 1:20
 sudo tc filter add dev wlp0s20f3 parent 1: protocol ip prio 1 u32 \
-		match ip protocol 17 0xff match ip dport 41641 0xffff flowid 1:20
+match ip protocol 17 0xff match ip dport 41641 0xffff flowid 1:20
 sudo tc filter add dev wlp0s20f3 parent 1: protocol ip prio 1 u32 \
-		match ip protocol 6 0xff match ip sport 22 0xffff flowid 1:20
+match ip protocol 6 0xff match ip sport 22 0xffff flowid 1:20
 sudo tc filter add dev wlp0s20f3 parent 1: protocol ip prio 1 u32 \
-		match ip protocol 6 0xff match ip dport 22 0xffff flowid 1:20
+match ip protocol 6 0xff match ip dport 22 0xffff flowid 1:20
 # Catch ALL other egress traffic and mirror to IFB_EGRESS for capture
 sudo tc filter add dev wlp0s20f3 parent 1: prio 10 \
-		matchall action mirred egress mirror dev ifb1
+matchall action mirred egress mirror dev ifb1
 echo "✅ Shaping ENABLED on wlp0s20f3 for ALL traffic (TCP/UDP/IPv4/IPv6)"
 === mgmt-exclusion
 echo '{"udp_port": 41641, "udp_port_source": "default 41641", "tcp_port": 22, "capture_bpf": "not (udp port 41641 or tcp port 22)", "method": "tc prio-1 u32 bypass (ingress action ok, egress class 1:20 unshaped) + tcpdump BPF"}'
@@ -48,14 +48,14 @@ echo '{"udp_port": 41641, "udp_port_source": "default 41641", "tcp_port": 22, "c
 echo "📉 Applying bandwidth limit and delay..."
 # Ingress — add first, fall back to change if already exists
 sudo tc class add dev ifb0 parent 1: classid 1:10 htb rate 1000kbit 2>/dev/null || \
-		sudo tc class change dev ifb0 parent 1: classid 1:10 htb rate 1000kbit
+sudo tc class change dev ifb0 parent 1: classid 1:10 htb rate 1000kbit
 sudo tc qdisc add dev ifb0 parent 1:10 netem delay 0ms loss 0% 2>/dev/null || \
-		sudo tc qdisc change dev ifb0 parent 1:10 netem delay 0ms loss 0%
+sudo tc qdisc change dev ifb0 parent 1:10 netem delay 0ms loss 0%
 # Egress
 sudo tc class add dev wlp0s20f3 parent 1: classid 1:10 htb rate 1000kbit 2>/dev/null || \
-		sudo tc class change dev wlp0s20f3 parent 1: classid 1:10 htb rate 1000kbit
+sudo tc class change dev wlp0s20f3 parent 1: classid 1:10 htb rate 1000kbit
 sudo tc qdisc add dev wlp0s20f3 parent 1:10 netem delay 0ms loss 0% 2>/dev/null || \
-		sudo tc qdisc change dev wlp0s20f3 parent 1:10 netem delay 0ms loss 0%
+sudo tc qdisc change dev wlp0s20f3 parent 1:10 netem delay 0ms loss 0%
 echo "✅ Network shaping applied: 1000kbit, 0ms, loss 0%"
 === disable
 echo "🧹 Cleaning up traffic shaping and virtual interfaces..."
@@ -80,17 +80,17 @@ echo "✅ Capture started"
 === stop-capture
 echo "🛑 Stopping capture..."
 if [ -f /C/ifb0.pid ]; then \
-		PID=`cat /C/ifb0.pid`; \
-		sudo kill -INT $PID; \
-		for i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \
-		rm /C/ifb0.pid; \
-	fi
+PID=`cat /C/ifb0.pid`; \
+sudo kill -INT $PID; \
+for i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \
+rm /C/ifb0.pid; \
+fi
 if [ -f /C/ifb1.pid ]; then \
-		PID=`cat /C/ifb1.pid`; \
-		sudo kill -INT $PID; \
-		for i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \
-		rm /C/ifb1.pid; \
-	fi
+PID=`cat /C/ifb1.pid`; \
+sudo kill -INT $PID; \
+for i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \
+rm /C/ifb1.pid; \
+fi
 # (the loop above waits up to 10 s for tcpdump to flush and exit; `sudo wait` never waited: wait is a shell builtin)
 echo "✅ Capture fully stopped"
 === merge-capture
@@ -102,36 +102,36 @@ rm /S/yt_1/outgoing.pcap
 === start_chrome
 echo "🚀 Starting Chrome with remote debugging..."
 LAUNCH_USER=${SUDO_USER:-${USER}}; \
-	mkdir -p /P/prof; \
-	chown -R $LAUNCH_USER /P/prof 2>/dev/null || true; \
-	CHROME_ARGS="--no-sandbox --user-data-dir=/P/prof --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel   --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check  --load-extension=<REPO>/labeling about:blank"; \
-	if [ "$LAUNCH_USER" = "$(id -un)" ]; then \
-		env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log  /usr/bin/google-chrome $CHROME_ARGS > /C/chrome.log 2>&1 & \
-	else \
-		sudo -u $LAUNCH_USER env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log  /usr/bin/google-chrome $CHROME_ARGS > /C/chrome.log 2>&1 & \
-	fi; \
-	echo $! > /C/chrome.pid
+mkdir -p /P/prof; \
+chown -R $LAUNCH_USER /P/prof 2>/dev/null || true; \
+CHROME_ARGS="--no-sandbox --user-data-dir=/P/prof --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --load-extension=<REPO>/labeling about:blank"; \
+if [ "$LAUNCH_USER" = "$(id -un)" ]; then \
+env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome.log 2>&1 & \
+else \
+sudo -u $LAUNCH_USER env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome.log 2>&1 & \
+fi; \
+echo $! > /C/chrome.pid
 echo "✅ Chrome launched (debug port 9222, log → /C/chrome.log)"
 === kill_chrome
 echo "🛑 Killing collection Chrome..."
 # [r]: the pattern must not match this recipe's own shell, whose command line contains it (make: *** Killed)
 pkill -9 -f "[r]emote-debugging-port=9222" 2>/dev/null || true
 for i in 1 2 3 4 5 6 7 8 9 10; do \
-		pgrep -f "[r]emote-debugging-port=9222" > /dev/null 2>&1 || break; \
-		sleep 1; \
-	done
+pgrep -f "[r]emote-debugging-port=9222" > /dev/null 2>&1 || break; \
+sleep 1; \
+done
 rm -f "/P/prof/Default/Sessions" \
-	        "/P/prof/Default/Last Session" \
-	        "/P/prof/Default/Current Session" \
-	        "/P/prof/Default/Last Tabs" \
-	        "/P/prof/Default/Current Tabs" \
-	        "/P/prof/Default/Last Browser" 2>/dev/null || true
+"/P/prof/Default/Last Session" \
+"/P/prof/Default/Current Session" \
+"/P/prof/Default/Last Tabs" \
+"/P/prof/Default/Current Tabs" \
+"/P/prof/Default/Last Browser" 2>/dev/null || true
 rm -f /C/chrome.pid /C/chrome.log
 echo "✅ Chrome killed, session files cleared"
 === change_perm
 OWNER=${SUDO_USER:-${USER}}; \
-	sudo chown -R $OWNER /S/yt_1 2>/dev/null || true; \
-	sudo chmod -R u+rw /S/yt_1 2>/dev/null || true; \
-	sudo chown $OWNER /S/ 2>/dev/null || true; \
-	sudo chown $OWNER /S/ 2>/dev/null || true; \
-	echo "Permissions updated for /S/yt_1"
+sudo chown -R $OWNER /S/yt_1 2>/dev/null || true; \
+sudo chmod -R u+rw /S/yt_1 2>/dev/null || true; \
+sudo chown $OWNER /S/ 2>/dev/null || true; \
+sudo chown $OWNER /S/ 2>/dev/null || true; \
+echo "Permissions updated for /S/yt_1"
