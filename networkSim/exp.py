@@ -522,7 +522,8 @@ if __name__ == "__main__":
         "--yt-matrix",
         choices=sorted(YOUTUBE_MATRICES),
         default="A",
-        help="yt shaper config (t38): A = batch default, B = pre-declared fallback, current = pre-t38 (old data). "
+        help="yt shaper config (t38): A = batch default, B = pre-declared fallback, current = pre-t38 (old data), "
+             "H = yt-H (Q am. 15 (6): the Q_1080p target only, cap 2, stationary start). "
              "A / B use a low-state cap of 6 and a stationary-distribution start; ignored on other platforms.",
     )
     parser.add_argument(

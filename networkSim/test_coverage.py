@@ -99,13 +99,21 @@ def test_am15_initial_state_and_low_yield():
     assert C.meta_record(fr, "youtube", "current", None)["initial_state_forced"]["applied"] is False
     assert C.meta_record(fr, "youtube", "A", d["state"])["initial_state_forced"]["applied"] is False
     assert C.meta_record({**rec, "initial_state_forced": None}, "youtube", "current")["initial_state_forced"] is None
-    # orchestrate passes the forced state as --initial-state (not the balance rule's)
-    seen = {}
-    O.subprocess.run = lambda cmd: seen.setdefault("cmd", cmd) and type("R", (), {"returncode": 0})()
-    O._run_collection("youtube", d["state"], 21, auto=True, matrix="current")
+    # orchestrate passes the forced state as --initial-state (not the balance rule's); subprocess.run restored after
+    seen, real_run = {}, O.subprocess.run
+    try:
+        O.subprocess.run = lambda cmd: seen.setdefault("cmd", cmd) and type("R", (), {"returncode": 0})()
+        O._run_collection("youtube", d["state"], 21, auto=True, matrix="current")
+    finally:
+        O.subprocess.run = real_run
     assert seen["cmd"][seen["cmd"].index("--initial-state") + 1] == d["state"]
     src = (Path(__file__).resolve().parent / "orchestrate.py").read_text()
     assert 'initial_state=fi["state"] if fi else most_needed_state(' in src
+
+    h, cap, rule = mats["H"]                                   # am. 15 (6) as recorded (LVQoE 57cd519e)
+    assert (cap, rule) == (2, "stationary") and h["9"] == {"4": 0.05, "7": 0.05, "8": 0.15, "9": 0.45, "10": 0.30}
+    assert h["10"] == {"3": 0.05, "8": 0.10, "9": 0.25, "10": 0.60} and all(abs(sum(v.values()) - 1) < 1e-9 for v in h.values())
+    assert bands["Q_1080p"]["mass"]["H"] >= 0.25 and bands["Q_1080p"]["qualifies"] == ["H", "current"]
 
     def snap(n, minutes):
         cm = {c: 0.0 for c in C.CLASSES["youtube"]}
@@ -117,7 +125,32 @@ def test_am15_initial_state_and_low_yield():
     assert (x["best_matrix"], x["minutes_per_session"], x["sessions"]) == ("current", 0.33, 5), x
     assert not any(x["class"] == "Q_1080p" for x in C.low_yield(snap(4, 0.33), mats))     # under 5 sessions: not yet
     assert not any(x["class"] == "Q_1080p" for x in C.low_yield(snap(5, 0.5), mats))
-    assert x["unmeasured"] == {}
+    assert x["basis"] == "untargeted" and x["unmeasured"] == {"H": {"tier_sessions": 0, "targeted_sessions": 0}}, x
+    # levi: >= 5 sessions targeted at the class under (5) -> their mean (basis targeted), else the all-sessions mean
+    s = snap(9, 0.3)
+    s["per_matrix"]["current"]["targeted"] = {"Q_1080p": {"sessions": 5, "class_minutes_mean": 1.2}}
+    assert not any(x["class"] == "Q_1080p" for x in C.low_yield(s, mats))
+    s["per_matrix"]["current"]["targeted"] = {"Q_1080p": {"sessions": 5, "class_minutes_mean": 0.4}}
+    x = next(x for x in C.low_yield(s, mats) if x["class"] == "Q_1080p")
+    assert (x["basis"], x["minutes_per_session"], x["sessions"]) == ("targeted", 0.4, 5), x
+    s["per_matrix"]["current"]["targeted"] = {"Q_1080p": {"sessions": 4, "class_minutes_mean": 1.2}}
+    x = next(x for x in C.low_yield(s, mats) if x["class"] == "Q_1080p")
+    assert (x["basis"], x["minutes_per_session"], x["sessions"]) == ("untargeted", 0.3, 9), x
+    # the snapshot counts a session as targeted only with its record applied and its band start applied
+    tgt = {"kind": "class", "key": "Q_1080p"}
+    assert C.targeted_class({"coverage": {"applied": True, "target": tgt, "initial_state_forced": {"applied": True}}}) == "Q_1080p"
+    for cov in ({"applied": False, "target": tgt, "initial_state_forced": {"applied": True}},
+                {"applied": True, "target": tgt, "initial_state_forced": {"applied": False}},
+                {"applied": True, "target": tgt}, {"applied": True, "target": {"kind": "class", "key": "STALL"}}, {}):
+        assert C.targeted_class({"coverage": cov}) is None, cov
+    with tempfile.TemporaryDirectory() as d:
+        for i, (key, fi) in enumerate((("Q_1080p", True), ("Q_1080p", False), ("Q_720p", True))):
+            sd = session(d, "youtube", f"h{i}", [("Q_1080p", 90), ("Q_720p", 30)], matrix="H")
+            meta = json.loads((sd / "meta.json").read_text())
+            meta["coverage"] = {"applied": True, "target": {"kind": "class", "key": key}, "initial_state_forced": {"applied": fi}}
+            (sd / "meta.json").write_text(json.dumps(meta))
+        tg = C.snapshot(Path(d), "youtube")["per_matrix"]["H"]["targeted"]
+        assert tg == {"Q_1080p": {"sessions": 1, "class_minutes_mean": 1.5}, "Q_720p": {"sessions": 1, "class_minutes_mean": 0.5}}, tg
 
 
 def main():
@@ -155,23 +188,43 @@ def main():
         snap = C.snapshot(d, "youtube")
         defs = C.deficits(snap)
         assert defs[0]["key"] == "Q_1080p" and defs[0]["deficit"] == 5, defs
-        r = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"])
-        # Q am. 15 (3): only "current" puts >= 2/21 of its mass in Q_1080p's band (9-10); the target couples fullscreen
+        r = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"], ["A", "B", "current"])
+        # Q am. 15 (3): of A / B / current only "current" puts >= 2/21 of its mass in Q_1080p's band (9-10); the target
+        # couples fullscreen
         assert r["matrix"] == "current" and r["why"].startswith("explore"), r
         assert r["bands"]["Q_1080p"]["qualifies"] == ["current"] and r["geometry_forced"] == "fullscreen:1920x1080", r
+        # am. 15 (6): with yt-H defined it qualifies too and, without sessions, is explored first
+        r = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"])
+        assert r["bands"]["Q_1080p"]["qualifies"] == ["H", "current"] and r["matrix"] == "H", r
+        assert r["why"].startswith("explore") and r["geometry_forced"] == "fullscreen:1920x1080", r
         for i in range(2):
             session(d, "youtube", f"b{i}", [("Q_1080p", 60)] + allc[:-1], matrix="B")
             session(d, "youtube", f"c{i}", [("Q_1080p", 200)] + allc[:-1], matrix="current")
-        r = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"])
+        r = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"], ["A", "B", "current"])
         assert r["target"]["key"] == "Q_1080p" and r["matrix"] == "current", r       # most 1080p minutes per session
         rb = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"], ["A", "B"])
         # A / B cannot reach 1080p: unreachable, no other deficit -> rotation, the least-collected (B: 2 vs A: 5)
         assert (rb["matrix"], rb["unreachable_targets"], rb["default_rotation"], rb["target"]) == ("B", ["Q_1080p"], True, None), rb
-        r2 = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"])
+        r2 = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"], ["A", "B", "current"])
         assert json.dumps(r, sort_keys=True) == json.dumps(r2, sort_keys=True)      # deterministic
         tie = dict(snap, per_matrix={m: {"sessions": 3, "tier_sessions": 3, "stall_share": 0.1, "stall_onsets_mean": 2.0,
                                           "class_minutes_mean": dict.fromkeys(C.CLASSES["youtube"], 1.0)} for m in ("A", "B", "current")})
-        assert C.pick_matrix(tie, PLATFORM_MATRICES["youtube"])["matrix"] == "current"   # the only one reaching 1080p
+        assert C.pick_matrix(tie, PLATFORM_MATRICES["youtube"], ["A", "B", "current"])["matrix"] == "current"   # the only one reaching 1080p
+        # am. 15 (6): yt-H is drawn only for Q_1080p: never for another class (not even to explore), never by rotation
+        tie_h = dict(tie, per_matrix={**tie["per_matrix"], "H": dict(tie["per_matrix"]["A"])})
+        assert C.pick_matrix(tie_h, PLATFORM_MATRICES["youtube"])["matrix"] in ("H", "current")
+        q720 = dict(snap, classes={**{c: {"sessions_ge_min": 5, "minutes": 50} for c in snap["classes"]},
+                                   "Q_720p": {"sessions_ge_min": 0, "minutes": 0}})
+        r = C.pick_matrix(q720, PLATFORM_MATRICES["youtube"])
+        assert r["target"]["key"] == "Q_720p" and r["bands"]["Q_720p"]["qualifies"] == ["A", "current"], r
+        assert r["matrix"] != "H" and r["bands"]["Q_720p"]["mass"]["H"] > 0.5, r       # it reaches the band, not drawn
+        full = dict(snap, classes={c: {"sessions_ge_min": 5, "minutes": 50} for c in snap["classes"]})
+        r = C.pick_matrix(full, PLATFORM_MATRICES["youtube"])
+        assert r["default_rotation"] and r["matrix"] != "H", r                       # H has the fewest sessions (0)
+        stall = dict(full, classes={**full["classes"], "STALL": {"sessions_ge_min": 0, "minutes": 0}})
+        assert C.pick_matrix(stall, PLATFORM_MATRICES["youtube"])["matrix"] != "H"
+        assert C.drawable("youtube", "H", "Q_1080p") and not C.drawable("youtube", "H", None)
+        assert C.drawable("youtube", "A", None) and C.drawable("twitch", "TW-M", "STALL")
 
     # am. 5: STALL support = sessions with >= 3 onsets; minutes and the share are covariates (a long single stall and a
     # share far over the old band are no target); the STALL yield = mean onsets per session; all floors met -> default

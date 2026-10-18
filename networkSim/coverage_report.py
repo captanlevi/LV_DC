@@ -105,6 +105,13 @@ SUMMARY_FILE = "_summaries/coverage_last.json"
 INITIAL_STATE_RULE = ("Q am. 15 (5): a tier-class target starts in its band, drawn from the matrix's stationary "
                       "distribution restricted to the band")
 LOW_YIELD_MIN_PER_SESSION, LOW_YIELD_MIN_SESSIONS = 0.5, 5   # Q am. 15 (6): minutes per session, over >= 5 sessions
+MATRIX_TARGETS = {("youtube", "H"): ("Q_1080p",)}   # Q am. 15 (6): yt-H is drawn only for the Q_1080p target
+
+
+def drawable(platform: str, matrix_id: str, target_key: str | None) -> bool:
+    """A matrix in MATRIX_TARGETS is drawn only for its targets (never by the no-deficit rotation); any other always."""
+    only = MATRIX_TARGETS.get((platform, matrix_id))
+    return only is None or target_key in only
 
 
 def quality_class(w: float, h: float) -> str | None:
@@ -227,13 +234,23 @@ def entry_sessions(data_dir: Path, platform: str) -> list[tuple[Path, dict]]:
     return out
 
 
+def targeted_class(meta: dict) -> str | None:
+    """The tier class a session was steered at under am. 15 (5): its applied coverage record's class target, started
+    in the band (initial_state_forced applied); else None."""
+    cov = meta.get("coverage") or {}
+    tgt = cov.get("target") or {}
+    if cov.get("applied") and tgt.get("kind") == "class" and (cov.get("initial_state_forced") or {}).get("applied"):
+        return tgt.get("key")
+    return None
+
+
 def snapshot(data_dir: Path, platform: str) -> dict:
     classes = CLASSES[platform]
     cnt, mins = dict.fromkeys(classes, 0), dict.fromkeys(classes, 0.0)
     st_min = lab_min = 0.0
     entries, codecs = collections.Counter(), collections.Counter()
     pm = collections.defaultdict(lambda: {"n": 0, "n_tier": 0, "min": collections.Counter(), "stall": 0.0, "lab": 0.0,
-                                          "onsets": 0})
+                                          "onsets": 0, "tg_n": collections.Counter(), "tg_min": collections.Counter()})
     onsets, run_s = 0, []
     sessions = accepted_sessions(data_dir, platform)
     for sd in sessions:
@@ -254,6 +271,10 @@ def snapshot(data_dir: Path, platform: str) -> dict:
         m["onsets"] += sc["stall_onsets"]
         onsets += sc["stall_onsets"]
         run_s += sc["stall_runs_s"]
+        tc = targeted_class(meta)
+        if tc and tier_ok:                               # am. 15 (6): a session targeted at the class, band start (5)
+            m["tg_n"][tc] += 1
+            m["tg_min"][tc] += sc["minutes"].get(tc, 0.0)
         for c in classes:
             if c != "STALL" and not tier_ok:
                 continue
@@ -273,6 +294,8 @@ def snapshot(data_dir: Path, platform: str) -> dict:
                               "class_minutes_mean": {c: round(v["min"][c] / (v["n"] if c == "STALL" else v["n_tier"]), 3)
                                                      if (v["n"] if c == "STALL" else v["n_tier"]) else None for c in classes},
                               "stall_onsets_mean": round(v["onsets"] / v["n"], 3) if v["n"] else None,
+                              "targeted": {c: {"sessions": v["tg_n"][c], "class_minutes_mean": round(v["tg_min"][c] / v["tg_n"][c], 3)}
+                                           for c in sorted(v["tg_n"])},
                               "stall_share": round(v["stall"] / v["lab"], 4) if v["lab"] else None}
                           for k, v in sorted(pm.items())}}
     if platform == "tiktok":
@@ -304,7 +327,7 @@ def class_band(platform: str, cls: str) -> dict | None:
 
 def band_map(platform: str, matrices: dict, ids: list[str]) -> dict:
     """Per tier class: its band and each allowed matrix's stationary mass in it, and the matrices that qualify (mass
-    >= FLOOR_MINUTES / the session's episodes)."""
+    >= FLOOR_MINUTES / the session's episodes, and drawable for the class: MATRIX_TARGETS)."""
     thr = FLOOR_MINUTES / float(SESSION_EPISODES[platform])
     out = {}
     for cls in CLASSES[platform]:
@@ -313,7 +336,8 @@ def band_map(platform: str, matrices: dict, ids: list[str]) -> dict:
             continue
         mass = {m: round(sum(p for s, p in stationary_distribution(matrices[m][0]).items() if s in b["band"]), 4)
                 for m in ids}
-        out[cls] = {**b, "mass": mass, "min_mass": round(thr, 4), "qualifies": [m for m in ids if mass[m] >= thr]}
+        out[cls] = {**b, "mass": mass, "min_mass": round(thr, 4),
+                    "qualifies": [m for m in ids if mass[m] >= thr and drawable(platform, m, cls)]}
     return out
 
 
@@ -346,14 +370,17 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None) ->
            "snapshot": snap, "bands": bands, "unreachable_targets": unreachable, "default_rotation": False, "geometry_forced": None}
     pm = snap["per_matrix"]
     if not live:      # am. 15 (2): rotate, the least-collected allowed matrix first, ties to the lowest id
-        n = {m: (pm.get(m) or {}).get("sessions", 0) for m in ids}
-        m = min(ids, key=lambda x: (n[x], x))
+        rot = [m for m in ids if drawable(platform, m, None)] or ids         # am. 15 (6): never a target-only matrix
+        n = {m: (pm.get(m) or {}).get("sessions", 0) for m in rot}
+        m = min(rot, key=lambda x: (n[x], x))
         return {**rec, "matrix": m, "target": None, "yields": {}, "default_rotation": True,
                 "why": "no deficit: rotation, least-collected matrix" + (" (every deficit unreachable)" if defs else "")}
     tgt = live[0]
     if tgt["kind"] == "class" and tgt["key"] in bands:     # only matrices that reach the class's band
         ids = bands[tgt["key"]]["qualifies"]
         rec["geometry_forced"] = GEOMETRY_FOR_CLASS.get((platform, tgt["key"]))
+    else:                                                  # am. 15 (6): a target-only matrix, only for its targets
+        ids = [m for m in ids if drawable(platform, m, tgt["key"])] or ids
     if tgt["kind"] == "entry_state":
         yields = {m: round(stationary_distribution(matrices[m][0]).get(tgt["key"], 0.0), 6) for m in ids}
         why = "stationary probability of the state"
@@ -401,20 +428,30 @@ def choose(data_dir: Path, platform: str, allowed: list[str] | None = None) -> d
 
 
 def low_yield(snap: dict, matrices: dict) -> list[dict]:
-    """Q am. 15 (6): per tier class, its qualifying matrices (band_map over every defined matrix); among those with
-    >= LOW_YIELD_MIN_SESSIONS tier sessions the best mean minutes per session; listed when it is below
-    LOW_YIELD_MIN_PER_SESSION (a gap like yt_47's, visible). Qualifying matrices still below that many sessions are
-    reported beside it (their yield is not yet measured)."""
+    """Q am. 15 (6): per tier class, its qualifying matrices (band_map over every defined matrix), each one's yield:
+    over its >= LOW_YIELD_MIN_SESSIONS sessions targeted at the class under (5) (band start) when it has them (basis
+    "targeted"; levi: that is the case the steering asks about, the all-sessions mean understates it), else over its
+    >= LOW_YIELD_MIN_SESSIONS tier sessions (basis "untargeted"), else unmeasured. Listed when the best measured yield is
+    below LOW_YIELD_MIN_PER_SESSION (a gap like yt_47's, visible), with each matrix's basis and the unmeasured ones."""
     pm, out = snap["per_matrix"], []
     for cls, b in band_map(snap["platform"], matrices, sorted(matrices)).items():
-        n = {m: (pm.get(m) or {}).get("tier_sessions", 0) for m in b["qualifies"]}
-        measured = {m: (pm[m]["class_minutes_mean"].get(cls) or 0.0) for m in b["qualifies"] if n[m] >= LOW_YIELD_MIN_SESSIONS}
-        if not measured:
+        ys, unmeasured = {}, {}
+        for m in b["qualifies"]:
+            v = pm.get(m) or {}
+            tg = (v.get("targeted") or {}).get(cls) or {}
+            if tg.get("sessions", 0) >= LOW_YIELD_MIN_SESSIONS:
+                ys[m] = {"minutes": tg["class_minutes_mean"], "basis": "targeted", "sessions": tg["sessions"]}
+            elif v.get("tier_sessions", 0) >= LOW_YIELD_MIN_SESSIONS:
+                ys[m] = {"minutes": v["class_minutes_mean"].get(cls) or 0.0, "basis": "untargeted",
+                         "sessions": v["tier_sessions"]}
+            else:
+                unmeasured[m] = {"tier_sessions": v.get("tier_sessions", 0), "targeted_sessions": tg.get("sessions", 0)}
+        if not ys:
             continue
-        best = min(measured, key=lambda m: (-measured[m], m))
-        if measured[best] < LOW_YIELD_MIN_PER_SESSION:
-            out.append({"class": cls, "best_matrix": best, "minutes_per_session": measured[best], "sessions": n[best],
-                        "yields": measured, "unmeasured": {m: n[m] for m in b["qualifies"] if m not in measured}})
+        best = min(ys, key=lambda m: (-ys[m]["minutes"], m))
+        if ys[best]["minutes"] < LOW_YIELD_MIN_PER_SESSION:
+            out.append({"class": cls, "best_matrix": best, "minutes_per_session": ys[best]["minutes"],
+                        "basis": ys[best]["basis"], "sessions": ys[best]["sessions"], "yields": ys, "unmeasured": unmeasured})
     return out
 
 
@@ -509,7 +546,8 @@ def markdown(rep: dict) -> list[str]:
         md += ["", "deficits: " + (", ".join(f"{d['key']} {d['deficit']}" for d in v["deficits"]) or "none"),
                f"low_yield (best qualifying matrix < {LOW_YIELD_MIN_PER_SESSION} min / session over >= "
                f"{LOW_YIELD_MIN_SESSIONS} sessions): "
-               + (", ".join(f"{x['class']} ({x['best_matrix']}: {x['minutes_per_session']} over {x['sessions']})"
+               + (", ".join(f"{x['class']} ({x['best_matrix']}: {x['minutes_per_session']} over {x['sessions']} "
+                            f"{x['basis']})"
                             for x in v.get("low_yield", [])) or "none"), ""]
     return md
 
