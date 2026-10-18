@@ -686,6 +686,8 @@ if __name__ == "__main__":
     if SLOT is None:
         session_meta.write(session_dir, concurrency={"mode": "single"})
     else:
+        # the session's own mark epoch (its name's number), so the slot's previous session's conntrack marks miss it
+        SLOT = SLOT.with_epoch(int(session_dir.name.rsplit("_", 1)[1]))
         staging = trio_slots.staging_dir(session_dir)
         staging.mkdir(parents=True, exist_ok=True)
         SLOT_VARS[:] = trio_slots.make_vars(SLOT, staging)
@@ -734,6 +736,8 @@ if __name__ == "__main__":
     if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform), platform,
                                     args.geometry) == False:
         raise ValueError("Cannot open chrome with SSL key log enabled")
+    # trio: every Chrome process stays in the slot's cgroup (Chrome moves its browser process into a systemd scope)
+    sweeper = trio_slots.CgroupSweeper(SLOT, lambda: trio_slots.chrome_pid_of(SLOT)).start() if SLOT is not None else None
 
     browser = None
     abort_reason = None
@@ -841,6 +845,7 @@ if __name__ == "__main__":
         meta_extra["compute_load"] = load_sampler.stop()
         if SLOT is not None:   # never fatal: the finalise path below must run
             try:
+                TRIO["cgroup_sweeper"] = sweeper.stop() if sweeper is not None else None
                 TRIO["tc"] = tc_sampler.stop()
                 TRIO["socket_owner_end"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
                 TRIO["siblings"] = trio_slots.siblings(slots_log, session_dir.name,

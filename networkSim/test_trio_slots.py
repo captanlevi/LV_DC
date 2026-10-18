@@ -45,6 +45,42 @@ def test_tree_is_gate1s():
     assert up[0] == "mkdir -p /sys/fs/cgroup/lvdc.slice/yt" and up[1].startswith("nft add rule")
 
 
+def test_leak_fixes():
+    """pilot-0 read (levi 1a / 1b): socketless egress packets take their connection's mark from conntrack (our marks
+    only); a session's mark carries its epoch, so the slot's previous session's conntrack marks miss its filters; every
+    Chrome process is swept back into the slot's cgroup."""
+    up = T.shared_up_cmds(IF)
+    restore = [c for c in up if "lvdc restore" in c]
+    assert len(restore) == 1 and "meta mark 0 ct mark & 0xf0 == 0x10 meta mark set ct mark" in restore[0]
+    assert up.index(restore[0]) > up.index(next(c for c in up if "nft add chain" in c))
+    yt = T.SLOTS["youtube"]
+    e3 = yt.with_epoch(100003)
+    assert (e3.mark, e3.egress_class, e3.prio, e3.tag) == (0x311, "1:311", 10, "yt") and e3.record()["epoch"] == 3
+    assert yt.with_epoch(16).mark == 0x11 and T.SLOTS["tiktok"].with_epoch(5).mark == 0x513
+    j = "\n".join(T.slot_up_cmds(e3, IF))
+    assert "meta mark set 0x311 ct mark set meta mark" in j and "handle 0x311 fw" in j and "flowid 1:311" in j
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _proc(root, 100, 1, "/opt/google/chrome/chrome --remote-debugging-port=9223",
+              "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.google.Chrome-100.scope")
+        _proc(root, 101, 100, "chrome --type=utility --utility-sub-type=network.mojom.NetworkService", "0::/lvdc.slice/yt")
+        _proc(root, 102, 100, "chrome --type=utility --utility-sub-type=audio.mojom.AudioService",
+              "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.google.Chrome-100.scope")
+        moved = []
+
+        def mover(pid):
+            moved.append(pid)
+            (root / str(pid) / "cgroup").write_text("0::/lvdc.slice/yt\n")
+            return True
+        sw = T.CgroupSweeper(yt, lambda: 100, proc=root, mover=mover)
+        assert sw.sweep() == 2 and moved == [100, 102]
+        assert sw.sweep() == 0                                       # all in the slot now
+        rec = sw.stop()
+        assert rec["n_moves"] == 2 and rec["sweeps"] == 2 and rec["moves"][0]["from"].endswith("Chrome-100.scope")
+        assert T.socket_owner(100, yt, proc=root)["all_in_slot"]
+        assert T.CgroupSweeper(yt, lambda: None, proc=root, mover=mover).sweep() == 0
+
+
 def test_slot_down_touches_only_its_own():
     yt = T.SLOTS["youtube"]
     down = "\n".join(T.slot_down_cmds(yt, IF, nft_handle=7))
@@ -318,6 +354,8 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry")}
     saved_pf, saved_nft, saved_stage, saved_tpf = O.preflight.run, T.nft_handle_of, T.STAGING, T.trio_preflight
+    saved_ct = T.conntrack_timeouts
+    T.conntrack_timeouts = lambda proc=None: {"nf_conntrack_udp_timeout_stream": 120}
     T.trio_preflight = trio_pf or (lambda *a, **k: {"ok": True, "problems": [], "checks": {}})
     O._RUNS_DIR = tmp
     O._pick = lambda p, nl, now, rg, ex=(), root=None: calls.append(("pick", p, ex, root)) and None or (None, None, None)
@@ -349,6 +387,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
         for k, v in saved.items():
             setattr(O, k, v)
         O.preflight.run, T.nft_handle_of, T.STAGING, T.trio_preflight = saved_pf, saved_nft, saved_stage, saved_tpf
+        T.conntrack_timeouts = saved_ct
     return rc, calls
 
 
@@ -365,8 +404,9 @@ def test_run_trio():
         kinds = [c[0] for c in calls]
         up = next(i for i, c in enumerate(calls) if c[0] == "apply" and c[1].startswith("modprobe"))
         assert kinds[0] == "preclean" and up < kinds.index("matrix")          # shared tree before any session
-        last_apply = [c for c in calls if c[0] == "apply"][-1]
-        assert last_apply[1].startswith("tc qdisc del") and last_apply[2] is False      # the teardown, last
+        applies = [c for c in calls if c[0] == "apply"]
+        last_tree = [c for c in applies if not c[1].startswith("sysctl")][-1]
+        assert last_tree[1].startswith("tc qdisc del") and last_tree[2] is False         # the teardown, last
         assert [c for c in calls if c[0] == "make"] == [("make", "start-capture"), ("make", "stop-capture"),
                                                         ("make", "merge-capture")]
         for cmd, env, log in spawned:
@@ -383,6 +423,10 @@ def test_run_trio():
         assert "/_trio/_summaries/trio_logs/" in str(spawned[0][2])
         ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
         assert ev[0]["event"] == "trio_up" and ev[-1]["event"] == "trio_down" and ev[-1]["end_rc"] == 0
+        sysctl = [c[1] for c in calls if c[0] == "apply" and c[1].startswith("sysctl")]
+        assert sysctl == ["sysctl -w net.netfilter.nf_conntrack_udp_timeout_stream=3600",
+                          "sysctl -w net.netfilter.nf_conntrack_udp_timeout_stream=120"], sysctl   # set, then restored
+        assert ev[0]["conntrack_timeouts_before"] == {"nf_conntrack_udp_timeout_stream": 120}
         assert sorted(e["slot"] for e in ev if e["event"] == "exit") == ["tt", "tw", "yt"]
 
         # rolling: no max -> a slot is refilled when its session ends, until drained
@@ -396,7 +440,7 @@ def test_run_trio():
         spawned.clear()
         rc, calls = _trio(tmp, {"youtube": 5}, spawn, pf_ok=False)
         assert rc == O.EXIT_PREFLIGHT and not spawned
-        assert [c for c in calls if c[0] == "apply"][-1][1].startswith("tc qdisc del")
+        assert [c for c in calls if c[0] == "apply" and not c[1].startswith("sysctl")][-1][1].startswith("tc qdisc del")
 
         # the "fb" layout (design §4): the framebuffer grows to three widths for the run and is restored; X11 shots
         fbs = []
@@ -420,7 +464,7 @@ def test_run_trio():
         spawned.clear()
         rc, calls = _trio(tmp, {"youtube": 5}, spawn, layout="fb", xrandr=lambda fb: xr(fb, grow=False))
         assert rc == O.EXIT_PREFLIGHT and not spawned and fbs[-1] == "1920x1080"
-        assert [c for c in calls if c[0] == "apply"][-1][1].startswith("tc qdisc del")
+        assert [c for c in calls if c[0] == "apply" and not c[1].startswith("sysctl")][-1][1].startswith("tc qdisc del")
         os.environ.pop("LVDC_TRIO_LAYOUT", None)
         os.environ.pop("LVDC_TRIO_SCREEN", None)
 

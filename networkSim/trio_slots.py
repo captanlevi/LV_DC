@@ -24,7 +24,7 @@ import re
 import subprocess
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 CG_ROOT = Path("/sys/fs/cgroup")
@@ -78,9 +78,20 @@ class Slot:
 
     def record(self) -> dict:
         return {**asdict(self), "mark": f"{self.mark:#x}", "cgroup": self.cgroup, "ifb_in": self.ifb_in,
-                "ifb_out": self.ifb_out, "egress_class": self.egress_class}
+                "ifb_out": self.ifb_out, "egress_class": self.egress_class, "epoch": self.mark >> 8}
+
+    def with_epoch(self, k: int) -> "Slot":
+        """The slot's mark for one session: its base (low byte) with the epoch k mod MARK_EPOCHS above it. A session's
+        mark differs from the slot's previous session's, so conntrack entries a finished session left (the old
+        connections' late packets, restored by connmark) match no filter of the next one and stay out of its class and
+        capture (pilot-0 read, levi 1b)."""
+        return replace(self, mark=(self.mark & 0xFF) | ((k % MARK_EPOCHS) << 8))
 
 
+MARK_EPOCHS = 16
+# conntrack's UDP stream timeout while a trio runs (pilot-0 read, levi 1b: at the box's 120 s an idle QUIC flow lost its
+# entry and so its mark, and the server's next packets reached the unshaped default class); set by run_trio, restored
+TRIO_UDP_STREAM_TIMEOUT_S = 3600
 # marks and preferences as gate 1 (trio_dry_run.SESSIONS); CDP ports beside single mode's 9222
 SLOTS = {"youtube": Slot("youtube", "yt", 0x11, 9223, 10),
          "twitch": Slot("twitch", "tw", 0x12, 9224, 11),
@@ -122,6 +133,10 @@ def shared_up_cmds(iface: str = IFACE_DEFAULT) -> list[str]:
         c += [f"ip link add {d} type ifb", f"ip link set {d} up"]
     c += [f"mkdir -p {CG_ROOT / SLICE}", f"nft add table inet {NFT_TABLE}",
           f"nft add chain inet {NFT_TABLE} out '{{ type route hook output priority mangle; policy accept; }}'",
+          # a packet with no full socket (a TIME_WAIT ACK, a kernel RST) carries no cgroup, so the slot rules miss it:
+          # it takes its connection's mark from conntrack (our marks only: low byte 0x1X), as the ingress connmark does
+          f"nft add rule inet {NFT_TABLE} out 'meta mark 0 ct mark & 0xf0 == 0x10 meta mark set ct mark "
+          f"comment \"lvdc restore\"'",
           f"tc qdisc add dev {iface} handle ffff: ingress"]
     c += _mgmt_filters(iface, "ffff:", "action ok")
     c += [f"tc filter add dev {iface} parent ffff: protocol all prio 5 matchall action connmark continue",
@@ -292,6 +307,78 @@ def _cgroup_of(pid: int, proc: Path) -> str | None:
         return None
 
 
+def chrome_tree(chrome_pid: int, table: dict) -> list[int]:
+    """The Chrome instance's processes (its pid and every descendant) from _proc_table."""
+    tree, todo = [chrome_pid], [chrome_pid]
+    while todo:
+        p = todo.pop()
+        kids = sorted(k for k, (pp, _) in table.items() if pp == p and k not in tree)
+        tree += kids
+        todo += kids
+    return tree
+
+
+class CgroupSweeper:
+    """Keeps every process of the session's Chrome in the slot's cgroup (pilot-0 read, levi 1a: Chrome moved its own
+    browser process into a systemd scope, app.slice/app-com.google.Chrome-<pid>.scope, and what it forked afterwards
+    followed; the network service, forked before, stayed). Each sweep moves any process of the tree outside the slot
+    back into it (root writes cgroup.procs); every move is recorded. Fast sweeps over the first FAST_S, then SLOW_S."""
+    FAST_S, FAST_EVERY_S, SLOW_EVERY_S = 120.0, 0.5, 5.0
+
+    def __init__(self, slot: Slot, pid_fn, proc: Path = Path("/proc"), mover=None, clock=time.time):
+        self.slot, self.pid_fn, self.proc, self.clock = slot, pid_fn, proc, clock
+        self.mover = mover or self._move
+        self.moves: list[dict] = []
+        self.sweeps = 0
+        self._stop = threading.Event()
+        self._t: threading.Thread | None = None
+        self._t0 = clock()
+
+    def _move(self, pid: int) -> bool:
+        r = subprocess.run(["sudo", "-n", "tee", str(CG_ROOT / self.slot.cgroup / "cgroup.procs")], input=f"{pid}\n",
+                           text=True, capture_output=True)
+        return r.returncode == 0
+
+    def sweep(self) -> int:
+        pid = self.pid_fn()
+        if not pid:
+            return 0
+        table = _proc_table(self.proc)
+        if pid not in table:
+            return 0
+        self.sweeps += 1
+        want, n = f"0::/{self.slot.cgroup}", 0
+        for p in chrome_tree(pid, table):
+            cg = _cgroup_of(p, self.proc)
+            if cg is not None and cg != want:
+                ok = self.mover(p)
+                n += 1
+                self.moves.append({"t": round(self.clock(), 3), "pid": p, "from": cg, "ok": ok, "cmd": table[p][1][:60]})
+        return n
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                self.sweep()
+            except Exception:
+                pass
+            fast = self.clock() - self._t0 < self.FAST_S
+            self._stop.wait(self.FAST_EVERY_S if fast else self.SLOW_EVERY_S)
+
+    def start(self) -> "CgroupSweeper":
+        self._t0 = self.clock()
+        self._t = threading.Thread(target=self._run, name="cgroup_sweeper", daemon=True)
+        self._t.start()
+        return self
+
+    def stop(self) -> dict:
+        self._stop.set()
+        if self._t is not None:
+            self._t.join(timeout=10)
+        return {"sweeps": self.sweeps, "n_moves": len(self.moves), "moves": self.moves[:50],
+                "first_move_s": round(self.moves[0]["t"] - self._t0, 2) if self.moves else None}
+
+
 def socket_owner(chrome_pid: int | None, slot: Slot, proc: Path = Path("/proc")) -> dict:
     """Supervisor v3, the socket-owner statement: the Chrome instance's process tree, its network service process
     (it opens the sockets the nft rule matches) and every process's cgroup; `all_in_slot` when each is in the slot's
@@ -304,12 +391,7 @@ def socket_owner(chrome_pid: int | None, slot: Slot, proc: Path = Path("/proc"))
         return {"chrome_pid": chrome_pid, "why": repr(e)}
     if chrome_pid not in table:
         return {"chrome_pid": chrome_pid, "why": "chrome pid not running"}
-    tree, todo = [chrome_pid], [chrome_pid]
-    while todo:
-        p = todo.pop()
-        kids = sorted(k for k, (pp, _) in table.items() if pp == p and k not in tree)
-        tree += kids
-        todo += kids
+    tree = chrome_tree(chrome_pid, table)
     want = f"0::/{slot.cgroup}"
     cg = {p: _cgroup_of(p, proc) for p in tree}
     ns = [p for p in tree if "network.mojom.NetworkService" in table[p][1]]

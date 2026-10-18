@@ -603,7 +603,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
         apply(T.slot_down_cmds(s, iface, T.nft_handle_of(s)), check=False)
     apply(T.shared_down_cmds(iface), check=False)
     xrandr = xrandr or _xrandr
-    screen = fb = dstage = ddir = None
+    screen = fb = dstage = ddir = ct_before = None
     try:
         apply(T.shared_up_cmds(iface))
         os.environ["LVDC_TRIO_LAYOUT"] = layout
@@ -616,13 +616,18 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                 end_rc = EXIT_PREFLIGHT
         # every name the run's sessions use is then asked upstream within the run, so it reaches a DNS capture (v3 §8)
         flush = apply(["resolvectl flush-caches"], check=False)
+        # an idle QUIC flow keeps its conntrack entry, so its mark, through the session (levi 1b); restored at the end
+        ct_before = T.conntrack_timeouts()
+        ct_set = apply([f"sysctl -w net.netfilter.nf_conntrack_udp_timeout_stream={T.TRIO_UDP_STREAM_TIMEOUT_S}"],
+                       check=False)
         dstage = T.STAGING / f"default_{run_id}"
         dstage.mkdir(parents=True, exist_ok=True)
         ddir = troot / T.DEFAULT_CAPTURE / run_id
         make(["start-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
         T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
                                        "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
-                                       "conntrack_timeouts": T.conntrack_timeouts(), "resolver_cache_flushed": flush[0],
+                                       "conntrack_timeouts_before": ct_before, "conntrack_timeouts": T.conntrack_timeouts(),
+                                       "conntrack_set": ct_set[0], "resolver_cache_flushed": flush[0],
                                        "layout": layout, "screen": screen, "framebuffer": fb})
         print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {run_id} up: {targets}, max per slot {max_per_slot}, "
               f"layout {layout}")
@@ -678,10 +683,14 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
             make(["stop-capture"] + T.default_capture_vars(dstage))
             make(["merge-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
         down = apply(T.shared_down_cmds(iface), check=False)
+        ct_restored = None
+        if ct_before and ct_before.get("nf_conntrack_udp_timeout_stream"):
+            ct_restored = apply([f"sysctl -w net.netfilter.nf_conntrack_udp_timeout_stream="
+                                 f"{ct_before['nf_conntrack_udp_timeout_stream']}"], check=False)[0]
         restored = xrandr(f"{screen[0]}x{screen[1]}") if screen else None
         T.slots_log_append(slots_log, {"event": "trio_down", "run": run_id, "t": time.time(), "end_rc": end_rc,
                                        "signal": stop_signal[:1], "teardown_failed": [x["cmd"] for x in down if x["rc"]],
-                                       "framebuffer_restored": restored})
+                                       "framebuffer_restored": restored, "conntrack_restored": ct_restored})
         _consume_drain("done")
         for s, h in old.items():
             signal.signal(s, h)
