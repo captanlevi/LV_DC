@@ -117,7 +117,7 @@ def test_check_recovered_and_censored():
     lab = CS.label_checks(cut + tail, "twitch", None, rec)
     assert lab["recovered_frozen"] and lab["frozen_playhead_max_s"] < 660
     ok = E.session_class("twitch", "PASS", None, [], None, None, lab["frozen_playhead_max_s"], 660,
-                         recovered=bool(lab["recovered_frozen"]))
+                         recovered_frozen=bool(lab["recovered_frozen"]))
     assert ok == "normal"
     # one recovery of either kind: with a player_dead recovery too, nothing is excluded
     assert CS.recovered_frozen(cut + tail, rec, n_dead_recovered=1)["recovered"] is None

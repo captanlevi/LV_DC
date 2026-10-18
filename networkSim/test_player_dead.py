@@ -120,7 +120,8 @@ def test_precedence():
     assert C("youtube", "FAIL", None, ok, None, None, 10, 180) == "qa_fail"
     assert C("youtube", "PASS", None, ok, None, None, 10, 180) == "normal"
     assert list(E.CLASS_PRECEDENCE) == ["not_live", "login_wall", "interrupted", "startup_failure", "room_ended",
-                                        "player_dead", "player_dead_recovered", "player_frozen", "qa_fail", "normal"]
+                                        "player_dead", "player_dead_recovered", "player_frozen",
+                                        "player_frozen_recovered", "qa_fail", "normal"]
     assert E.RECOVERED_DEAD_CLASS == "normal"          # levi (a); player_dead_recovered is read only under option (b)
 
 
@@ -282,6 +283,42 @@ def test_media_snapshot_is_capped(mp):
     snap = b._media_snapshot()
     assert snap["timed_out"] and "videos" not in snap and _t.time() - t0 < B.MEDIA_SNAPSHOT_MAX_S + 0.5, snap
 
+def test_class_switches_and_boundaries():
+    """levi's FROZEN_COLLECTOR audit (2026-10-18). F1: a recovered dead run and a recovered frozen run each have their own
+    class switch (RECOVERED_DEAD_CLASS / RECOVERED_FROZEN_CLASS, both "normal"); flipping one moves only its own kind.
+    F2 (Q am. 12): dead fails at >= T, frozen above T; both sides pinned, in session_class and in check_session's verdict
+    (both use entries.dead_over_t / frozen_over_t)."""
+    C = E.session_class
+    for kw in ({"recovered_dead": True}, {"recovered_frozen": True}):
+        assert C("twitch", "PASS", None, [], None, None, 10, 660, **kw) == "normal"
+    old = E.RECOVERED_DEAD_CLASS, E.RECOVERED_FROZEN_CLASS
+    try:
+        E.RECOVERED_DEAD_CLASS = "player_dead_recovered"
+        assert C("tiktok", "PASS", None, [], 10, 60, 10, 720, recovered_dead=True) == "player_dead_recovered"
+        assert C("twitch", "PASS", None, [], None, None, 10, 660, recovered_frozen=True) == "normal"
+        E.RECOVERED_DEAD_CLASS = old[0]
+        E.RECOVERED_FROZEN_CLASS = "player_frozen_recovered"
+        assert C("twitch", "PASS", None, [], None, None, 10, 660, recovered_frozen=True) == "player_frozen_recovered"
+        assert C("tiktok", "PASS", None, [], 10, 60, 10, 720, recovered_dead=True) == "normal"
+        assert list(E.CLASS_PRECEDENCE).index("player_frozen_recovered") == list(E.CLASS_PRECEDENCE).index("player_frozen") + 1
+    finally:
+        E.RECOVERED_DEAD_CLASS, E.RECOVERED_FROZEN_CLASS = old
+    T, TICK = 60, 1.0
+    assert not E.dead_over_t(T - TICK, T) and E.dead_over_t(T, T)                    # dead: T - 1 tick passes, T fails
+    assert C("tiktok", "PASS", None, [], T - TICK, T, 0, 720) == "normal" and C("tiktok", "PASS", None, [], T, T, 0, 720) == "player_dead"
+    F = 660
+    assert not E.frozen_over_t(F, F) and E.frozen_over_t(F + TICK, F)                # frozen: T passes, T + 1 tick fails
+    assert C("twitch", "PASS", None, [], None, None, F, F) == "normal" and C("twitch", "PASS", None, [], None, None, F + TICK, F) == "player_frozen"
+    assert not E.dead_over_t(None, T) and not E.frozen_over_t(F, None)
+    import check_session as CS                                                       # the verdict, the same boundaries
+    net = {"pcap": True, "packets": 1, "ssl_keys": True}
+
+    def why(**lab):
+        base = {"n_res_meta": 100, "tick_presence": 1.0, "v2_columns": True, "frozen_playhead_T_s": F, "dead_player_T_s": T}
+        return " | ".join(CS.verdict({**base, **lab}, net, {}, [], 0.0)[1])
+    assert "player_dead" not in why(dead_player_max_s=T - TICK) and "player_dead" in why(dead_player_max_s=T)
+    assert "player_frozen" not in why(frozen_playhead_max_s=F) and "player_frozen" in why(frozen_playhead_max_s=F + TICK)
+
 
 def test_one_reentry_then_the_session_ends():
     """supervisor ruling 2026-10-18: one re-entry of the same room on player_dead, then a death ends the session; the
@@ -414,7 +451,7 @@ def test_ti37_recovered_reads_normal():
     assert [(e["kind"], e.get("reason"), e["shaper_at_entry"]["state"]) for e in ents] == \
         [("stream", None, "unshaped"), ("room_reentry", "player_dead", "3")], ents   # (3): a shaped entry, counted
     assert E.startup_rates(ents)["room_reentry:3"] == {"entries": 1, "failed": 0, "rate": 0.0}
-    cls = lambda dd, v="PASS": E.session_class("tiktok", v, None, ents, dd["max_s"], T, 0, 900, recovered=bool(dd["recovered"]))
+    cls = lambda dd, v="PASS": E.session_class("tiktok", v, None, ents, dd["max_s"], T, 0, 900, recovered_dead=bool(dd["recovered"]))
     assert cls(d) == "normal"
     # a second long dead run 300 s later, not recovered -> player_dead (one recovery per session)
     t_shift = 300_000
@@ -448,6 +485,7 @@ def main() -> int:
     test_ti32_dead_after_end_with_the_stream_alive()
     test_ti43_dead_window_reference()
     test_media_listener_records()
+    test_class_switches_and_boundaries()
     test_one_reentry_then_the_session_ends()
     for t in (test_reenter_room_records_an_entry, test_ti33_reentry_window, test_media_snapshot_is_capped):
         mp = _Patch()

@@ -813,10 +813,10 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
         if not lab.get("v2_columns"):
             why.append("labels.csv lacks the v2 columns (old extension loaded?)")
         fz, T = lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s")
-        if T is not None and fz is not None and fz > T and abort_reason != "player_frozen":
+        if E.frozen_over_t(fz, T) and abort_reason != "player_frozen":
             why.append(f"player_frozen: playhead frozen {fz:.0f} s in a stall > T {T} s (addendum N)")
         dr, DT = lab.get("dead_player_max_s"), lab.get("dead_player_T_s")
-        if DT is not None and dr is not None and dr >= DT and abort_reason != "player_dead":
+        if E.dead_over_t(dr, DT) and abort_reason != "player_dead":
             why.append(f"player_dead: no media (readyState 0) for {dr:.0f} s after playback >= T {DT} s")
         sa = lab.get("stall_advancing_share")
         if sa is not None and sa > STALL_ADVANCING_SHARE_MAX:
@@ -894,7 +894,8 @@ def main() -> int:
         ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_max_s"),
                               lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"),
-                              recovered=bool(lab.get("recovered_dead") or lab.get("recovered_frozen")))
+                              recovered_dead=bool(lab.get("recovered_dead")),
+                              recovered_frozen=bool(lab.get("recovered_frozen")))
     slow_start = E.slow_start_shaped(ents)
     sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
     import decode_path as DP

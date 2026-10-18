@@ -15,13 +15,16 @@ SUSTAIN_RUN_S = 5.0
 SLOW_START_MAX_STATE = 2
 NOT_LIVE_MARK = "Failed to navigate to a live"     # browser.py's start failure (yt / twitch: no live stream to enter)
 CLASS_PRECEDENCE = ("not_live", "login_wall", "interrupted", "startup_failure", "room_ended", "player_dead",
-                    "player_dead_recovered", "player_frozen", "qa_fail", "normal")
+                    "player_dead_recovered", "player_frozen", "player_frozen_recovered", "qa_fail", "normal")
 # levi 2026-10-18 ruling (a) on the tt player_dead re-entry (peter's ti_37-39 read): the dead run that contains an
 # outcome-continue re-entry's t_nav is not the player_dead verdict / class; it is reported as recovered_dead_s with its
 # window (a covariate, labels unchanged). With no other FAIL the session reads this class: "normal" = (a), counts toward
 # quotas; "player_dead_recovered" = option (b), kept and not counted. One recovery per session: a second recovered run
 # excludes nothing (player_dead).
 RECOVERED_DEAD_CLASS = "normal"
+# the same treatment for a recovered frozen run (Q am. 6; levi's FROZEN_COLLECTOR audit F1, 2026-10-18), under its own
+# name and switch: "normal" counts toward quotas, "player_frozen_recovered" is kept and not counted
+RECOVERED_FROZEN_CLASS = "normal"
 RECOVERY_SLACK_S = 2.0      # t_nav may fall this far outside the run's first / last dead tick (tick spacing ~1 s)
 
 
@@ -193,11 +196,22 @@ def dead_player(rows: list[dict], reentries: list[dict] | None) -> dict:
     return out
 
 
+def dead_over_t(run_s: float | None, t: float | None) -> bool:
+    """The player_dead boundary (Q am. 12): a dead run fails at >= T."""
+    return t is not None and run_s is not None and run_s >= t
+
+
+def frozen_over_t(run_s: float | None, t: float | None) -> bool:
+    """The player_frozen boundary (Q am. 12): a frozen run fails above T (> T)."""
+    return t is not None and run_s is not None and run_s > t
+
+
 def session_class(platform: str, verdict: str, abort_reason: str | None, entries: list[dict],
                   dead_run_s: float | None, dead_t: float | None, frozen_s: float | None, frozen_t: float | None,
-                  recovered: bool = False) -> str:
-    """levi's precedence: not_live > login_wall > interrupted > startup_failure > room_ended > player_dead >
-    player_frozen > qa_fail > normal. A start failure is not_live on yt / twitch (no live stream to enter) and a
+                  recovered_dead: bool = False, recovered_frozen: bool = False) -> str:
+    """levi's precedence (Q am. 12): not_live > login_wall > interrupted > startup_failure > room_ended > player_dead >
+    (player_dead_recovered) > player_frozen > (player_frozen_recovered) > qa_fail > normal; the recovered classes only
+    when their RECOVERED_*_CLASS switch is not "normal". Boundaries: dead at >= T, frozen at > T (Q am. 12). A start failure is not_live on yt / twitch (no live stream to enter) and a
     startup_failure on tt (live rooms were found but none played)."""
     ab = abort_reason or ""
     start_failed = NOT_LIVE_MARK in ab
@@ -212,12 +226,14 @@ def session_class(platform: str, verdict: str, abort_reason: str | None, entries
         return "startup_failure"
     if ab == "room_ended":
         return "room_ended"
-    if ab == "player_dead" or (dead_t is not None and dead_run_s is not None and dead_run_s >= dead_t):
+    if ab == "player_dead" or dead_over_t(dead_run_s, dead_t):
         return "player_dead"
-    if recovered and RECOVERED_DEAD_CLASS != "normal":
+    if recovered_dead and RECOVERED_DEAD_CLASS != "normal":
         return RECOVERED_DEAD_CLASS
-    if ab == "player_frozen" or (frozen_t is not None and frozen_s is not None and frozen_s > frozen_t):
+    if ab == "player_frozen" or frozen_over_t(frozen_s, frozen_t):
         return "player_frozen"
+    if recovered_frozen and RECOVERED_FROZEN_CLASS != "normal":
+        return RECOVERED_FROZEN_CLASS
     if verdict != "PASS":
         return "qa_fail"
     return "normal"
