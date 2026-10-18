@@ -152,6 +152,10 @@ def shared_up_cmds(iface: str = IFACE_DEFAULT) -> list[str]:
           f"tc class add dev {iface} parent 1: classid 1:20 htb rate 1000mbit",
           f"tc class add dev {iface} parent 1: classid 1:30 htb rate 1000mbit"]
     c += _mgmt_filters(iface, "1:", "flowid 1:20")
+    # egress too restores the mark from conntrack (pilot-0b: tt's kernel RSTs answering a closed connection's late
+    # packets reached the default class: conntrack left them without an entry, so nft's ct mark restore could not see
+    # it; tc's connmark looks the connection up by its tuple itself, as at ingress)
+    c.append(f"tc filter add dev {iface} parent 1: protocol all prio 5 matchall action connmark continue")
     c.append(f"tc filter add dev {iface} parent 1: protocol all prio {ORPHAN_PRIO} handle 0x10/0xf0 fw action drop")
     c.append(f"tc filter add dev {iface} parent 1: protocol all prio 50 matchall flowid 1:30 "
              f"action mirred egress mirror dev lvo_def")
