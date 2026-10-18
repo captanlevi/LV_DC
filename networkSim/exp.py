@@ -747,6 +747,12 @@ if __name__ == "__main__":
         # v2: the TLS keys (<session_dir>/ssl_keys.log) and raw decoder outputs stay in the session dir
 
         save_json(session_dir / "net_labels.txt", net_labels)
+        if platform == "tiktok":   # supervisor 2026-10-18: the stream regime (codec, ladder) per session, from http_v2
+            try:
+                from tt_stream import tt_stream_regime
+                session_meta.write(session_dir, tt_stream=tt_stream_regime(session_dir))
+            except Exception as e:
+                print(f"tt_stream failed: {e!r}")
         print(f"Run complete → {session_dir}")
         change_perm(session_dir)
         try:   # addendum O: the screenshot motion cross-check (ground truth, motion.jsonl); never fatal

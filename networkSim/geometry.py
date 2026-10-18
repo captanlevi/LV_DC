@@ -6,6 +6,9 @@ meta.json (geometry_target); client_w / client_h per tick are in labels.csv alre
 
   player:WxH  the window is resized until the <video> element measures W x H (browser.pin_player)
   window:WxH  the window is set to W x H (clamped to the screen), the player takes what the page layout gives it
+  theater:WxH (yt only) the window as window:WxH, then yt's theater mode (the player's size button), so the player
+              exceeds 720 device px tall where the viewport allows (supervisor 2026-10-18: no 1080p in 30 sessions,
+              the 1263x710 / 855x481 players most likely capped yt's ABR at 720p)
 
 Sessions collected before rotation (pinned sizes) carry only player_pin.target in meta.json; they count as
 player:<target>, so the rotation first evens the other entries out.
@@ -16,7 +19,7 @@ import json
 from pathlib import Path
 
 GEOMETRY_CHOICES: dict[str, list[str]] = {
-    "youtube": ["player:853x480", "player:1280x720", "window:1920x1080"],
+    "youtube": ["player:853x480", "player:1280x720", "window:1920x1080", "theater:1920x1080"],
     "twitch": ["player:1274x717", "window:1920x1080"],          # chat open on twitch (CLOSE_CHAT_DEFAULT)
     "tiktok": ["player:783x604", "player:537x880", "window:1920x1080"],
 }
@@ -25,8 +28,8 @@ GEOMETRY_CHOICES: dict[str, list[str]] = {
 def parse(spec: str) -> tuple[str, int, int]:
     mode, wh = spec.split(":", 1)
     w, h = wh.lower().split("x")
-    if mode not in ("player", "window"):
-        raise ValueError(f"geometry mode must be player or window: {spec}")
+    if mode not in ("player", "window", "theater"):
+        raise ValueError(f"geometry mode must be player, window or theater: {spec}")
     return mode, int(w), int(h)
 
 

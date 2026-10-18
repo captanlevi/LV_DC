@@ -70,7 +70,48 @@ def test_captions_off():
     assert captions(True, True, sticky=True) == {"r": "click-failed", "clicks": 1}
 
 
+THEATER_STUB = r"""
+const [has_flexy, theater, has_button] = JSON.parse(process.argv[2]);
+let clicks = 0;
+const f = {attrs: new Set(theater ? ['theater'] : []), hasAttribute(a) { return this.attrs.has(a); }};
+const b = {click() { clicks++; f.attrs.add('theater'); }};
+global.document = {querySelector: s => ({'ytd-watch-flexy': has_flexy ? f : null, '.ytp-size-button': has_button ? b : null})[s] ?? null};
+console.log(JSON.stringify({r: JSON.parse(eval(process.argv[1])), clicks}));
+"""
+
+
+def test_theater():
+    """supervisor 2026-10-18 (no 1080p on yt): geometry theater:WxH = window W x H, then yt's theater mode, once."""
+    import geometry as G
+    assert G.parse("theater:1920x1080") == ("theater", 1920, 1080)
+    assert "theater:1920x1080" in G.GEOMETRY_CHOICES["youtube"] and "player:853x480" in G.GEOMETRY_CHOICES["youtube"]
+    assert not any(c.startswith("theater") for c in G.GEOMETRY_CHOICES["twitch"] + G.GEOMETRY_CHOICES["tiktok"])
+    run = lambda *a: json.loads(subprocess.run([shutil.which("node"), "-e", THEATER_STUB, B._YT_THEATER_JS, json.dumps(list(a))],
+                                               capture_output=True, text=True, check=True).stdout)
+    assert run(True, False, True) == {"r": {"action": "clicked"}, "clicks": 1}
+    assert run(True, True, True) == {"r": {"action": "already"}, "clicks": 0}           # never toggles it off
+    assert run(True, False, False)["r"] == {"action": "no-button"}
+    assert run(False, False, True)["r"] == {"action": "no-flexy"}
+
+    class Page:
+        def __init__(self):
+            self.n = 0
+        def eval(self, js):
+            self.n += 1
+            return json.dumps({"action": "clicked"}) if js == B._YT_THEATER_JS else \
+                json.dumps({"on": True, "player": [1818, 812], "dpr": 1})
+    r = B.yt_theater(Page(), settle_s=0)
+    assert r == {"action": "clicked", "on": True, "player": [1818, 812], "dpr": 1, "player_device_px_h": 812}, r
+
+
+def test_yt_top_quality():
+    import yt_channels as Y
+    html = '{"qualityLabel":"144p"},{"qualityLabel":"720p60"},{"qualityLabel":"1080p60"},{"qualityLabel":"1440p60"}'
+    assert Y.top_quality(html) == 1440 and Y.top_quality('{"qualityLabel":"720p"}') == 720 and Y.top_quality("") is None
+
+
 def main() -> int:
+    test_yt_top_quality()
     if not shutil.which("node"):
         print("SKIP: node not found")
         return 0
@@ -92,6 +133,7 @@ def main() -> int:
     assert sc["x11_player_shot_scale"] == round(640 / 1706, 5), sc
     assert B.geometry_scales({"player_rect": None, "viewport": [1280, 720]}) is None
     test_captions_off()
+    test_theater()
     print("test_geometry_rect: ok")
     return 0
 

@@ -38,15 +38,16 @@ def main() -> int:
     a.log.parent.mkdir(parents=True, exist_ok=True)
     for h in a.handles:
         errors: list = []
-        row = {"ts": time.time(), "handle": h, "state": Y.yt_live_state(h, errors=errors), "host": socket.gethostname(),
-               "url": Y.url_of(h)}
+        probe = Y.yt_live_probe(h, errors=errors)
+        row = {"ts": time.time(), "handle": h, "state": probe["state"], "top_height": probe["top_height"],
+               "host": socket.gethostname(), "url": Y.url_of(h)}
         if errors:
             row["error"] = errors[0]
         with open(a.log, "a") as fh:
             fh.write(json.dumps(row) + "\n")
         rows = [json.loads(l) for l in a.log.read_text().splitlines() if l.strip()]
         st = Y.promotion_status(rows, h)
-        print(f"{h}: {row['state']} | promotion {'PASSED' if st['passed'] else 'not yet'} "
+        print(f"{h}: {row['state']} (top {row['top_height']}p) | promotion {'PASSED' if st['passed'] else 'not yet'} "
               f"({len(st['checks'])} live checks >= {Y.PROMOTE_MIN_GAP_S // 3600} h apart, "
               f"span {(st['checks'][-1] - st['checks'][0]) / 3600 if st['checks'] else 0:.1f} h of {Y.PROMOTE_SPAN_S // 3600} h)")
     return 0

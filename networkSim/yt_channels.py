@@ -265,17 +265,30 @@ def classify_live_page(final_url: str, html: str) -> str:
     return "unknown"
 
 
-def yt_live_state(handle: str, timeout: float = 12.0, errors: list | None = None) -> str:
-    """Fetch the channel's /live page and classify it; 'unknown' on any error (fail open; the error is appended to
-    `errors` when given)."""
+def top_quality(html: str) -> int | None:
+    """The tallest quality the /live page's player response offers (qualityLabel "1080p60" -> 1080), None when the page
+    lists none (supervisor 2026-10-18: which channels offer 1080p+ at all)."""
+    hs = [int(m) for m in re.findall(r'"qualityLabel"\s*:\s*"(\d+)p', html)]
+    return max(hs) if hs else None
+
+
+def yt_live_probe(handle: str, timeout: float = 12.0, errors: list | None = None) -> dict:
+    """Fetch the channel's /live page: {state (live / not_live / unknown, fail open), top_height (top_quality)}."""
     try:
         req = urllib.request.Request(url_of(handle), headers=PROBE_HEADERS)
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return classify_live_page(r.geturl(), r.read(3_000_000).decode("utf-8", "replace"))
+            html = r.read(3_000_000).decode("utf-8", "replace")
+            return {"state": classify_live_page(r.geturl(), html), "top_height": top_quality(html)}
     except Exception as e:
         if errors is not None:
             errors.append(repr(e)[:300])
-        return "unknown"
+        return {"state": "unknown", "top_height": None}
+
+
+def yt_live_state(handle: str, timeout: float = 12.0, errors: list | None = None) -> str:
+    """Fetch the channel's /live page and classify it; 'unknown' on any error (fail open; the error is appended to
+    `errors` when given)."""
+    return yt_live_probe(handle, timeout, errors)["state"]
 
 
 def pick_live_channel(data_dir: Path, exclude: set[str] | None = None, probe=yt_live_state) -> tuple[dict, list[dict]]:

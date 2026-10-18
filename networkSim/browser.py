@@ -841,6 +841,45 @@ def size_window(page: "CDPPage", target: tuple[int, int], target_id: str | None)
     return trace
 
 
+# yt theater mode (geometry theater:WxH): the player's own size button, once, when the page is not in theater already;
+# the result and the player size after it are recorded (meta.json player_pin.theater). Layout only, never quality.
+_YT_THEATER_JS = """
+(function() {
+    const f = document.querySelector('ytd-watch-flexy');
+    if (!f) return JSON.stringify({action: 'no-flexy'});
+    let action = 'already';
+    if (!f.hasAttribute('theater')) {
+        const b = document.querySelector('.ytp-size-button');
+        if (!b) return JSON.stringify({action: 'no-button'});
+        b.click();
+        action = 'clicked';
+    }
+    return JSON.stringify({action});
+})()
+"""
+_YT_THEATER_STATE_JS = """
+(function() {
+    const f = document.querySelector('ytd-watch-flexy');
+    const v = document.querySelector('#movie_player video');
+    return JSON.stringify({on: !!(f && f.hasAttribute('theater')), player: v ? [v.clientWidth, v.clientHeight] : null,
+                           dpr: window.devicePixelRatio || 1});
+})()
+"""
+
+
+def yt_theater(page: "CDPPage", settle_s: float = 1.5) -> dict:
+    """Switch yt to theater mode and read back the state; never raises."""
+    try:
+        rec = json.loads(page.eval(_YT_THEATER_JS) or "{}")
+        time.sleep(settle_s)
+        rec.update(json.loads(page.eval(_YT_THEATER_STATE_JS) or "{}"))
+        p, dpr = rec.get("player"), rec.get("dpr") or 1
+        rec["player_device_px_h"] = round(p[1] * dpr) if p else None
+        return rec
+    except Exception as exc:
+        return {"action": "error", "error": repr(exc)}
+
+
 # Window / viewport / player geometry (meta.json): the player size decides the top of yt's ladder. player_rect is the
 # largest visible <video>'s bounding rect in viewport CSS px [x, y, w, h] (supervisor 2026-10-17, brad's R-O audit: the
 # motion crop is derived per session from it, without detection); control_band is the player's own control bar where
@@ -1857,6 +1896,8 @@ class BrowserSession:
                 self.player_pin = pin_player(self._page, (gw, gh), tid)
             else:
                 self.player_pin = size_window(self._page, (gw, gh), tid)
+                if mode == "theater":
+                    self.player_pin["theater"] = yt_theater(self._page) if self.platform == "youtube" else "not yt"
             self.player_pin["geometry_target"] = self.geometry_target
             print(f"[browser] Geometry {self.geometry_target}: {self.player_pin}", flush=True)
         try:
