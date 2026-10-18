@@ -8,6 +8,7 @@ drain, preflight / spawn failures drain instead of tearing down under running si
 """
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import time
@@ -299,7 +300,8 @@ class FakeProc:
         return self.rc
 
 
-def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None):
+def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
+          xrandr=None):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry")}
@@ -328,7 +330,8 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
         rc = O.run_trio(targets, "A", iface=IF, capacity_kbit=104100.0, max_per_slot=max_per_slot, stagger_s=0,
                         spawn=spawn, apply=lambda cmds, check=True: calls.append(("apply", cmds[0], check)) or
                         [{"cmd": c, "rc": 0} for c in cmds],
-                        make=lambda args: calls.append(("make", args[0])) or 0, sleep=sleep)
+                        make=lambda args: calls.append(("make", args[0])) or 0, sleep=sleep, layout=layout,
+                        xrandr=xrandr)
     finally:
         for k, v in saved.items():
             setattr(O, k, v)
@@ -380,6 +383,32 @@ def test_run_trio():
         rc, calls = _trio(tmp, {"youtube": 5}, spawn, pf_ok=False)
         assert rc == O.EXIT_PREFLIGHT and not spawned
         assert [c for c in calls if c[0] == "apply"][-1][1].startswith("tc qdisc del")
+
+        # the "fb" layout (design §4): the framebuffer grows to three widths for the run and is restored; X11 shots
+        fbs = []
+
+        def xr(fb, grow=True):
+            fbs.append(fb)
+            if fb is None:
+                return (1920, 1080)
+            return tuple(int(x) for x in fb.split("x")) if grow else (1920, 1080)
+        spawned.clear()
+        rc, _ = _trio(tmp, {"youtube": 5, "tiktok": 5}, spawn, layout="fb", xrandr=xr)
+        assert rc == 0 and fbs == [None, "5760x1080", "1920x1080"], fbs
+        assert all(e["LVQOE_SHOT_SOURCE"] == "x11" and e["LVDC_TRIO_LAYOUT"] == "fb" and e["LVDC_TRIO_SCREEN"] == "1920x1080"
+                   for _, e, _ in spawned)
+        lay = {T.slot_of(c[c.index("--slot") + 1]).tag: T.layout_of(T.slot_of(c[c.index("--slot") + 1]), e)
+               for c, e, _ in spawned}
+        assert lay["yt"]["origin"] == [0, 0] and lay["tt"]["origin"] == [3840, 0] and lay["tt"]["x_screen_px"] == [5760, 1080]
+        assert T.layout_of(T.SLOTS["twitch"], {}) == {"layout": "cdp"}
+        # it did not grow (a window manager that keeps the screen): no session, EXIT_PREFLIGHT, restored, torn down
+        fbs.clear()
+        spawned.clear()
+        rc, calls = _trio(tmp, {"youtube": 5}, spawn, layout="fb", xrandr=lambda fb: xr(fb, grow=False))
+        assert rc == O.EXIT_PREFLIGHT and not spawned and fbs[-1] == "1920x1080"
+        assert [c for c in calls if c[0] == "apply"][-1][1].startswith("tc qdisc del")
+        os.environ.pop("LVDC_TRIO_LAYOUT", None)
+        os.environ.pop("LVDC_TRIO_SCREEN", None)
 
         # a spawn failure in one slot drains: the running sibling finishes before the teardown
         order = []

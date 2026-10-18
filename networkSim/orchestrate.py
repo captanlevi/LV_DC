@@ -508,8 +508,9 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
                           episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix, channel=channel,
                           geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
-    # trio v1 shots: CDP (three windows on one screen; X11 crops need the enlarged framebuffer, design §4)
-    env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVQOE_SHOT_SOURCE": "cdp", "LVDC_PREFLIGHT_JSON": str(pf_path)}
+    # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4)
+    env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
+           "LVQOE_SHOT_SOURCE": "x11" if os.environ.get("LVDC_TRIO_LAYOUT") == "fb" else "cdp"}
     started[p] += 1
     log = troot / TRIO_LOGS / run_id / f"{s.tag}_{started[p]}.log"
     print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {p} slot ({s.tag}) session {started[p]}: "
@@ -522,10 +523,20 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     return True
 
 
+def _xrandr(fb: str | None):
+    """`xrandr --fb <fb>` (None: no change); the X screen's size after it, (w, h)."""
+    if fb:
+        subprocess.run(["xrandr", "--fb", fb], capture_output=True, text=True, timeout=15)
+    out = subprocess.run(["xrandr", "--current"], capture_output=True, text=True, timeout=15).stdout
+    import re
+    m = re.search(r"current (\d+) x (\d+)", out)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
 def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = True, iface: str = "wlp0s20f3",
              capacity_kbit: float | None = None, max_per_slot: int | None = None,
-             stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S,
-             spawn=_spawn, apply=None, make=_make, sleep=time.sleep) -> int:
+             stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S, layout: str = "cdp",
+             spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None) -> int:
     """One slot per platform (trio_slots.SLOTS), each refilled when its session ends (A1), until every platform has its
     target of PASS trio sessions (counted in the trio's own data root, data/_trio/<platform>: single mode never sees
     them), or `max_per_slot` sessions started per slot (the pilot: 1). Trio v1 draws no fullscreen geometry, and a
@@ -536,6 +547,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     remainder's capture, then the slots; no orchestrator-wide preclean while a slot runs (a slot cleans only its own
     pieces, exp.py slot_up). Drain (TRIO_DRAIN_FILE, or SIGINT / SIGTERM, which are also passed to every running
     session) stops refilling; once every slot has ended the default capture is merged and the shared tree removed.
+    layout: "cdp" (pilot-0: windows at the origin, CDP shots) or "fb" (design §4: the X framebuffer enlarged to three
+    monitor widths for the run, restored at its end; slot k's window at k x the width; X11 shots).
     Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT when that ended it."""
     import signal
     import trio_slots as T
@@ -572,18 +585,30 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     for s in T.SLOTS.values():
         apply(T.slot_down_cmds(s, iface, T.nft_handle_of(s)), check=False)
     apply(T.shared_down_cmds(iface), check=False)
-    apply(T.shared_up_cmds(iface))
-    # every name the run's sessions use is then asked upstream within the run, so it reaches a DNS capture (v3 §8)
-    flush = apply(["resolvectl flush-caches"], check=False)
-    dstage = T.STAGING / f"default_{run_id}"
-    dstage.mkdir(parents=True, exist_ok=True)
-    ddir = troot / T.DEFAULT_CAPTURE / run_id
-    make(["start-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
-    T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
-                                   "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
-                                   "conntrack_timeouts": T.conntrack_timeouts(), "resolver_cache_flushed": flush[0]})
-    print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {run_id} up: {targets}, max per slot {max_per_slot}")
+    xrandr = xrandr or _xrandr
+    screen = fb = dstage = ddir = None
     try:
+        apply(T.shared_up_cmds(iface))
+        os.environ["LVDC_TRIO_LAYOUT"] = layout
+        if layout == "fb":               # design §4: room for three non-overlapping windows beside the monitor
+            screen = xrandr(None)
+            fb = xrandr(f"{len(T.SLOTS) * screen[0]}x{screen[1]}") if screen else None
+            os.environ["LVDC_TRIO_SCREEN"] = f"{screen[0]}x{screen[1]}" if screen else ""
+            if not screen or not fb or fb[0] < len(T.SLOTS) * screen[0]:
+                print(f"  TRIO: the framebuffer did not grow (screen {screen}, now {fb}): no session starts")
+                end_rc = EXIT_PREFLIGHT
+        # every name the run's sessions use is then asked upstream within the run, so it reaches a DNS capture (v3 §8)
+        flush = apply(["resolvectl flush-caches"], check=False)
+        dstage = T.STAGING / f"default_{run_id}"
+        dstage.mkdir(parents=True, exist_ok=True)
+        ddir = troot / T.DEFAULT_CAPTURE / run_id
+        make(["start-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
+        T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
+                                       "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
+                                       "conntrack_timeouts": T.conntrack_timeouts(), "resolver_cache_flushed": flush[0],
+                                       "layout": layout, "screen": screen, "framebuffer": fb})
+        print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {run_id} up: {targets}, max per slot {max_per_slot}, "
+              f"layout {layout}")
         while True:
             for p, r in list(running.items()):
                 rc = r["proc"].poll()
@@ -633,11 +658,14 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                 r["proc"].wait(timeout=900)
             except Exception as e:
                 print(f"  ({p}: {e!r})")
-        make(["stop-capture"] + T.default_capture_vars(dstage))
-        make(["merge-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
+        if ddir is not None:
+            make(["stop-capture"] + T.default_capture_vars(dstage))
+            make(["merge-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
         down = apply(T.shared_down_cmds(iface), check=False)
+        restored = xrandr(f"{screen[0]}x{screen[1]}") if screen else None
         T.slots_log_append(slots_log, {"event": "trio_down", "run": run_id, "t": time.time(), "end_rc": end_rc,
-                                       "signal": stop_signal[:1], "teardown_failed": [x["cmd"] for x in down if x["rc"]]})
+                                       "signal": stop_signal[:1], "teardown_failed": [x["cmd"] for x in down if x["rc"]],
+                                       "framebuffer_restored": restored})
         _consume_drain("done")
         for s, h in old.items():
             signal.signal(s, h)
@@ -737,6 +765,9 @@ if __name__ == "__main__":
     parser.add_argument("--link-capacity-kbit", type=float, default=None,
                         help="--concurrent: the measured multi-stream goodput (the gate 1 dry run); each session records "
                              "it and flags seconds whose summed slot rates exceed it (L-A2).")
+    parser.add_argument("--trio-layout", choices=["cdp", "fb"], default="cdp",
+                        help="--concurrent: cdp = windows at the origin, CDP shots (pilot-0); fb = the X framebuffer "
+                             "enlarged to three monitor widths, one window per width, X11 shots (design §4; pilot-1).")
     parser.add_argument("--max-per-slot", type=int, default=None,
                         help="--concurrent: stop refilling a slot after this many sessions (the pilot: 1).")
     parser.add_argument("--iface", default=os.environ.get("LVDC_IFACE", "wlp0s20f3"),
@@ -768,7 +799,8 @@ if __name__ == "__main__":
             sys.exit(f"unknown platform(s) in --batch: {unknown}")
         if args.concurrent:
             sys.exit(run_trio(targets, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry,
-                              iface=args.iface, capacity_kbit=args.link_capacity_kbit, max_per_slot=args.max_per_slot))
+                              iface=args.iface, capacity_kbit=args.link_capacity_kbit, max_per_slot=args.max_per_slot,
+                              layout=args.trio_layout))
         run_batch(targets, auto=True, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry)
         sys.exit(0)
 

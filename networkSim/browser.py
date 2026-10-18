@@ -780,6 +780,12 @@ def _next_window_dim(samples: list[tuple[int, int]], target: int, cur_win: int) 
     return int(round(w + (target - pl) * w / max(pl, 1) * 0.9))
 
 
+# t53 trio layout "fb" (design §4): each slot's window sits at its own origin on an X framebuffer enlarged beyond the
+# monitor (xrandr --fb), so X11 crops of the three never overlap. Single mode: (0, 0) and None, behaviour unchanged.
+WINDOW_ORIGIN: tuple[int, int] = (0, 0)
+X_SCREEN_PX: tuple[int, int] | None = None     # the X root's size when it is larger than the page's screen
+
+
 def pin_player(page: "CDPPage", target: tuple[int, int], target_id: str | None, iters: int = 8) -> dict:
     """Resize the browser window until the <video> client size is within PIN_TOLERANCE of `target`. Ends on the
     closest window seen when the target is not reached (screen- or layout-bound). Returns the trace for meta.json;
@@ -792,6 +798,10 @@ def pin_player(page: "CDPPage", target: tuple[int, int], target_id: str | None, 
             trace["error"] = "no window id"
             return trace
         _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
+        if WINDOW_ORIGIN != (0, 0):         # trio "fb" layout: the slot's own origin (single mode never moves it)
+            _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"left": WINDOW_ORIGIN[0],
+                                                                                   "top": WINDOW_ORIGIN[1]}})
+            trace["origin"] = list(WINDOW_ORIGIN)
         scr = json.loads(page.eval("JSON.stringify([screen.availWidth, screen.availHeight])") or "[0, 0]")
         trace["screen_avail"] = scr
         sw, sh = [], []
@@ -857,7 +867,8 @@ def size_window(page: "CDPPage", target: tuple[int, int], target_id: str | None)
         if scr[0] and scr[1]:
             w, h = min(w, scr[0]), min(h, scr[1])
         _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "normal"}})
-        _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"left": 0, "top": 0, "width": w, "height": h}})
+        _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"left": WINDOW_ORIGIN[0], "top": WINDOW_ORIGIN[1],
+                                                                               "width": w, "height": h}})
         time.sleep(1.5)
         got = _browser_call("Browser.getWindowBounds", {"windowId": wid}).get("bounds") or {}
         ps = page.eval(_PLAYER_SIZE_JS)
@@ -2042,8 +2053,9 @@ def calibrate_shot_origin(page: "CDPPage") -> dict:
         vx, vy, vw, vh = model
         ax, ay = max(0, vx - M), max(0, vy - M)
         bx, by = vx + vw + M, vy + vh + M
-        if sw and sh:                                  # never grab beyond the screen
-            bx, by = min(bx, sw), min(by, sh)
+        lim = X_SCREEN_PX or (sw, sh)                  # never grab beyond the screen (trio "fb": the X root)
+        if lim[0] and lim[1]:
+            bx, by = min(bx, lim[0]), min(by, lim[1])
         area = ImageGrab.grab(bbox=(ax, ay, bx, by), xdisplay=os.environ.get("DISPLAY") or ":0")
         shot = page.call("Page.captureScreenshot", {"format": "png", "fromSurface": True, "captureBeyondViewport": False})
         rec["capture_s"] = round(time.time() - t0, 3)

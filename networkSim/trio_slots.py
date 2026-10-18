@@ -84,6 +84,17 @@ SLOTS = {"youtube": Slot("youtube", "yt", 0x11, 9223, 10),
          "tiktok": Slot("tiktok", "tt", 0x13, 9225, 12)}
 
 
+def layout_of(s: Slot, env) -> dict:
+    """The slot's window layout from run_trio's environment: "cdp" (pilot-0: windows at the origin, CDP shots) or
+    "fb" (design §4: the X framebuffer enlarged to len(SLOTS) monitor widths, slot k's window at k x the width)."""
+    lay = env.get("LVDC_TRIO_LAYOUT") or "cdp"
+    if lay != "fb":
+        return {"layout": lay}
+    w, h = (int(x) for x in env["LVDC_TRIO_SCREEN"].split("x"))
+    k = list(SLOTS).index(s.platform)
+    return {"layout": "fb", "screen": [w, h], "x_screen_px": [w * len(SLOTS), h], "origin": [k * w, 0], "index": k}
+
+
 def slot_of(tag_or_platform: str) -> Slot:
     for s in SLOTS.values():
         if tag_or_platform in (s.tag, s.platform):

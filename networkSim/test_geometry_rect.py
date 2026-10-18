@@ -258,7 +258,44 @@ def test_fullscreen_window_and_screen_checks():
     assert CS.fullscreen_player_lt_screen({"player_pin": {"fullscreen": {"player": [1920, 1080], "screen": [1920, 1080]}}}) is None
 
 
+def test_trio_window_origin():
+    """t53 trio "fb" layout: size_window / pin_player put the window at the slot's origin; single mode (origin 0, 0)
+    keeps size_window's left 0 / top 0 and pin_player never moves the window."""
+    bounds = []
+
+    def bc(method, params=None):
+        if method == "Browser.getWindowForTarget":
+            return {"windowId": 7, "bounds": {"width": 1280, "height": 800}}
+        if method == "Browser.setWindowBounds":
+            bounds.append(params["bounds"])
+        if method == "Browser.getWindowBounds":
+            return {"bounds": {"width": 1920, "height": 1080}}
+        return {}
+
+    class P:
+        def eval(self, js, await_promise=False):
+            return json.dumps([1920, 1080]) if "availWidth" in js else json.dumps([853, 480])
+    real = B._browser_call
+    B._browser_call = bc
+    try:
+        B.size_window(P(), (1920, 1080), "T1")
+        assert bounds[-1] == {"left": 0, "top": 0, "width": 1920, "height": 1080}, bounds
+        bounds.clear()
+        B.pin_player(P(), (853, 480), "T1")
+        assert not any("left" in b for b in bounds), bounds                   # single mode: never moved
+        B.WINDOW_ORIGIN = (3840, 0)
+        bounds.clear()
+        B.size_window(P(), (1920, 1080), "T1")
+        assert bounds[-1] == {"left": 3840, "top": 0, "width": 1920, "height": 1080}, bounds
+        bounds.clear()
+        r = B.pin_player(P(), (853, 480), "T1")
+        assert {"left": 3840, "top": 0} in bounds and r["origin"] == [3840, 0], (bounds, r)
+    finally:
+        B._browser_call, B.WINDOW_ORIGIN = real, (0, 0)
+
+
 def main() -> int:
+    test_trio_window_origin()
     test_yt_top_quality()
     test_fullscreen_window_and_screen_checks()
     test_device_scale_variant()

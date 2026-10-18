@@ -57,6 +57,7 @@ SYSTEM_TICK : float = 0.1
 SLOT = None
 SLOT_VARS: list[str] = []
 TRIO: dict = {}          # the trio session's meta.json concurrency record, built as the session runs
+CHROME_EXTRA: list[str] = []   # trio "fb" layout: the window's position at launch; [] in single mode
 trio_slots = None        # the module, imported only with --slot
 
 
@@ -165,7 +166,7 @@ def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window
         import geometry
         run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"]
             + ([f"WINDOW_SIZE={window_size}"] if window_size else [])
-            + geometry.merge_make_vars(decode_path.make_vars(platform or ""), geometry.chrome_args(geometry_spec))
+            + geometry.merge_make_vars(decode_path.make_vars(platform or ""), geometry.chrome_args(geometry_spec) + CHROME_EXTRA)
             + SLOT_VARS)
         return True
     except Exception as e:
@@ -634,6 +635,10 @@ if __name__ == "__main__":
             parser.error(f"--slot {args.slot} is the {SLOT.platform} slot and needs --auto")
         import browser as _browser_mod          # every CDP call of browser.py and session_meta goes to the slot's port
         _browser_mod.CDP_BASE = session_meta.CDP_BASE = f"http://localhost:{SLOT.cdp_port}"
+        LAYOUT = trio_slots.layout_of(SLOT, os.environ)  # design §4: the "fb" layout puts each slot at its own origin
+        if LAYOUT["layout"] == "fb":
+            _browser_mod.WINDOW_ORIGIN, _browser_mod.X_SCREEN_PX = tuple(LAYOUT["origin"]), tuple(LAYOUT["x_screen_px"])
+            CHROME_EXTRA[:] = [f"--window-position={LAYOUT['origin'][0]},{LAYOUT['origin'][1]}"]
     signal.signal(signal.SIGINT, signal.default_int_handler)
 
     def _term(*_):
@@ -687,6 +692,7 @@ if __name__ == "__main__":
         import browser as _browser_mod
         TRIO.update(trio_slots.concurrency_record(
             SLOT, staging=str(staging), link_capacity_kbit=args.link_capacity_kbit, shot_source=_browser_mod.SHOT_SOURCE,
+            layout=LAYOUT,
             trio_run=os.environ.get("LVDC_TRIO_RUN"), slots_log=str(slots_log)))
         session_meta.write(session_dir, concurrency=TRIO)
         trio_slots.slots_log_append(slots_log, {"event": "start", "slot": SLOT.tag, "session": session_dir.name,
