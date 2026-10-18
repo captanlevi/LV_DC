@@ -28,7 +28,7 @@ TOP = {"session": str, "platform": str, "verdict": str, "session_class": str, "e
        "meta_missing": list, "player_stats": (dict, NONE), "motion": (dict, NONE), "matrix": (str, NONE),
        "low_state_cap": (int, NONE), "stream_regime": (dict, NONE), "suspicious": list, "censored": (dict, NONE),
        "lowest_rung": (dict, NONE), "decode_path": (dict, NONE), "decode_hevc": (dict, NONE),
-       "template_note": (str, NONE)}
+       "template_note": (str, NONE), "entry_quality": (dict, NONE)}
 LABELS = ["ad_span_seconds", "ad_spans_per_signal", "ad_spans_span_type_set", "ad_ticks_per_signal",
           "advancing_share_while_playing", "dead_player_T_s", "dead_player_max_all_s", "dead_player_max_s",
           "duration_s", "frozen_playhead_T_s", "frozen_playhead_max_all_s", "frozen_playhead_max_s",

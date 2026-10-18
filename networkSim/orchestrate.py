@@ -125,6 +125,7 @@ def _prompt_ready(platform: str, initial_state: str | None) -> bool:
     return ans != "q"
 
 
+ENTRY_QUALITY = False   # --entry-quality: pass exp.py --entry-quality (Q am. 1 / am. 10; yt / twitch; default off)
 DPMS_OFF = False   # --dpms-off: pass exp.py --dpms-off (chaos: re-blank the monitor after each session's window resize)
 # shaper matrix per platform (yt t38; tt / twitch prereg addendum M) and the tt room-rotation fallback (seconds or None)
 MATRIX_IDS: dict[str, str] = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}
@@ -167,6 +168,8 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
         cmd += ["--geometry", geom]
     if DPMS_OFF:
         cmd += ["--dpms-off"]
+    if ENTRY_QUALITY and platform in ("youtube", "twitch"):
+        cmd += ["--entry-quality"]
     print(f"\n  Running: {' '.join(cmd)}")
     return subprocess.run(cmd).returncode
 
@@ -469,6 +472,12 @@ if __name__ == "__main__":
         help="exp.py --dpms-off for every session: `xset dpms force off` after the browser start (opt-in).",
     )
     parser.add_argument(
+        "--entry-quality",
+        action="store_true",
+        help="exp.py --entry-quality for every yt / twitch session (Q am. 1 / am. 10; default off until its tests, the "
+             "laptop live check and the 3-per-platform chaos pilot pass).",
+    )
+    parser.add_argument(
         "--fixed-geometry",
         action="store_true",
         help="--batch: keep each platform's pinned player size instead of rotating geometry.py's list (rushi t37: rotate).",
@@ -493,6 +502,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     DPMS_OFF = args.dpms_off
+    ENTRY_QUALITY = args.entry_quality
     MATRIX_IDS = {"youtube": args.yt_matrix, "tiktok": args.tt_matrix, "twitch": args.tw_matrix}
     TT_ROOM_ROTATION_S = args.tt_room_rotation
     MATRIX_RULE = args.matrix_rule

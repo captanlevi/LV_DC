@@ -4,7 +4,7 @@ changes the experiment). Every value below must equal fixtures/frozen_constants.
 measure (Python and content.js), the stuck rule (T2, rung margin, re-entry windows, recoveries, rung fallbacks), the tt
 dead-player rule and its diagnostics, the classes and their switches, the entry rule, the QA checks, the shaper
 matrices (tables, low-state caps, initial-state rules), the low-state window, the episodes, the coverage rule and
-floors, and the per-platform decode path. A deliberate change edits the json in the same commit
+floors, the per-platform decode path, and the entry-quality exception (Q am. 10; off by default). A deliberate change edits the json in the same commit
 (`python3 test_frozen_constants.py --write`) with a FROZEN_COLLECTOR.md change-log row.
 
     python3 test_frozen_constants.py            (exit 0 = pass)
@@ -25,6 +25,7 @@ import browser as B  # noqa: E402
 import check_session as CS  # noqa: E402
 import coverage_report as CR  # noqa: E402
 import decode_path as DP  # noqa: E402
+import entry_quality as EQ  # noqa: E402
 import entries as E  # noqa: E402
 import geometry as GEO  # noqa: E402
 import orchestrate as O  # noqa: E402
@@ -82,6 +83,10 @@ def current() -> dict:
                      "DEFAULT_MATRIX": CR.DEFAULT_MATRIX, "FLAG_AFTER_SESSIONS": CR.FLAG_AFTER_SESSIONS},
         "decode_path": {"PLATFORM_DECODE": DP.PLATFORM_DECODE, "DEFAULT": DP.DEFAULT},
         "geometry": {"GEOMETRY_CHOICES": GEO.GEOMETRY_CHOICES},
+        "entry_quality": {"ENTRY_QUALITY_PLATFORMS": EQ.ENTRY_QUALITY_PLATFORMS, "ENTRY_RULE": EQ.ENTRY_RULE,
+                          "AD_WAIT_S": EQ.AD_WAIT_S, "PICK_HOLD_MAX_S": EQ.PICK_HOLD_MAX_S,
+                          "SETTLE_RECORD_S": EQ.SETTLE_RECORD_S, "MIN_OPTIONS": EQ.MIN_OPTIONS,
+                          "YT_QUALITY_HEIGHT": EQ.YT_QUALITY_HEIGHT, "orchestrate_default_on": O.ENTRY_QUALITY},
     }))
 
 

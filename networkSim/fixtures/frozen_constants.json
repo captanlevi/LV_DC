@@ -72,6 +72,29 @@
   "SUSTAIN_RUN_S": 5.0,
   "SUSTAIN_WINDOW_S": 60.0
  },
+ "entry_quality": {
+  "AD_WAIT_S": 60.0,
+  "ENTRY_QUALITY_PLATFORMS": [
+   "youtube",
+   "twitch"
+  ],
+  "ENTRY_RULE": "entry-tier-v1 (Q am. 1 / am. 10): largest class deficit among the offered tiers, ties higher, else top",
+  "MIN_OPTIONS": 2,
+  "PICK_HOLD_MAX_S": 15.0,
+  "SETTLE_RECORD_S": 120.0,
+  "YT_QUALITY_HEIGHT": {
+   "hd1080": 1080,
+   "hd1440": 1440,
+   "hd2160": 2160,
+   "hd720": 720,
+   "highres": 4320,
+   "large": 480,
+   "medium": 360,
+   "small": 240,
+   "tiny": 144
+  },
+  "orchestrate_default_on": false
+ },
  "episodes": {
   "EPISODES_V2": {
    "tiktok": 23,

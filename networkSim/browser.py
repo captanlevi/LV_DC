@@ -1919,8 +1919,14 @@ class BrowserSession:
     """
 
     def __init__(self, platform: str, session_dir: Path | None = None, close_chat: bool | None = None,
-                 first_url: str | None = None, geometry: str | None = None, room_rotation_s: float | None = None):
+                 first_url: str | None = None, geometry: str | None = None, room_rotation_s: float | None = None,
+                 entry_quality: dict | None = None):
         self.platform = platform
+        # Q am. 1 / am. 10: the entry-quality pick (entry_quality.py), only with exp.py --entry-quality on yt / twitch;
+        # the config holds the coverage snapshot the entry tier is chosen from; the result goes to meta.json
+        import entry_quality as EQ
+        self.entry_quality_cfg = entry_quality if platform in EQ.ENTRY_QUALITY_PLATFORMS else None
+        self.entry_quality: dict | None = None
         # addendum M: login state (meta.json) and the tt room-rotation fallback (None = off; seconds between rooms)
         self.login_state: dict | None = None
         self.room_rotation_s = room_rotation_s if platform == "tiktok" else None
@@ -2067,6 +2073,7 @@ class BrowserSession:
         if not self.list_url:
             raise RuntimeError(f"Failed to navigate to a live {self.platform} stream")
 
+        self._t_entry = time.time()   # the stream entry: Q am. 10's 60 s for an ad-free pick count from here
         try:
             self.channel_url = self._page.eval("location.href")
         except Exception:
@@ -2167,6 +2174,8 @@ class BrowserSession:
         )
         self._watcher.start()
         print("[browser] Ad-watcher running", flush=True)
+        if self.entry_quality_cfg is not None:
+            self._entry_quality_pick()
 
         if self.platform == "tiktok":
             self._room_watcher = threading.Thread(target=self._room_watch_loop, daemon=True, name="room-watch")
@@ -2492,6 +2501,29 @@ class BrowserSession:
         self.frozen_reentries.append(r)
         return r
 
+    def _entry_quality_pick(self) -> None:
+        """Q am. 10 (entry_quality.py): the once-per-session pick at the unshaped entry, before exp.py starts the shaper;
+        then the settle trace in the background. A failure is recorded; after a click the state decides auto_restored."""
+        import entry_quality as EQ
+        drv = EQ.Driver(self._page, self.platform)
+        try:
+            rec = EQ.entry_pick(drv, self.entry_quality_cfg.get("snapshot"), getattr(self, "_t_entry", None))
+        except Exception as exc:
+            rec = {"rule": EQ.ENTRY_RULE, "error": repr(exc)[:200], "selected": None, "menu_available": None}
+            try:
+                rec["auto_restored"], rec["verify"] = EQ.verify_auto(self.platform, drv.state())
+            except Exception:
+                rec["auto_restored"] = False
+        self.entry_quality = rec
+        print(f"[browser] Entry quality: selected {rec.get('selected')}, auto_restored {rec.get('auto_restored')}, "
+              f"{rec.get('reason') or ''}", flush=True)
+        if rec.get("t_auto"):
+            def settle() -> None:
+                rec["settle_trace"] = EQ.settle_trace(EQ.Driver(self._page, self.platform), stop=self._stop.is_set)
+                rec["t_settle_s"] = EQ.t_settle(self.platform, rec["settle_trace"], rec["t_auto"],
+                                                (rec.get("choice") or {}).get("target_height"))
+            threading.Thread(target=settle, daemon=True, name="entry-quality-settle").start()
+
     def _after_reentry_setup(self) -> dict:
         """What start() did after the entry that a page load undoes: the chat closed, yt captions off and theater mode,
         twitch Video Stats; and the geometry after it."""
@@ -2506,6 +2538,9 @@ class BrowserSession:
                     out["theater"] = yt_theater(self._page)
             if self.platform == "twitch":
                 out["video_stats"] = self._page.eval(_TWITCH_VIDEO_STATS_JS, await_promise=True)
+            if (self.entry_quality or {}).get("t_auto"):   # Q am. 10: a failed restore persists in the profile
+                import entry_quality as EQ
+                out["entry_quality"] = EQ.reentry_check(EQ.Driver(self._page, self.platform))
             out["geometry"] = json.loads(self._page.eval(_GEOMETRY_JS) or "null")
         except Exception as exc:
             out["error"] = repr(exc)[:200]
