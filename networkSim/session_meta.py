@@ -44,24 +44,66 @@ def chrome_version(cdp_base: str | None = None) -> dict:
         return {"browser": None, "error": repr(e)}
 
 
-def chrome_cmdline(cdp_base: str | None = None) -> dict:
+def browser_pid_cdp(cdp_base: str | None = None) -> int | None:
+    """The browser process's pid over CDP (SystemInfo.getProcessInfo, type "browser"); None when it cannot be read."""
+    try:
+        import websocket
+        with urllib.request.urlopen(f"{cdp_base or CDP_BASE}/json/version", timeout=5) as r:
+            ws_url = json.loads(r.read())["webSocketDebuggerUrl"]
+        ws = websocket.create_connection(ws_url, timeout=5)
+        try:
+            ws.send(json.dumps({"id": 1, "method": "SystemInfo.getProcessInfo"}))
+            for _ in range(100):
+                m = json.loads(ws.recv())
+                if m.get("id") == 1:
+                    procs = (m.get("result") or {}).get("processInfo") or []
+                    return next((int(x["id"]) for x in procs if x.get("type") == "browser"), None)
+        finally:
+            ws.close()
+    except Exception:
+        return None
+    return None
+
+
+def proc_argv(raw: bytes) -> tuple[list[str], bool]:
+    """(argv, title_rewritten) from /proc/<pid>/cmdline. Chrome rewrites its process title (shagun on chaos: the
+    browser's cmdline is one space-joined string with a single trailing NUL), so a single part holding spaces is split
+    on whitespace (lossy only for an argument with a space in it)."""
+    parts = [a.decode(errors="replace") for a in raw.split(b"\0") if a]
+    if len(parts) == 1 and " " in parts[0]:
+        return parts[0].split(), True
+    return parts, False
+
+
+def chrome_cmdline(cdp_base: str | None = None, proc_root: str = "/proc") -> dict:
     """The launched browser process's command line (t53, levi: the anti-throttling flags are in both modes; recorded so
-    each session shows them): the /proc process with --remote-debugging-port=<the CDP port> and no --type= (not a
-    renderer / GPU child). Linux only; never raises."""
+    each session shows them). The pid from CDP (browser_pid_cdp), else the /proc process with --remote-debugging-port=<the
+    CDP port> and no --type= (not a renderer / GPU child); its argv by proc_argv (Chrome's rewritten title handled;
+    composite_check on chaos, 179c870: a NUL split never found it). Linux only; never raises."""
     import re
     port = re.search(r":(\d+)", cdp_base or CDP_BASE)
     want = f"--remote-debugging-port={port.group(1) if port else 9222}"
+    root = Path(proc_root)
+
+    def argv_of(pid: int):
+        return proc_argv((root / str(pid) / "cmdline").read_bytes())
     try:
-        for p in Path("/proc").iterdir():
+        pid = browser_pid_cdp(cdp_base) if proc_root == "/proc" else None
+        if pid is not None:
+            try:
+                args, rewritten = argv_of(pid)
+            except OSError:
+                args, rewritten = None, None
+            return {"pid": pid, "argv": args, "source": "cdp SystemInfo.getProcessInfo", "title_rewritten": rewritten}
+        for p in root.iterdir():
             if not p.name.isdigit():
                 continue
             try:
-                argv = (p / "cmdline").read_bytes().split(b"\0")
+                args, rewritten = argv_of(int(p.name))
             except OSError:
                 continue
-            args = [a.decode(errors="replace") for a in argv if a]
             if want in args and not any(a.startswith("--type=") for a in args):
-                return {"pid": int(p.name), "argv": args}
+                return {"pid": int(p.name), "argv": args, "source": "proc scan", "title_rewritten": rewritten}
         return {"pid": None, "argv": None, "error": f"no browser process with {want}"}
     except Exception as e:
         return {"pid": None, "argv": None, "error": repr(e)}
