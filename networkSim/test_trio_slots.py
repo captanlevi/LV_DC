@@ -333,6 +333,26 @@ def test_dns_answers():
         assert rep["dns_fail"] == ["youtube/yt_7"]
 
 
+def test_check_session_reads_dns_answers():
+    """pilot-0 fix 2 (levi): a flow with no SNI and no DNS in its own pcap is named from the session's dns_answers.json
+    (yt_100001's 88 MB QUIC media flow read as exogenous background); the pcap's own sources come first."""
+    import check_session as CS
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d)
+        assert CS.dns_answers_names(sd) == {}
+        (sd / "dns_answers.json").write_text(json.dumps({"144.6.4.207": ["RR1---sn-X.googlevideo.com"]}))
+        ans = CS.dns_answers_names(sd)
+        key = ("192.168.4.50", 443, "144.6.4.207", 50001, "udp")
+        names, src = CS.flow_name("144.6.4.207", key, {}, {}, {}, ans)
+        assert (names, src) == ({"rr1---sn-x.googlevideo.com"}, "dns_answers")
+        assert CS.flow_category(names, "youtube") == "media"
+        assert CS.flow_name("144.6.4.207", key, {}, {}, {"144.6.4.207": {"a.example"}}, ans)[1] == "tshark_dns"
+        assert CS.flow_name("144.6.4.207", key, {key: "b.example"}, {}, {}, ans)[1] == "network_core"
+        assert CS.flow_name("1.2.3.4", key, {}, {}, {}, ans) == (set(), "none")
+        (sd / "dns_answers.json").write_text("not json")
+        assert CS.dns_answers_names(sd) == {}
+
+
 class FakeProc:
     def __init__(self, polls: int, rc: int, log: list):
         self.left, self.rc, self.log, self.signals = polls, rc, log, []

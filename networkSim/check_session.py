@@ -653,6 +653,32 @@ def http_media_flows(sd: Path) -> set:
     return keys
 
 
+def dns_answers_names(sd: Path) -> dict[str, set]:
+    """The session's dns_answers.json ({address: [names]}, LVQoE's form), lower-cased; {} when absent or unreadable. A
+    trio session writes it from its run's default-class DNS (its own pcap holds none: the system resolver's queries are
+    not the session's; pilot-0, yt_100001's media went unnamed)."""
+    try:
+        raw = json.loads((sd / "dns_answers.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return {str(ip): {str(n).lower() for n in names} for ip, names in raw.items() if isinstance(names, list)} \
+        if isinstance(raw, dict) else {}
+
+
+def flow_name(server: str, key: tuple, nc_names: dict, flow_sni: dict, ip_names: dict, ans_names: dict) -> tuple[set, str]:
+    """A flow's host names and their source: network_core (SNI / QUIC Initial / DNS), else tshark's SNI on the client's
+    handshake, else tshark's DNS answers in the pcap for the server address, else the session's dns_answers.json."""
+    if key in nc_names:
+        return {nc_names[key]}, "network_core"
+    if key in flow_sni:
+        return {flow_sni[key]}, "tshark_sni"
+    if ip_names.get(server):
+        return ip_names[server], "tshark_dns"
+    if ans_names.get(server):
+        return ans_names[server], "dns_answers"
+    return set(), "none"
+
+
 def traffic_checks(sd: Path, platform: str) -> dict:
     pcap = sd / "merged.pcap"
     if not pcap.exists():
@@ -678,16 +704,10 @@ def traffic_checks(sd: Path, platform: str) -> dict:
         if p[7] and p[1] in mine:
             flow_sni[(p[1], p[3], p[2], p[4], p[5])] = p[7].split("|")[0].lower()
     name_src = collections.Counter()
+    ans_names = dns_answers_names(sd)
 
     def classify(server, key):
-        if key in nc_names:
-            names, src = {nc_names[key]}, "network_core"
-        elif key in flow_sni:
-            names, src = {flow_sni[key]}, "tshark_sni"
-        elif ip_names.get(server):
-            names, src = ip_names[server], "tshark_dns"
-        else:
-            names, src = set(), "none"
+        names, src = flow_name(server, key, nc_names, flow_sni, ip_names, ans_names)
         name_src[src] += 1
         cat = flow_category(names, platform)
         # an unnamed flow is identified by its server address (a missed video CDN shows up here: addendum I, brad)
