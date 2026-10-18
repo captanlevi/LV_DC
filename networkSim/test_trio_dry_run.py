@@ -39,6 +39,28 @@ def main() -> int:
            "(dropped 0, overlimits 0 requeues 0) \nfilter protocol all pref 50 matchall chain 0 handle 0x1 \n"
            "\tSent 1526 bytes 9 pkt (dropped 0, overlimits 0 requeues 0) \n")
     assert T.parse_ingress_filter_stats(flt) == {"0x11": 500, "default": 1526}
+    # levi's gate-1 conditions: netem counters, idle ping, the check_session reference
+    q = ("qdisc htb 1: root refcnt 2 r2q 10 default 0x10 direct_packets_stat 0\n Sent 9 bytes 1 pkt (dropped 0, "
+         "overlimits 0 requeues 0)\n backlog 0b 0p requeues 0\nqdisc netem 8003: parent 1:10 limit 1000 delay 20ms loss 1%\n"
+         " Sent 1000 bytes 10 pkt (dropped 2, overlimits 0 requeues 0)\n backlog 0b 0p requeues 0\n")
+    assert T.parse_netem_stats(q) == {"1:10": {"bytes": 1000, "packets": 10, "drops": 2}}
+    pg = ("64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=41.2 ms\n64 bytes from 1.1.1.1: icmp_seq=2 ttl=57 time=40.8 ms\n"
+          "64 bytes from 1.1.1.1: icmp_seq=4 ttl=57 time=43.0 ms\n\n--- 1.1.1.1 ping statistics ---\n"
+          "4 packets transmitted, 3 received, 25% packet loss, time 603ms\n")
+    r = T.parse_ping(pg)
+    assert (r["transmitted"], r["received"], r["loss_share"], r["rtt_ms_median"]) == (4, 3, 0.25, 41.2), r
+    assert T.ping_cmd("1.1.1.1", 20, "0.2") == "ping -n -c 100 -i 0.2 -w 25 1.1.1.1"
+    import json, tempfile
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        for i, (verdict, eps) in enumerate((("PASS", [{"state": "3", "ratio": 0.9}, {"state": "7", "ratio": 0.5}]),
+                                            ("PASS", [{"state": "3", "ratio": 0.7}, {"state": 3, "ratio": 0.95}]),
+                                            ("FAIL", [{"state": "3", "ratio": 0.1}]))):
+            (d / "youtube" / f"yt_{i}").mkdir(parents=True)
+            (d / "youtube" / f"yt_{i}" / "check.json").write_text(json.dumps({"verdict": verdict, "traffic": {"episodes": eps}}))
+        ref = T.check_session_reference(d, {"yt": ["3", "7"], "tw": ["5"]})["per_session_state"]
+        assert ref["yt"]["3"] == {"n_sessions": 2, "n_episodes": 3, "min": 0.7, "max": 0.95, "median": 0.9, "enough": False}
+        assert ref["yt"]["7"]["n_episodes"] == 1 and ref["tw"]["5"]["n_sessions"] == 0
     print("test_trio_dry_run: ok")
     return 0
 

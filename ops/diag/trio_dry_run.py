@@ -22,6 +22,16 @@ What it does, in order:
   4. the report: per session and state, the realised ingress rate vs the set rate, RTT and loss vs the set delay /
      loss, its curl bytes vs its class bytes, the bytes in the other sessions' classes and in the default class
      while it ran (cross-class), the shaper-bound seconds (backlog > 0 or drops); the goodput gate; versions.
+Levi's gate-1 conditions (2026-10-19), each a phase of its own:
+  - idle delay / loss per class: before the bulk, every class at each of its states with NO bulk in it, a ping from
+    each cgroup (RTT minus the unshaped idle RTT vs 2 x the set delay: netem on both directions), and the netem
+    qdiscs' own drop counters under the bulk (the realised loss per direction);
+  - cross-class bytes: one page fetch inside each cgroup in turn, every class's counters before and after (its own
+    class rises by the page, no other session's class rises);
+  - the single-mode null for the same states: single mode's own tree (the Makefile's enable / slow / disable) under
+    the same bulk and idle ping, one state at a time; and, with --data, the accepted single-mode sessions'
+    check.json shaper ratios per state ([min, max], n);
+  - every state and the goodput run >= 60 s.
 Output: <out>/report.json, <out>/samples.jsonl, <out>/commands.log. --print-only lists the commands and exits.
 
     sudo python3 ops/diag/trio_dry_run.py --iface wlp0s20f3 --out /tmp/trio_dry_run_$(date +%s)
@@ -289,11 +299,14 @@ def run(a) -> dict:
             if c.startswith("tc ") or c.startswith("nft "):
                 continue                                     # the cgroups and IFBs only, for the goodput phase
             sh(c, check=not c.endswith("|| true") and "modprobe" not in c)
+        rep["idle_ping_unshaped"] = ping_many([None], a, out, "unshaped")["root"]      # the RTT baseline
         rep["goodput"] = gp = goodput(a.iface, a.url, a.goodput_s, a.streams, out)
         need = 1.5 * TOP_STATE_KBIT * len(SESSIONS)
         rep["goodput_gate"] = {"needed_kbit": need, "measured_kbit": gp["goodput_kbit"],
                                "pass": gp["goodput_kbit"] >= need,
                                "rule": "measured multi-stream goodput >= 1.5 x the summed top-state rate (am. 13)"}
+        if not a.no_single_reference:
+            rep["single_mode_reference"] = single_mode_reference(a, states, out)
         for c in tree_up_cmds(a.iface):
             if c.startswith("tc ") or c.startswith("nft "):
                 sh(c, check="|| true" not in c)
@@ -301,6 +314,26 @@ def run(a) -> dict:
         rep["tree"] = {"ingress_filters": sh(f"tc filter show dev {a.iface} parent ffff:", capture=True),
                        "egress_classes": sh(f"tc class show dev {a.iface}", capture=True),
                        "nft": sh(f"nft list table inet {NFT_TABLE}", capture=True)}
+        for s in SESSIONS:
+            for c in rate_cmds(a.iface, s, state_params(states[s][0])):
+                sh(c)
+        rep["cross_class_fetch"] = cross_class_fetch(a, out)
+        idle = []                                     # levi (1): every class at each of its states, no bulk anywhere
+        for k in range(max(len(v) for v in states.values())):
+            for s in SESSIONS:
+                if k < len(states[s]):
+                    for c in rate_cmds(a.iface, s, state_params(states[s][k])):
+                        sh(c)
+            time.sleep(2)
+            res = ping_many([s for s in SESSIONS if k < len(states[s])], a, out, f"idle_{k}")
+            base = (rep.get("idle_ping_unshaped") or {}).get("rtt_ms_median")
+            for s, r in res.items():
+                p = state_params(states[s][k])
+                idle.append({"session": s, "state": states[s][k], "set": p, **r,
+                             "rtt_minus_unshaped_ms": round(r["rtt_ms_median"] - base, 2) if r["rtt_ms_median"] and base else None,
+                             "expected_added_ms": 2 * p["delay_ms"],
+                             "expected_ping_loss": round(1 - (1 - p["loss_pct"] / 100) ** 2, 5)})
+        rep["idle_ping_per_class"] = idle
         for s in SESSIONS:
             for c in rate_cmds(a.iface, s, state_params(states[s][0])):
                 sh(c)
@@ -322,6 +355,7 @@ def run(a) -> dict:
             t_end = time.time() + a.state_s
             while time.time() < t_end:
                 samples.append({"t": round(time.time() - t0, 2), "classes": {d: class_stats(d) for d in devs},
+                                "netem": {d: netem_stats(d) for d in devs},
                                 "ingress_by_mark": ingress_filter_stats(a.iface),
                                 "links": {d: link_stats(d) for d in [a.iface, "lvi_def", "lvo_def"]
                                           + [f"lvo_{s}" for s in SESSIONS]}})
@@ -356,6 +390,152 @@ def _link_delta(samples: list[dict], dev: str, t0: float, t1: float, key: str = 
     return int(w[-1]["links"][dev][key] - w[0]["links"][dev][key]) if len(w) >= 2 else 0
 
 
+_NETEM_RE = re.compile(r"qdisc netem (\S+) parent (\S+).*?\n\s*Sent (\d+) bytes (\d+) pkt \(dropped (\d+),", re.S)
+
+
+def parse_netem_stats(text: str) -> dict:
+    """{parent classid: {bytes, packets, drops}} of every netem qdisc in `tc -s qdisc show` text."""
+    out = {}
+    for blk in re.split(r"\n(?=qdisc )", text or ""):
+        m = _NETEM_RE.search(blk)
+        if m:
+            out[m.group(2)] = {"bytes": int(m.group(3)), "packets": int(m.group(4)), "drops": int(m.group(5))}
+    return out
+
+
+def netem_stats(dev: str) -> dict:
+    try:
+        return parse_netem_stats(sh(f"tc -s qdisc show dev {dev}", capture=True))
+    except Exception:
+        return {}
+
+
+def parse_ping(text: str) -> dict:
+    """`ping -n -c N` output: transmitted, received, loss share, the replies' RTT median."""
+    rtts = sorted(float(m.group(1)) for m in re.finditer(r"time=([\d.]+) ms", text or ""))
+    m = re.search(r"(\d+) packets transmitted, (\d+) (?:packets )?received", text or "")
+    tx, rx = (int(m.group(1)), int(m.group(2))) if m else (None, len(rtts))
+    return {"transmitted": tx, "received": rx, "loss_share": round(1 - rx / tx, 4) if tx else None,
+            "rtt_ms_median": rtts[len(rtts) // 2] if rtts else None, "rtt_ms_p90": rtts[int(len(rtts) * 0.9)] if rtts else None}
+
+
+def ping_cmd(host: str, seconds: float, interval: str) -> str:
+    n = max(1, int(seconds / float(interval)))
+    return f"ping -n -c {n} -i {interval} -w {int(seconds) + 5} {host}"
+
+
+def ping_many(sessions: list[str | None], a, out: Path, tag: str) -> dict:
+    """Pings from each cgroup (None: no cgroup) at once, for a.ping_s; {session: parse_ping}."""
+    procs = {}
+    for s in sessions:
+        log = out / f"ping_{tag}_{s or 'root'}.log"
+        cmd = ping_cmd(a.ping_host, a.ping_s, a.ping_interval)
+        procs[s] = (start(in_cgroup(s, cmd) if s else cmd, log), log)
+    res = {}
+    for s, (p, log) in procs.items():
+        try:
+            p.wait(timeout=a.ping_s + 15)
+        except subprocess.TimeoutExpired:
+            stop([p])
+        res[s or "root"] = parse_ping(log.read_text(errors="ignore"))
+    return res
+
+
+def cross_class_fetch(a, out: Path) -> dict:
+    """Levi (2): one page fetch inside each cgroup in turn; every class's bytes before and after."""
+    devs = ([] if NO_IFB else [f"lvi_{s}" for s in SESSIONS])
+
+    def snap():
+        c = {d: (class_stats(d).get("1:10") or {}).get("bytes", 0) for d in devs}
+        c.update({f"{a.iface} 1:{m:x}": (class_stats(a.iface).get(f"1:{m:x}") or {}).get("bytes", 0)
+                  for m in SESSIONS.values()})
+        c["lvi_def tx"] = (link_stats("lvi_def") or {}).get("tx_bytes", 0)
+        return c
+    res = {}
+    for s in SESSIONS:
+        b0 = snap()
+        r = subprocess.run(in_cgroup(s, f"curl -s -o /dev/null -w '%{{size_download}}' --max-time 30 "
+                                        f"{shlex.quote(a.page_url)}"), shell=True, text=True, capture_output=True)
+        LOG.append(f"(fetch {s}) {a.page_url}")
+        time.sleep(1.0)
+        b1 = snap()
+        d = {k: b1[k] - b0[k] for k in b0}
+        own = d.get(f"lvi_{s}", 0)
+        others = {k: v for k, v in d.items() if k.startswith("lvi_") and k not in (f"lvi_{s}", "lvi_def tx")}
+        res[s] = {"page_bytes": int(r.stdout) if r.stdout.strip().isdigit() else None, "deltas": d,
+                  "own_class_bytes": own, "other_session_classes_bytes": others,
+                  "pass": bool(own) and all(v == 0 for v in others.values())}
+    return res
+
+
+def single_mode_reference(a, states: dict, out: Path) -> dict:
+    """Levi (3): single mode's own tree (the Makefile's enable / slow / disable, unchanged) under the same bulk and the
+    same idle ping, one state at a time (every state the sessions visit, in order)."""
+    nsim = Path(__file__).resolve().parents[2] / "networkSim"
+    order = []
+    for s in SESSIONS:
+        for x in states[s]:
+            if x not in order:
+                order.append(x)
+    rows = []
+    sh(f"make -s -C {nsim} enable IFACE={a.iface}", check=False)
+    try:
+        for st in order:
+            p = state_params(st)
+            sh(f"make -s -C {nsim} slow IFACE={a.iface} BANDWIDTH={p['rate_kbit']}kbit DELAY={p['delay_ms']}ms "
+               f"PLR={p['loss_pct']}%", check=False)
+            time.sleep(2)
+            idle = ping_many([None], a, out, f"single_{st}")["root"]
+            pr = start(f"curl -s -o /dev/null --max-time {a.ref_state_s + 5} {shlex.quote(a.url)}", out / f"curl_single_{st}.log")
+            time.sleep(3.0)
+            c0, n0, t0 = (class_stats("ifb0").get("1:10") or {}), netem_stats("ifb0").get("1:10") or {}, time.time()
+            bound, k = 0, 0
+            while time.time() < t0 + a.ref_state_s - 3:
+                cs = class_stats("ifb0").get("1:10") or {}
+                bound += bool(cs.get("backlog"))
+                k += 1
+                time.sleep(1.0)
+            c1, n1, t1 = (class_stats("ifb0").get("1:10") or {}), netem_stats("ifb0").get("1:10") or {}, time.time()
+            stop([pr])
+            kbit = ((c1.get("bytes") or 0) - (c0.get("bytes") or 0)) * 8 / 1000 / (t1 - t0)
+            dp, dd = (n1.get("packets", 0) - n0.get("packets", 0)), (n1.get("drops", 0) - n0.get("drops", 0))
+            rows.append({"state": st, "set": p, "realised_ingress_kbit": round(kbit, 1),
+                         "ratio_to_set": round(kbit / p["rate_kbit"], 3), "shaper_bound_share": round(bound / k, 3) if k else None,
+                         "netem_drop_share_under_bulk": round(dd / (dp + dd), 5) if dp + dd else None, "idle_ping": idle})
+    finally:
+        sh(f"make -s -C {nsim} disable IFACE={a.iface}", check=False)
+    return {"tree": "single mode's Makefile enable / slow / disable", "states": rows}
+
+
+def check_session_reference(data: Path, states: dict) -> dict:
+    """Levi (3), from the record: per platform and state, the accepted single-mode sessions' check.json episode shaper
+    ratios (measured / set downstream): n sessions, n episodes, [min, max], median. Demand-limited (players do not
+    saturate), so a lower bound only (the gate-2 checklist's one-sided reading)."""
+    plat = {"yt": "youtube", "tw": "twitch", "tt": "tiktok"}
+    out = {}
+    for s, pl in plat.items():
+        by: dict = {}
+        for c in sorted((data / pl).glob("*/check.json")):
+            try:
+                chk = json.loads(c.read_text())
+            except (OSError, ValueError):
+                continue
+            if chk.get("verdict") != "PASS":
+                continue
+            for e in (chk.get("traffic") or {}).get("episodes") or []:
+                if e.get("ratio") is not None and str(e.get("state")) in states.get(s, []):
+                    by.setdefault(str(e["state"]), {}).setdefault(c.parent.name, []).append(e["ratio"])
+        out[s] = {}
+        for st in states.get(s, []):
+            per = by.get(st) or {}
+            vals = sorted(v for x in per.values() for v in x)
+            out[s][st] = {"n_sessions": len(per), "n_episodes": len(vals),
+                          "min": vals[0] if vals else None, "max": vals[-1] if vals else None,
+                          "median": vals[len(vals) // 2] if vals else None,
+                          "enough": len(per) >= 5}
+    return {"platforms": plat, "source": str(data), "per_session_state": out}
+
+
 def ping_stats(path: Path) -> list[tuple[float, float | None]]:
     """[(seconds since start, rtt ms or None for a lost reply)] from `ping -n` output (seq gaps = losses)."""
     rows, last = [], None
@@ -378,6 +558,13 @@ def summarise(samples, timeline, states, a, out) -> dict:
             others = {o: _delta(samples, f"lvi_{o}", "1:10", t0, t1) for o in SESSIONS if o != s}
             default_in = _link_delta(samples, "lvi_def", t0, t1, "tx_bytes")
             drops = _delta(samples, f"lvi_{s}", "1:10", t0, t1, "drops")
+            nw = [x for x in samples if t0 <= x["t"] <= t1 and ((x.get("netem") or {}).get(f"lvi_{s}") or {}).get("1:10")]
+            if len(nw) >= 2:
+                n0, n1 = nw[0]["netem"][f"lvi_{s}"]["1:10"], nw[-1]["netem"][f"lvi_{s}"]["1:10"]
+                dp, dd = n1["packets"] - n0["packets"], n1["drops"] - n0["drops"]
+                netem_loss = round(dd / (dp + dd), 5) if dp + dd else None
+            else:
+                netem_loss = None
             bound = sum(1 for x in samples if t0 <= x["t"] <= t1
                         and ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("backlog"))
             n = sum(1 for x in samples if t0 <= x["t"] <= t1)
@@ -385,6 +572,7 @@ def summarise(samples, timeline, states, a, out) -> dict:
                          "realised_ingress_kbit": round(own * 8 / 1000 / (t1 - t0), 1),
                          "ratio_to_set": round(own * 8 / 1000 / (t1 - t0) / p["rate_kbit"], 3) if p["rate_kbit"] else None,
                          "class_drops": drops, "shaper_bound_share": round(bound / n, 3) if n else None,
+                         "netem_drop_share_under_bulk": netem_loss, "set_loss_share": round(p["loss_pct"] / 100, 5),
                          "other_sessions_bytes_same_window": others, "default_class_bytes_same_window": default_in})
         pings = ping_stats(out / f"ping_{s}.log")
         curl = (out / f"curl_{s}.log").read_text().strip() if (out / f"curl_{s}.log").exists() else ""
@@ -405,10 +593,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--iface", default="wlp0s20f3")
     ap.add_argument("--out", default=f"/tmp/trio_dry_run_{int(time.time())}")
-    ap.add_argument("--state-s", type=float, default=30.0, help="seconds per state")
+    ap.add_argument("--state-s", type=float, default=60.0, help="seconds per state (levi: >= 60)")
     ap.add_argument("--states", type=lambda x: dict(kv.split("=") for kv in x.split()), default={},
                     help="per session states, e.g. 'yt=3,7,10 tw=5,9,2 tt=8,4,6'")
-    ap.add_argument("--goodput-s", type=float, default=20.0)
+    ap.add_argument("--goodput-s", type=float, default=60.0)
+    ap.add_argument("--ping-s", type=float, default=20.0, help="seconds per idle ping (no bulk)")
+    ap.add_argument("--ref-state-s", type=float, default=60.0, help="seconds per state in the single-mode reference")
+    ap.add_argument("--no-single-reference", action="store_true", help="skip the single-mode tree reference phase")
+    ap.add_argument("--data", type=Path, default=None, help="the data dir: single-mode check.json ratios per state")
+    ap.add_argument("--page-url", default="https://www.wikipedia.org/", help="the cross-class page fetch")
     ap.add_argument("--streams", type=int, default=6)
     ap.add_argument("--url", default=BULK_URL)
     ap.add_argument("--ping-host", default="1.1.1.1")
@@ -431,7 +624,11 @@ def main(argv=None) -> int:
                 + tree_down_cmds(a.iface):
             print(c)
         return 0
+    if a.state_s < 60 or a.goodput_s < 60:
+        print("note: levi's gate-1 condition is >= 60 s per state and for the goodput run", file=sys.stderr)
     rep = run(a)
+    if a.data:
+        rep["check_session_reference"] = check_session_reference(a.data, rep.get("states") or {})
     Path(a.out, "report.json").write_text(json.dumps(rep, indent=1, default=str))
     print(json.dumps({k: rep.get(k) for k in ("goodput", "goodput_gate", "error", "aborted", "torn_down")}, default=str))
     print(f"report: {a.out}/report.json")
