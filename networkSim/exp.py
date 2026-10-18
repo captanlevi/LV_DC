@@ -164,10 +164,8 @@ def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window
         # decode flags (decode_path.py: tt's HEVC path) and the geometry's launch args (geometry.py: a `@D` device scale
         # factor) go in as make variables
         import geometry
-        run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"]
-            + ([f"WINDOW_SIZE={window_size}"] if window_size else [])
-            + geometry.merge_make_vars(decode_path.make_vars(platform or ""), geometry.chrome_args(geometry_spec) + CHROME_EXTRA)
-            + SLOT_VARS)
+        run(["make", "start_chrome"] + geometry.start_chrome_make_vars(session_dir, chrome_profile, window_size, platform,
+                                                                      geometry_spec, CHROME_EXTRA) + SLOT_VARS)
         return True
     except Exception as e:
         print(e)
@@ -546,7 +544,8 @@ if __name__ == "__main__":
         "--yt-matrix",
         choices=sorted(YOUTUBE_MATRICES),
         default="A",
-        help="yt shaper config (t38): A = batch default, B = pre-declared fallback, current = pre-t38 (old data). "
+        help="yt shaper config (t38): A = batch default, B = pre-declared fallback, current = pre-t38 (old data), "
+             "H = yt-H (Q am. 15 (6): the Q_1080p target only, cap 2, stationary start). "
              "A / B use a low-state cap of 6 and a stationary-distribution start; ignored on other platforms.",
     )
     parser.add_argument(
@@ -711,7 +710,7 @@ if __name__ == "__main__":
     if os.environ.get("LVDC_COVERAGE_JSON"):   # orchestrate's coverage-steered matrix (prereg Addendum Q)
         try:
             session_meta.write(session_dir, coverage=coverage_report.meta_record(
-                json.loads(Path(os.environ["LVDC_COVERAGE_JSON"]).read_text()), platform, matrix_id))
+                json.loads(Path(os.environ["LVDC_COVERAGE_JSON"]).read_text()), platform, matrix_id, args.initial_state))
         except Exception as e:
             session_meta.write(session_dir, coverage={"error": repr(e)})
     if platform == "youtube":   # Addendum P: every list change is recorded in the session's channel record
@@ -769,6 +768,8 @@ if __name__ == "__main__":
             if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
                 TRIO["socket_owner_start"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
                 session_meta.write(session_dir, concurrency=TRIO)
+            # Chrome's version while it surely answers (tw_43: refused at finish); finish falls back to it
+            session_meta.write(session_dir, chrome_start=session_meta.chrome_version(tries=3))
             if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
                 try:
                     dpms = subprocess.run(["xset", "dpms", "force", "off"], capture_output=True, text=True, timeout=10)

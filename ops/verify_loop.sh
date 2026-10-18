@@ -11,6 +11,8 @@
 # attempt per session per loop start (no retry until a restart). A whole-session verify.json from before is kept as
 # verify_whole.json. Events: "verify-censored".
 . "${OPS:-$(dirname "$(readlink -f "$0")")}/env.sh"
+# the verdict verify_session wrote (rc: 0 PASS, 2 suspicious, 1 error); "none" when it wrote no verify.json
+verdict_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("verdict", "?"))' "$1/verify.json" 2>/dev/null || echo none; }
 D=$LVDC_DATA; E=$D/_summaries/verify_events.txt
 TRIED=$(mktemp); trap 'rm -f "$TRIED"' EXIT; trap 'exit 143' INT TERM HUP  # censored sessions tried since this start
 CENSORED=1
@@ -23,7 +25,7 @@ while true; do
     if [ ! -f "$s/verify.json" ]; then
       t0=$(date +%s)
       (cd "$LVQOE_LOOP_DIR" && PYTHONDONTWRITEBYTECODE=1 $LVDC_COMPUTE_PIN "$LVQOE_PY" verify_session.py "$s" --ingest > "$s/verify.log" 2>&1)
-      rc=$?; echo "$(date -Is) verify ${s#$D/} rc=$rc ($(( $(date +%s)-t0 )) s; 0 PASS / 2 suspicious / 1 error; lvqoe $(git -C "$LVQOE_LOOP_DIR" rev-parse --short HEAD))" >> "$E"
+      rc=$?; echo "$(date -Is) verify ${s#$D/} verdict=$(verdict_of "$s") rc=$rc ($(( $(date +%s)-t0 )) s; lvqoe $(git -C "$LVQOE_LOOP_DIR" rev-parse --short HEAD))" >> "$E"
     fi
     if [ ! -f "$s/frames.jsonl" ]; then
       t0=$(date +%s)
@@ -44,7 +46,7 @@ while true; do
     if [ -f "$s/verify.json" ]; then w=$s/verify_whole.json; [ -e "$w" ] && w=$s/verify_whole_$(date +%s).json; mv "$s/verify.json" "$w"; fi
     t0=$(date +%s)
     (cd "$LVQOE_LOOP_DIR" && PYTHONDONTWRITEBYTECODE=1 $LVDC_COMPUTE_PIN "$LVQOE_PY" verify_session.py "$s" --ingest --until "$u" > "$s/verify.log" 2>&1)
-    rc=$?; echo "$(date -Is) verify-censored ${s#$D/} rc=$rc ($(( $(date +%s)-t0 )) s; --until $u; 0 PASS / 2 suspicious / 1 error; lvqoe $(git -C "$LVQOE_LOOP_DIR" rev-parse --short HEAD))" >> "$E"
+    rc=$?; echo "$(date -Is) verify-censored ${s#$D/} verdict=$(verdict_of "$s") rc=$rc ($(( $(date +%s)-t0 )) s; --until $u; lvqoe $(git -C "$LVQOE_LOOP_DIR" rev-parse --short HEAD))" >> "$E"
   done
   sleep 60
 done

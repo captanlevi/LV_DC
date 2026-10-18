@@ -54,10 +54,32 @@ def device_scale(spec: str | None) -> float | None:
     return d
 
 
+# hot-fix 4 (t37, shagun on yt_46): the collection Chrome runs with --no-sandbox, so Chrome shows its "unsupported
+# command-line flag" infobar (56 px) at the top of the window, also in window fullscreen: the viewport never covers the
+# screen (1920x1024 on the 1920x1080 panel) and the player is never the screen. --test-type hides that infobar (and the
+# other startup infobars; ChromeDriver passes it to every Chrome it drives). Fullscreen sessions only: every other
+# geometry's launch, and so its viewport, is unchanged (the infobar has been there in all of them).
+MODE_CHROME_ARGS: dict[str, list[str]] = {"fullscreen": ["--test-type"]}
+
+
 def chrome_args(spec: str | None) -> list[str]:
-    """The Chrome launch arguments a spec needs (the device scale factor; layout only)."""
+    """The Chrome launch arguments a spec needs (the device scale factor; fullscreen's --test-type; layout only)."""
     d = device_scale(spec)
-    return [f"--force-device-scale-factor={d:g}"] if d else []
+    out = [f"--force-device-scale-factor={d:g}"] if d else []
+    if spec:
+        out += MODE_CHROME_ARGS.get(parse(spec)[0], [])
+    return out
+
+
+def start_chrome_make_vars(session_dir, chrome_profile, window_size: str | None, platform: str | None,
+                           geometry_spec: str | None, extra_args: list[str] | None = None) -> list[str]:
+    """exp.py's `make start_chrome` variables (hot-fix 4: one definition, so ops/diag/fullscreen_check.py launches its
+    Chrome with exactly the collector's arguments). extra_args: the trio "fb" layout's window position (single mode:
+    none)."""
+    import decode_path
+    return ([f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"]
+            + ([f"WINDOW_SIZE={window_size}"] if window_size else [])
+            + merge_make_vars(decode_path.make_vars(platform or ""), chrome_args(geometry_spec) + list(extra_args or [])))
 
 
 def merge_make_vars(make_vars: list[str], extra_args: list[str]) -> list[str]:
@@ -84,7 +106,7 @@ def collected_counts(data_dir: Path, platform: str) -> dict[str, int]:
     """Accepted sessions per geometry entry (data/<...>/<platform>/<session>/meta.json; _failed not counted)."""
     counts = {g: 0 for g in GEOMETRY_CHOICES.get(platform, [])}
     for m in data_dir.rglob("meta.json"):
-        if m.parent.parent.name != platform or "_failed" in m.parts:
+        if m.parent.parent.name != platform or "_failed" in m.parts or "_trio" in m.parts:   # trio: its own root
             continue
         try:
             spec = _session_spec(json.loads(m.read_text()))

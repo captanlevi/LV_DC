@@ -174,11 +174,28 @@ YOUTUBE_TRANSITIONS_B = {
     "9":  {"7": 0.10, "8": 0.25, "9": 0.40, "10": 0.25},
     "10": {"8": 0.15, "9": 0.40, "10": 0.45},
 }
+# LVQoE prereg Addendum Q am. 15 (6) (2026-10-19, levi at LVQoE 57cd519e; peter's proposal, design inputs only): yt-H,
+# a top-heavy yt matrix for the Q_1080p target (stationary mass in 9-10 about 0.52). Literal from the amendment's table;
+# cap 2; stationary start, band-restricted for a Q_1080p target (am. 15 (5)); drawn only for that target
+# (coverage_report.MATRIX_TARGETS). The deep drops 9 -> 4 and 10 -> 3 are part of the table (levi).
+YOUTUBE_TRANSITIONS_H = {
+    "1":  {"1": 0.30, "2": 0.30, "3": 0.25, "4": 0.15},
+    "2":  {"1": 0.10, "2": 0.30, "3": 0.30, "4": 0.20, "5": 0.10},
+    "3":  {"2": 0.10, "3": 0.30, "4": 0.30, "5": 0.20, "6": 0.10},
+    "4":  {"3": 0.10, "4": 0.30, "5": 0.30, "6": 0.20, "7": 0.10},
+    "5":  {"4": 0.10, "5": 0.30, "6": 0.30, "7": 0.20, "8": 0.10},
+    "6":  {"5": 0.10, "6": 0.30, "7": 0.30, "8": 0.20, "9": 0.10},
+    "7":  {"5": 0.05, "6": 0.10, "7": 0.30, "8": 0.30, "9": 0.20, "10": 0.05},
+    "8":  {"5": 0.05, "6": 0.10, "7": 0.15, "8": 0.30, "9": 0.25, "10": 0.15},
+    "9":  {"4": 0.05, "7": 0.05, "8": 0.15, "9": 0.45, "10": 0.30},
+    "10": {"3": 0.05, "8": 0.10, "9": 0.25, "10": 0.60},
+}
 # matrix id -> (transitions, low-state cap, initial-state rule). "current" = the pre-t38 yt config (old data).
 YOUTUBE_MATRICES = {
     "current": (YOUTUBE_TRANSITIONS, 2, "linear"),
     "A": (YOUTUBE_TRANSITIONS_A, 6, "stationary"),
     "B": (YOUTUBE_TRANSITIONS_B, 6, "stationary"),
+    "H": (YOUTUBE_TRANSITIONS_H, 2, "stationary"),
 }
 
 

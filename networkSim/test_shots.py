@@ -38,19 +38,19 @@ def _synthetic(seed=0, flat=False):
 
 
 class _CalPage:
-    def __init__(self, cdp, fullscreen=False, covers=False):
+    def __init__(self, cdp, fullscreen=False, covers=False, player_rect=(60, 40, 460, 300)):
         import base64
         import io
         from PIL import Image
         buf = io.BytesIO()
         Image.fromarray(cdp).save(buf, format="PNG")
         self.png = base64.b64encode(buf.getvalue()).decode()
-        self.fs, self.covers = fullscreen, covers
+        self.fs, self.covers, self.player_rect = fullscreen, covers, list(player_rect)
 
     def eval(self, js, await_promise=False):
         import json
         if js is B._PLAYER_RECT_JS:
-            return json.dumps({"player": {"rect": [60, 40, 460, 300], "inner": [600, 400], "dpr": 1},
+            return json.dumps({"player": {"rect": self.player_rect, "inner": [600, 400], "dpr": 1},
                                "viewport": [600, 400], "dpr": 1, "fullscreen": self.fs,
                                "screen": [600, 400] if self.covers else [1000, 700]})
         # model viewport (207, 188): side 0, top = oh - ih = 188 - sy
@@ -96,6 +96,39 @@ def test_origin_calibration():
     finally:
         IG.grab = real
     assert B.calibration_verdict(8.0, 4.0) and not B.calibration_verdict(8.1, 9.0) and not B.calibration_verdict(1.0, 3.9)
+
+
+def test_fullscreen_geometry_origin():
+    """t37 (yt_47, supervisor): the player is the screen, so nothing static is left to match (the picture moved between
+    the captures): the origin is [0, 0] by geometry when the window's CDP state is fullscreen, the <video> covers the
+    screen and the X screen is the CDP screen's size; the match is reported, not required. Any check failing: the
+    match decides, as before."""
+    import numpy as np
+    import PIL.ImageGrab as IG
+    from PIL import Image
+    rng = np.random.default_rng(3)
+    x11 = (rng.random((400, 600)) * 255).astype(np.uint8)                      # the picture at X11 time
+    cdp = (rng.random((400, 600)) * 255).astype(np.uint8)                      # another frame at CDP time
+    real, real_ws = IG.grab, B._window_state
+    try:
+        def run(state="fullscreen", root=x11, rect=(0, 0, 600, 400)):
+            IG.grab = lambda bbox=None, xdisplay=None, s=root: Image.fromarray(s).crop(bbox)
+            B._window_state = lambda tid: state
+            return B.calibrate_shot_origin(_CalPage(cdp, fullscreen=True, covers=True, player_rect=rect), "T1")
+        r = run()
+        assert (r["method"], r["offset"], r["accepted"], r["fullscreen_screen"]) == ("fullscreen_geometry", [0, 0], True, True), r
+        assert r["geometry"] == {"window_state": "fullscreen", "player_rect": [0, 0, 600, 400], "screen": [600, 400],
+                                 "dpr": 1.0, "x_root_px": [600, 400], "player_is_screen": True, "ok": True}, r
+        assert r["template_match"]["accepted"] is False and r["template_match"]["compared_share"] == 0.0, r
+        assert r["residual"] is None and r["gap"] is None
+        wide = np.hstack([x11, x11, x11])                                       # an enlarged X framebuffer (5760 px)
+        for kw, failed in (({"state": "maximized"}, "window_state"), ({"state": None}, "window_state"),
+                           ({"rect": (0, 0, 600, 338)}, "player_is_screen"), ({"root": wide}, "x_root_px")):
+            r = run(**kw)
+            assert r["method"].startswith("cdp_vs_x11_match (fullscreen") and not r["geometry"]["ok"], (kw, r)
+            assert r["accepted"] is False and r["fullscreen_screen"] is False and "template_match" not in r, (kw, r)
+    finally:
+        IG.grab, B._window_state = real, real_ws
     assert not B.calibration_verdict(None, None)
 
 
@@ -121,6 +154,7 @@ def main() -> int:
     if sys.platform == "darwin":
         assert B._grab_x11((0, 0, 100, 100)) is None   # no X display here: the CDP fallback takes the shot
     test_origin_calibration()
+    test_fullscreen_geometry_origin()
     print("test_shots: ok")
     return 0
 
