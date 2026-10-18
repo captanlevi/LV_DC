@@ -359,8 +359,18 @@ def session_window(meta: dict, net: list[dict]) -> tuple[float, float] | None:
     return (lo, hi) if hi > lo else None
 
 
+def entry_window(ents: list[dict] | None, window: tuple[float, float] | None) -> tuple[float, float] | None:
+    """The stream entry's seconds before the shaper starts: the first stream entry's time to the session window's
+    start (levi 2026-10-19: the per-entry startup reading uses them); None when either is missing or empty."""
+    t = next((e.get("t") for e in ents or [] if e.get("kind") == "stream" and e.get("t") is not None), None)
+    if t is None or not window or window[0] <= float(t):
+        return None
+    return float(t), window[0]
+
+
 def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
-                 frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None) -> dict:
+                 frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
+                 entry_win: tuple[float, float] | None = None) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
         return {"n_res_meta": len(meta)}
@@ -403,6 +413,8 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
         "n_res_meta": len(meta), "duration_s": dur,
         "tick_presence": tick_presence(ts, window),
         "tick_window": list(window) if window else None,
+        # reported only (levi 2026-10-19): the same rule over the entry's seconds before the shaper starts
+        "entry_tick_presence": tick_presence(ts, entry_win) if entry_win else None,
         "advancing_share_while_playing": (sum(adv_play) / len(adv_play)) if adv_play else None,
         "v2_columns": has_v2,
         "usable_share": usable / seconds,
@@ -920,8 +932,13 @@ def main() -> int:
     meta, meta_missing = meta_check(sd)
     platform = meta.get("platform") or sd.parent.name
     label_rows = read_labels(sd)
-    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"),
-                       session_window(meta, E.read_net_labels(sd)))
+    # levi 2026-10-17: entries (from meta.json, else computed here for older sessions)
+    ents = meta.get("entries")
+    if ents is None:
+        ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
+    win = session_window(meta, E.read_net_labels(sd))
+    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
+                       entry_window(ents, win))
     lab["shot_effects"] = shot_effects(label_rows, sd)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
@@ -966,11 +983,7 @@ def main() -> int:
     eq = entry_quality_summary(meta)
     if eq and eq["qa_fail"]:      # Q am. 10: a restore not verified from state is QA-flagged
         v, why = "FAIL", why + [f"entry_quality: Auto not restored ({eq['qa_fail']})"]
-    # levi 2026-10-17: entries (from meta.json, else computed here for older sessions) and one session class by the
-    # fixed precedence; only `normal` counts toward quotas
-    ents = meta.get("entries")
-    if ents is None:
-        ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
+    # levi 2026-10-17: one session class by the fixed precedence (entries above); only `normal` counts toward quotas
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_max_s"),
                               lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"),
                               recovered_dead=bool(lab.get("recovered_dead")),

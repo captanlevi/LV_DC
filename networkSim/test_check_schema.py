@@ -31,7 +31,7 @@ TOP = {"session": str, "platform": str, "verdict": str, "session_class": str, "e
        "template_note": (str, NONE), "entry_quality": (dict, NONE)}
 LABELS = ["ad_span_seconds", "ad_spans_per_signal", "ad_spans_span_type_set", "ad_ticks_per_signal",
           "advancing_share_while_playing", "dead_player_T_s", "dead_player_max_all_s", "dead_player_max_s",
-          "duration_s", "frozen_playhead_T_s", "frozen_playhead_max_all_s", "frozen_playhead_max_s",
+          "duration_s", "entry_tick_presence", "frozen_playhead_T_s", "frozen_playhead_max_all_s", "frozen_playhead_max_s",
           "login_wall_text_ticks", "login_wall_ticks", "n_res_meta", "paused_while_playing_share",
           "quality_countdown_ticks", "recovered_dead", "recovered_dead_runs", "recovered_frozen", "shot_effects",
           "src_changed_ticks", "stall_advancing_share", "stall_share", "swap_only_ad_spans", "tick_presence", "tick_window",
@@ -109,6 +109,13 @@ def test_tick_presence_is_phase_free() -> None:
     assert abs(CS.tick_presence(late, win) - (1 - 124.0 / 1386.0)) < 0.002, CS.tick_presence(late, win)
     assert CS.session_window({"ended_at": t0 + 9}, [{"timestamp": t0}, {"timestamp": t0 + 3}]) == (t0, t0 + 9)
     assert CS.session_window({}, [{"timestamp": t0}]) is None and CS.session_window({"ended_at": t0}, []) is None
+    # levi 2026-10-19: the entry's seconds before the shaper starts, recorded (never the verdict)
+    ew = CS.entry_window([{"kind": "stream", "t": t0 - 70.0}], (t0, t0 + 1380.0))
+    assert ew == (t0 - 70.0, t0) and CS.entry_window([], (t0, t0 + 1)) is None and CS.entry_window(
+        [{"kind": "stream", "t": t0 + 5}], (t0, t0 + 1)) is None
+    early = [t0 - 70.0 + k for k in range(70)] + ts
+    lab = CS.label_checks([{"type": "res_meta", "ts": str(t * 1000)} for t in early], "twitch", window=win, entry_win=ew)
+    assert lab["entry_tick_presence"] == 1.0 and lab["tick_window"] == list(win)
 
 
 def main() -> int:
