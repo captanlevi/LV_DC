@@ -780,6 +780,35 @@ def meta_check(sd: Path) -> tuple[dict, list[str]]:
     return m, missing
 
 
+MENU_OVERLAY_S = 3.0   # a cadence shot this close to a twitch ladder probe may show the settings menu (levi 2026-10-18)
+
+
+def probe_times(meta: dict) -> list[float]:
+    """Every twitch ladder-probe time in meta: player_ladder.t (lvdc ef67424 on) and rung_probes' open / close."""
+    ts = [x.get(k) for x in (meta.get("rung_probes") or []) for k in ("t_open", "t_close")]
+    ts.append((meta.get("player_ladder") or {}).get("t"))
+    return sorted(float(t) for t in ts if t is not None)
+
+
+def menu_overlay_shots(sd: Path, meta: dict) -> list[str]:
+    """The cadence shots within MENU_OVERLAY_S of a ladder probe (their file names): readers skip them."""
+    probes = probe_times(meta or {})
+    idx = sd / "shots" / "index.jsonl"
+    if not probes or not idx.exists():
+        return []
+    out = []
+    for line in idx.read_text().splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        t = r.get("t_decide") or r.get("ts")
+        if (r.get("reason") or "cadence") == "cadence" and t is not None and \
+                any(abs(float(t) - p) <= MENU_OVERLAY_S for p in probes):
+            out.append(r.get("file"))
+    return out
+
+
 def entry_quality_summary(meta: dict) -> dict | None:
     """Q am. 10: the entry pick's outcome and every re-entry's re-check; qa_fail names a restore not verified from state."""
     eq = meta.get("entry_quality")
@@ -883,7 +912,8 @@ def main() -> int:
                 pass
     # the cadence shots carry the integrity check; event shots (tier change / ad start, t37) are extra
     n_cad = shot_reasons.get("cadence", len(shot_files)) if shot_reasons else len(shot_files)
-    shots = {"n": n_cad, "expected": exp_n, "share": (n_cad / exp_n) if exp_n else None, "by_reason": dict(shot_reasons)}
+    shots = {"n": n_cad, "expected": exp_n, "share": (n_cad / exp_n) if exp_n else None, "by_reason": dict(shot_reasons),
+             "menu_overlay": menu_overlay_shots(sd, meta)}
     # G3 ground truth (never features): player_stats.jsonl records; twitch records carrying the Video Stats overlay
     ps_n, ps_tw = 0, 0
     if (sd / "player_stats.jsonl").exists():

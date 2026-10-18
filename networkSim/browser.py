@@ -1489,6 +1489,7 @@ _USHER_RE = re.compile(r"usher\.ttvnw\.net/api/(?:v2/)?channel/hls/[^/?]+\.m3u8"
 
 
 LADDER_PROBE_FROZEN_S = 60.0   # twitch, master unread: the quality menu is read only inside a frozen run this long
+LADDER_PROBE_ATTEMPTS = 2      # ... once per frozen run, a second attempt only when the first raised
 MEDIA_EVENTS_FILE = "media_events.jsonl"
 MEDIA_MESSAGE_LEVELS = ("error", "warning", "info")   # playerMessagesLogged kept (debug dropped: volume)
 MEDIA_RECENT_N = 40
@@ -1983,6 +1984,7 @@ class BrowserSession:
         self._master: MasterListener | None = None   # twitch: the master playlist listener
         self.t2_skipped: list[dict] = []            # stuck rule: T2_S frozen with only the fallback rung (no T2)
         self.player_ladder: dict | None = None      # twitch: the quality menu's options when the master was not read
+        self.rung_probes: list[dict] = []           # twitch: each menu read (open / close times): shots near it are flagged
         self._media: MediaListener | None = None     # tt: the media-internals recorder (media_events.jsonl)
         self._rung_probe_at = 0.0
         self._recovery_lock = threading.Lock()    # one recovery of either kind per session (am. 6)
@@ -2447,16 +2449,25 @@ class BrowserSession:
             # >= LADDER_PROBE_FROZEN_S, retried every 30 s until it reads (supervisor's condition on d40e263)
             if self.lowest_rung and self.lowest_rung.get("source") == "ladder_160p_transcode":
                 return self.lowest_rung
-            if frozen_s >= LADDER_PROBE_FROZEN_S and time.time() - self._rung_probe_at >= 30:
-                self._rung_probe_at = time.time()
+            run0 = round(time.time() - frozen_s)
+            tries = [x for x in self.rung_probes if abs(x["run_start"] - run0) <= 2]
+            # once per frozen run (levi / supervisor on 7089cb2); a retry only when the read raised, at most 2 attempts
+            if frozen_s >= LADDER_PROBE_FROZEN_S and len(tries) < LADDER_PROBE_ATTEMPTS and \
+                    all(x.get("error") for x in tries):
+                rec = {"run_start": run0, "frozen_s": round(frozen_s, 1), "t_open": time.time()}
                 try:
                     import entry_quality as EQ
                     opts = [i.get("label") for i in (EQ.Driver(self._page, "twitch").state().get("items") or [])]
+                    rec["options"] = opts
                     self.player_ladder = {"options": opts, "t": time.time(), "frozen_s": round(frozen_s, 1)}
                     if any(EQ.option_height(o) == 160 for o in opts):
                         kbit, src, detail = stuck.TWITCH_160P_TRANSCODE_KBIT, "ladder_160p_transcode", {"options": opts}
                 except Exception as exc:
-                    detail = {"error": repr(exc)[:200]}
+                    rec["error"] = detail = {"error": repr(exc)[:200]}
+                rec["t_close"] = time.time()
+                self.rung_probes.append(rec)
+                print(f"[browser] twitch ladder probe (master unread, frozen {frozen_s:.0f} s): "
+                      f"{rec.get('options') or rec.get('error')}", flush=True)
             elif self.lowest_rung:
                 return self.lowest_rung
         elif self.platform in ("youtube", "tiktok"):

@@ -148,7 +148,7 @@ def _session(platform="twitch"):
     s = B.BrowserSession.__new__(B.BrowserSession)
     s.platform, s.abort_reason, s.abort_at, s.censored, s.channel_url = platform, None, None, None, "https://www.twitch.tv/chan"
     s.frozen_reentries, s.player_dead_reentries, s.lowest_rung, s._rung_probe_at = [], [], None, 0.0
-    s.t2_skipped, s.player_ladder = [], None
+    s.t2_skipped, s.player_ladder, s.rung_probes = [], None, []
     s._recovery_lock, s._page = threading.Lock(), _Page()
     s._master = types.SimpleNamespace(latest={"kbit": 230.0, "t": 0, "path": "/api/v2/channel/hls/chan.m3u8"})
     import time
@@ -223,6 +223,25 @@ def test_stuck_tick():
         assert s6.lowest_rung["source"] == "ladder_160p_transcode" and s6.lowest_rung["kbit"] == S.TWITCH_160P_TRANSCODE_KBIT
         assert len(calls) == 1 and not s6.t2_skipped and s6.player_ladder["options"][-1] == "160p30" and len(reads) == 1
         assert s6.player_ladder["frozen_s"] == 95.0
+        s6b = _session()                                         # once per frozen run: later ticks do not re-read
+        s6b._master = types.SimpleNamespace(latest=None)
+        s6b._reenter_frozen = types.MethodType(fake_reenter, s6b)
+        reads.clear()
+        t0 = time.time()
+        for _ in range(3):
+            s6b._current_rung(61 + (time.time() - t0))
+        assert len(reads) == 1 and len(s6b.rung_probes) == 1 and s6b.rung_probes[0]["t_open"] <= s6b.rung_probes[0]["t_close"]
+        def boom(self):
+            reads.append(1)
+            raise RuntimeError("menu gone")
+        EQ.Driver.state = boom                                   # a read that raises: one retry, then no more
+        s6c = _session()
+        s6c._master = types.SimpleNamespace(latest=None)
+        reads.clear()
+        t0 = time.time()
+        for _ in range(4):                                       # one run: frozen_s grows with the clock
+            s6c._current_rung(61 + (time.time() - t0))
+        assert len(reads) == 2 and all(p.get("error") for p in s6c.rung_probes)
         EQ.Driver.state = lambda self: {"items": [{"label": "Auto"}, {"label": "720p60"}, {"label": "480p"}]}
         s7 = _session()
         s7._master = types.SimpleNamespace(latest=None)
@@ -255,7 +274,25 @@ def test_master_listener_reads_the_worker():
     assert m.latest["kbit"] == 230.0 and m.latest["from_worker"] is True and m.latest["path"].endswith("chan.m3u8")
 
 
+def test_menu_overlay_shots():
+    """levi 2026-10-18: cadence shots within MENU_OVERLAY_S of a ladder probe (meta rung_probes, or player_ladder.t
+    for sessions between ef67424 and the probe log) are flagged menu_overlay in check.json; event shots are not."""
+    import json as _j
+    import tempfile
+    from pathlib import Path as P
+    with tempfile.TemporaryDirectory() as d:
+        sd = P(d)
+        (sd / "shots").mkdir()
+        rows = [{"ts": 100.0 + 10 * k, "t_decide": 100.0 + 10 * k, "file": f"s{k}.jpg", "reason": "cadence"} for k in range(6)]
+        rows.append({"ts": 121.0, "t_decide": 121.0, "file": "ev.jpg", "reason": "tier_change"})
+        (sd / "shots" / "index.jsonl").write_text("".join(_j.dumps(r) + "\n" for r in rows))
+        assert CS.menu_overlay_shots(sd, {"rung_probes": [{"t_open": 118.0, "t_close": 121.5}]}) == ["s2.jpg"]
+        assert CS.menu_overlay_shots(sd, {"player_ladder": {"t": 147.0}}) == ["s5.jpg"]
+        assert CS.menu_overlay_shots(sd, {}) == []
+
+
 def main() -> int:
+    test_menu_overlay_shots()
     test_master_listener_reads_the_worker()
     test_t2_cases()
     test_rungs()
