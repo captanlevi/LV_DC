@@ -1,0 +1,135 @@
+# FROZEN_COLLECTOR.md: the collector's frozen behaviour (living document)
+
+**What this is.** Every collector behaviour a reading depends on, with its value, the code, what pins it, and the prereg clause behind it. The prereg is `docs/analysis/design/collection_v2_prereg_levi_2026-10-16.md` in LVQoE ("Q am. 6" = Addendum Q amendment 6).
+
+**Who does what:**
+- peter fills the rows from the code.
+- levi checks each row against the clause it cites. A mismatch is a finding, not an edit.
+- Started 2026-10-18 at lvdc `1bcdc5e` (the tt media instrumentation), on lvdc-v2 `7a248b3`.
+
+**Conventions:**
+- Paths are under `networkSim/` unless shown otherwise.
+- Status values:
+  - **frozen**: in force and pinned;
+  - **unpinned**: in force, no test asserts the value;
+  - **pending**: on a branch, not yet on lvdc-v2;
+  - **not built**: a clause with no code yet;
+  - **finding**: something levi should rule on.
+- Tests are plain scripts. `ops/apply_at_boundary.sh` runs every `test_*.py` except the live `test_browser.py`, and a failure leaves the batch paused.
+
+## 1. Session classes and precedence
+
+| behaviour | value / rule | code (file:symbol) | pinned by | prereg clause | status |
+|---|---|---|---|---|---|
+| precedence | not_live > login_wall > interrupted > startup_failure > room_ended > player_dead > player_dead_recovered > player_frozen > qa_fail > normal; first match wins | entries.py:CLASS_PRECEDENCE, session_class | test_player_dead.py:test_precedence | Q am. 4 (recovered), N, Q | frozen |
+| not_live | abort_reason holds `NOT_LIVE_MARK` ("Failed to navigate to a live"), on yt / twitch | entries.py:session_class | test_precedence, test_slow_start.py | Q am. 3 (4) | frozen |
+| login_wall | abort_reason == "login_wall" | entries.py:session_class | test_precedence | Q am. 3 (4) | frozen |
+| interrupted | abort_reason starts with "signal" / "interrupted" | entries.py:session_class | test_precedence | Q am. 3 (4) | frozen |
+| startup_failure | a start failure on tt, or the stream entry neither `sustained_60s` nor `slow_start_shaped` | entries.py:session_class, slow_start_shaped | test_precedence, test_tt_start_failure_entry, test_slow_start.py | Q am. 4 (entries) | frozen |
+| room_ended | abort_reason == "room_ended" (banner, or rule (b) of TTRoomWatch) | entries.py:session_class; browser.py:TTRoomWatch | test_precedence, test_tt_room.py | M (tt fallback), N | frozen |
+| player_dead | abort_reason == "player_dead", or the longest non-recovered dead run ≥ T (tt 60 s) | entries.py:session_class (`>=`) | test_precedence, test_entries_and_class, test_ti37_recovered_reads_normal | Q am. 4 | frozen |
+| player_dead_recovered | returned only when `RECOVERED_DEAD_CLASS != "normal"` (it is "normal", ruling (a)) | entries.py:RECOVERED_DEAD_CLASS | test_ti37 (flips the constant) | Q am. 4 | frozen |
+| player_frozen | abort_reason == "player_frozen" (watchdog at T, or the stuck rule's censor), or the longest non-recovered frozen run > T | entries.py:session_class (`>`) | test_precedence, test_stuck.py:test_check_recovered_and_censored | N, Q am. 6, am. 7 (1) | frozen |
+| qa_fail / normal | verdict != PASS / otherwise | entries.py:session_class | test_precedence | Q (acceptance = QA verdicts) | frozen |
+| recovered dead | the dead run holding an outcome-continue re-entry's t_nav (±`RECOVERY_SLACK_S` 2.0 s) is excluded and reported as `recovered_dead_s` + window; one per session | entries.py:dead_player, RECOVERY_SLACK_S | test_ti37_recovered_reads_normal | Q am. 4 | frozen |
+| recovered frozen | the frozen run holding a continue re-entry's t_nav (2.0 s before the run to 5.0 s after) is excluded and reported as `recovered_frozen_s`, window, post-recovery window, rung, shaper; only with no dead recovery | check_session.py:recovered_frozen, label_checks | test_stuck.py:test_check_recovered_and_censored | Q am. 6 | frozen; the revocation in label_checks (a frozen continue re-entry revokes a dead recovery) is **unpinned** |
+| censored | set only by the stuck rule's second T2, or a re-entry that does not play: `{reason: second_freeze \| freeze_after_recovery \| reentry_not_playing, t, ...}` plus abort player_frozen. The backstop watchdog at T sets player_frozen without a censored record | browser.py:_stuck_tick; stuck.py:action | test_stuck.py:test_stuck_tick | Q am. 6, am. 11 | frozen. The checkpoint-list status is LVQoE's (am. 11) |
+| **finding F1** | session_class's `recovered` flag is set by recovered_dead **or** recovered_frozen. Were RECOVERED_DEAD_CLASS ever flipped to (b), a recovered *frozen* session would also read player_dead_recovered | check_session.py:main | — | Q am. 4 / am. 6 | finding (latent; no effect at "normal") |
+| **finding F2** | dead uses `≥ T`, frozen uses `> T` | entries.py:session_class | test_precedence | N / Q am. 4 | finding (asymmetry; at 1 s ticks, a difference of one tick) |
+
+## 2. Thresholds
+
+| behaviour | value / rule | code | pinned by | prereg clause | status |
+|---|---|---|---|---|---|
+| T table (backstop) | yt `180` s, twitch `660` s, tt `720` s; FAIL on > T; the watchdog aborts at T | check_session.py:FROZEN_PLAYHEAD_MAX_S; browser.py:_ad_watcher_loop | test_stuck.py (twitch, relative only) | N, Q am. 7 (2) | **unpinned** values |
+| tt dead T | `60` s (readyState 0 / no element with no media appended or decoded) | check_session.py:PLAYER_DEAD_MAX_S; browser.py:TTRoomWatch | test_player_dead.py:test_recovery_is_a_discontinuity (59 s does not fire, 62 s fires), test_ti20_replay, test_ti32 | Q am. 4 (tt dead rule, supervisor 2026-10-17) | frozen |
+| frozen-run measure | after the first move of > `1.0` s (FROZEN_TOL_S), a run opens at the first non-ad tick whose step is not in (`0.2`, `3.0`] s, whatever the label. It ends only after `10` consecutive advancing ticks (the end is where that advance began) or at an ad tick. A tick without current_time keeps it open | labeling/content.js:FROZEN_TOL_S / FROZEN_ADVANCE_TICKS / FROZEN_ADV_MIN_S / FROZEN_ADV_MAX_S; check_session.py:FROZEN_ADVANCE_TICKS, FROZEN_ADV_STEP_S, frozen_runs, frozen_playhead_run | test_frozen_run.py (JS = Python; needs node, else SKIP), test_stuck.py:test_tw1_tw27 (tw_27 longest > 660; tw_1 player_frozen) | Q am. 7 (1) | frozen |
+| T2 | `90` s, its clock running only while the shaper is ≥ `1.5` × the lowest rung: start = max(run start, start of that stretch) | stuck.py:T2_S, RUNG_MARGIN, above_since, t2_clock | test_stuck.py:test_t2_cases, test_stuck_tick | Q am. 6, am. 7 (3) | frozen (T2_S pinned to (80, 90]; RUNG_MARGIN range-only) |
+| stuck-rule action | first T2: one re-entry of the same channel / room, which must play within `60` s; second T2, or no resume: censor | stuck.py:action, REENTRY_CONFIRM_S; browser.py:_reenter_frozen, _reenter_room (tt: TT_REENTRY_CONFIRM_S 60) | test_stuck_tick; test_reenter_room_records_an_entry (tt 60 s) | Q am. 6 | frozen; REENTRY_CONFIRM_S (yt / twitch) **unpinned** |
+| one recovery per session | `RECOVERIES_PER_SESSION = 1` across player_dead and frozen re-entries, under one lock (`_recovery_lock`; used = dead + frozen re-entries) | stuck.py:RECOVERIES_PER_SESSION; browser.py:_recovery_lock | test_stuck_tick (freeze_after_recovery); test_one_reentry_then_the_session_ends | Q am. 4, am. 6 | frozen |
+| tt dead re-entry | `PLAYER_DEAD_REENTRIES = 1`; the re-entry is a shaped entry | browser.py:PLAYER_DEAD_REENTRIES, _reenter_room, dead_action | test_one_reentry_then_the_session_ends, test_ti33_reentry_window | Q am. 4 | frozen |
+| dead_window verdict (recorded only) | alive iff shaped rx ≥ `0.5` × min(shaper rate, shaped rx over the `30` s before the dead clock while the player progressed on ≥ `0.8` of ticks); else no_media. Detection is unchanged | browser.py:dead_window, PLAYER_DEAD_ALIVE_SHARE, PLAYING_REF_S, TTRoomWatch.playing_kbps | test_player_dead.py:test_ti43_dead_window_reference, test_ti32 | none (diagnostic; supervisor 2026-10-18) | pending `1bcdc5e` |
+| lowest rung | twitch: HLS master's lowest BANDWIDTH (MasterListener). yt: lowest video + lowest audio (player response). tt: `vbitrate` for the codec (room sdk_params). Fallbacks twitch `230`, yt `130`, tt `1800` kbit; source recorded | stuck.py:rung_from_master, rung_from_yt_formats, rung_from_tt_sdk, rung_record, FALLBACK_RUNG_KBIT; browser.py:_current_rung | test_stuck.py:test_rungs | Q am. 7 (3) | frozen (fallback values **unpinned**) |
+| the entry rule | a censored stall whose frozen window starts within `60` s of an entry fails that entry (`sustained_60s` false, `censored_stall` true) | entries.py:compute_entries, SUSTAIN_WINDOW_S | test_stuck.py:test_entries | Q am. 6 | frozen |
+| entry fields | kind (stream / room_reentry / reentry), t, url, rotation_ok, reason, dead_window, outcome, shaper_at_entry {state, rate_kbit}, first_shaped_after, sustained_60s (a `5` s run within `60` s), sustained_at, start_failed, censored_stall | entries.py:compute_entries, SUSTAIN_RUN_S | test_player_dead.py (test_rates_and_reentry, test_entries_and_class), test_slow_start.py | Q am. 4 (per-entry startup rate) | frozen |
+| slow start | an unsustained stream entry whose first shaped state in the window is ≤ `2` is slow_start_shaped, not startup_failure | entries.py:slow_start_shaped, SLOW_START_MAX_STATE | test_slow_start.py | (supervisor 2026-10-18, yt_35) | frozen; **clause?** |
+
+## 3. Recorded fields
+
+| field | content | writer | pinned by | prereg clause | status |
+|---|---|---|---|---|---|
+| meta shaper | matrix_id, low_state_cap, initial_state_rule, forced_initial_state | exp.py → session_meta.start | check_session meta_check requires matrix_id + low_state_cap | M, Q | frozen (the writers are untested) |
+| meta coverage | the snapshot itself, rule version, allowed set, deficits, chosen matrix, target, yields, why, taken_at, applied. There is no separate snapshot id: the snapshot is embedded | coverage_report.choose, meta_record; exp.py | test_coverage.py | Q | frozen |
+| meta lowest_rung | {kbit, source, detail, t} | browser.py:_current_rung → exp.py | test_stuck.py | Q am. 7 (3) | frozen |
+| meta decode_path | spec (name, flags, env) + gpu (SystemInfo at launch) + page (MSE / WebCodecs hvc1) + hevc / source / probes (the decision) | decode_path.py; browser.py; exp.py | test_decode_path.py | Q am. 8 | frozen (decision fields from `cdc6204`) |
+| meta template_note | the template's TEMPLATE_NOTE.txt only | profile_clone.template_note_of | test_decode_path.py | Q am. 8 (regime boundary) | frozen |
+| meta tt_stream | the codec, requested suffixes, ladder per codec, quality button (tt only) | tt_stream.py → exp.py | test_tt_stream.py | Q am. 2 / am. 8 | frozen |
+| meta player_dead / player_dead_reentries | reason, at, sample, shaper_state, room, dead_s, dead_window; re-entries: t_nav, t_enter, ok, t_playing, confirm, outcome. New: `media` | browser.py → exp.py | test_player_dead.py | Q am. 4 | frozen; `media` pending `1bcdc5e` |
+| meta frozen_reentries / censored | the stuck rule's re-entries and its censor record | browser.py:_stuck_tick → exp.py | test_stuck.py | Q am. 6 | frozen |
+| recovered_dead_s / recovered_frozen_s | check-time only (check.json labels), with windows; not in meta | check_session.py:label_checks | test_ti37, test_check_recovered_and_censored | Q am. 4 / am. 6 | frozen |
+| meta compute_load | Sampler summary (1-min load, running compute jobs every 5 s; compute_load.jsonl) | compute_load.py → exp.py | test_compute_load.py | (supervisor 2026-10-18 covariate) | frozen; **clause?** |
+| media_events.jsonl + player_dead.media | tt: CDP Media domain per player (decoder, resolution, events, errors, error / warning / info messages); at a dead trigger each `<video>`'s error / state, Chrome's video_decode, the listener snapshot. Recording only, no flag | browser.py:MediaListener, _media_snapshot | test_player_dead.py:test_media_listener_records | none (diagnostic, supervisor 2026-10-18, ti_43) | pending `1bcdc5e` |
+| entry_quality | not built: Q am. 10 (behind a flag, default off) | — | — | Q am. 10 | not built |
+| session counter | `_summaries/session_counter_<platform>.json`; never reuses a removed session's name | session_names.py | test_session_names.py | (supervisor 2026-10-18) | frozen |
+| check.json | verdict, session_class, entries, reasons, thresholds, labels (incl. recovered_*), traffic, shots, ad_actions, matrix, low_state_cap, stream_regime, suspicious, censored, lowest_rung, decode_path, decode_hevc (decision with the played codec), template_note. tt_stream is in check.md only | check_session.py:main | — | — | **unpinned** (no test reads check.json's keys) |
+
+## 4. Matrices and the coverage rule
+
+| behaviour | value / rule | code | pinned by | prereg clause | status |
+|---|---|---|---|---|---|
+| tt matrices | `current` (cap 2, linear start), `TT-M` (cap 4, stationary start) | utils/shaping.py:TIKTOK_MATRICES | — | M | **unpinned** (TT-M table, cap, rule) |
+| twitch matrices | `current` (2, linear), `TW-M` (2, stationary), `TW-L` (2, stationary) | utils/shaping.py:TWITCH_MATRICES, TWITCH_TRANSITIONS_L | test_coverage.py (TW-L table, cap 2, stationary, mass in states ≤ 5) | M, Q am. 3 | TW-L frozen; TW-M **unpinned** |
+| yt matrices | `current` (2, linear), `A` (6, stationary), `B` (6, stationary) | utils/shaping.py:YOUTUBE_MATRICES; utils/netStat.py (yt cap 6 under A / B, t38) | — | A | **unpinned** |
+| initial state | linear (weights 1..n) or the stationary distribution, per matrix; `--initial-state` overrides | utils/shaping.py:initial_state, initial_state_stationary; exp.py; utils/netStat.py (`--initial-state`) | — | M | **unpinned** |
+| low-state cap | after `cap` consecutive episodes in states ≤ 3, the next is forced to state 4 | utils/netStat.py (max_consecutive_low, _MIN_RECOVERY_STATE) | test_coverage.py (TW-L only) | M, Q am. 3 | partly pinned |
+| episodes | `60` s each; yt `21`, tt `23`, twitch `23` | exp.py; orchestrate.py:EPISODES_V2 | — | M (23 × 60 s); yt: A (t38) **clause?** | **unpinned** |
+| steering | `MATRIX_RULE = "coverage"`; allowed = every defined matrix (`COVERAGE_ALLOWED` empty); fixed fallback ids A / TT-M / TW-M | orchestrate.py:MATRIX_RULE, COVERAGE_ALLOWED, MATRIX_IDS, session_matrix | test_coverage.py | Q, Q am. 3 (1) | frozen |
+| the rule | largest deficit first; any matrix with < `2` sessions explored; then highest yield (tier: mean minutes; STALL: mean onsets; tt entry state: stationary probability); ties to the lowest id; no deficit → DEFAULT_MATRIX | coverage_report.pick_matrix, EXPLORE_MIN, DEFAULT_MATRIX, RULE_VERSION `coverage-v2` | test_coverage.py | Q, Q am. 3 (2) / (5), am. 5 | frozen |
+| floors | `5` sessions with ≥ `2` min of every tier class; STALL: `5` sessions with ≥ `3` onsets; tt: each shaper state at ≥ `5` room entries (every recorded entry except not_live / login_wall / interrupted); pooled stall band reported | coverage_report.FLOOR_SESSIONS, FLOOR_MINUTES, STALL_FLOOR_ONSETS, TT_ENTRY_FLOOR | test_coverage.py | Q, Q am. 3 (4), am. 5 | frozen |
+| entry-tier rotation | not built (Q am. 10, behind its flag) | — | — | Q am. 1 / am. 10 | not built |
+
+## 5. Fixtures as goldens
+
+Run with `cd networkSim && for t in test_*.py; do [ "$t" = test_browser.py ] \|\| ../.venv/bin/python "$t"; done`. That is the same set as apply_at_boundary.sh.
+
+| fixture | pins | test |
+|---|---|---|
+| fixtures/tt_room_html_2026-10-17.html | the ended-banner phrase on real pages | test_tt_room.py:test_ended_phrase_on_real_pages |
+| fixtures/tt_ti12_src_drops.json | a reconnect is a discontinuity, not a cut | test_tt_room.py:test_ti12_reconnects_are_discontinuities |
+| fixtures/tt_ti20_session_2026-10-17.json, tt_ti20_ticks_2026-10-17.json | player_dead at 60 s; entries and class | test_player_dead.py:test_ti20_replay, test_entries_and_class |
+| fixtures/tt_ti32_player_dead_2026-10-18.json | dead after the element's end with the stream alive | test_player_dead.py:test_ti32 |
+| fixtures/tt_ti33_reentry_2026-10-18.json | the tt re-entry window (60 s) | test_player_dead.py:test_ti33_reentry_window |
+| fixtures/tt_ti37_recovered_2026-10-18.json | a recovered death reads normal | test_player_dead.py:test_ti37_recovered_reads_normal |
+| fixtures/tw_player_dom_self_pause_2026-10-17.html, tw_player_state_self_pause_2026-10-17.json | the self-pause resume on a real twitch DOM | test_resume.py:test_real_twitch_self_pause_fixture |
+| fixtures/tw1_frozen_2026-10-18.json | tw_1 player_frozen under the am. 7 measure | test_stuck.py:test_tw1_tw27 |
+| fixtures/tw27_frozen_2026-10-18.json | tw_27's run > 660 s; recovered / censored at check | test_stuck.py:test_tw1_tw27, test_check_recovered_and_censored |
+
+- **Unpinned behaviours, listed above:** the T-table values; the yt / twitch REENTRY_CONFIRM_S; the rung fallbacks; TT-M / TW-M / yt A / B tables and caps; the initial-state rules; the episode counts; check.json's keys; the label_checks revocation.
+- **For levi:** which of these each needs a golden.
+
+## 6. Change log
+
+"First session" means the first session per platform whose recorded `lvdc_commit` contains the change. Changes are applied at boundaries, so commit time is not used.
+
+| date | change | code sha | first session (tt / twitch / yt) | prereg clause | signed |
+|---|---|---|---|---|---|
+| 2026-10-18 | coverage fixes; tt_stream regime record | `8141759` | ti_40 / tw_27 / yt_39 | Q am. 2 | — |
+| 2026-10-18 | coverage steering (snapshot → matrix) | `c13b3e6` | ti_40 / tw_27 / yt_39 | Q | levi (Q am. 3) |
+| 2026-10-18 | first-session fault flags | `c3c5dbe` | ti_40 / tw_27 / yt_39 | Q am. 3 (3) | levi |
+| 2026-10-18 | TW-L; tt entry count | `75640a8` | ti_40 / tw_27 / yt_39 | Q am. 3 | levi |
+| 2026-10-18 | tt recovered death reads normal | `c9f465e` | ti_40 / tw_28 / yt_39 | Q am. 4 | levi |
+| 2026-10-18 | monotonic session counter | `1a97037` | ti_40 / tw_28 / yt_39 | — (fault fix) | — |
+| 2026-10-18 | am. 5–6 (stall onsets, stuck rule) + frozen-measure fix | `8eec432` | ti_40 / tw_29 / yt_40 | Q am. 5, am. 6, am. 7 (1) | levi |
+| 2026-10-18 | T2 clock only at ≥ 1.5 × lowest rung | `bd0231b` | ti_40 / tw_29 / yt_40 | Q am. 7 (3) | levi |
+| 2026-10-18 | tt VA-API HEVC flag set (yt / twitch unchanged) | `62f2e1b` | ti_40 / tw_29 / yt_40 | Q am. 8 | levi |
+| 2026-10-18 | **HEVC regime boundary**: the tt template rebuild (TEMPLATE_NOTE: verified by room check `tt_hevc_roomcheck_20261018_1337`) | template, not code | last H.264: ti_39 (11:33); first HEVC: ti_40 (13:42) | Q am. 8 | — |
+| 2026-10-18 | decode decision recorded with its source (page probe on chaos); template_note in meta | `cdc6204` | ti_41 / tw_29 / yt_40. ti_40 predates it: `decode_path_unrecorded`, regime from the played codec (levi's ruling) | Q am. 8 | levi |
+| 2026-10-18 | ops: verify / frames loop from one LVQoE worktree (no collector behaviour) | `c77f524` | ti_41 / tw_32 / yt_41 | — (ops) | supervisor |
+| 2026-10-18 | tt media-internals recorder; dead_window reference (recorded verdict only) | `1bcdc5e` | pending | none (diagnostic) | — |
+
+## 7. Change procedure
+
+- A behaviour change names its prereg clause before code. A change with no clause is a fault fix only, stated as such.
+- Fixtures are updated in the same commit.
+- Each change gets a change-log row naming its first affected session per platform, by `lvdc_commit`.
+- levi signs each row.
