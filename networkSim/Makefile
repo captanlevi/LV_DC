@@ -1,8 +1,14 @@
 # Configurable parameters
 # PLZ keep paths ABSOLUTE no RELATIVE SHIT
 IFACE ?= wlp0s20f3
-IFB_INGRESS = ifb0
-IFB_EGRESS = ifb1
+# t53 (--concurrent): a trio slot overrides these; every default is single mode's value (make -n golden:
+# test_make_single_mode.py)
+IFB_INGRESS ?= ifb0
+IFB_EGRESS ?= ifb1
+EGRESS_CLASS ?= 1:10
+CDP_PORT ?= 9222
+SLOT_SUFFIX ?=
+CHROME_PREFIX ?=
 BANDWIDTH = 1000kbit
 DELAY = 0ms
 PLR = 0%
@@ -99,10 +105,10 @@ slow:
 	@sudo tc qdisc add dev $(IFB_INGRESS) parent 1:10 netem delay $(DELAY) loss $(PLR) 2>/dev/null || \
 		sudo tc qdisc change dev $(IFB_INGRESS) parent 1:10 netem delay $(DELAY) loss $(PLR)
 	# Egress
-	@sudo tc class add dev $(IFACE) parent 1: classid 1:10 htb rate $(BANDWIDTH) 2>/dev/null || \
-		sudo tc class change dev $(IFACE) parent 1: classid 1:10 htb rate $(BANDWIDTH)
-	@sudo tc qdisc add dev $(IFACE) parent 1:10 netem delay $(DELAY) loss $(PLR) 2>/dev/null || \
-		sudo tc qdisc change dev $(IFACE) parent 1:10 netem delay $(DELAY) loss $(PLR)
+	@sudo tc class add dev $(IFACE) parent 1: classid $(EGRESS_CLASS) htb rate $(BANDWIDTH) 2>/dev/null || \
+		sudo tc class change dev $(IFACE) parent 1: classid $(EGRESS_CLASS) htb rate $(BANDWIDTH)
+	@sudo tc qdisc add dev $(IFACE) parent $(EGRESS_CLASS) netem delay $(DELAY) loss $(PLR) 2>/dev/null || \
+		sudo tc qdisc change dev $(IFACE) parent $(EGRESS_CLASS) netem delay $(DELAY) loss $(PLR)
 	@echo "✅ Network shaping applied: $(BANDWIDTH), $(DELAY), loss $(PLR)"
 
 
@@ -124,8 +130,8 @@ start-capture:
 	@# v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails ("Couldn't change ownership of
 	@# savefile") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never
 	@# opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.
-	@sudo sh -c 'exec tcpdump -i $(IFB_INGRESS) -U -w - "$(CAPTURE_BPF)" > "$(IN_FILE)"' & echo $$! > $(CAPTURE_DIR)/ifb0.pid
-	@sudo sh -c 'exec tcpdump -i $(IFB_EGRESS) -U -w - "$(CAPTURE_BPF)" > "$(OUT_FILE)"' & echo $$! > $(CAPTURE_DIR)/ifb1.pid
+	@sudo sh -c 'exec tcpdump -i $(IFB_INGRESS) -U -w - "$(CAPTURE_BPF)" > "$(IN_FILE)"' & echo $$! > $(CAPTURE_DIR)/$(IFB_INGRESS).pid
+	@sudo sh -c 'exec tcpdump -i $(IFB_EGRESS) -U -w - "$(CAPTURE_BPF)" > "$(OUT_FILE)"' & echo $$! > $(CAPTURE_DIR)/$(IFB_EGRESS).pid
 	@echo "✅ Capture started"
 
 
@@ -134,18 +140,18 @@ start-capture:
 stop-capture:
 	@echo "🛑 Stopping capture..."
 
-	@if [ -f $(CAPTURE_DIR)/ifb0.pid ]; then \
-		PID=`cat $(CAPTURE_DIR)/ifb0.pid`; \
+	@if [ -f $(CAPTURE_DIR)/$(IFB_INGRESS).pid ]; then \
+		PID=`cat $(CAPTURE_DIR)/$(IFB_INGRESS).pid`; \
 		sudo kill -INT $$PID; \
 		for i in $$(seq 50); do sudo kill -0 $$PID 2>/dev/null || break; sleep 0.2; done; \
-		rm $(CAPTURE_DIR)/ifb0.pid; \
+		rm $(CAPTURE_DIR)/$(IFB_INGRESS).pid; \
 	fi
 
-	@if [ -f $(CAPTURE_DIR)/ifb1.pid ]; then \
-		PID=`cat $(CAPTURE_DIR)/ifb1.pid`; \
+	@if [ -f $(CAPTURE_DIR)/$(IFB_EGRESS).pid ]; then \
+		PID=`cat $(CAPTURE_DIR)/$(IFB_EGRESS).pid`; \
 		sudo kill -INT $$PID; \
 		for i in $$(seq 50); do sudo kill -0 $$PID 2>/dev/null || break; sleep 0.2; done; \
-		rm $(CAPTURE_DIR)/ifb1.pid; \
+		rm $(CAPTURE_DIR)/$(IFB_EGRESS).pid; \
 	fi
 
 	@# (the loop above waits up to 10 s for tcpdump to flush and exit; `sudo wait` never waited: wait is a shell builtin)
@@ -183,7 +189,7 @@ CHROME_BIN ?= $(shell which google-chrome chromium-browser chromium 2>/dev/null 
 # on branded Chrome it keeps the CDP-loaded extension's content script from running (laptop test 2026-10-16).
 CHROME_PROFILE ?= $(CAPTURE_DIR)/chrome_profile
 
-CHROME_LOG := $(CAPTURE_DIR)/chrome.log
+CHROME_LOG := $(CAPTURE_DIR)/chrome$(SLOT_SUFFIX).log
 # v2: optional fixed window size "W,H" (exp.py passes the platform's; the player size is recorded in meta.json)
 WINDOW_SIZE ?=
 WINDOW_FLAG := $(if $(WINDOW_SIZE),--window-size=$(WINDOW_SIZE),)
@@ -207,21 +213,21 @@ start_chrome:
 	@LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
 	mkdir -p $(CHROME_PROFILE); \
 	chown -R $$LAUNCH_USER $(CHROME_PROFILE) 2>/dev/null || true; \
-	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=$(DISABLE_FEATURES_ALL) $(ENABLE_FEATURES_FLAG) $(CHROME_EXTRA_ARGS) --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check $(WINDOW_FLAG) --load-extension=$(LABELING_DIR) about:blank"; \
+	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=$(CDP_PORT) --remote-allow-origins=* --disable-features=$(DISABLE_FEATURES_ALL) $(ENABLE_FEATURES_FLAG) $(CHROME_EXTRA_ARGS) --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check $(WINDOW_FLAG) --load-extension=$(LABELING_DIR) about:blank"; \
 	if [ "$$LAUNCH_USER" = "$$(id -un)" ]; then \
-		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_ENV) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
+		$(if $(CHROME_PREFIX),$(CHROME_PREFIX) ,)env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_ENV) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	else \
-		sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_ENV) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
+		$(if $(CHROME_PREFIX),$(CHROME_PREFIX) ,)sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_ENV) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	fi; \
-	echo $$! > $(CAPTURE_DIR)/chrome.pid
-	@echo "✅ Chrome launched (debug port 9222, log → $(CHROME_LOG))"
+	echo $$! > $(CAPTURE_DIR)/chrome$(SLOT_SUFFIX).pid
+	@echo "✅ Chrome launched (debug port $(CDP_PORT), log → $(CHROME_LOG))"
 
 kill_chrome:
 	@echo "🛑 Killing collection Chrome..."
 	@# [r]: the pattern must not match this recipe's own shell, whose command line contains it (make: *** Killed)
-	@pkill -9 -f "[r]emote-debugging-port=9222" 2>/dev/null || true
+	@pkill -9 -f "[r]emote-debugging-port=$(CDP_PORT)" 2>/dev/null || true
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
-		pgrep -f "[r]emote-debugging-port=9222" > /dev/null 2>&1 || break; \
+		pgrep -f "[r]emote-debugging-port=$(CDP_PORT)" > /dev/null 2>&1 || break; \
 		sleep 1; \
 	done
 	@rm -f "$(CHROME_PROFILE)/Default/Sessions" \
@@ -230,7 +236,7 @@ kill_chrome:
 	        "$(CHROME_PROFILE)/Default/Last Tabs" \
 	        "$(CHROME_PROFILE)/Default/Current Tabs" \
 	        "$(CHROME_PROFILE)/Default/Last Browser" 2>/dev/null || true
-	@rm -f $(CAPTURE_DIR)/chrome.pid $(CAPTURE_DIR)/chrome.log
+	@rm -f $(CAPTURE_DIR)/chrome$(SLOT_SUFFIX).pid $(CAPTURE_DIR)/chrome$(SLOT_SUFFIX).log
 	@echo "✅ Chrome killed, session files cleared"
 
 # v2: NOT called by exp.py any more (the keys are kept per session); left for manual use.
