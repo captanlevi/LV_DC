@@ -690,6 +690,8 @@ if __name__ == "__main__":
                                      entry_quality=eq_cfg)
             browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)
             browser.start()
+            # Chrome's version while it surely answers (tw_43: refused at finish); finish falls back to it
+            session_meta.write(session_dir, chrome_start=session_meta.chrome_version(tries=3))
             if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
                 try:
                     dpms = subprocess.run(["xset", "dpms", "force", "off"], capture_output=True, text=True, timeout=10)

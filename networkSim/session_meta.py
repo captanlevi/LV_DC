@@ -31,13 +31,38 @@ def lvdc_commit() -> dict:
     return {"sha": sha, "dirty": bool(dirty) if dirty is not None else None}
 
 
-def chrome_version(cdp_base: str = "http://localhost:9222") -> dict:
-    try:
-        with urllib.request.urlopen(f"{cdp_base}/json/version", timeout=5) as r:
-            v = json.loads(r.read())
-        return {"browser": v.get("Browser"), "user_agent": v.get("User-Agent"), "protocol": v.get("Protocol-Version")}
-    except Exception as e:
-        return {"browser": None, "error": repr(e)}
+def chrome_version(cdp_base: str = "http://localhost:9222", tries: int = 1, wait_s: float = 2.0) -> dict:
+    """Chrome's version from /json/version; up to `tries` attempts `wait_s` apart (the last error kept)."""
+    err = None
+    for i in range(max(1, tries)):
+        try:
+            with urllib.request.urlopen(f"{cdp_base}/json/version", timeout=5) as r:
+                v = json.loads(r.read())
+            return {"browser": v.get("Browser"), "user_agent": v.get("User-Agent"), "protocol": v.get("Protocol-Version"),
+                    **({"tries": i + 1} if i else {})}
+        except Exception as e:
+            err = repr(e)
+            if i + 1 < tries:
+                time.sleep(wait_s)
+    return {"browser": None, "error": err, "tries": max(1, tries)}
+
+
+CHROME_END_TRIES = 5       # tw_43 (shagun 2026-10-19): the end read was refused once; then the start read stands
+
+
+def chrome_at_end(session_dir: Path) -> dict:
+    """meta.chrome at finish: the end read (CHROME_END_TRIES attempts); when Chrome no longer answers there (tw_43:
+    refused, the session otherwise complete), the start read (meta.chrome_start, taken once the browser attached) with
+    the end error beside it, so a version string never fails a session that ran."""
+    end = chrome_version(tries=CHROME_END_TRIES)
+    if end.get("browser"):
+        return end
+    p = Path(session_dir) / "meta.json"
+    start = (json.loads(p.read_text()) if p.exists() else {}).get("chrome_start") or {}
+    if start.get("browser"):
+        return {**start, "source": "chrome_start (the end read failed)", "end_error": end.get("error"),
+                "end_tries": end.get("tries")}
+    return end
 
 
 def extension_version() -> str | None:
@@ -160,5 +185,5 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
 
 def finish(session_dir: Path, channel_url: str | None, **extra) -> dict:
     """extra: e.g. chat_action, geometry (window / viewport / player size at start), window_size_flag."""
-    return write(session_dir, ended_at=time.time(), channel_url=channel_url, chrome=chrome_version(),
+    return write(session_dir, ended_at=time.time(), channel_url=channel_url, chrome=chrome_at_end(session_dir),
                  ntp_offset_end=ntp_offset(), data_volume_end=data_volume(session_dir), **extra)
