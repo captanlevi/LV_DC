@@ -97,6 +97,26 @@
    ]
   }
  },
+ "geometry": {
+  "GEOMETRY_CHOICES": {
+   "tiktok": [
+    "player:783x604",
+    "player:537x880",
+    "window:1920x1080"
+   ],
+   "twitch": [
+    "player:1274x717",
+    "window:1920x1080"
+   ],
+   "youtube": [
+    "player:853x480",
+    "player:1280x720",
+    "window:1920x1080",
+    "theater:1920x1080",
+    "theater:1920x1080@1.5"
+   ]
+  }
+ },
  "low_state": {
   "_LOW_STATE_THRESHOLD": 3,
   "_MAX_CONSECUTIVE_LOW": 2,

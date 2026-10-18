@@ -9,6 +9,10 @@ meta.json (geometry_target); client_w / client_h per tick are in labels.csv alre
   theater:WxH (yt only) the window as window:WxH, then yt's theater mode (the player's size button), so the player
               exceeds 720 device px tall where the viewport allows (supervisor 2026-10-18: no 1080p in 30 sessions,
               the 1263x710 / 855x481 players most likely capped yt's ABR at 720p)
+  <spec>@D    the same, with Chrome launched at device scale factor D (--force-device-scale-factor; layout only):
+              theater:1920x1080@1.5 (supervisor 2026-10-18, shagun's audit: in theater mode yt_39-41's player stayed
+              699 device px tall in the 1818x868 viewport and never played above 720p, so the yt 1080p floor could not
+              fill); the DPR and the player's device px are recorded in meta.json player_pin / geometry (Q am. 2)
 
 Sessions collected before rotation (pinned sizes) carry only player_pin.target in meta.json; they count as
 player:<target>, so the rotation first evens the other entries out.
@@ -19,18 +23,47 @@ import json
 from pathlib import Path
 
 GEOMETRY_CHOICES: dict[str, list[str]] = {
-    "youtube": ["player:853x480", "player:1280x720", "window:1920x1080", "theater:1920x1080"],
+    "youtube": ["player:853x480", "player:1280x720", "window:1920x1080", "theater:1920x1080", "theater:1920x1080@1.5"],
     "twitch": ["player:1274x717", "window:1920x1080"],          # chat open on twitch (CLOSE_CHAT_DEFAULT)
     "tiktok": ["player:783x604", "player:537x880", "window:1920x1080"],
 }
 
 
 def parse(spec: str) -> tuple[str, int, int]:
-    mode, wh = spec.split(":", 1)
+    mode, wh = spec.split("@", 1)[0].split(":", 1)
     w, h = wh.lower().split("x")
     if mode not in ("player", "window", "theater"):
         raise ValueError(f"geometry mode must be player, window or theater: {spec}")
     return mode, int(w), int(h)
+
+
+def device_scale(spec: str | None) -> float | None:
+    """The `@D` device scale factor of a spec (theater:1920x1080@1.5 -> 1.5); None without one."""
+    if not spec or "@" not in spec:
+        return None
+    d = float(spec.split("@", 1)[1])
+    if not 1.0 <= d <= 3.0:
+        raise ValueError(f"device scale factor out of range: {spec}")
+    return d
+
+
+def chrome_args(spec: str | None) -> list[str]:
+    """The Chrome launch arguments a spec needs (the device scale factor; layout only)."""
+    d = device_scale(spec)
+    return [f"--force-device-scale-factor={d:g}"] if d else []
+
+
+def merge_make_vars(make_vars: list[str], extra_args: list[str]) -> list[str]:
+    """exp.py's `make start_chrome` variables (decode_path.make_vars) with extra Chrome args appended to
+    CHROME_EXTRA_ARGS (one variable: make takes the last assignment)."""
+    if not extra_args:
+        return list(make_vars)
+    out, done = [], False
+    for v in make_vars:
+        if v.startswith("CHROME_EXTRA_ARGS="):
+            v, done = v + " " + " ".join(extra_args), True
+        out.append(v)
+    return out if done else out + ["CHROME_EXTRA_ARGS=" + " ".join(extra_args)]
 
 
 def _session_spec(meta: dict) -> str | None:

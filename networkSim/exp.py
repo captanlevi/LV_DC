@@ -141,12 +141,15 @@ def fresh_chrome_profile(session_dir: Path, template: Path | None) -> tuple[Path
 
 
 def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window_size: str | None = None,
-                                 platform: str | None = None) -> bool:
+                                 platform: str | None = None, geometry_spec: str | None = None) -> bool:
     try:
         # the key log goes to <session_dir>/ssl_keys.log (kept); the profile is the session's fresh one; the platform's
-        # decode flags (decode_path.py: tt's HEVC path) go in as make variables
+        # decode flags (decode_path.py: tt's HEVC path) and the geometry's launch args (geometry.py: a `@D` device scale
+        # factor) go in as make variables
+        import geometry
         run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"]
-            + ([f"WINDOW_SIZE={window_size}"] if window_size else []) + decode_path.make_vars(platform or ""))
+            + ([f"WINDOW_SIZE={window_size}"] if window_size else [])
+            + geometry.merge_make_vars(decode_path.make_vars(platform or ""), geometry.chrome_args(geometry_spec)))
         return True
     except Exception as e:
         print(e)
@@ -650,7 +653,8 @@ if __name__ == "__main__":
     if is_capture and initialize_pcap(session_dir) == False:
         raise ValueError("Cannot initialize pcap capture")
 
-    if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform), platform) == False:
+    if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform), platform,
+                                    args.geometry) == False:
         raise ValueError("Cannot open chrome with SSL key log enabled")
 
     browser = None

@@ -2141,6 +2141,12 @@ class BrowserSession:
                 if mode == "theater":
                     self.player_pin["theater"] = yt_theater(self._page) if self.platform == "youtube" else "not yt"
             self.player_pin["geometry_target"] = self.geometry_target
+            from geometry import device_scale   # a `@D` launch scale: requested beside the page's own devicePixelRatio
+            self.player_pin["device_scale_requested"] = device_scale(self.geometry_target)
+            try:
+                self.player_pin["device_pixel_ratio"] = self._page.eval("window.devicePixelRatio")
+            except Exception:
+                pass
             print(f"[browser] Geometry {self.geometry_target}: {self.player_pin}", flush=True)
         try:
             self.geometry = json.loads(self._page.eval(_GEOMETRY_JS) or "null")

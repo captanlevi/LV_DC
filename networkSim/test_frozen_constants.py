@@ -26,6 +26,7 @@ import check_session as CS  # noqa: E402
 import coverage_report as CR  # noqa: E402
 import decode_path as DP  # noqa: E402
 import entries as E  # noqa: E402
+import geometry as GEO  # noqa: E402
 import orchestrate as O  # noqa: E402
 import stuck as S  # noqa: E402
 from utils import netStat as NS, shaping as SH  # noqa: E402
@@ -80,6 +81,7 @@ def current() -> dict:
                      "TT_ENTRY_FLOOR": CR.TT_ENTRY_FLOOR, "EXPLORE_MIN": CR.EXPLORE_MIN,
                      "DEFAULT_MATRIX": CR.DEFAULT_MATRIX, "FLAG_AFTER_SESSIONS": CR.FLAG_AFTER_SESSIONS},
         "decode_path": {"PLATFORM_DECODE": DP.PLATFORM_DECODE, "DEFAULT": DP.DEFAULT},
+        "geometry": {"GEOMETRY_CHOICES": GEO.GEOMETRY_CHOICES},
     }))
 
 

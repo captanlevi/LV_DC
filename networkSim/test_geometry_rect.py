@@ -110,8 +110,38 @@ def test_yt_top_quality():
     assert Y.top_quality(html) == 1440 and Y.top_quality('{"qualityLabel":"720p"}') == 720 and Y.top_quality("") is None
 
 
+def test_device_scale_variant():
+    """yt theater at device scale 1.5 (supervisor 2026-10-18, shagun's audit: theater at DPR 1 left the player 699
+    device px tall and yt never played above 720p): the spec parses as theater, launches Chrome with
+    --force-device-scale-factor merged into CHROME_EXTRA_ARGS (beside any decode-path args), and enters the rotation."""
+    import geometry as G
+    assert G.parse("theater:1920x1080@1.5") == ("theater", 1920, 1080) and G.parse("theater:1920x1080") == ("theater", 1920, 1080)
+    assert G.device_scale("theater:1920x1080@1.5") == 1.5 and G.device_scale("window:1920x1080") is None and G.device_scale(None) is None
+    assert G.chrome_args("theater:1920x1080@1.5") == ["--force-device-scale-factor=1.5"] and G.chrome_args("player:853x480") == []
+    try:
+        G.device_scale("theater:1920x1080@9")
+        raise AssertionError("an out-of-range scale must raise")
+    except ValueError:
+        pass
+    assert G.merge_make_vars([], []) == []
+    assert G.merge_make_vars(["CHROME_ENV=X=1"], ["--force-device-scale-factor=1.5"]) == \
+        ["CHROME_ENV=X=1", "CHROME_EXTRA_ARGS=--force-device-scale-factor=1.5"]
+    assert G.merge_make_vars(["CHROME_EXTRA_ARGS=--ignore-gpu-blocklist"], ["--force-device-scale-factor=1.5"]) == \
+        ["CHROME_EXTRA_ARGS=--ignore-gpu-blocklist --force-device-scale-factor=1.5"]
+    assert "theater:1920x1080@1.5" in G.GEOMETRY_CHOICES["youtube"]
+    import tempfile
+    from pathlib import Path as P
+    with tempfile.TemporaryDirectory() as d:                                  # the least-collected entry goes next
+        for i, g in enumerate(G.GEOMETRY_CHOICES["youtube"][:-1]):
+            sd = P(d) / "youtube" / f"yt_{i}"
+            sd.mkdir(parents=True)
+            (sd / "meta.json").write_text('{"geometry_target": "%s"}' % g)
+        assert G.next_geometry(P(d), "youtube") == "theater:1920x1080@1.5"
+
+
 def main() -> int:
     test_yt_top_quality()
+    test_device_scale_variant()
     if not shutil.which("node"):
         print("SKIP: node not found")
         return 0
