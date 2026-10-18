@@ -34,7 +34,9 @@ Levi's gate-1 conditions (2026-10-19), each a phase of its own:
   - every state and the goodput run >= 60 s.
 Output: <out>/report.json, <out>/samples.jsonl, <out>/commands.log. --print-only lists the commands and exits.
 
-    sudo python3 ops/diag/trio_dry_run.py --iface wlp0s20f3 --out /tmp/trio_dry_run_$(date +%s)
+    sudo .venv/bin/python ops/diag/trio_dry_run.py --iface wlp0s20f3 --out /tmp/trio_dry_run_$(date +%s)
+
+The collector's venv Python (numpy): the script checks its imports before any phase and records the interpreter.
 """
 from __future__ import annotations
 
@@ -48,6 +50,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+try:
+    import numpy as np            # checked in main() before any phase (pilot-0b: system Python, no numpy, after goodput)
+except ImportError:
+    np = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "networkSim"))
 try:
@@ -286,6 +293,8 @@ def run(a) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     states = {s: (a.states.get(s) or DEFAULT_STATES[s]) for s in SESSIONS}
     rep: dict = {"what": "t53 trio dry run (gate 1)", "iface": a.iface, "states": states, "state_s": a.state_s,
+                 "interpreter": {"executable": sys.executable, "python": sys.version.split()[0],
+                                 "numpy": getattr(np, "__version__", None)},
                  "params": {s: [state_params(x) for x in v] for s, v in states.items()}, "url": a.url}
     rep["preflight"] = pf = preflight(a.iface)
     if not pf["ok"] and not a.force:
@@ -515,7 +524,6 @@ def single_mode_reference(a, states: dict, out: Path) -> dict:
 def per_second_ratio(series: list[tuple[float, int]], rate_kbit: float) -> dict:
     """Per second (consecutive samples), the class's delivered kbit / its set rate: n, p50, p95, max, mean (pilot-0,
     levi 4: the per-second p95 at twitch's low states against single mode's, the mean the long-run delivery)."""
-    import numpy as np
     r = [((b1 - b0) * 8 / 1000 / (t1 - t0)) / rate_kbit for (t0, b0), (t1, b1) in zip(series, series[1:])
          if t1 > t0 and rate_kbit]
     if not r:
@@ -647,6 +655,10 @@ def main(argv=None) -> int:
     if MARK_BY == "uid" and not a.print_only:
         for s in SESSIONS:
             sh(f"id lvdc_{s} || useradd -M -s /usr/sbin/nologin lvdc_{s}", check=False)
+    if np is None and not a.print_only:           # fail before any phase, not after the goodput run
+        print(f"trio_dry_run needs numpy; {sys.executable} has none. Run it with the collector's venv: "
+              f"sudo .venv/bin/python ops/diag/trio_dry_run.py ...", file=sys.stderr)
+        return 2
     if a.print_only:
         for c in tree_up_cmds(a.iface) + [x for s in SESSIONS for x in rate_cmds(a.iface, s, state_params("5"))] \
                 + tree_down_cmds(a.iface):
