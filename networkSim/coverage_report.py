@@ -13,8 +13,10 @@ exclusion; the class mix never decides inclusion).
 
 Snapshot per platform (Addendum Q): per class of the platform alphabet, the accepted sessions with >= FLOOR_MINUTES of
 it (tt tier classes count HEVC-ladder sessions only, meta tt_stream.codec; amendment 2); the pooled stall share; tt:
-room entries per entry state (a stream entry counts at the first shaped state after it, a re-entry at the state in
-force); per matrix: accepted sessions, mean minutes per class, pooled stall share.
+room entries per entry state over every checked session, accepted or _failed, except not_live / login_wall / interrupted
+(amendment 3: startup_failure / player_dead sessions are the startup reading's events); a stream entry counts at the
+first shaped state after it, a re-entry at the state in force; per matrix: accepted sessions, mean minutes per class,
+pooled stall share.
 
 The matrix rule (RULE_VERSION, deterministic):
   1. target = the largest deficit to its floor: a class, FLOOR_SESSIONS - its sessions; the stall band, the shortfall as
@@ -52,6 +54,7 @@ CLASSES = {"youtube": ["STALL", "Q_144p", "Q_240p", "Q_360p", "Q_480p", "Q_720p"
            "twitch": ["STALL", "Q_144p", "Q_360p", "Q_480p", "Q_720p", "Q_1080p"],
            "tiktok": ["STALL", "Q_360p", "Q_480p", "Q_720p", "Q_1080p"]}
 DEFAULT_MATRIX = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}
+ENTRY_EXCLUDED_CLASSES = ("not_live", "login_wall", "interrupted")   # amendment 3: the entry did not happen as designed
 EXPLORE_MIN = 2
 FLAG_AFTER_SESSIONS = 5                         # supervisor 2026-10-18: a class with zero support after 5 sessions: FLAG
 SUMMARY_FILE = "_summaries/coverage_last.json"
@@ -159,6 +162,17 @@ def entry_states(meta: dict) -> list[str]:
     return out
 
 
+def entry_sessions(data_dir: Path, platform: str) -> list[tuple[Path, dict]]:
+    """(session dir, check.json) of every checked session, accepted or _failed, whose class is not excluded."""
+    out = []
+    for c in sorted(list((Path(data_dir) / platform).glob("*/check.json"))
+                    + list((Path(data_dir) / "_failed" / platform).glob("*/check.json"))):
+        chk = _load(c)
+        if chk and chk.get("session_class") not in ENTRY_EXCLUDED_CLASSES:
+            out.append((c.parent, chk))
+    return out
+
+
 def snapshot(data_dir: Path, platform: str) -> dict:
     classes = CLASSES[platform]
     cnt, mins = dict.fromkeys(classes, 0), dict.fromkeys(classes, 0.0)
@@ -174,7 +188,6 @@ def snapshot(data_dir: Path, platform: str) -> dict:
             codec = (meta.get("tt_stream") or {}).get("codec") or "unknown"
             codecs[codec] += 1
             tier_ok = codec == "hevc"                    # amendment 2: tt tier floors count HEVC-ladder sessions only
-            entries.update(entry_states(meta))
         m = pm[(meta.get("shaper") or {}).get("matrix_id") or "unknown"]
         tot, st = sum(sc["minutes"].values()), sc["minutes"].get("STALL", 0.0)
         st_min, lab_min = st_min + st, lab_min + tot
@@ -198,7 +211,11 @@ def snapshot(data_dir: Path, platform: str) -> dict:
                               "stall_share": round(v["stall"] / v["lab"], 4) if v["lab"] else None}
                           for k, v in sorted(pm.items())}}
     if platform == "tiktok":
-        out.update(tt_entries_by_state=dict(sorted(entries.items())), tt_codec_sessions=dict(sorted(codecs.items())))
+        es = entry_sessions(data_dir, platform)
+        for sd, chk in es:
+            entries.update(entry_states({"entries": (_load(sd / "meta.json").get("entries") or chk.get("entries") or [])}))
+        out.update(tt_entries_by_state=dict(sorted(entries.items())), tt_entry_sessions=len(es),
+                   tt_codec_sessions=dict(sorted(codecs.items())))
     return out
 
 
@@ -332,7 +349,8 @@ def markdown(rep: dict) -> list[str]:
                f"buffer median over sessions {v['buffer_median_s_over_sessions']}"
                + (f"; latency to broadcaster {v['twitch_latency_median_s_over_sessions']}" if p == "twitch" else "")
                + (f"; codec sessions {s['tt_codec_sessions']} (tiers: hevc only); entries by state "
-                  f"{s['tt_entries_by_state']}" if p == "tiktok" else ""), "",
+                  f"{s['tt_entries_by_state']} (over {s['tt_entry_sessions']} sessions, any class but not_live / login_wall / "
+                  f"interrupted)" if p == "tiktok" else ""), "",
                "| class | sessions >= floor min | minutes |", "|---|---|---|"]
         md += [f"| {c} | {x['sessions_ge_min']} | {x['minutes']} |" for c, x in s["classes"].items()]
         md += ["", "deficits: " + (", ".join(f"{d['key']} {d['deficit']}" for d in v["deficits"]) or "none"), ""]

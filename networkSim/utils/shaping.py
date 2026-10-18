@@ -303,6 +303,21 @@ TWITCH_TRANSITIONS_M = {
     "9":  {"7": 0.05, "8": 0.15, "9": 0.50, "10": 0.30},
     "10": {"8": 0.10, "9": 0.45, "10": 0.45},
 }
+# LVQoE prereg Addendum Q amendment 3 (2026-10-18, levi; an addendum M amendment, defined before any steering yield):
+# TW-L, a twitch low-state matrix for stall and low-tier coverage (not a model of real networks). Literal from the
+# amendment's table; cap 2 as TW-M; stationary start (states 1-5); rows 7-10 return to 6.
+TWITCH_TRANSITIONS_L = {
+    "1":  {"1": 0.50, "2": 0.35, "3": 0.15},
+    "2":  {"1": 0.30, "2": 0.45, "3": 0.20, "4": 0.05},
+    "3":  {"1": 0.15, "2": 0.30, "3": 0.40, "4": 0.15},
+    "4":  {"2": 0.20, "3": 0.35, "4": 0.35, "5": 0.10},
+    "5":  {"3": 0.25, "4": 0.40, "5": 0.30, "6": 0.05},
+    "6":  {"4": 0.40, "5": 0.40, "6": 0.20},
+    "7":  {"6": 1.00},
+    "8":  {"6": 1.00},
+    "9":  {"6": 1.00},
+    "10": {"6": 1.00},
+}
 TIKTOK_MATRICES = {
     "current": (TIKTOK_TRANSITIONS, 2, "linear"),
     "TT-M": (TIKTOK_TRANSITIONS_M, 4, "stationary"),
@@ -310,6 +325,7 @@ TIKTOK_MATRICES = {
 TWITCH_MATRICES = {
     "current": (TWITCH_TRANSITIONS, 2, "linear"),
     "TW-M": (TWITCH_TRANSITIONS_M, 2, "stationary"),
+    "TW-L": (TWITCH_TRANSITIONS_L, 2, "stationary"),
 }
 # per platform: matrix id -> (transitions, low-state cap, initial-state rule)
 PLATFORM_MATRICES = {"youtube": YOUTUBE_MATRICES, "tiktok": TIKTOK_MATRICES, "twitch": TWITCH_MATRICES}

@@ -458,8 +458,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--tt-matrix", choices=["TT-M", "current"], default="TT-M",
                         help="tt shaper config (prereg addendum M; default TT-M).")
-    parser.add_argument("--tw-matrix", choices=["TW-M", "current"], default="TW-M",
-                        help="twitch shaper config (prereg addendum M; default TW-M).")
+    parser.add_argument("--tw-matrix", choices=["TW-M", "TW-L", "current"], default="TW-M",
+                        help="twitch shaper config (prereg addendum M; default TW-M; TW-L = Addendum Q amendment 3).")
     parser.add_argument("--tt-room-rotation", type=float, default=None, metavar="SECONDS",
                         help="addendum M's pre-declared tt fallback: a new room every SECONDS (300) within each tt "
                              "session. Off unless the checkpoint QA triggers it.")

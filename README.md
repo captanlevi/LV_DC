@@ -108,7 +108,8 @@ The targets are floors (rushi): when a platform reaches its floor, it is raised 
   - the target is the largest deficit to the floors: 5 sessions with at least 2 min of each class (tt tier classes count HEVC sessions only), the stall band, and 5 tt entries per state;
   - then the matrix: first one with fewer than 2 accepted sessions; otherwise the highest yield for the target; ties go to the first matrix id.
   - The record (snapshot, deficits, yields, choice, rule version) is written to meta.json `coverage`. Its `applied` field says whether the session ran that matrix.
-  - `--coverage-allowed 'tiktok=TT-M|current,...'` narrows the allowed set (default: every defined matrix).
+  - `--coverage-allowed 'tiktok=TT-M|current,...'` narrows the allowed set (default: every defined matrix, including twitch `TW-L`, the low-state matrix of Addendum Q amendment 3).
+  - tt entry states (amendment 3) count every checked session's entries, accepted or `_failed`, except not_live / login_wall / interrupted.
 - Coverage report on demand: `python3 networkSim/coverage_report.py` writes `data/_summaries/coverage_<date>.json` and `.md`:
   - per class: the sessions and minutes;
   - the stall share against its band;

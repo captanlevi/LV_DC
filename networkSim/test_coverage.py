@@ -109,6 +109,8 @@ def main():
         snap = C.snapshot(d, "twitch")
         assert snap["stall_share_pooled"] > C.STALL_BAND["twitch"][1]
         r = C.pick_matrix(snap, PLATFORM_MATRICES["twitch"])
+        assert r["target"]["kind"] == "stall_high" and r["matrix"] == "TW-L" and r["why"].startswith("explore"), r
+        r = C.pick_matrix(snap, PLATFORM_MATRICES["twitch"], ["TW-M", "current"])
         assert r["target"]["kind"] == "stall_high" and r["matrix"] == "current", r
         ok = dict(snap, stall_share_pooled=0.05, classes={c: {"sessions_ge_min": 5, "minutes": 50} for c in snap["classes"]})
         assert C.pick_matrix(ok, PLATFORM_MATRICES["twitch"])["matrix"] == "TW-M"
@@ -121,9 +123,18 @@ def main():
         for i in range(5):
             session(d, "tiktok", f"h{i}", allc, matrix="TT-M", codec="h264",
                     entries=[ent("stream", s) for s in states] * 2)
+        # amendment 3: entries count in every checked session but not_live / login_wall / interrupted ones
+        session(d, "_failed/tiktok", "f0", [("Q_720p", 100)], verdict="FAIL", s_class="player_dead",
+                entries=[ent("stream", states[0]), ent("room_reentry", states[1])])
+        session(d, "_failed/tiktok", "f1", [], verdict="FAIL", s_class="startup_failure", entries=[ent("stream", states[0])])
+        for k in ("not_live", "login_wall", "interrupted"):
+            session(d, "_failed/tiktok", k, [], verdict="FAIL", s_class=k, entries=[ent("stream", states[0])] * 3)
         snap = C.snapshot(d, "tiktok")
         assert snap["classes"]["Q_720p"]["sessions_ge_min"] == 0 and snap["classes"]["STALL"]["sessions_ge_min"] == 5
-        assert snap["tt_codec_sessions"] == {"h264": 5} and all(snap["tt_entries_by_state"][s] == 10 for s in states)
+        assert snap["n_sessions"] == 5 and snap["tt_entry_sessions"] == 7, snap
+        assert snap["tt_entries_by_state"][states[0]] == 12 and snap["tt_entries_by_state"][states[1]] == 11, snap
+        assert all(snap["tt_entries_by_state"][s] == 10 for s in states[2:]), snap
+        assert snap["tt_codec_sessions"] == {"h264": 5}
         r = C.pick_matrix(snap, PLATFORM_MATRICES["tiktok"])
         assert r["target"]["key"] == "Q_360p" and r["why"].startswith("explore"), r  # no HEVC sessions on any matrix
         session(d, "tiktok", "v0", allc, matrix="TT-M", codec="hevc")
@@ -160,6 +171,13 @@ def main():
         md = out.read_text()
         assert "| Q_720p | 1 |" in md and "codec sessions {'h264': 5, 'hevc': 1}" in md, md
         assert json.loads((d / "_summaries" / "coverage_2026-10-18.json").read_text())["platforms"]["tiktok"]["sessions"]
+
+    # TW-L (Addendum Q amendment 3): the amendment's table, cap 2, stationary start in states 1-5, in the allowed set
+    tl, cap, rule = PLATFORM_MATRICES["twitch"]["TW-L"]
+    assert (cap, rule) == (2, "stationary") and tl["1"] == {"1": 0.50, "2": 0.35, "3": 0.15}
+    assert tl["6"] == {"4": 0.40, "5": 0.40, "6": 0.20} and all(tl[k] == {"6": 1.0} for k in ("7", "8", "9", "10"))
+    assert all(abs(sum(v.values()) - 1) < 1e-9 for v in tl.values())
+    assert sum(v for k, v in C.stationary_distribution(tl).items() if int(k) <= 5) > 0.99
 
     # twitch latency covariate from player_stats.jsonl
     with tempfile.TemporaryDirectory() as d:

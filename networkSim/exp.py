@@ -509,7 +509,8 @@ if __name__ == "__main__":
         "--tw-matrix",
         choices=sorted(TWITCH_MATRICES),
         default="TW-M",
-        help="twitch shaper config (prereg addendum M): TW-M (cap 2, stationary start); current = before it.",
+        help="twitch shaper config (prereg addendum M): TW-M (cap 2, stationary start); TW-L (Addendum Q amendment 3: "
+             "low-state, cap 2, stationary start); current = before M.",
     )
     parser.add_argument(
         "--tt-room-rotation",
