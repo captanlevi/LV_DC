@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """t53: single mode's Makefile commands are byte-identical with --concurrent off (the supervisor's landing condition).
 `make -n` of every single-mode target, with fixed variables, against fixtures/make_single_mode.golden, which was taken
-from the Makefile before the trio parameters (lvdc-v2 51007ea); the checkout path is normalised. A slot's overrides
-(trio_slots.make_vars: IFB_INGRESS / IFB_EGRESS / EGRESS_CLASS / CDP_PORT / SLOT_SUFFIX / CHROME_PREFIX, and
-the staged capture files / tcpdump stderr) are checked to land where meant.
+from the Makefile before the trio parameters (lvdc-v2 51007ea); the checkout path and whitespace are normalised and
+the management port's source is pinned, so the golden holds on any machine (GNU make 3.81 / 4.3, with or without
+tailscaled; supervisor 2026-10-19). A slot's overrides (trio_slots.make_vars: IFB_INGRESS / IFB_EGRESS /
+EGRESS_CLASS / CDP_PORT / SLOT_SUFFIX / CHROME_PREFIX, and the staged capture files / tcpdump stderr) are checked
+to land where meant.
 
     python3 test_make_single_mode.py [--write]        (exit 0 = pass)
 """
+import re
 import shutil
 import subprocess
 import sys
@@ -14,8 +17,16 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 GOLDEN = HERE / "fixtures" / "make_single_mode.golden"
+# TS_UDP_PORT= pins the management port's source: the Makefile reads tailscaled's port with `ss` (chaos: present, the
+# laptop: none), which would otherwise change mgmt-exclusion's udp_port_source between machines (supervisor 2026-10-19)
 VARS = ["SESSION_DIR=/S/yt_1", "CHROME_PROFILE=/P/prof", "CHROME_BIN=/usr/bin/google-chrome", "CAPTURE_DIR=/C",
-        "VENV_DIR=/V", "MGMT_UDP_PORT=41641"]
+        "VENV_DIR=/V", "MGMT_UDP_PORT=41641", "TS_UDP_PORT="]
+
+
+def normalise(text: str) -> str:
+    """Environment-independent form of `make -n` output: whitespace runs collapsed, each line stripped (GNU make 3.81
+    on the laptop and 4.3 on chaos print a recipe's continuation lines with different leading tabs)."""
+    return "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()) + "\n"
 TARGETS = ["enable", "mgmt-exclusion", "slow", "disable", "start-capture", "stop-capture", "merge-capture",
            "start_chrome", "kill_chrome", "change_perm"]
 
@@ -26,7 +37,7 @@ def dry(makefile: Path, extra=()) -> str:
         r = subprocess.run(["make", "-s", "-n", "-f", str(makefile), t, *VARS, *extra], cwd=HERE, capture_output=True,
                            text=True)
         out.append(f"=== {t}\n{r.stdout}{r.stderr}")
-    return "".join(out).replace(str(HERE.parent), "<REPO>")
+    return normalise("".join(out).replace(str(HERE.parent), "<REPO>"))
 
 
 def main() -> int:
