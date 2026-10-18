@@ -137,9 +137,9 @@ COVERAGE_ALLOWED: dict[str, list[str]] = {}
 TT_ROOM_ROTATION_S: float | None = None
 
 
-def _run_collection(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
+def _collection_cmd(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
                     yt_matrix: str | None = None, channel: dict | None = None, geom: str | None = None,
-                    tw_category: dict | None = None, matrix: str | None = None) -> int:
+                    tw_category: dict | None = None, matrix: str | None = None) -> list[str]:
     cmd = [
         sys.executable, "exp.py",
         "--platform", platform,
@@ -170,6 +170,11 @@ def _run_collection(platform: str, initial_state: str | None, episodes: int, aut
         cmd += ["--dpms-off"]
     if ENTRY_QUALITY and platform in ("youtube", "twitch"):
         cmd += ["--entry-quality"]
+    return cmd
+
+
+def _run_collection(*a, **kw) -> int:
+    cmd = _collection_cmd(*a, **kw)
     print(f"\n  Running: {' '.join(cmd)}")
     return subprocess.run(cmd).returncode
 
@@ -243,7 +248,7 @@ def coupled_geometry(p: str, geom: str | None) -> str | None:
     return (LAST_COVERAGE.get(p) or {}).get("geometry_forced") or geom
 
 
-def session_matrix(p: str) -> str | None:
+def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE) -> str | None:
     """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
     LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such."""
     rec = {"platform": p, "rule": "fixed", "matrix": MATRIX_IDS.get(p)}
@@ -255,7 +260,7 @@ def session_matrix(p: str) -> str | None:
             rec["rule_error"] = repr(e)
             print(f"  coverage rule failed ({e!r}): matrix {rec['matrix']} (fixed)")
     LAST_COVERAGE[p] = rec
-    path = _RUNS_DIR / coverage_report.SUMMARY_FILE
+    path = _RUNS_DIR / summary_file
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rec, indent=1, default=str))
     os.environ["LVDC_COVERAGE_JSON"] = str(path)
@@ -312,6 +317,64 @@ def _summary() -> None:
         print(f"  (daily summary failed: {e!r})")
 
 
+def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool) -> tuple:
+    """The session's channel (yt), category (twitch) and geometry draw, and the skip records they leave (run_batch and,
+    per slot, run_trio)."""
+    skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
+    if p == "youtube":
+        for r in yt_channels.apply_leave_rule(_RUNS_DIR, now):
+            print(f"  LIST: {r['handle']} ({r['type']}, {r['role']}) leaves the yt list ({r['evidence']}; Addendum P); "
+                  f"commit it in yt_channels.py")
+    yt_skips = yt_channels.not_live_skips(_RUNS_DIR, now) if p == "youtube" else {}
+    for h, why in yt_skips.items():
+        print(f"  skip {h}: {why}")
+    channel = None
+    if p == "youtube":
+        # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
+        channel, pre_skips = yt_channels.pick_live_channel(_RUNS_DIR, exclude=skip | set(yt_skips))
+        if pre_skips:
+            (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
+            with open(_RUNS_DIR / yt_channels.PRECHECK_SKIPS_FILE, "a") as fh:
+                for s in pre_skips:
+                    fh.write(json.dumps(s) + "\n")
+                    print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")
+    # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
+    # NOT_LIVE_RETRY_S, like a yt channel)
+    category, esports_skip = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else (None, None)
+    if esports_skip:      # levi: no league channel live -> the next type; the skip goes to the daily summary
+        (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
+        with open(_RUNS_DIR / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
+            fh.write(json.dumps(esports_skip) + "\n")
+        print(f"  esports unavailable (none of {esports_skip['checked']} live): drawing {category['name']}")
+    geom = geometry.next_geometry(_RUNS_DIR, p) if rotate_geometry else None
+    return channel, category, geom
+
+
+def _account(p: str, rc: int, before: int, channel: dict | None, category: dict | None, now: float,
+             paused: dict, fails: dict, frozen: dict, not_live: dict) -> None:
+    """A finished session's exit code into the batch state: login-wall pause, not-a-failure aborts, the not-live skip,
+    the consecutive-failure pause (run_batch and, per slot, run_trio)."""
+    if rc == EXIT_LOGIN_WALL:
+        paused[p] = "login wall (fix the profile template, then rerun)"
+    elif rc in NOT_A_FAILURE:
+        frozen[p] += 1
+        print(f"  {NOT_A_FAILURE[rc]} on {p} ({frozen[p]} such aborts in a row): not counted as a failure; "
+              f"next session re-picks")
+        if frozen[p] >= MAX_CONSECUTIVE_FROZEN:
+            paused[p] = f"{frozen[p]} consecutive player_frozen / room_ended / player_dead aborts"
+    elif rc != 0 and channel:
+        not_live[channel["handle"]] = now
+    elif rc != 0 and category:
+        not_live[category.get("channel") or category["name"]] = now
+    if rc not in NOT_A_FAILURE:
+        frozen[p] = 0
+        fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1
+    if fails[p] >= MAX_CONSECUTIVE_FAIL and p not in paused:
+        paused[p] = f"{fails[p]} consecutive sessions without a PASS"
+    if p in paused:
+        print(f"  PAUSED {p}: {paused[p]}")
+
+
 def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geometry: bool = True) -> None:
     """Collect until every platform has its target of PASS sessions. Next platform = next_platform(): the one furthest
     behind its target (accepted / target; BATCH_ORDER breaks ties), at most MAX_CONSECUTIVE_SAME_PLATFORM in a row, so
@@ -336,33 +399,7 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             sys.exit(EXIT_LOW_DISK)
         before = accepted_sessions(p)
         now = time.time()
-        skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
-        if p == "youtube":
-            for r in yt_channels.apply_leave_rule(_RUNS_DIR, now):
-                print(f"  LIST: {r['handle']} ({r['type']}, {r['role']}) leaves the yt list ({r['evidence']}; Addendum P); "
-                      f"commit it in yt_channels.py")
-        yt_skips = yt_channels.not_live_skips(_RUNS_DIR, now) if p == "youtube" else {}
-        for h, why in yt_skips.items():
-            print(f"  skip {h}: {why}")
-        channel = None
-        if p == "youtube":
-            # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
-            channel, pre_skips = yt_channels.pick_live_channel(_RUNS_DIR, exclude=skip | set(yt_skips))
-            if pre_skips:
-                (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
-                with open(_RUNS_DIR / yt_channels.PRECHECK_SKIPS_FILE, "a") as fh:
-                    for s in pre_skips:
-                        fh.write(json.dumps(s) + "\n")
-                        print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")
-        # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
-        # NOT_LIVE_RETRY_S, like a yt channel)
-        category, esports_skip = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else (None, None)
-        if esports_skip:      # levi: no league channel live -> the next type; the skip goes to the daily summary
-            (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
-            with open(_RUNS_DIR / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
-                fh.write(json.dumps(esports_skip) + "\n")
-            print(f"  esports unavailable (none of {esports_skip['checked']} live): drawing {category['name']}")
-        geom = geometry.next_geometry(_RUNS_DIR, p) if rotate_geometry else None
+        channel, category, geom = _pick(p, not_live, now, rotate_geometry)
         print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] {p.upper()}: {before}/{targets[p]} accepted"
               + (f"; channel {channel['handle']} ({channel['type']}, {channel['role']})" if channel else "")
               + (f"; category {category['name']} ({category['type']}{', ' + category['channel'] if category.get('channel') else ''})" if category else "")
@@ -401,30 +438,200 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             print("  Session stopped by the operator (SIGINT / SIGTERM): stopping the batch.")
             _summary()
             sys.exit(EXIT_STOPPED)
-        if rc == EXIT_LOGIN_WALL:
-            paused[p] = "login wall (fix the profile template, then rerun)"
-        elif rc in NOT_A_FAILURE:
-            frozen[p] += 1
-            print(f"  {NOT_A_FAILURE[rc]} on {p} ({frozen[p]} such aborts in a row): not counted as a failure; "
-                  f"next session re-picks")
-            if frozen[p] >= MAX_CONSECUTIVE_FROZEN:
-                paused[p] = f"{frozen[p]} consecutive player_frozen / room_ended / player_dead aborts"
-        elif rc != 0 and channel:
-            not_live[channel["handle"]] = now
-        elif rc != 0 and category:
-            not_live[category.get("channel") or category["name"]] = now
-        if rc not in NOT_A_FAILURE:
-            frozen[p] = 0
-            fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1
-        if fails[p] >= MAX_CONSECUTIVE_FAIL and p not in paused:
-            paused[p] = f"{fails[p]} consecutive sessions without a PASS"
-        if p in paused:
-            print(f"  PAUSED {p}: {paused[p]}")
+        _account(p, rc, before, channel, category, now, paused, fails, frozen, not_live)
         _summary()
     print("\nBatch finished." + (f" Paused: {paused}" if paused else ""))
     for p in targets:
         print(f"  {p}: {accepted_sessions(p)}/{targets[p]} accepted")
     _summary()
+
+
+# ---------------------------------------------------------------------------
+# t53 --concurrent: the trio (design LVQoE concurrent_trio_design_peter_2026-10-18.md, A1 rolling slots)
+# ---------------------------------------------------------------------------
+
+TRIO_STAGGER_S = 30.0     # at least this long between two slot starts (Chrome launches and profile clones not at once)
+TRIO_POLL_S = 2.0
+TRIO_DRAIN_FILE = "_summaries/trio_drain"   # touch it (data dir) to drain: no refill, every slot ends; archived when used
+TRIO_LOGS = "_summaries/trio_logs"          # each trio session's exp.py output (three would interleave on stdout)
+
+
+def _spawn(cmd: list[str], env: dict, log: Path):
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a") as fh:
+        return subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT)
+
+
+def _make(args: list[str]) -> int:
+    return subprocess.run(["make", "-s", *args], cwd=Path(__file__).parent).returncode
+
+
+class _TrioStop(Exception):
+    def __init__(self, rc: int):
+        super().__init__(rc)
+        self.rc = rc
+
+
+def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused: dict, not_live: dict,
+                 rotate_geometry: bool, yt_matrix: str, capacity_kbit: float | None, run_id: str, summaries: Path,
+                 spawn) -> bool:
+    """Start the next session in p's slot (run_trio); False when its preflight failed (the trio drains)."""
+    s = T.SLOTS[p]
+    free_gb = shutil.disk_usage(_RUNS_DIR).free / 1e9
+    if free_gb < MIN_FREE_GB:
+        print(f"\n  Data volume {free_gb:.0f} GB free < {MIN_FREE_GB} GB: draining the trio.")
+        raise _TrioStop(EXIT_LOW_DISK)
+    floor = T.trio_root_floor_gb(_RUNS_DIR, preflight.ROOT_MIN_FREE_GB)
+    pf = {**preflight.run(_RUNS_DIR, MIN_FREE_GB, root_min_free_gb=floor["floor_gb"]), "trio_root_floor": floor}
+    pf_path = summaries / f"preflight_last_{s.tag}.json"
+    pf_path.write_text(json.dumps(pf, indent=1))
+    if not pf["ok"]:
+        print(f"\n  PREFLIGHT FAILED for the {p} slot ({', '.join(pf['problems'])}): draining the trio. "
+              f"{json.dumps({k: pf['checks'][k] for k in pf['problems']})}")
+        return False
+    before, now = accepted_sessions(p), time.time()
+    channel, category, geom = _pick(p, not_live, now, rotate_geometry)
+    mid = session_matrix(p, f"_summaries/coverage_last_{s.tag}.json")      # sets LVDC_COVERAGE_JSON to this file
+    forced = coupled_geometry(p, geom) if rotate_geometry else geom
+    if forced != geom:
+        print(f"  geometry {forced} (coupled to the coverage target; rotation drew {geom})")
+        geom = forced
+    cmd = _collection_cmd(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
+                          episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix, channel=channel,
+                          geom=geom, tw_category=category, matrix=mid)
+    cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
+    # trio v1 shots: CDP (three windows on one screen; X11 crops need the enlarged framebuffer, design §4)
+    env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVQOE_SHOT_SOURCE": "cdp", "LVDC_PREFLIGHT_JSON": str(pf_path)}
+    started[p] += 1
+    log = _RUNS_DIR / TRIO_LOGS / run_id / f"{s.tag}_{started[p]}.log"
+    print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {p} slot ({s.tag}) session {started[p]}: "
+          f"{before}/{targets[p]} accepted"
+          + (f"; channel {channel['handle']}" if channel else "")
+          + (f"; category {category['name']}" if category else "")
+          + (f"; geometry {geom}" if geom else "") + f"\n  Running: {' '.join(cmd)}\n  log: {log}")
+    running[p] = {"proc": spawn(cmd, env, log), "before": before, "channel": channel, "category": category,
+                  "now": now, "t": time.time(), "log": str(log)}
+    return True
+
+
+def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = True, iface: str = "wlp0s20f3",
+             capacity_kbit: float | None = None, max_per_slot: int | None = None,
+             stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S,
+             spawn=_spawn, apply=None, make=_make, sleep=time.sleep) -> int:
+    """One slot per platform (trio_slots.SLOTS), each refilled when its session ends (A1), until every platform has its
+    target of PASS sessions, or `max_per_slot` sessions started per slot (the pilot: 1). Per slot exactly as run_batch
+    per session: the pick (_pick), the per-session preflight (rootfs floor raised by A2), the coverage matrix and its
+    coupled geometry, the accounting (_account), the flag report; each slot's coverage / preflight record is its own
+    file. Started in a pause (no session running): single mode's preclean once, then the shared tree, the unmarked
+    remainder's capture, then the slots; no orchestrator-wide preclean while a slot runs (a slot cleans only its own
+    pieces, exp.py slot_up). Drain (TRIO_DRAIN_FILE, or SIGINT / SIGTERM, which are also passed to every running
+    session) stops refilling; once every slot has ended the default capture is merged and the shared tree removed.
+    Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT when that ended it."""
+    import signal
+    import trio_slots as T
+    apply = apply or T.apply
+    run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    summaries = _RUNS_DIR / "_summaries"
+    summaries.mkdir(parents=True, exist_ok=True)
+    slots_log, drain_path = _RUNS_DIR / T.SLOTS_LOG, _RUNS_DIR / TRIO_DRAIN_FILE
+    paused: dict[str, str] = {}
+    fails = {p: 0 for p in targets}
+    frozen = {p: 0 for p in targets}
+    not_live: dict[str, float] = {}
+    started = {p: 0 for p in targets}
+    running: dict[str, dict] = {}
+    end_rc, last_start = 0, 0.0
+    stop_signal: list[int] = []
+
+    def _on_signal(sig, _frame):
+        stop_signal.append(sig)
+        for r in running.values():
+            try:
+                r["proc"].send_signal(signal.SIGTERM)
+            except Exception:
+                pass
+
+    def _consume_drain(why: str) -> None:      # archived, so a later trio is not drained by it
+        if drain_path.exists():
+            drain_path.rename(drain_path.with_name(f"{drain_path.name}.{why}_{run_id}"))
+
+    _consume_drain("stale")
+    old = {s: signal.signal(s, _on_signal) for s in (signal.SIGINT, signal.SIGTERM)}
+    preclean()
+    for s in T.SLOTS.values():
+        apply(T.slot_down_cmds(s, iface, T.nft_handle_of(s)), check=False)
+    apply(T.shared_down_cmds(iface), check=False)
+    apply(T.shared_up_cmds(iface))
+    dstage = T.STAGING / f"default_{run_id}"
+    dstage.mkdir(parents=True, exist_ok=True)
+    ddir = _RUNS_DIR / T.DEFAULT_CAPTURE / run_id
+    make(["start-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
+    T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
+                                   "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot})
+    print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {run_id} up: {targets}, max per slot {max_per_slot}")
+    try:
+        while True:
+            for p, r in list(running.items()):
+                rc = r["proc"].poll()
+                if rc is None:
+                    continue
+                del running[p]
+                T.slots_log_append(slots_log, {"event": "exit", "slot": T.SLOTS[p].tag, "rc": rc, "t": time.time()})
+                print(f"[{dt.datetime.now():%H:%M}] TRIO {p}: exp.py rc {rc} (log {r['log']})")
+                try:
+                    report_flags(p, r["t"])
+                except Exception as e:
+                    print(f"  (flag report failed: {e!r})")
+                if rc == EXIT_STOPPED:
+                    print(f"  {p}: session stopped (SIGINT / SIGTERM): draining the trio")
+                    end_rc = end_rc or EXIT_STOPPED
+                else:
+                    _account(p, rc, r["before"], r["channel"], r["category"], r["now"], paused, fails, frozen, not_live)
+                _summary()
+            draining = bool(stop_signal) or end_rc != 0 or drain_path.exists()
+            todo = [p for p in BATCH_ORDER if p in targets and p in T.SLOTS and p not in paused
+                    and (max_per_slot is None or started[p] < max_per_slot) and accepted_sessions(p) < targets[p]]
+            if not running and (draining or not todo):
+                break
+            for p in ([] if draining else todo):
+                if p in running or time.time() - last_start < stagger_s:
+                    continue
+                try:
+                    if not _trio_refill(p, T, targets, started, running, paused, not_live, rotate_geometry, yt_matrix,
+                                        capacity_kbit, run_id, summaries, spawn):
+                        end_rc = end_rc or EXIT_PREFLIGHT
+                        break
+                except _TrioStop as e:
+                    end_rc = end_rc or e.rc
+                    break
+                except Exception as e:      # never a crash under running siblings: drain instead
+                    print(f"  TRIO {p} slot could not start a session ({e!r}): draining the trio")
+                    end_rc = end_rc or 1
+                    break
+                last_start = time.time()
+            sleep(poll_s)
+    finally:
+        for p, r in running.items():        # only after an unexpected error: every session finalises before the teardown
+            print(f"  TRIO: waiting for the {p} session to finalise before the teardown")
+            try:
+                r["proc"].send_signal(signal.SIGTERM)
+                r["proc"].wait(timeout=900)
+            except Exception as e:
+                print(f"  ({p}: {e!r})")
+        make(["stop-capture"] + T.default_capture_vars(dstage))
+        make(["merge-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
+        down = apply(T.shared_down_cmds(iface), check=False)
+        T.slots_log_append(slots_log, {"event": "trio_down", "run": run_id, "t": time.time(), "end_rc": end_rc,
+                                       "signal": stop_signal[:1], "teardown_failed": [x["cmd"] for x in down if x["rc"]]})
+        _consume_drain("done")
+        for s, h in old.items():
+            signal.signal(s, h)
+    end_rc = end_rc or (EXIT_STOPPED if stop_signal else 0)
+    print(f"\nTRIO {run_id} finished (rc {end_rc})." + (f" Paused: {paused}" if paused else ""))
+    for p in targets:
+        print(f"  {p}: {accepted_sessions(p)}/{targets[p]} accepted, {started[p]} started")
+    _summary()
+    return end_rc
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +715,17 @@ if __name__ == "__main__":
     parser.add_argument("--coverage-allowed", default=None, metavar="P=ID|ID,...",
                         help="--matrix-rule coverage: the allowed matrices per platform, e.g. 'tiktok=TT-M|current' "
                              "(default: every defined matrix).")
+    parser.add_argument("--concurrent", action="store_true",
+                        help="--batch as a trio (t53; design concurrent_trio_design_peter_2026-10-18): one rolling slot "
+                             "per platform (yt / twitch / tt) at once, each in its own cgroup, marks, IFBs, Chrome; "
+                             "start it in a pause. Off: single mode, unchanged.")
+    parser.add_argument("--link-capacity-kbit", type=float, default=None,
+                        help="--concurrent: the measured multi-stream goodput (the gate 1 dry run); each session records "
+                             "it and flags seconds whose summed slot rates exceed it (L-A2).")
+    parser.add_argument("--max-per-slot", type=int, default=None,
+                        help="--concurrent: stop refilling a slot after this many sessions (the pilot: 1).")
+    parser.add_argument("--iface", default=os.environ.get("LVDC_IFACE", "wlp0s20f3"),
+                        help="--concurrent: the collection interface (the Makefile's IFACE).")
     parser.add_argument(
         "--report-only",
         action="store_true",
@@ -526,11 +744,16 @@ if __name__ == "__main__":
         bad = {k: v for k, v in COVERAGE_ALLOWED.items() if k not in PLATFORM_MATRICES or set(v) - set(PLATFORM_MATRICES[k])}
         if bad:
             sys.exit(f"unknown platform / matrix in --coverage-allowed: {bad}")
+    if args.concurrent and not args.batch:
+        sys.exit("--concurrent needs --batch")
     if args.batch:
         targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
         if unknown:
             sys.exit(f"unknown platform(s) in --batch: {unknown}")
+        if args.concurrent:
+            sys.exit(run_trio(targets, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry,
+                              iface=args.iface, capacity_kbit=args.link_capacity_kbit, max_per_slot=args.max_per_slot))
         run_batch(targets, auto=True, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry)
         sys.exit(0)
 

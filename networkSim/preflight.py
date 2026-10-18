@@ -101,9 +101,11 @@ def check_rootfs(min_free_gb: float = ROOT_MIN_FREE_GB, path: str = "/") -> dict
     return {"path": path, "free_gb": free, "min_free_gb": min_free_gb, "ok": free is not None and free >= min_free_gb}
 
 
-def run(data_dir: Path, min_free_gb: float, sh=_sh) -> dict:
+def run(data_dir: Path, min_free_gb: float, sh=_sh, root_min_free_gb: float | None = None) -> dict:
+    """root_min_free_gb: the trio's raised rootfs floor (t53 A2: its pcaps are staged on the root filesystem)."""
     checks = {"ipv6": check_ipv6(sh), "shaper": check_shaper(sh), "volume": check_volume(data_dir, min_free_gb, sh),
-              "holds": check_holds(sh), "rootfs": check_rootfs()}
+              "holds": check_holds(sh),
+              "rootfs": check_rootfs() if root_min_free_gb is None else check_rootfs(root_min_free_gb)}
     problems = [k for k, v in checks.items() if not v.get("ok")]
     return {"ok": not problems, "problems": problems, "checks": checks, "at": time.time()}
 

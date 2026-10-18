@@ -31,7 +31,11 @@ def lvdc_commit() -> dict:
     return {"sha": sha, "dirty": bool(dirty) if dirty is not None else None}
 
 
-def chrome_version(cdp_base: str = "http://localhost:9222") -> dict:
+CDP_BASE = "http://localhost:9222"      # a trio slot's exp.py sets its own port (trio_slots.Slot.cdp_port)
+
+
+def chrome_version(cdp_base: str | None = None) -> dict:
+    cdp_base = cdp_base or CDP_BASE
     try:
         with urllib.request.urlopen(f"{cdp_base}/json/version", timeout=5) as r:
             v = json.loads(r.read())

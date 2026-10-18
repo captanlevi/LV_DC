@@ -52,6 +52,13 @@ PLATFORM_ABBREV = {
 CURRENT_NET_STAT : None | NetStat = None
 SYSTEM_TICK : float = 0.1
 
+# t53 --concurrent (orchestrate.py run_trio): the session's trio slot (trio_slots.Slot) and the make variables that put
+# single mode's targets on it; None / [] in single mode, whose make calls are then unchanged (test_make_single_mode.py)
+SLOT = None
+SLOT_VARS: list[str] = []
+TRIO: dict = {}          # the trio session's meta.json concurrency record, built as the session runs
+trio_slots = None        # the module, imported only with --slot
+
 
 def make_session_dir(platform: str) -> Path:
     # a name is never reused, also not a removed or _failed session's (session_names: a monotonic persisted counter)
@@ -74,6 +81,14 @@ def run(args):
 
 
 def initialize_network() -> bool:
+    if SLOT is not None:   # trio: the slot's own pieces (the shared tree is the orchestrator's)
+        try:
+            TRIO["slot_up"] = trio_slots.slot_up(SLOT)
+            return True
+        except Exception as e:
+            print(e)
+            TRIO["slot_up"] = {"error": repr(e)}
+            return False
     try:
         run(["make", "enable"])
         return True
@@ -149,7 +164,8 @@ def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window
         import geometry
         run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"]
             + ([f"WINDOW_SIZE={window_size}"] if window_size else [])
-            + geometry.merge_make_vars(decode_path.make_vars(platform or ""), geometry.chrome_args(geometry_spec)))
+            + geometry.merge_make_vars(decode_path.make_vars(platform or ""), geometry.chrome_args(geometry_spec))
+            + SLOT_VARS)
         return True
     except Exception as e:
         print(e)
@@ -157,6 +173,9 @@ def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window
 
 
 def finalize_network() -> bool:
+    if SLOT is not None:
+        TRIO["slot_down"] = trio_slots.slot_down(SLOT)
+        return True
     try:
         run(["make", "disable"])
         return True
@@ -167,7 +186,7 @@ def finalize_network() -> bool:
 
 def initialize_pcap(session_dir: Path) -> bool:
     try:
-        run(["make", "start-capture", f"SESSION_DIR={session_dir}"])
+        run(["make", "start-capture", f"SESSION_DIR={session_dir}"] + SLOT_VARS)
         return True
     except Exception as e:
         print(e)
@@ -176,8 +195,8 @@ def initialize_pcap(session_dir: Path) -> bool:
 
 def finalize_pcap(session_dir: Path) -> bool:
     try:
-        run(["make", "stop-capture"])
-        run(["make", "merge-capture", f"SESSION_DIR={session_dir}"])
+        run(["make", "stop-capture"] + SLOT_VARS)
+        run(["make", "merge-capture", f"SESSION_DIR={session_dir}"] + SLOT_VARS)
         return True
     except Exception as e:
         print(e)
@@ -186,10 +205,11 @@ def finalize_pcap(session_dir: Path) -> bool:
 
 def kill_chrome(chrome_profile: Path | None = None) -> None:
     try:
-        run(["make", "kill_chrome"] + ([f"CHROME_PROFILE={chrome_profile}"] if chrome_profile else []))
+        run(["make", "kill_chrome"] + ([f"CHROME_PROFILE={chrome_profile}"] if chrome_profile else []) + SLOT_VARS)
     except Exception as e:
         print(e)
-    for _f in ["chrome.pid", "chrome.log"]:
+    suffix = f"_{SLOT.tag}" if SLOT is not None else ""
+    for _f in [f"chrome{suffix}.pid", f"chrome{suffix}.log"]:
         (Path(__file__).parent.parent / "current_data" / _f).unlink(missing_ok=True)
 
 
@@ -280,6 +300,7 @@ def _apply_net_stat(net_stat : NetStat):
                 f"DELAY={net_stat.delay_ms}ms",
                 f"PLR={net_stat.loss_pct}%",
             ]
+            + SLOT_VARS
         )
 
 
@@ -583,6 +604,20 @@ if __name__ == "__main__":
         help="Start from an empty profile instead of the template (a deviation, recorded in meta.json).",
     )
     parser.add_argument(
+        "--slot",
+        choices=["yt", "tw", "tt"],
+        default=None,
+        help="t53 trio only (orchestrate.py --concurrent sets it): run in this platform's trio slot (trio_slots.py: its "
+             "cgroup, mark, IFBs, egress class, CDP port, staged capture); meta.json concurrency. Requires --auto.",
+    )
+    parser.add_argument(
+        "--link-capacity-kbit",
+        type=float,
+        default=None,
+        help="--slot: the measured multi-stream goodput (gate 1 dry run); recorded, and seconds whose summed slot "
+             "rates exceed it are flagged (L-A2).",
+    )
+    parser.add_argument(
         "--save-dir",
         type=Path,
         default=None,
@@ -591,6 +626,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     platform = args.platform
+    if args.slot:
+        import trio_slots
+        SLOT = trio_slots.slot_of(args.slot)
+        if SLOT.platform != platform or not args.auto:
+            parser.error(f"--slot {args.slot} is the {SLOT.platform} slot and needs --auto")
+        import browser as _browser_mod          # every CDP call of browser.py and session_meta goes to the slot's port
+        _browser_mod.CDP_BASE = session_meta.CDP_BASE = f"http://localhost:{SLOT.cdp_port}"
     signal.signal(signal.SIGINT, signal.default_int_handler)
 
     def _term(*_):
@@ -634,6 +676,20 @@ if __name__ == "__main__":
                        forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
                        channel_type=args.channel_type, channel_handle=args.channel_handle,
                        profile_template=profile_template)
+    if SLOT is None:
+        session_meta.write(session_dir, concurrency={"mode": "single"})
+    else:
+        staging = trio_slots.staging_dir(session_dir)
+        staging.mkdir(parents=True, exist_ok=True)
+        SLOT_VARS[:] = trio_slots.make_vars(SLOT, staging)
+        slots_log = DATA_DIR / trio_slots.SLOTS_LOG
+        import browser as _browser_mod
+        TRIO.update(trio_slots.concurrency_record(
+            SLOT, staging=str(staging), link_capacity_kbit=args.link_capacity_kbit, shot_source=_browser_mod.SHOT_SOURCE,
+            trio_run=os.environ.get("LVDC_TRIO_RUN"), slots_log=str(slots_log)))
+        session_meta.write(session_dir, concurrency=TRIO)
+        trio_slots.slots_log_append(slots_log, {"event": "start", "slot": SLOT.tag, "session": session_dir.name,
+                                                "platform": platform, "t": time.time(), "pid": os.getpid()})
     if template_note:   # the template's rebuild note (e.g. tt's HEVC template): the regime boundary in the session record
         session_meta.write(session_dir, template_note=template_note)
     if os.environ.get("LVDC_PREFLIGHT_JSON"):   # orchestrate's per-session preflight (preflight.py)
@@ -654,7 +710,13 @@ if __name__ == "__main__":
 
     net_labels = []
     if initialize_network() == False:
+        if SLOT is not None:   # a slot can fail to come up (single mode's enable cannot): no clone with cookies left
+            session_meta.write(session_dir, concurrency=TRIO)
+            from profile_clone import remove_profile_clone
+            print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
         raise ValueError("Cannot initialize the network for collection")
+    tc_sampler = (trio_slots.TcSampler(session_dir, SLOT, capacity_kbit=args.link_capacity_kbit).start()
+                  if SLOT is not None else None)
 
     if is_capture and initialize_pcap(session_dir) == False:
         raise ValueError("Cannot initialize pcap capture")
@@ -690,6 +752,9 @@ if __name__ == "__main__":
                                      entry_quality=eq_cfg)
             browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)
             browser.start()
+            if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
+                TRIO["socket_owner_start"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
+                session_meta.write(session_dir, concurrency=TRIO)
             if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
                 try:
                     dpms = subprocess.run(["xset", "dpms", "force", "off"], capture_output=True, text=True, timeout=10)
@@ -764,6 +829,16 @@ if __name__ == "__main__":
             _export_via_service_worker(session_dir)
         meta_extra["abort_reason"] = (browser.abort_reason if browser is not None else None) or abort_reason
         meta_extra["compute_load"] = load_sampler.stop()
+        if SLOT is not None:   # never fatal: the finalise path below must run
+            try:
+                TRIO["tc"] = tc_sampler.stop()
+                TRIO["socket_owner_end"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
+                TRIO["siblings"] = trio_slots.siblings(DATA_DIR / trio_slots.SLOTS_LOG, session_dir.name,
+                                                       json.loads((session_dir / "meta.json").read_text())["started_at"],
+                                                       None)
+            except Exception as e:
+                TRIO["record_error"] = repr(e)
+            meta_extra["concurrency"] = TRIO
         session_meta.finish(session_dir, channel_url, **meta_extra)   # while Chrome is still up (records its version)
         kill_chrome(chrome_profile)
 
@@ -771,6 +846,18 @@ if __name__ == "__main__":
             raise ValueError("Cannot finalize pcap capture")
         if finalize_network() == False:
             raise ValueError("Could not finish removing the network setup")
+        if SLOT is not None:   # tcpdump's kernel drop counters; its stderr files join the session dir (staging emptied)
+            try:
+                import shutil as _shutil
+                TRIO["capture_drops"] = trio_slots.capture_drops_of(staging)
+                for _f in staging.glob("tcpdump_*.err"):
+                    _shutil.move(str(_f), str(session_dir / _f.name))
+                TRIO["staging_left"] = sorted(x.name for x in staging.iterdir())
+                if not TRIO["staging_left"]:
+                    staging.rmdir()
+            except Exception as e:
+                TRIO["staging_error"] = repr(e)
+            session_meta.write(session_dir, concurrency=TRIO)
 
         http_ok = make_http_logs(session_dir)
         if not http_ok:
@@ -805,6 +892,9 @@ if __name__ == "__main__":
         # 2026-10-18; profile_clone.py); the template stays the reproducible state
         from profile_clone import remove_profile_clone
         print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
+        if SLOT is not None:
+            trio_slots.slots_log_append(DATA_DIR / trio_slots.SLOTS_LOG, {"event": "end", "slot": SLOT.tag,
+                                                                          "session": session_dir.name, "t": time.time()})
 
     if abort_reason == "login_wall":
         # orchestrate.py stops the platform on this code: every further logged-out session would hit the same wall

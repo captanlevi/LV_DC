@@ -9,6 +9,9 @@ EGRESS_CLASS ?= 1:10
 CDP_PORT ?= 9222
 SLOT_SUFFIX ?=
 CHROME_PREFIX ?=
+# a slot's tcpdump stderr (its kernel drop counters, meta.json concurrency.capture_drops); single mode: make's stderr
+CAPTURE_ERR_IN ?=
+CAPTURE_ERR_OUT ?=
 BANDWIDTH = 1000kbit
 DELAY = 0ms
 PLR = 0%
@@ -130,8 +133,8 @@ start-capture:
 	@# v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails ("Couldn't change ownership of
 	@# savefile") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never
 	@# opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.
-	@sudo sh -c 'exec tcpdump -i $(IFB_INGRESS) -U -w - "$(CAPTURE_BPF)" > "$(IN_FILE)"' & echo $$! > $(CAPTURE_DIR)/$(IFB_INGRESS).pid
-	@sudo sh -c 'exec tcpdump -i $(IFB_EGRESS) -U -w - "$(CAPTURE_BPF)" > "$(OUT_FILE)"' & echo $$! > $(CAPTURE_DIR)/$(IFB_EGRESS).pid
+	@sudo sh -c 'exec tcpdump -i $(IFB_INGRESS) -U -w - "$(CAPTURE_BPF)" > "$(IN_FILE)"$(if $(CAPTURE_ERR_IN), 2> "$(CAPTURE_ERR_IN)",)' & echo $$! > $(CAPTURE_DIR)/$(IFB_INGRESS).pid
+	@sudo sh -c 'exec tcpdump -i $(IFB_EGRESS) -U -w - "$(CAPTURE_BPF)" > "$(OUT_FILE)"$(if $(CAPTURE_ERR_OUT), 2> "$(CAPTURE_ERR_OUT)",)' & echo $$! > $(CAPTURE_DIR)/$(IFB_EGRESS).pid
 	@echo "✅ Capture started"
 
 
