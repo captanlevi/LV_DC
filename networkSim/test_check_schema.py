@@ -34,7 +34,7 @@ LABELS = ["ad_span_seconds", "ad_spans_per_signal", "ad_spans_span_type_set", "a
           "duration_s", "frozen_playhead_T_s", "frozen_playhead_max_all_s", "frozen_playhead_max_s",
           "login_wall_text_ticks", "login_wall_ticks", "n_res_meta", "paused_while_playing_share",
           "quality_countdown_ticks", "recovered_dead", "recovered_dead_runs", "recovered_frozen", "shot_effects",
-          "src_changed_ticks", "stall_advancing_share", "stall_share", "swap_only_ad_spans", "tick_presence",
+          "src_changed_ticks", "stall_advancing_share", "stall_share", "swap_only_ad_spans", "tick_presence", "tick_window",
           "tier_changes", "tier_changes_per_min", "tier_changes_with_swap_within_2s_share", "tier_mix_quality_time",
           "tt_cap_resets_55_75s", "tt_explore_ticks", "tt_flv_tokens_per_room", "tt_room_changes", "tt_room_ticks",
           "tt_room_visits", "usable_share", "v2_columns"]
@@ -101,6 +101,14 @@ def test_tick_presence_is_phase_free() -> None:
     assert CS.tick_presence([t0 + 0.5 * k for k in range(200)]) == 1.0                        # 2 Hz
     assert CS.tick_presence([t0 + 1.6 * k for k in range(100)]) < 1.0                          # every gap > 1.5 s
     assert CS.tick_presence([t0]) == 1.0 and CS.tick_presence([]) == 0.0
+    # the supervisor: the session's span is the denominator; a sampler that stops 10 min into a 23-min session fails
+    win = (t0 - 5.0, t0 + 1380.0)
+    assert CS.tick_presence(ts[:600], win) < CS.CHECKS["tick_presence_min"] < CS.tick_presence(ts[:1380], win)
+    assert CS.tick_presence(ts[:600]) == 1.0                                  # (its own span would have passed it)
+    late = [t for t in ts if t > t0 + 120]                                    # starts 2 min late
+    assert abs(CS.tick_presence(late, win) - (1 - 124.0 / 1386.0)) < 0.002, CS.tick_presence(late, win)
+    assert CS.session_window({"ended_at": t0 + 9}, [{"timestamp": t0}, {"timestamp": t0 + 3}]) == (t0, t0 + 9)
+    assert CS.session_window({}, [{"timestamp": t0}]) is None and CS.session_window({"ended_at": t0}, []) is None
 
 
 def main() -> int:

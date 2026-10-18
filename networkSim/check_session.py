@@ -332,20 +332,35 @@ def shot_effects(rows: list[dict], sd: Path, near_s: float = 1.0) -> dict | None
             "client_size_off_mode_elsewhere": sum(1 for s_, n in zip(sizes, near) if not n and s_ != mode)}
 
 
-def tick_presence(ts: list[float], gap_s: float = CHECKS["tick_gap_s"]) -> float:
-    """The share of the session's seconds the res_meta ticks cover, phase-free: a tick covers +- 0.5 s, so only a gap
-    between consecutive ticks longer than gap_s uncovers time, its length beyond 1 s (t37, shagun 2026-10-19: the
-    int(t - t0) bins lost a second whenever jitter moved a tick sitting near an integer offset across the boundary;
-    tw_38, 1402 ticks over 1402 s with no gap > 1.5 s, read 0.934)."""
+def tick_presence(ts: list[float], window: tuple[float, float] | None = None, gap_s: float = CHECKS["tick_gap_s"]) -> float:
+    """The share of the session's seconds the res_meta ticks cover, phase-free (t37, shagun 2026-10-19: the int(t - t0)
+    bins lost a second whenever jitter moved a tick sitting near an integer offset across the boundary; tw_38, 1402
+    ticks over 1402 s with no gap > 1.5 s, read 0.934). The session's seconds are `window` (session_window: the shaper's
+    start to the session's end; the supervisor: a sampler that stops early must not shrink its own denominator), else
+    the ticks' own span. The window's edges count as ticks; a gap between consecutive ticks (or an edge) longer than
+    gap_s uncovers its length beyond 1 s; ticks outside the window are not counted."""
     ts = sorted(ts)
-    if len(ts) < 2:
+    lo, hi = window if window else ((ts[0], ts[-1]) if ts else (0.0, 0.0))
+    if hi <= lo:
         return 1.0 if ts else 0.0
-    uncovered = sum(b - a - 1.0 for a, b in zip(ts, ts[1:]) if b - a > gap_s)
-    return max(0.0, 1.0 - uncovered / (ts[-1] - ts[0] + 1.0))
+    pts = [lo] + [t for t in ts if lo < t < hi] + [hi]
+    uncovered = sum(b - a - 1.0 for a, b in zip(pts, pts[1:]) if b - a > gap_s)
+    return max(0.0, 1.0 - uncovered / (hi - lo + 1.0))
+
+
+def session_window(meta: dict, net: list[dict]) -> tuple[float, float] | None:
+    """The seconds the res_meta ticks must cover: from the shaper's first label (the schedule starts once the stream
+    plays; earlier time is browser start and entry) to the session's end (meta ended_at); None when either is missing."""
+    try:
+        lo = min(float(r["timestamp"]) for r in net if r.get("timestamp") is not None)
+        hi = float(meta["ended_at"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    return (lo, hi) if hi > lo else None
 
 
 def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
-                 frozen_reentries: list[dict] | None = None) -> dict:
+                 frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
         return {"n_res_meta": len(meta)}
@@ -386,7 +401,8 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
         dp = {**dp, "max_s": dp["max_all_s"], "recovered": None}   # one recovery of either kind per session (am. 6)
     out = {
         "n_res_meta": len(meta), "duration_s": dur,
-        "tick_presence": tick_presence(ts),
+        "tick_presence": tick_presence(ts, window),
+        "tick_window": list(window) if window else None,
         "advancing_share_while_playing": (sum(adv_play) / len(adv_play)) if adv_play else None,
         "v2_columns": has_v2,
         "usable_share": usable / seconds,
@@ -904,7 +920,8 @@ def main() -> int:
     meta, meta_missing = meta_check(sd)
     platform = meta.get("platform") or sd.parent.name
     label_rows = read_labels(sd)
-    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"))
+    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"),
+                       session_window(meta, E.read_net_labels(sd)))
     lab["shot_effects"] = shot_effects(label_rows, sd)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
