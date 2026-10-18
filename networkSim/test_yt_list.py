@@ -102,7 +102,41 @@ def test_promotion():
     assert not P([live(0), live(12 * H), {**live(24 * H), "handle": "@x"}], h)["passed"]
 
 
+def test_no_immediate_repeat_and_trio_excluded():
+    """supervisor 2026-10-19: the least-collected primary, never the previous yt session's channel while another is
+    possible; trio sessions (data/_trio) never count in single mode's rotation (channels, geometry, twitch categories)."""
+    import geometry
+    import tw_categories
+    prim = [c["handle"] for c in Y.YT_CHANNELS if c["role"] == "primary"]
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        for i, h in enumerate(prim):                     # every primary twice, the last one once (the least collected)
+            for k in range(1 if h == prim[-1] else 2):
+                meta(d, f"youtube/yt_{i}{k}", channel_handle=h, started_at=100.0 + i * 10 + k)
+        assert Y.next_channel(d, no_repeat=False)["handle"] == prim[-1]
+        meta(d, "youtube/yt_99", channel_handle=prim[-1], started_at=10_000.0)        # it was the latest session
+        assert Y.last_channel(d) == prim[-1]
+        assert Y.collected_counts(d)[prim[-1]] == 2
+        meta(d, "youtube/yt_98", channel_handle=prim[0], started_at=20_000.0)         # now prim[0] is the latest
+        c = Y.next_channel(d)
+        assert c["handle"] != prim[0] and c["handle"] == prim[1], c                   # least-collected, no repeat
+        only = {c["handle"] for c in Y.YT_CHANNELS} - {prim[0]}
+        assert Y.next_channel(d, exclude=only)["handle"] == prim[0]                   # the only one left: it repeats
+        meta(d, "_trio/youtube/yt_100001", channel_handle=prim[1], started_at=30_000.0,
+             geometry_target="window:1920x1080")
+        meta(d, "_trio/twitch/tw_100001", tw_category="Just Chatting", started_at=30_000.0)
+        assert Y.last_channel(d) == prim[0] and Y.collected_counts(d)[prim[1]] == 2   # the trio session not counted
+        assert geometry.collected_counts(d, "youtube").get("window:1920x1080", 0) == 0
+        assert sum(tw_categories.collected_counts(d).values()) == 0
+        meta(d, "_failed/youtube/yt_97", channel_handle=prim[2], started_at=40_000.0,
+             abort_reason="error: RuntimeError: Failed to navigate to a live youtube stream")
+        assert Y.last_channel(d) == prim[0]                                           # a not-live start: no session
+        rec = Y.pick_record(d, c)
+        assert rec["handle"] == prim[1] and rec["last"] == prim[0] and rec["no_immediate_repeat"] is True
+
+
 def main() -> int:
+    test_no_immediate_repeat_and_trio_excluded()
     test_list()
     test_leave_rule()
     test_precheck_observations()

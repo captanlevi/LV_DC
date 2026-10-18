@@ -8,7 +8,8 @@ Verified 2026-10-16 on the laptop (Chrome 155; scripts in the LVQoE t35 report):
 live badge, playback advanced, and no age or members gate appeared.
 
 Rotation: no channel gets a 3rd session until every primary has 2 (generally: always the least-collected primary,
-ties broken by list order). Sessions are counted from every youtube/<session>/meta.json under data/ (channel_handle),
+ties broken by list order), and never the previous yt session's channel while another is possible (no immediate repeat,
+supervisor 2026-10-19; each pick is logged to _summaries/yt_channel_picks.jsonl). Sessions are counted from every youtube/<session>/meta.json under data/ (channel_handle),
 excluding data/_failed (a failed session does not count).
 
 List maintenance (prereg Addendum P, levi 2026-10-17): a channel leaves outright when, in a rolling LEAVE_WINDOW_S, it has
@@ -75,6 +76,15 @@ LEAVE_NOT_LIVE = 3
 LEAVE_MIN_GAP_S = 6 * 3600
 LEAVES_FILE = Path("_summaries") / "yt_list_leaves.jsonl"
 PRECHECK_SKIPS_FILE = Path("_summaries") / "yt_precheck_skips.jsonl"
+PICKS_FILE = Path("_summaries") / "yt_channel_picks.jsonl"
+
+
+def pick_record(data_dir: Path, channel: dict) -> dict:
+    """What the rotation saw when it picked (logged per pick): the channel, the previous session's, the counts."""
+    counts = collected_counts(data_dir)
+    return {"ts": time.time(), "handle": channel.get("handle"), "role": channel.get("role"), "type": channel.get("type"),
+            "last": last_channel(data_dir), "no_immediate_repeat": NO_IMMEDIATE_REPEAT,
+            "counts": {c["handle"]: counts.get(c["handle"], 0) for c in YT_CHANNELS if c["role"] == "primary"}}
 
 
 def url_of(handle: str) -> str:
@@ -89,7 +99,8 @@ def collected_counts(data_dir: Path) -> dict[str, int]:
     """Accepted yt sessions per channel handle: every <...>/youtube/<session>/meta.json under data_dir (so both
     data/youtube/ and data/<collector>/youtube/ count), except anything under _failed/."""
     counts = {c["handle"]: 0 for c in YT_CHANNELS}
-    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts)
+    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts
+             and "_trio" not in m.parts)                 # trio sessions have their own root and never count here
     for meta in sorted(metas):
         try:
             m = json.loads(meta.read_text())
@@ -104,7 +115,8 @@ def collected_counts(data_dir: Path) -> dict[str, int]:
 def not_live_failures(data_dir: Path) -> dict[str, list[float]]:
     """Start times of the not-live failures per channel handle: data/_failed/.../youtube/<session>/meta.json."""
     out: dict[str, list[float]] = {}
-    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" in m.parts)
+    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" in m.parts
+             and "_trio" not in m.parts)
     for meta in metas:
         try:
             m = json.loads(meta.read_text())
@@ -131,7 +143,8 @@ def not_live_skips(data_dir: Path, now: float) -> dict[str, str]:
 def accepted_starts(data_dir: Path) -> dict[str, list[float]]:
     """Start times of the accepted (not _failed) sessions per channel handle."""
     out: dict[str, list[float]] = {}
-    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts)
+    metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts
+             and "_trio" not in m.parts)
     for meta in metas:
         try:
             m = json.loads(meta.read_text())
@@ -221,13 +234,40 @@ def list_record(data_dir: Path, handle: str | None) -> dict:
             "changes": LIST_CHANGES, "collector_leaves": leaves}
 
 
-def next_channel(data_dir: Path, exclude: set[str] | None = None) -> dict:
-    """The least-collected primary (list order breaks ties); a spare of the same type only when every primary of
-    that type is excluded (e.g. not live right now)."""
+def last_channel(data_dir: Path) -> str | None:
+    """The channel of the latest single-mode yt session that played (accepted or _failed, by meta.json started_at); a
+    not-live start failure is no session of the channel (the not-live skips handle it)."""
+    best = None
+    for meta in data_dir.rglob("meta.json"):
+        if meta.parent.parent.name != "youtube" or "_trio" in meta.parts:
+            continue
+        try:
+            m = json.loads(meta.read_text())
+        except Exception:
+            continue
+        t, h = m.get("started_at"), m.get("channel_handle")
+        if NOT_LIVE_MARK in (m.get("abort_reason") or ""):
+            continue
+        if h and isinstance(t, (int, float)) and (best is None or t > best[0]):
+            best = (t, h)
+    return best[1] if best else None
+
+
+NO_IMMEDIATE_REPEAT = True     # supervisor 2026-10-19 (06:50 audit: a newly promoted primary was drawn back to back)
+
+
+def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: bool | None = None) -> dict:
+    """The least-collected primary (list order breaks ties), the previous yt session's channel last while another
+    primary is possible (NO_IMMEDIATE_REPEAT: a channel catching up, e.g. a newly promoted primary, is spread across
+    sessions instead of drawn back to back); a spare of the same type only when every primary of that type is excluded
+    (e.g. not live right now)."""
     exclude = set(exclude or ()) | {r["handle"] for r in disk_leaves(data_dir)}
     counts = collected_counts(data_dir)
     prim = [c for c in YT_CHANNELS if c["role"] == "primary"]
     order = sorted(range(len(prim)), key=lambda i: (counts[prim[i]["handle"]], i))
+    last = last_channel(data_dir) if (NO_IMMEDIATE_REPEAT if no_repeat is None else no_repeat) else None
+    if last and any(p["handle"] not in exclude and p["handle"] != last for p in prim):
+        order = [i for i in order if prim[i]["handle"] != last] + [i for i in order if prim[i]["handle"] == last]
     for i in order:
         c = prim[i]
         if c["handle"] not in exclude:

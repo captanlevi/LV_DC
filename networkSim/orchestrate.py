@@ -348,6 +348,12 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         if p == "youtube":
             # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
             channel, pre_skips = yt_channels.pick_live_channel(_RUNS_DIR, exclude=skip | set(yt_skips))
+            try:                                       # the rotation's view at the pick (no immediate repeat)
+                (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
+                with open(_RUNS_DIR / yt_channels.PICKS_FILE, "a") as fh:
+                    fh.write(json.dumps(yt_channels.pick_record(_RUNS_DIR, channel)) + "\n")
+            except Exception as e:
+                print(f"  (pick record failed: {e!r})")
             if pre_skips:
                 (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
                 with open(_RUNS_DIR / yt_channels.PRECHECK_SKIPS_FILE, "a") as fh:
