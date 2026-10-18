@@ -948,11 +948,52 @@ _FULLSCREEN_TRACE_JS = ("(function() { if (!window.__lvqoeFs) { window.__lvqoeFs
                         "__lvqoeFs.push([Math.round(performance.now() - t0), 'error'])); } return 'ok'; })()")
 
 
-def yt_fullscreen(page: "CDPPage", settle_s: float = 4.0) -> dict:
-    """Put the yt player in fullscreen and park the pointer; read back the state, with the page's fullscreenchange
-    trace ([ms, on]; laptop 2026-10-18: macOS drops a background app's fullscreen after about 1 s, so entering is not
-    staying). Never raises."""
+_SCREEN_JS = ("JSON.stringify({viewport: [window.innerWidth, window.innerHeight], screen: [screen.width, screen.height], "
+              "dpr: window.devicePixelRatio || 1})")
+
+
+def covers_screen(viewport, screen) -> bool:
+    """The page viewport is the whole screen (CSS px)."""
     try:
+        return bool(viewport and screen and viewport[0] >= screen[0] and viewport[1] >= screen[1])
+    except (TypeError, IndexError):
+        return False
+
+
+def window_fullscreen(page: "CDPPage", target_id: str | None, settle_s: float = 1.5) -> dict:
+    """The Chrome window itself in fullscreen (t37 hot-fix, shagun on yt_44: the player's fullscreen alone stayed
+    inside a windowed Chrome, viewport 1818x868 on a 1920x1080 screen): CDP Browser.setWindowBounds windowState
+    fullscreen, verified by the window state and by the viewport covering the screen. Never raises."""
+    rec: dict = {"ok": False}
+    try:
+        win = _browser_call("Browser.getWindowForTarget", {"targetId": target_id} if target_id else {})
+        wid = win.get("windowId")
+        if wid is None:
+            rec["error"] = "no window id"
+            return rec
+        before = (_browser_call("Browser.getWindowBounds", {"windowId": wid}).get("bounds") or {}).get("windowState")
+        if before != "fullscreen":
+            _browser_call("Browser.setWindowBounds", {"windowId": wid, "bounds": {"windowState": "fullscreen"}})
+            time.sleep(settle_s)
+        got = _browser_call("Browser.getWindowBounds", {"windowId": wid}).get("bounds") or {}
+        vs = json.loads(page.eval(_SCREEN_JS) or "{}")
+        rec.update(state_before=before, window_state=got.get("windowState"),
+                   bounds=[got.get("left"), got.get("top"), got.get("width"), got.get("height")],
+                   viewport=vs.get("viewport"), screen=vs.get("screen"),
+                   viewport_is_screen=covers_screen(vs.get("viewport"), vs.get("screen")))
+        rec["ok"] = rec["window_state"] == "fullscreen" and rec["viewport_is_screen"]
+    except Exception as exc:
+        rec["error"] = repr(exc)
+    return rec
+
+
+def yt_fullscreen(page: "CDPPage", settle_s: float = 4.0, target_id: str | None = None) -> dict:
+    """Put the Chrome window in fullscreen (window_fullscreen), then the yt player, and park the pointer; read back
+    the state, with the page's fullscreenchange trace ([ms, on]; laptop 2026-10-18: macOS drops a background app's
+    fullscreen after about 1 s, so entering is not staying) and whether the viewport covers the screen
+    (`on_screen`). Never raises."""
+    try:
+        win = window_fullscreen(page, target_id)
         page.eval(_FULLSCREEN_TRACE_JS)
         st = json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}")
         rec: dict = {"action": "already" if st.get("on") else None}
@@ -983,6 +1024,8 @@ def yt_fullscreen(page: "CDPPage", settle_s: float = 4.0) -> dict:
             rec["events"] = None
         p, dpr = rec.get("player"), rec.get("dpr") or 1
         rec["player_device_px_h"] = round(p[1] * dpr) if p else None
+        rec["window"] = win
+        rec["on_screen"] = bool(rec.get("on")) and covers_screen(rec.get("viewport"), rec.get("screen"))
         return rec
     except Exception as exc:
         return {"action": "error", "error": repr(exc)}
@@ -1920,8 +1963,10 @@ def calibration_verdict(residual: float | None, gap: float | None) -> bool:
 
 
 def calibrate_shot_origin(page: "CDPPage") -> dict:
-    """The X11 viewport origin's correction to the window-metric model (device px); never raises. In fullscreen the
-    region is the screen and needs none."""
+    """The X11 viewport origin's correction to the model (device px); never raises. The model is the window metrics,
+    or the screen when the page is fullscreen and its viewport covers the screen; there the match must say [0, 0]
+    for the screen to be taken as the viewport (fullscreen_screen; t37 hot-fix: yt_44's fullscreen stayed in a
+    windowed Chrome and the shots assumed the screen)."""
     t0 = time.time()
     rec: dict = {"method": "cdp_vs_x11_match", "at": t0, "offset": None, "residual": None, "gap": None,
                  "accepted": False, "thresholds": {"max_residual": SHOT_CALIB_MAX_RESIDUAL, "min_gap": SHOT_CALIB_MIN_GAP,
@@ -1932,17 +1977,25 @@ def calibrate_shot_origin(page: "CDPPage") -> dict:
         import numpy as np
         from PIL import Image, ImageGrab
         pr = json.loads(page.eval(_PLAYER_RECT_JS) or "{}")
-        if pr.get("fullscreen"):
-            rec.update(method="fullscreen (the screen is the viewport)", offset=[0, 0], accepted=True)
-            return rec
-        model = _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
+        dpr = float(pr.get("dpr") or 1)
+        sc = pr.get("screen") or [0, 0]
+        sw, sh = round(sc[0] * dpr), round(sc[1] * dpr)
+        fs_claim = bool(pr.get("fullscreen")) and covers_screen(pr.get("viewport"), sc)
+        if fs_claim:
+            rec["method"] = "cdp_vs_x11_match (fullscreen: the screen as the model)"
+            model = (0, 0, sw, sh)
+        else:
+            model = _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
         if SHOT_SOURCE != "x11" or not model:
             rec["why"] = "no x11 source or no window metrics"
             return rec
         M = SHOT_CALIB_MARGIN_PX
         vx, vy, vw, vh = model
         ax, ay = max(0, vx - M), max(0, vy - M)
-        area = ImageGrab.grab(bbox=(ax, ay, vx + vw + M, vy + vh + M), xdisplay=os.environ.get("DISPLAY") or ":0")
+        bx, by = vx + vw + M, vy + vh + M
+        if sw and sh:                                  # never grab beyond the screen
+            bx, by = min(bx, sw), min(by, sh)
+        area = ImageGrab.grab(bbox=(ax, ay, bx, by), xdisplay=os.environ.get("DISPLAY") or ":0")
         shot = page.call("Page.captureScreenshot", {"format": "png", "fromSurface": True, "captureBeyondViewport": False})
         rec["capture_s"] = round(time.time() - t0, 3)
         cdp = np.asarray(Image.open(io.BytesIO(base64.b64decode(shot.get("data") or ""))).convert("L"), float)
@@ -1951,7 +2004,6 @@ def calibrate_shot_origin(page: "CDPPage") -> dict:
         tpl = cdp[M:cdp.shape[0] - M, M:cdp.shape[1] - M]
         mask = np.ones(tpl.shape, bool)
         p = (pr.get("player") or {}).get("rect")
-        dpr = float(pr.get("dpr") or 1)
         if p:                                         # the picture changes between the captures: compare the page
             x0, y0 = int(p[0] * dpr) - M, int(p[1] * dpr) - M
             mask[max(0, y0):max(0, y0 + int(p[3] * dpr)), max(0, x0):max(0, x0 + int(p[2] * dpr))] = False
@@ -1960,7 +2012,8 @@ def calibrate_shot_origin(page: "CDPPage") -> dict:
         # the template's model position on the grab is (vy + M - ay, vx + M - ax)
         dx, dy = int(x - (vx + M - ax)), int(y - (vy + M - ay))
         rec.update(offset=[dx, dy], residual=res, gap=gap, accepted=calibration_verdict(res, gap),
-                   model_viewport=list(model), cdp_px=[cdp.shape[1], cdp.shape[0]])
+                   model_viewport=list(model), cdp_px=[cdp.shape[1], cdp.shape[0]],
+                   fullscreen_screen=fs_claim and calibration_verdict(res, gap) and [dx, dy] == [0, 0])
     except Exception as exc:
         rec["why"] = repr(exc)[:200]
     rec["elapsed_s"] = round(time.time() - t0, 3)
@@ -1968,9 +2021,10 @@ def calibrate_shot_origin(page: "CDPPage") -> dict:
 
 
 def _fullscreen_on_screen(pr: dict | None) -> tuple[int, int, int, int] | None:
-    """In fullscreen the player is the screen: the whole screen in device px (no window metrics needed)."""
+    """In fullscreen with the viewport covering the screen the player is the screen: the whole screen in device px.
+    The shot loop takes it only where the calibration confirmed it (origin fullscreen_screen)."""
     try:
-        if not (pr or {}).get("fullscreen"):
+        if not (pr or {}).get("fullscreen") or not covers_screen(pr.get("viewport"), pr.get("screen")):
             return None
         dpr = float(pr.get("dpr") or 1)
         w, h = pr["screen"]
@@ -2069,7 +2123,7 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
             data, capture, capture_px, shot_px, region, crop = None, None, None, None, None, "viewport"
             t_js = t_grab = None
             if SHOT_SOURCE == "x11":
-                fs = _fullscreen_on_screen(pr_)        # fullscreen: the player is the screen (t37)
+                fs = _fullscreen_on_screen(pr_) if (origin or {}).get("fullscreen_screen") else None   # t37
                 try:
                     region = fs or _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
                 except Exception:
@@ -2373,7 +2427,8 @@ class BrowserSession:
                 if mode == "theater":
                     self.player_pin["theater"] = yt_theater(self._page) if self.platform == "youtube" else "not yt"
                 if mode == "fullscreen":
-                    self.player_pin["fullscreen"] = yt_fullscreen(self._page) if self.platform == "youtube" else "not yt"
+                    self.player_pin["fullscreen"] = (yt_fullscreen(self._page, target_id=tid) if self.platform == "youtube"
+                                                     else "not yt")
             self.player_pin["geometry_target"] = self.geometry_target
             from geometry import device_scale   # a `@D` launch scale: requested beside the page's own devicePixelRatio
             self.player_pin["device_scale_requested"] = device_scale(self.geometry_target)
@@ -2807,7 +2862,11 @@ class BrowserSession:
                 if (self.geometry_target or "").startswith("theater"):
                     out["theater"] = yt_theater(self._page)
                 if (self.geometry_target or "").startswith("fullscreen"):     # a page load leaves fullscreen
-                    out["fullscreen"] = yt_fullscreen(self._page)
+                    try:
+                        tid = next((t.get("id") for t in _targets() if t.get("webSocketDebuggerUrl") == self._ws_url), None)
+                    except Exception:
+                        tid = None
+                    out["fullscreen"] = yt_fullscreen(self._page, target_id=tid)
             if self.platform == "twitch":
                 out["video_stats"] = self._page.eval(_TWITCH_VIDEO_STATS_JS, await_promise=True)
             if (self.entry_quality or {}).get("t_auto"):   # Q am. 10: a failed restore persists in the profile

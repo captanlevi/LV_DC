@@ -368,6 +368,21 @@ def entry_window(ents: list[dict] | None, window: tuple[float, float] | None) ->
     return float(t), window[0]
 
 
+def fullscreen_not_screen(meta: dict) -> dict | None:
+    """t37 hot-fix (shagun on yt_44): the player's fullscreen ran with a viewport smaller than the screen (a windowed
+    Chrome), so the session played under a window-sized player and its shots did not cover the screen. From meta alone
+    (player_pin.fullscreen on, geometry viewport < screen), so it is retro-computable; reported, never the verdict."""
+    fs = (meta.get("player_pin") or {}).get("fullscreen")
+    g = meta.get("geometry") or {}
+    vp, sc = g.get("viewport"), g.get("screen")
+    if not isinstance(fs, dict) or not fs.get("on") or not vp or not sc:
+        return None
+    if vp[0] >= sc[0] and vp[1] >= sc[1]:
+        return None
+    return {"flag": "fullscreen_not_screen", "viewport": vp, "screen": sc,
+            "window_state": (fs.get("window") or {}).get("window_state")}
+
+
 def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
                  frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
                  entry_win: tuple[float, float] | None = None) -> dict:
@@ -990,6 +1005,9 @@ def main() -> int:
                               recovered_frozen=bool(lab.get("recovered_frozen")))
     slow_start = E.slow_start_shaped(ents)
     sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
+    fns = fullscreen_not_screen(meta)
+    if fns:
+        sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
     import decode_path as DP
     _dp = meta.get("decode_path") or {}
     dp_hevc = DP.hevc_decision(_dp.get("gpu"), _dp.get("page"), (sreg.get("regime") or {}).get("played_codec")) if _dp else {}

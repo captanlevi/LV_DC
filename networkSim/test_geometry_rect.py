@@ -147,8 +147,10 @@ def test_fullscreen():
     assert G.parse("fullscreen:1920x1080") == ("fullscreen", 1920, 1080) and G.chrome_args("fullscreen:1920x1080") == []
     assert "fullscreen:1920x1080" in G.GEOMETRY_CHOICES["youtube"]
     assert not any(c.startswith("fullscreen") for c in G.GEOMETRY_CHOICES["twitch"] + G.GEOMETRY_CHOICES["tiktok"])
-    assert B._fullscreen_on_screen({"fullscreen": True, "screen": [1920, 1080], "dpr": 1}) == (0, 0, 1920, 1080)
-    assert B._fullscreen_on_screen({"fullscreen": True, "screen": [1280, 720], "dpr": 1.5}) == (0, 0, 1920, 1080)
+    assert B._fullscreen_on_screen({"fullscreen": True, "viewport": [1920, 1080], "screen": [1920, 1080], "dpr": 1}) == \
+        (0, 0, 1920, 1080)
+    assert B._fullscreen_on_screen({"fullscreen": True, "viewport": [1280, 720], "screen": [1280, 720], "dpr": 1.5}) == \
+        (0, 0, 1920, 1080)
     assert B._fullscreen_on_screen({"fullscreen": False, "screen": [1920, 1080]}) is None
     assert B._fullscreen_on_screen(None) is None
 
@@ -169,6 +171,7 @@ def test_fullscreen():
                                "player": [1920, 1080] if self.on else [1243, 699], "screen": [1920, 1080],
                                "viewport": [1920, 1080] if self.on else [1818, 868], "dpr": 1,
                                "controls_hidden": self.on, "button": [1700, 840]})
+    real_bc, B._browser_call = B._browser_call, (lambda m, p=None: {})   # no CDP browser: window_fullscreen records why
     pg = Page()
     r = B.yt_fullscreen(pg, settle_s=0)
     assert (r["action"], r["on"], r["player_device_px_h"], r["controls_hidden"]) == ("key_f", True, 1080, True)
@@ -180,10 +183,55 @@ def test_fullscreen():
     pg = Page()
     pg.on = True
     assert B.yt_fullscreen(pg, settle_s=0)["action"] == "already"
+    B._browser_call = real_bc
+
+
+def test_fullscreen_window_and_screen_checks():
+    """t37 hot-fix (shagun on yt_44: the player's fullscreen stayed inside a windowed Chrome, viewport 1818x868 on a
+    1920x1080 screen): the Chrome window is set fullscreen over CDP and verified (window state + viewport covering the
+    screen); the shot region is the screen only when the viewport covers it; check_session flags the windowed case."""
+    import check_session as CS
+    calls = []
+    state = {"ws": "normal"}
+
+    def bc(method, params=None):
+        calls.append(method)
+        if method == "Browser.getWindowForTarget":
+            return {"windowId": 7}
+        if method == "Browser.setWindowBounds":
+            state["ws"] = params["bounds"]["windowState"]
+            return {}
+        if method == "Browser.getWindowBounds":
+            return {"bounds": {"windowState": state["ws"], "left": 0, "top": 0, "width": 1920, "height": 1080}}
+        return {}
+
+    class P:
+        def eval(self, js, await_promise=False):
+            full = state["ws"] == "fullscreen"
+            return json.dumps({"viewport": [1920, 1080] if full else [1818, 868], "screen": [1920, 1080], "dpr": 1})
+    real = B._browser_call
+    B._browser_call = bc
+    try:
+        r = B.window_fullscreen(P(), "T1", settle_s=0)
+    finally:
+        B._browser_call = real
+    assert r["ok"] and r["window_state"] == "fullscreen" and r["viewport_is_screen"] and r["state_before"] == "normal", r
+    assert "Browser.setWindowBounds" in calls
+    assert B.covers_screen([1920, 1080], [1920, 1080]) and not B.covers_screen([1818, 868], [1920, 1080])
+    yt44 = {"fullscreen": True, "viewport": [1818, 868], "screen": [1920, 1080], "dpr": 1}
+    assert B._fullscreen_on_screen(yt44) is None                               # windowed: not the screen
+    assert B._fullscreen_on_screen({**yt44, "viewport": [1920, 1080]}) == (0, 0, 1920, 1080)
+    meta = {"player_pin": {"fullscreen": {"on": True, "window": {"window_state": "normal"}}},
+            "geometry": {"viewport": [1818, 868], "screen": [1920, 1080]}}
+    f = CS.fullscreen_not_screen(meta)
+    assert f["flag"] == "fullscreen_not_screen" and f["window_state"] == "normal", f
+    assert CS.fullscreen_not_screen({**meta, "geometry": {"viewport": [1920, 1080], "screen": [1920, 1080]}}) is None
+    assert CS.fullscreen_not_screen({"player_pin": {"fullscreen": "not yt"}, "geometry": meta["geometry"]}) is None
 
 
 def main() -> int:
     test_yt_top_quality()
+    test_fullscreen_window_and_screen_checks()
     test_device_scale_variant()
     test_fullscreen()
     if not shutil.which("node"):

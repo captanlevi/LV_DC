@@ -38,20 +38,21 @@ def _synthetic(seed=0, flat=False):
 
 
 class _CalPage:
-    def __init__(self, cdp, fullscreen=False):
+    def __init__(self, cdp, fullscreen=False, covers=False):
         import base64
         import io
         from PIL import Image
         buf = io.BytesIO()
         Image.fromarray(cdp).save(buf, format="PNG")
         self.png = base64.b64encode(buf.getvalue()).decode()
-        self.fs = fullscreen
+        self.fs, self.covers = fullscreen, covers
 
     def eval(self, js, await_promise=False):
         import json
         if js is B._PLAYER_RECT_JS:
             return json.dumps({"player": {"rect": [60, 40, 460, 300], "inner": [600, 400], "dpr": 1},
-                               "viewport": [600, 400], "dpr": 1, "fullscreen": self.fs, "screen": [1000, 700]})
+                               "viewport": [600, 400], "dpr": 1, "fullscreen": self.fs,
+                               "screen": [600, 400] if self.covers else [1000, 700]})
         # model viewport (207, 188): side 0, top = oh - ih = 188 - sy
         return json.dumps({"sx": 207, "sy": 0, "ow": 600, "oh": 588, "iw": 600, "ih": 400, "dpr": 1})
 
@@ -76,8 +77,22 @@ def test_origin_calibration():
             if ok:                                   # true (210, 167) - model (207, 188)
                 assert r["offset"] == [3, -21] and r["residual"] == 0.0 and r["model_viewport"] == [207, 188, 600, 400], r
                 assert 0 < r["compared_share"] < 0.1 and r["gap"] > 20, r          # the page beside the picture
+        # t37 hot-fix (yt_44): a fullscreen page whose viewport is smaller than the screen is a windowed Chrome: the
+        # window model, never the screen
+        screen, cdp = _synthetic()
+        IG.grab = lambda bbox=None, xdisplay=None, s=screen: Image.fromarray(s).crop(bbox)
         r = B.calibrate_shot_origin(_CalPage(cdp, fullscreen=True))
-        assert r["accepted"] and r["offset"] == [0, 0] and r["method"].startswith("fullscreen"), r
+        assert r["method"] == "cdp_vs_x11_match" and r["offset"] == [3, -21] and not r["fullscreen_screen"], r
+        # a viewport covering the screen: the screen is the model, taken as the viewport only at offset [0, 0]
+        import numpy as np
+        for shift, ok in ((0, True), (20, False)):
+            scr = np.array(Image.fromarray(screen).resize((600, 400)))
+            page = scr.copy()
+            if shift:
+                scr = np.vstack([np.full((shift, 600), 9, np.uint8), scr[:-shift]])     # the X11 screen is shifted
+            IG.grab = lambda bbox=None, xdisplay=None, s=scr: Image.fromarray(s).crop(bbox)
+            r = B.calibrate_shot_origin(_CalPage(page, fullscreen=True, covers=True))
+            assert r["method"].startswith("cdp_vs_x11_match (fullscreen") and r["fullscreen_screen"] is ok, (shift, r)
     finally:
         IG.grab = real
     assert B.calibration_verdict(8.0, 4.0) and not B.calibration_verdict(8.1, 9.0) and not B.calibration_verdict(1.0, 3.9)
