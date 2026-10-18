@@ -11,6 +11,10 @@ Expected (EXPECTED):
     Reachable top = the smallest offered rung >= the player's device-px height. Basis (chaos, 2026-10-18 diagnosis):
     481- and 505-px players played 720p; 710-px players never played 1080p while it was on offer, at 6-9 Mb/s. That is
     a reading of 30 sessions, not a documented yt rule; the inputs are recorded beside the flag.
+yt ladder source: the player response's qualityLabels in http_v2 (the /live page), else the player API's
+getAvailableQualityLevels() logged per tick in player_stats.jsonl (non-ad ticks; t37, 2026-10-18: from yt_41 the /live
+page is an app shell with no inline player response and no youtubei player exchange is in http_v2, so yt_41-43 read
+no ladder); ladder_source names which, ladder_why says why neither gave one.
 Flags: unexpected_codec, single_rung_ladder (1 rung), short_ladder (2 .. min - 1), ladder_unknown (no ladder captured),
   player_below_top (yt).
 """
@@ -75,12 +79,28 @@ def _mode(xs):
     return collections.Counter(xs).most_common(1)[0][0] if xs else None
 
 
+YT_LEVEL_H = {"tiny": 144, "small": 240, "medium": 360, "large": 480, "hd720": 720, "hd1080": 1080, "hd1440": 1440,
+              "hd2160": 2160, "highres": 4320}
+
+
 def youtube(sd: Path, meta: dict, http_v2: dict) -> dict:
     offered = sorted({int(h) for _, b in _bodies(http_v2) for h in re.findall(r'"qualityLabel"\s*:\s*"(\d+)p', b)})
-    st = [s.get("nerds") or {} for s in _stats(sd) if s.get("ad_state", -1) == -1]
+    src, why = ("http_v2 player response" if offered else None), None
+    nonad = [s for s in _stats(sd) if s.get("ad_state", -1) == -1]
+    if not offered:
+        lv = [s.get("quality_levels") for s in nonad if isinstance(s.get("quality_levels"), list)]
+        offered = sorted({YT_LEVEL_H[x] for ls in lv for x in ls if x in YT_LEVEL_H})
+        src = "player api levels" if offered else None
+        if not offered:
+            shell = not any("ytInitialPlayerResponse" in b for _, b in _bodies(http_v2))
+            why = ("no player response in http_v2" + (" (the /live page is an app shell)" if shell else "")
+                   + ("; player_stats has no quality_levels" if not lv else "; the player listed no levels"))
+    st = [s.get("nerds") or {} for s in nonad]
     res = [str(n.get("resolution") or "").split(" / ") for n in st]
     played = [_short(r[0]) for r in res if r and r[0]]
-    g, th = meta.get("geometry") or {}, (meta.get("player_pin") or {}).get("theater") or {}
+    pin = meta.get("player_pin") or {}
+    g = meta.get("geometry") or {}
+    th = next((x for x in (pin.get("fullscreen"), pin.get("theater")) if isinstance(x, dict)), {})
     pc = g.get("player_client")
     player_h = th.get("player_device_px_h") or (round(pc[1] * (g.get("device_pixel_ratio") or 1)) if pc else None)
     reach = None
@@ -88,6 +108,7 @@ def youtube(sd: Path, meta: dict, http_v2: dict) -> dict:
         reach = next((h for h in offered if h >= player_h), offered[-1])
     return {"played_codec": codec_name(_mode([str(n.get("codecs") or "").split(" / ")[0] for n in st])),
             "ladder": offered, "rungs": len(offered), "offered_top": offered[-1] if offered else None,
+            "ladder_source": src, "ladder_why": why,
             "player_h_device_px": player_h, "reachable_top": reach, "played_top": max([p for p in played if p], default=None),
             "optimal_res_mode": _mode([r[1] for r in res if len(r) > 1 and _short(r[1])])}
 

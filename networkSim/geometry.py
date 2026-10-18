@@ -9,10 +9,17 @@ meta.json (geometry_target); client_w / client_h per tick are in labels.csv alre
   theater:WxH (yt only) the window as window:WxH, then yt's theater mode (the player's size button), so the player
               exceeds 720 device px tall where the viewport allows (supervisor 2026-10-18: no 1080p in 30 sessions,
               the 1263x710 / 855x481 players most likely capped yt's ABR at 720p)
+  fullscreen:WxH (yt only) the window as window:WxH, then the player's own fullscreen (the `f` key, a CDP key event:
+              a user gesture), the pointer parked over the picture so the controls auto-hide: the player is the screen
+              (1080 device px tall on chaos's 1920x1080 panel) and the X11 shot is the whole screen (supervisor t37,
+              2026-10-18: it replaces theater:1920x1080@1.5 in the rotation)
   <spec>@D    the same, with Chrome launched at device scale factor D (--force-device-scale-factor; layout only):
               theater:1920x1080@1.5 (supervisor 2026-10-18, shagun's audit: in theater mode yt_39-41's player stayed
               699 device px tall in the 1818x868 viewport and never played above 720p, so the yt 1080p floor could not
-              fill); the DPR and the player's device px are recorded in meta.json player_pin / geometry (Q am. 2)
+              fill); the DPR and the player's device px are recorded in meta.json player_pin / geometry (Q am. 2).
+              Retired after yt_43 (supervisor t37): at scale 1.5 the CSS viewport shrinks to 1235x702 on a 1920x1080
+              panel, so the theater player is 853x480 CSS = 1280x720 device px, the same 720 cap; its sessions stay
+              valid at their recorded geometry
 
 Sessions collected before rotation (pinned sizes) carry only player_pin.target in meta.json; they count as
 player:<target>, so the rotation first evens the other entries out.
@@ -23,7 +30,7 @@ import json
 from pathlib import Path
 
 GEOMETRY_CHOICES: dict[str, list[str]] = {
-    "youtube": ["player:853x480", "player:1280x720", "window:1920x1080", "theater:1920x1080", "theater:1920x1080@1.5"],
+    "youtube": ["player:853x480", "player:1280x720", "window:1920x1080", "theater:1920x1080", "fullscreen:1920x1080"],
     "twitch": ["player:1274x717", "window:1920x1080"],          # chat open on twitch (CLOSE_CHAT_DEFAULT)
     "tiktok": ["player:783x604", "player:537x880", "window:1920x1080"],
 }
@@ -32,8 +39,8 @@ GEOMETRY_CHOICES: dict[str, list[str]] = {
 def parse(spec: str) -> tuple[str, int, int]:
     mode, wh = spec.split("@", 1)[0].split(":", 1)
     w, h = wh.lower().split("x")
-    if mode not in ("player", "window", "theater"):
-        raise ValueError(f"geometry mode must be player, window or theater: {spec}")
+    if mode not in ("player", "window", "theater", "fullscreen"):
+        raise ValueError(f"geometry mode must be player, window, theater or fullscreen: {spec}")
     return mode, int(w), int(h)
 
 

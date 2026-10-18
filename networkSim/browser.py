@@ -910,6 +910,84 @@ def yt_theater(page: "CDPPage", settle_s: float = 1.5) -> dict:
         return {"action": "error", "error": repr(exc)}
 
 
+# yt fullscreen (geometry fullscreen:WxH; supervisor t37, 2026-10-18: the DPR route cannot pass 720 device px on a
+# 1920x1080 panel): the player's own fullscreen, entered by the `f` key as a CDP key event (a user gesture; a script
+# click cannot enter fullscreen), else by a CDP mouse click on its fullscreen button; then the pointer is parked over
+# the picture, off the control bars, so the controls auto-hide. The state after it is recorded (meta.json
+# player_pin.fullscreen). Layout only, never quality.
+_FULLSCREEN_STATE_JS = """
+(function() {
+    const fe = document.fullscreenElement;
+    const v = document.querySelector('#movie_player video') || document.querySelector('video');
+    const mp = document.querySelector('#movie_player');
+    const b = document.querySelector('.ytp-fullscreen-button');
+    const br = b ? b.getBoundingClientRect() : null;
+    return JSON.stringify({on: !!fe, element: fe ? (fe.id || fe.tagName.toLowerCase()) : null,
+                           player: v ? [v.clientWidth, v.clientHeight] : null, screen: [screen.width, screen.height],
+                           viewport: [window.innerWidth, window.innerHeight], dpr: window.devicePixelRatio || 1,
+                           controls_hidden: mp ? mp.classList.contains('ytp-autohide') : null,
+                           button: br ? [br.x + br.width / 2, br.y + br.height / 2] : null});
+})()
+"""
+
+
+def _key(page: "CDPPage", key: str, code: str, vk: int) -> None:
+    for t in ("keyDown", "keyUp"):
+        page.call("Input.dispatchKeyEvent", {"type": t, "key": key, "code": code, "windowsVirtualKeyCode": vk,
+                                             **({"text": key} if t == "keyDown" else {})})
+
+
+def _mouse(page: "CDPPage", kind: str, x: float, y: float) -> None:
+    page.call("Input.dispatchMouseEvent", {"type": kind, "x": x, "y": y,
+                                           "button": "none" if kind == "mouseMoved" else "left", "clickCount": 1})
+
+
+_FULLSCREEN_TRACE_JS = ("(function() { if (!window.__lvqoeFs) { window.__lvqoeFs = []; const t0 = performance.now(); "
+                        "document.addEventListener('fullscreenchange', () => __lvqoeFs.push([Math.round(performance.now() "
+                        "- t0), !!document.fullscreenElement])); document.addEventListener('fullscreenerror', () => "
+                        "__lvqoeFs.push([Math.round(performance.now() - t0), 'error'])); } return 'ok'; })()")
+
+
+def yt_fullscreen(page: "CDPPage", settle_s: float = 4.0) -> dict:
+    """Put the yt player in fullscreen and park the pointer; read back the state, with the page's fullscreenchange
+    trace ([ms, on]; laptop 2026-10-18: macOS drops a background app's fullscreen after about 1 s, so entering is not
+    staying). Never raises."""
+    try:
+        page.eval(_FULLSCREEN_TRACE_JS)
+        st = json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}")
+        rec: dict = {"action": "already" if st.get("on") else None}
+        if not st.get("on"):
+            _key(page, "f", "KeyF", 70)
+            time.sleep(1.0)
+            st = json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}")
+            rec["action"] = "key_f"
+            if not st.get("on") and st.get("button"):
+                x, y = st["button"]
+                _mouse(page, "mouseMoved", x, y)              # the button sits in the auto-hiding control bar
+                time.sleep(0.3)
+                _mouse(page, "mousePressed", x, y)
+                _mouse(page, "mouseReleased", x, y)
+                time.sleep(1.0)
+                st = json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}")
+                rec["action"] = "button_click"
+        vw, vh = st.get("viewport") or [0, 0]
+        rec["pointer_parked"] = [round(vw * 0.5), round(vh * 0.4)]    # over the picture, off both control bars
+        _mouse(page, "mouseMoved", *rec["pointer_parked"])
+        time.sleep(settle_s)
+        rec.update(json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}"))
+        rec.pop("button", None)
+        try:
+            ev = json.loads(page.eval("JSON.stringify(window.__lvqoeFs || null)") or "null")
+            rec["events"] = ev if isinstance(ev, list) else None
+        except (TypeError, ValueError):
+            rec["events"] = None
+        p, dpr = rec.get("player"), rec.get("dpr") or 1
+        rec["player_device_px_h"] = round(p[1] * dpr) if p else None
+        return rec
+    except Exception as exc:
+        return {"action": "error", "error": repr(exc)}
+
+
 # Window / viewport / player geometry (meta.json): the player size decides the top of yt's ladder. player_rect is the
 # largest visible <video>'s bounding rect in viewport CSS px [x, y, w, h] (supervisor 2026-10-17, brad's R-O audit: the
 # motion crop is derived per session from it, without detection); control_band is the player's own control bar where
@@ -1788,6 +1866,18 @@ def _player_on_screen(viewport: tuple[int, int, int, int], player: dict | None) 
         return None
 
 
+def _fullscreen_on_screen(pr: dict | None) -> tuple[int, int, int, int] | None:
+    """In fullscreen the player is the screen: the whole screen in device px (no window metrics needed)."""
+    try:
+        if not (pr or {}).get("fullscreen"):
+            return None
+        dpr = float(pr.get("dpr") or 1)
+        w, h = pr["screen"]
+        return 0, 0, round(w * dpr), round(h * dpr)
+    except (TypeError, KeyError, ValueError):
+        return None
+
+
 def _grab_x11(region: tuple[int, int, int, int]) -> bytes | None:
     """The region of the X display as a SHOT_WIDTH_PX JPEG; None when it cannot be grabbed or comes back blank."""
     try:
@@ -1833,7 +1923,8 @@ _PLAYER_RECT_JS = """
     const inner = [window.innerWidth, window.innerHeight], dpr = window.devicePixelRatio || 1;
     let player = null;
     if (v) { const r = v.getBoundingClientRect(); player = {rect: [r.x, r.y, r.width, r.height], inner, dpr}; }
-    return JSON.stringify({player, viewport: inner, dpr});
+    return JSON.stringify({player, viewport: inner, dpr, fullscreen: !!document.fullscreenElement,
+                           screen: [screen.width, screen.height]});
 })()
 """
 
@@ -1876,14 +1967,17 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
             data, capture, capture_px, shot_px, region, crop = None, None, None, None, None, "viewport"
             t_js = t_grab = None
             if SHOT_SOURCE == "x11":
+                fs = _fullscreen_on_screen(pr_)        # fullscreen: the player is the screen (t37)
                 try:
-                    region = _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
+                    region = fs or _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
                 except Exception:
                     region = None
                 t_js = time.time()
                 # the player rectangle only (supervisor 2026-10-17: the smallest XGetImage), else the viewport
-                pr = _player_on_screen(region, player) if region else None
-                if pr:
+                pr = _player_on_screen(region, player) if region and not fs else None
+                if fs:                                 # the screen is the player: crop "player", as readers expect
+                    crop = "player"
+                elif pr:
                     region, crop = pr, "player"
                 data = _grab_x11(region) if region else None
                 t_grab = time.time()
@@ -1913,7 +2007,7 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
                                      "request": req if reason != "cadence" else None, "player": player,
                                      "viewport": viewport,
                                      "capture_px": capture_px, "shot_px": shot_px, "capture": capture,
-                                     "screen_region": region, "crop": crop,
+                                     "screen_region": region, "crop": crop, "fullscreen": bool((pr_ or {}).get("fullscreen")),
                                      # per-step timing (tw_10: the near-shot dropped frames sit on the tick about
                                      # 1 s before ts; these say which step that is)
                                      "t_decide": t_decide, "js_s": None if t_js is None else round(t_js - t_decide, 4),
@@ -2170,6 +2264,8 @@ class BrowserSession:
                 self.player_pin = size_window(self._page, (gw, gh), tid)
                 if mode == "theater":
                     self.player_pin["theater"] = yt_theater(self._page) if self.platform == "youtube" else "not yt"
+                if mode == "fullscreen":
+                    self.player_pin["fullscreen"] = yt_fullscreen(self._page) if self.platform == "youtube" else "not yt"
             self.player_pin["geometry_target"] = self.geometry_target
             from geometry import device_scale   # a `@D` launch scale: requested beside the page's own devicePixelRatio
             self.player_pin["device_scale_requested"] = device_scale(self.geometry_target)
@@ -2595,6 +2691,8 @@ class BrowserSession:
                 out["captions"] = self._page.eval(_CAPTIONS_OFF_JS)
                 if (self.geometry_target or "").startswith("theater"):
                     out["theater"] = yt_theater(self._page)
+                if (self.geometry_target or "").startswith("fullscreen"):     # a page load leaves fullscreen
+                    out["fullscreen"] = yt_fullscreen(self._page)
             if self.platform == "twitch":
                 out["video_stats"] = self._page.eval(_TWITCH_VIDEO_STATS_JS, await_promise=True)
             if (self.entry_quality or {}).get("t_auto"):   # Q am. 10: a failed restore persists in the profile

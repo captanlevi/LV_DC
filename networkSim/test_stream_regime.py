@@ -60,8 +60,21 @@ def main():
         th = {**geo, "player_pin": {"theater": {"player_device_px_h": 1009}}}
         r = S.session_regime(sess(d, "youtube", "y2", yt_http(["360", "480", "720", "1080"]), stats, th), "youtube")
         assert r["regime"]["reachable_top"] == 1080 and r["suspicious"] == [], r
+        assert r["regime"]["ladder_source"] == "http_v2 player response", r
         r = S.session_regime(sess(d, "youtube", "y3", {"c": []}, stats, geo), "youtube")
         assert S.flag_keys(r["suspicious"]) == ["ladder_unknown"], r                   # no player response captured
+        assert r["regime"]["ladder_why"] == ("no player response in http_v2 (the /live page is an app shell); "
+                                             "player_stats has no quality_levels"), r
+        # t37 (yt_41-43: the /live page is an app shell): the player API's levels, from non-ad ticks, give the ladder
+        lv = [{**x, "quality_levels": ["hd1080", "hd720", "large", "medium", "small", "tiny", "auto"]} for x in stats[:5]]
+        lv.append({**nerds("1920x1080", "1920x1080", ad=1), "quality_levels": ["hd2160", "auto"]})       # ad: ignored
+        shell = {"c1": [{"request_url": "/@chan/live", "response_data": "<html>app shell</html>"}]}
+        fs = {"geometry": {"player_client": [1920, 1080], "device_pixel_ratio": 1},
+              "player_pin": {"fullscreen": {"player_device_px_h": 1080}, "theater": "not yt"}}
+        r = S.session_regime(sess(d, "youtube", "y5", shell, lv, fs), "youtube")
+        assert (r["regime"]["ladder"], r["regime"]["ladder_source"], r["regime"]["ladder_why"]) == \
+            ([144, 240, 360, 480, 720, 1080], "player api levels", None), r
+        assert r["regime"]["player_h_device_px"] == 1080 and r["regime"]["reachable_top"] == 1080, r
         r = S.session_regime(sess(d, "youtube", "y4", yt_http(["720", "1080"]), [nerds("1280x720", "1280x720", "hev1.1 (1)")],
                                   {"geometry": {"player_client": [1263, 710], "device_pixel_ratio": 1}}), "youtube")
         assert S.flag_keys(r["suspicious"]) == ["unexpected_codec", "short_ladder", "player_below_top"], r

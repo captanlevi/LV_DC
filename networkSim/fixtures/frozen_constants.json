@@ -136,7 +136,7 @@
     "player:1280x720",
     "window:1920x1080",
     "theater:1920x1080",
-    "theater:1920x1080@1.5"
+    "fullscreen:1920x1080"
    ]
   }
  },

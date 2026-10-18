@@ -128,7 +128,7 @@ def test_device_scale_variant():
         ["CHROME_ENV=X=1", "CHROME_EXTRA_ARGS=--force-device-scale-factor=1.5"]
     assert G.merge_make_vars(["CHROME_EXTRA_ARGS=--ignore-gpu-blocklist"], ["--force-device-scale-factor=1.5"]) == \
         ["CHROME_EXTRA_ARGS=--ignore-gpu-blocklist --force-device-scale-factor=1.5"]
-    assert "theater:1920x1080@1.5" in G.GEOMETRY_CHOICES["youtube"]
+    assert "theater:1920x1080@1.5" not in G.GEOMETRY_CHOICES["youtube"]      # retired after yt_43 (t37); still parses
     import tempfile
     from pathlib import Path as P
     with tempfile.TemporaryDirectory() as d:                                  # the least-collected entry goes next
@@ -136,12 +136,56 @@ def test_device_scale_variant():
             sd = P(d) / "youtube" / f"yt_{i}"
             sd.mkdir(parents=True)
             (sd / "meta.json").write_text('{"geometry_target": "%s"}' % g)
-        assert G.next_geometry(P(d), "youtube") == "theater:1920x1080@1.5"
+        assert G.next_geometry(P(d), "youtube") == "fullscreen:1920x1080"
+
+
+def test_fullscreen():
+    """supervisor t37 (2026-10-18, yt_43: the DPR route stays at 720 device px on a 1920x1080 panel): geometry
+    fullscreen:WxH (yt only) = window W x H, then the player's own fullscreen by the `f` key (a CDP key event), else a
+    CDP click on its button; the pointer parked over the picture; the X11 shot is the whole screen in device px."""
+    import geometry as G
+    assert G.parse("fullscreen:1920x1080") == ("fullscreen", 1920, 1080) and G.chrome_args("fullscreen:1920x1080") == []
+    assert "fullscreen:1920x1080" in G.GEOMETRY_CHOICES["youtube"]
+    assert not any(c.startswith("fullscreen") for c in G.GEOMETRY_CHOICES["twitch"] + G.GEOMETRY_CHOICES["tiktok"])
+    assert B._fullscreen_on_screen({"fullscreen": True, "screen": [1920, 1080], "dpr": 1}) == (0, 0, 1920, 1080)
+    assert B._fullscreen_on_screen({"fullscreen": True, "screen": [1280, 720], "dpr": 1.5}) == (0, 0, 1920, 1080)
+    assert B._fullscreen_on_screen({"fullscreen": False, "screen": [1920, 1080]}) is None
+    assert B._fullscreen_on_screen(None) is None
+
+    class Page:                                                   # the `f` key works on the second state read
+        def __init__(self, key_works=True):
+            self.calls, self.on, self.key_works = [], False, key_works
+
+        def call(self, method, params=None):
+            self.calls.append((method, (params or {}).get("type"), (params or {}).get("key")))
+            if method == "Input.dispatchKeyEvent" and params.get("type") == "keyDown" and self.key_works:
+                self.on = True
+            if method == "Input.dispatchMouseEvent" and params.get("type") == "mouseReleased":
+                self.on = True
+            return {}
+
+        def eval(self, js, await_promise=False):
+            return json.dumps({"on": self.on, "element": "movie_player" if self.on else None,
+                               "player": [1920, 1080] if self.on else [1243, 699], "screen": [1920, 1080],
+                               "viewport": [1920, 1080] if self.on else [1818, 868], "dpr": 1,
+                               "controls_hidden": self.on, "button": [1700, 840]})
+    pg = Page()
+    r = B.yt_fullscreen(pg, settle_s=0)
+    assert (r["action"], r["on"], r["player_device_px_h"], r["controls_hidden"]) == ("key_f", True, 1080, True)
+    assert r["pointer_parked"] == [960, 432] and "button" not in r
+    assert ("Input.dispatchKeyEvent", "keyDown", "f") in pg.calls and not any(c[1] == "mousePressed" for c in pg.calls)
+    pg = Page(key_works=False)
+    r = B.yt_fullscreen(pg, settle_s=0)
+    assert r["action"] == "button_click" and r["on"] and ("Input.dispatchMouseEvent", "mousePressed", None) in pg.calls
+    pg = Page()
+    pg.on = True
+    assert B.yt_fullscreen(pg, settle_s=0)["action"] == "already"
 
 
 def main() -> int:
     test_yt_top_quality()
     test_device_scale_variant()
+    test_fullscreen()
     if not shutil.which("node"):
         print("SKIP: node not found")
         return 0
@@ -154,8 +198,10 @@ def main() -> int:
     assert js(B._GEOMETRY_JS, videos=[[100, 40, 783, 604]])["control_band"] is None   # tt: the inset rule
     # the shot loop: player rect and viewport in one eval; the viewport also with no player
     r = js(B._PLAYER_RECT_JS, videos=[[24, 80, 853, 480]], dpr=2)
-    assert r == {"player": {"rect": [24, 80, 853, 480], "inner": [1280, 720], "dpr": 2}, "viewport": [1280, 720], "dpr": 2}, r
-    assert js(B._PLAYER_RECT_JS) == {"player": None, "viewport": [1280, 720], "dpr": 1}
+    fs = {"fullscreen": False, "screen": [1920, 1080]}                     # t37: the shot loop's fullscreen test
+    assert r == {"player": {"rect": [24, 80, 853, 480], "inner": [1280, 720], "dpr": 2}, "viewport": [1280, 720], "dpr": 2,
+                 **fs}, r
+    assert js(B._PLAYER_RECT_JS) == {"player": None, "viewport": [1280, 720], "dpr": 1, **fs}
     # screenshot pixels: viewport 1280 CSS px at dpr 2 = 2560 device px -> 640 px shots (scale 0.25)
     sc = B.geometry_scales({"player_rect": [24, 80, 853, 480], "viewport": [1280, 720], "device_pixel_ratio": 2})
     assert sc["player_rect_device_px"] == [48, 160, 1706, 960] and sc["viewport_shot_scale"] == 0.25, sc

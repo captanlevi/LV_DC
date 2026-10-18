@@ -47,6 +47,8 @@
     try { if (typeof p.getPlaybackQuality === "function") out.playback_quality = p.getPlaybackQuality(); } catch (e) {}
     try { if (typeof p.getVideoLoadedFraction === "function") out.loaded_fraction = p.getVideoLoadedFraction(); } catch (e) {}
     try { if (typeof p.getAdState === "function") out.ad_state = p.getAdState(); } catch (e) {}
+    // the offered ladder (t37, yt_41-43: the /live page became an app shell, so http_v2 carries no player response)
+    try { if (typeof p.getAvailableQualityLevels === "function") out.quality_levels = p.getAvailableQualityLevels(); } catch (e) {}
     return out;
   }
   setInterval(() => {
