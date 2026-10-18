@@ -383,6 +383,20 @@ def fullscreen_not_screen(meta: dict) -> dict | None:
             "window_state": (fs.get("window") or {}).get("window_state")}
 
 
+def fullscreen_player_lt_screen(meta: dict) -> dict | None:
+    """t37 hot-fix 2 (chaos fullscreen check: the live chat stayed beside a fullscreen player, 1400x788 of 1920x1080):
+    the session's fullscreen player was smaller than the screen. From player_pin.fullscreen alone (its video size and
+    the screen), so retro-computable; reported, never the verdict."""
+    fs = (meta.get("player_pin") or {}).get("fullscreen")
+    if not isinstance(fs, dict):
+        return None
+    pl, sc = fs.get("player"), fs.get("screen")
+    if not pl or not sc or (pl[0] >= sc[0] - 1 and pl[1] >= sc[1] - 1):
+        return None
+    return {"flag": "fullscreen_player_lt_screen", "player": pl, "screen": sc,
+            "player_fullscreen": fs.get("on"), "chat_hidden": (fs.get("chat_hidden") or {}).get("collapsed")}
+
+
 def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
                  frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
                  entry_win: tuple[float, float] | None = None) -> dict:
@@ -1005,9 +1019,9 @@ def main() -> int:
                               recovered_frozen=bool(lab.get("recovered_frozen")))
     slow_start = E.slow_start_shaped(ents)
     sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
-    fns = fullscreen_not_screen(meta)
-    if fns:
-        sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
+    for fns in (fullscreen_not_screen(meta), fullscreen_player_lt_screen(meta)):
+        if fns:
+            sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
     import decode_path as DP
     _dp = meta.get("decode_path") or {}
     dp_hevc = DP.hevc_decision(_dp.get("gpu"), _dp.get("page"), (sreg.get("regime") or {}).get("played_codec")) if _dp else {}

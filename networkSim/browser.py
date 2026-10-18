@@ -915,6 +915,8 @@ def yt_theater(page: "CDPPage", settle_s: float = 1.5) -> dict:
 # click cannot enter fullscreen), else by a CDP mouse click on its fullscreen button; then the pointer is parked over
 # the picture, off the control bars, so the controls auto-hide. The state after it is recorded (meta.json
 # player_pin.fullscreen). Layout only, never quality.
+# `on` is the PLAYER's fullscreen (t37 hot-fix 2, shagun on chaos: after the window's fullscreen the document element
+# is document.fullscreenElement, so a bare fullscreenElement read "already" and the player never entered its own)
 _FULLSCREEN_STATE_JS = """
 (function() {
     const fe = document.fullscreenElement;
@@ -922,13 +924,45 @@ _FULLSCREEN_STATE_JS = """
     const mp = document.querySelector('#movie_player');
     const b = document.querySelector('.ytp-fullscreen-button');
     const br = b ? b.getBoundingClientRect() : null;
-    return JSON.stringify({on: !!fe, element: fe ? (fe.id || fe.tagName.toLowerCase()) : null,
-                           player: v ? [v.clientWidth, v.clientHeight] : null, screen: [screen.width, screen.height],
+    const pr = mp ? mp.getBoundingClientRect() : null;
+    const flexy = document.querySelector('ytd-watch-flexy');
+    const chat = document.querySelector('ytd-live-chat-frame');
+    const playerFs = !!(fe && fe !== document.documentElement && mp && (fe === mp || fe.contains(mp)));
+    return JSON.stringify({on: playerFs, element: fe ? (fe.id || fe.tagName.toLowerCase()) : null,
+                           doc_fullscreen: fe === document.documentElement,
+                           flexy_fullscreen: flexy ? flexy.hasAttribute('fullscreen') : null,
+                           player: v ? [v.clientWidth, v.clientHeight] : null,
+                           player_rect: pr ? [pr.x, pr.y, pr.width, pr.height] : null,
+                           screen: [screen.width, screen.height],
                            viewport: [window.innerWidth, window.innerHeight], dpr: window.devicePixelRatio || 1,
                            controls_hidden: mp ? mp.classList.contains('ytp-autohide') : null,
+                           chat_present: !!chat, chat_collapsed: chat ? chat.hasAttribute('collapsed') : null,
                            button: br ? [br.x + br.width / 2, br.y + br.height / 2] : null});
 })()
 """
+# the watch page's live chat collapsed before the player's fullscreen (t37 hot-fix 2: yt keeps the chat panel beside a
+# fullscreen player, ~520 px of a 1920 px screen); a script click is enough for the toggle (no fullscreen grant needed)
+_YT_HIDE_CHAT_JS = """
+(function() {
+    const fr = document.querySelector('ytd-live-chat-frame');
+    if (!fr) return JSON.stringify({action: 'no-chat'});
+    if (fr.hasAttribute('collapsed')) return JSON.stringify({action: 'already'});
+    const b = fr.querySelector('#show-hide-button button') || fr.querySelector('#show-hide-button');
+    if (!b) return JSON.stringify({action: 'no-button'});
+    b.click();
+    return JSON.stringify({action: 'clicked'});
+})()
+"""
+
+
+def player_is_screen(rec: dict) -> bool:
+    """The player element covers the screen (CSS px): its rect from (0, 0) at least the screen's size."""
+    try:
+        x, y, w, h = rec["player_rect"]
+        sw, sh = rec["screen"]
+        return x <= 0.5 and y <= 0.5 and w >= sw - 1 and h >= sh - 1
+    except (TypeError, KeyError, ValueError):
+        return False
 
 
 def _key(page: "CDPPage", key: str, code: str, vk: int) -> None:
@@ -994,10 +1028,14 @@ def yt_fullscreen(page: "CDPPage", settle_s: float = 4.0, target_id: str | None 
     (`on_screen`). Never raises."""
     try:
         win = window_fullscreen(page, target_id)
+        chat = json.loads(page.eval(_YT_HIDE_CHAT_JS) or "{}")
+        time.sleep(0.8)
+        chat["collapsed"] = json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}").get("chat_collapsed")
         page.eval(_FULLSCREEN_TRACE_JS)
         st = json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}")
         rec: dict = {"action": "already" if st.get("on") else None}
         if not st.get("on"):
+            page.eval("(document.querySelector('#movie_player') || document.body).focus()")   # the hotkey's target
             _key(page, "f", "KeyF", 70)
             time.sleep(1.0)
             st = json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}")
@@ -1025,7 +1063,9 @@ def yt_fullscreen(page: "CDPPage", settle_s: float = 4.0, target_id: str | None 
         p, dpr = rec.get("player"), rec.get("dpr") or 1
         rec["player_device_px_h"] = round(p[1] * dpr) if p else None
         rec["window"] = win
+        rec["chat_hidden"] = chat
         rec["on_screen"] = bool(rec.get("on")) and covers_screen(rec.get("viewport"), rec.get("screen"))
+        rec["player_is_screen"] = bool(rec.get("on")) and player_is_screen(rec)
         return rec
     except Exception as exc:
         return {"action": "error", "error": repr(exc)}
@@ -2132,7 +2172,7 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
                     region = (region[0] + off[0], region[1] + off[1], region[2], region[3])
                 t_js = time.time()
                 # the player rectangle only (supervisor 2026-10-17: the smallest XGetImage), else the viewport
-                pr = _player_on_screen(region, player) if region and not fs else None
+                pr = _player_on_screen(region, player) if region else None   # the player within it (hot-fix 2)
                 if fs:                                 # the screen is the player: crop "player", as readers expect
                     crop = "player"
                 elif pr:

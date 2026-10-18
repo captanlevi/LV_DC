@@ -7,9 +7,9 @@
     # 2. this script (from networkSim's directory, with the collector's venv)
     python3 ../ops/diag/fullscreen_check.py [--port 9333] [--url https://www.youtube.com/@LofiGirl/live]
 
-Prints, as JSON: the window and player fullscreen record (window_fullscreen + yt_fullscreen), the shot-origin
-calibration (calibrate_shot_origin: fullscreen_screen must be true, offset [0, 0]), and the X11 shot region the
-loop would use; saves that region's grab to /tmp/fscheck_region.jpg for the eye check. Nothing is written elsewhere."""
+Prints, as JSON: the window and player fullscreen record (window_fullscreen + yt_fullscreen: the player's own
+fullscreen, the chat hidden, player_is_screen must be true), the shot-origin calibration (calibrate_shot_origin:
+fullscreen_screen must be true, offset [0, 0]), and the X11 shot region the loop would use; saves that region's grab to /tmp/fscheck_region.jpg for the eye check. Nothing is written elsewhere."""
 import argparse
 import json
 import sys
@@ -44,7 +44,7 @@ def main() -> int:
     pr = json.loads(page.eval(B._PLAYER_RECT_JS) or "{}")
     fs = B._fullscreen_on_screen(pr) if out["origin"].get("fullscreen_screen") else None
     vp = B._viewport_on_screen(json.loads(page.eval(B._VIEWPORT_JS) or "{}"))
-    region = fs or vp
+    region = B._player_on_screen(fs, pr.get("player")) or fs if fs else vp
     out["shot_region"] = {"region": region, "source": "screen (calibrated)" if fs else "window model"}
     if region:
         data = B._grab_x11(region)
@@ -52,7 +52,7 @@ def main() -> int:
             Path("/tmp/fscheck_region.jpg").write_bytes(data)
             out["shot_region"]["saved"] = "/tmp/fscheck_region.jpg"
     ok = bool((out["fullscreen"].get("window") or {}).get("ok")) and out["fullscreen"].get("on_screen") \
-        and out["origin"].get("fullscreen_screen")
+        and out["fullscreen"].get("player_is_screen") and out["origin"].get("fullscreen_screen")
     out["verdict"] = "PASS" if ok else "FAIL"
     print(json.dumps(out, indent=1, default=str))
     page.close()

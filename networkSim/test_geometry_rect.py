@@ -167,14 +167,22 @@ def test_fullscreen():
             return {}
 
         def eval(self, js, await_promise=False):
-            return json.dumps({"on": self.on, "element": "movie_player" if self.on else None,
-                               "player": [1920, 1080] if self.on else [1243, 699], "screen": [1920, 1080],
-                               "viewport": [1920, 1080] if self.on else [1818, 868], "dpr": 1,
-                               "controls_hidden": self.on, "button": [1700, 840]})
+            if js is B._YT_HIDE_CHAT_JS:
+                self.chat = True
+                return json.dumps({"action": "clicked"})
+            return json.dumps({"on": self.on, "element": "movie_player" if self.on else "html",
+                               "doc_fullscreen": not self.on, "player": [1920, 1080] if self.on else [1243, 699],
+                               "player_rect": [0, 0, 1920, 1080] if self.on else [0, 0, 1400, 1080],
+                               "screen": [1920, 1080], "viewport": [1920, 1080], "dpr": 1,
+                               "controls_hidden": self.on, "chat_collapsed": getattr(self, "chat", False),
+                               "button": [1700, 840]})
     real_bc, B._browser_call = B._browser_call, (lambda m, p=None: {})   # no CDP browser: window_fullscreen records why
     pg = Page()
     r = B.yt_fullscreen(pg, settle_s=0)
     assert (r["action"], r["on"], r["player_device_px_h"], r["controls_hidden"]) == ("key_f", True, 1080, True)
+    # hot-fix 2: the window's fullscreen (document element) is not the player's; the chat is hidden first
+    assert r["player_is_screen"] and r["chat_hidden"] == {"action": "clicked", "collapsed": True}, r
+    assert not B.player_is_screen({"player_rect": [0, 0, 1400, 1080], "screen": [1920, 1080]})
     assert r["pointer_parked"] == [960, 432] and "button" not in r
     assert ("Input.dispatchKeyEvent", "keyDown", "f") in pg.calls and not any(c[1] == "mousePressed" for c in pg.calls)
     pg = Page(key_works=False)
@@ -227,6 +235,10 @@ def test_fullscreen_window_and_screen_checks():
     assert f["flag"] == "fullscreen_not_screen" and f["window_state"] == "normal", f
     assert CS.fullscreen_not_screen({**meta, "geometry": {"viewport": [1920, 1080], "screen": [1920, 1080]}}) is None
     assert CS.fullscreen_not_screen({"player_pin": {"fullscreen": "not yt"}, "geometry": meta["geometry"]}) is None
+    # hot-fix 2 (chaos check: the chat beside a fullscreen player, 1400x788 of 1920x1080)
+    chaos = {"player_pin": {"fullscreen": {"on": False, "player": [1400, 788], "screen": [1920, 1080]}}}
+    assert CS.fullscreen_player_lt_screen(chaos)["flag"] == "fullscreen_player_lt_screen"
+    assert CS.fullscreen_player_lt_screen({"player_pin": {"fullscreen": {"player": [1920, 1080], "screen": [1920, 1080]}}}) is None
 
 
 def main() -> int:
