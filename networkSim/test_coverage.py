@@ -59,7 +59,23 @@ def ent(kind, state):
             if kind == "stream" else {"kind": kind, "shaper_at_entry": {"state": state}})
 
 
+def test_am15_bands():
+    """Q am. 15 (3), revised 9dfbb62: the band (midpoint rate >= margin x rung), the qualifying matrices (mass >= 2 min /
+    episodes), the session episodes equal orchestrate's, the reading is one constant."""
+    import orchestrate as O
+    assert C.SESSION_EPISODES == O.EPISODES_V2
+    assert C.state_rate("10") == 7500.0 and C.class_band("youtube", "STALL") is None
+    b = C.class_band("youtube", "Q_1080p")
+    assert (b["band"], b["need_kbit"], b["margin"], b["codec"]) == (["9", "10"], 4256.0, 1.4, "vp9"), b
+    assert C.class_band("twitch", "Q_720p")["band"] == ["9", "10"] and C.class_band("twitch", "Q_1080p")["band"] == []
+    assert C.class_band("tiktok", "Q_1080p")["band"] == ["9", "10"]
+    m = C.band_map("youtube", PLATFORM_MATRICES["youtube"], ["A", "B", "current"])
+    assert m["Q_1080p"]["qualifies"] == ["current"] and m["Q_720p"]["qualifies"] == ["A", "current"], m
+    assert abs(m["Q_1080p"]["min_mass"] - 2 / 21) < 1e-3
+
+
 def main():
+    test_am15_bands()
     # class rule = LVQoE quality_to_video_state on min(w, h)
     assert [C.quality_class(*r) for r in ((256, 144), (300, 200), (426, 240), (480, 300), (640, 360), (720, 420),
                                           (854, 480), (1080, 600), (1280, 720), (1600, 900), (1920, 1080), (1080, 1920), (0, 0))] == \
@@ -93,18 +109,22 @@ def main():
         defs = C.deficits(snap)
         assert defs[0]["key"] == "Q_1080p" and defs[0]["deficit"] == 5, defs
         r = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"])
-        assert r["matrix"] == "B" and r["why"].startswith("explore"), r              # B and current untried: B first
+        # Q am. 15 (3): only "current" puts >= 2/21 of its mass in Q_1080p's band (9-10); the target couples fullscreen
+        assert r["matrix"] == "current" and r["why"].startswith("explore"), r
+        assert r["bands"]["Q_1080p"]["qualifies"] == ["current"] and r["geometry_forced"] == "fullscreen:1920x1080", r
         for i in range(2):
             session(d, "youtube", f"b{i}", [("Q_1080p", 60)] + allc[:-1], matrix="B")
             session(d, "youtube", f"c{i}", [("Q_1080p", 200)] + allc[:-1], matrix="current")
         r = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"])
         assert r["target"]["key"] == "Q_1080p" and r["matrix"] == "current", r       # most 1080p minutes per session
-        assert C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"], ["A", "B"])["matrix"] == "B"
+        rb = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"], ["A", "B"])
+        # A / B cannot reach 1080p: unreachable, no other deficit -> rotation, the least-collected (B: 2 vs A: 5)
+        assert (rb["matrix"], rb["unreachable_targets"], rb["default_rotation"], rb["target"]) == ("B", ["Q_1080p"], True, None), rb
         r2 = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"])
         assert json.dumps(r, sort_keys=True) == json.dumps(r2, sort_keys=True)      # deterministic
         tie = dict(snap, per_matrix={m: {"sessions": 3, "tier_sessions": 3, "stall_share": 0.1, "stall_onsets_mean": 2.0,
                                           "class_minutes_mean": dict.fromkeys(C.CLASSES["youtube"], 1.0)} for m in ("A", "B", "current")})
-        assert C.pick_matrix(tie, PLATFORM_MATRICES["youtube"])["matrix"] == "A"     # equal yields: first id
+        assert C.pick_matrix(tie, PLATFORM_MATRICES["youtube"])["matrix"] == "current"   # the only one reaching 1080p
 
     # am. 5: STALL support = sessions with >= 3 onsets; minutes and the share are covariates (a long single stall and a
     # share far over the old band are no target); the STALL yield = mean onsets per session; all floors met -> default
@@ -123,7 +143,19 @@ def main():
         r = C.pick_matrix(snap, PLATFORM_MATRICES["twitch"], ["TW-M", "current"])
         assert r["matrix"] == "current" and r["yields"] == {"TW-M": 1.0, "current": 2.0}, r     # more onsets per session
         ok = dict(snap, classes={c: {"sessions_ge_min": 5, "minutes": 50, "criterion": ""} for c in snap["classes"]})
-        assert C.pick_matrix(ok, PLATFORM_MATRICES["twitch"])["matrix"] == "TW-M"
+        r = C.pick_matrix(ok, PLATFORM_MATRICES["twitch"])          # Q am. 15 (2): no deficit -> the least-collected
+        assert (r["matrix"], r["default_rotation"], r["target"]) == ("TW-L", True, None), r      # TW-L 0, others 3
+        # Q am. 15 (3): twitch Q_1080p (1.1 x 7066 kbit/s) is above every state's midpoint: never drawn, reported;
+        # the next deficit is the target
+        q = dict(ok, classes={**ok["classes"], "Q_1080p": {"sessions_ge_min": 0, "minutes": 0, "criterion": ""},
+                              "Q_480p": {"sessions_ge_min": 3, "minutes": 9, "criterion": ""}})
+        r = C.pick_matrix(q, PLATFORM_MATRICES["twitch"])
+        assert r["unreachable_targets"] == ["Q_1080p"] and r["target"]["key"] == "Q_480p", r
+        assert set(r["bands"]["Q_480p"]["qualifies"]) == {"current", "TW-M"} and r["matrix"] in ("current", "TW-M"), r
+        assert r["geometry_forced"] is None and r["bands"]["Q_1080p"]["band"] == []
+        only = dict(ok, classes={**ok["classes"], "Q_1080p": {"sessions_ge_min": 0, "minutes": 0, "criterion": ""}})
+        r = C.pick_matrix(only, PLATFORM_MATRICES["twitch"])     # every deficit unreachable -> rotation, reported
+        assert r["default_rotation"] and r["unreachable_targets"] == ["Q_1080p"] and "unreachable" in r["why"], r
 
     # tt: tier floors count HEVC sessions only; stall and entry states count every accepted session
     with tempfile.TemporaryDirectory() as d:
@@ -172,6 +204,12 @@ def main():
         O.subprocess.run = lambda cmd: seen.setdefault("cmd", cmd) and type("R", (), {"returncode": 0})()
         O._run_collection("tiktok", None, 23, auto=True, matrix="current")
         assert seen["cmd"][seen["cmd"].index("--tt-matrix") + 1] == "current", seen
+        # Q am. 15 (3): a yt Q_1080p target couples the fullscreen geometry, overriding the rotation's draw
+        O.LAST_COVERAGE["youtube"] = {"geometry_forced": "fullscreen:1920x1080"}
+        assert O.coupled_geometry("youtube", "player:853x480") == "fullscreen:1920x1080"
+        O.LAST_COVERAGE["youtube"] = {"geometry_forced": None}
+        assert O.coupled_geometry("youtube", "player:853x480") == "player:853x480"
+        assert O.coupled_geometry("twitch", "window:1920x1080") == "window:1920x1080"
         O.MATRIX_RULE = "fixed"
         assert O.session_matrix("tiktok") == O.MATRIX_IDS["tiktok"]
         assert json.loads(Path(os.environ["LVDC_COVERAGE_JSON"]).read_text())["rule"] == "fixed"

@@ -28,6 +28,9 @@
   "FLAG_AFTER_SESSIONS": 5,
   "FLOOR_MINUTES": 2.0,
   "FLOOR_SESSIONS": 5,
+  "GEOMETRY_FOR_CLASS": {
+   "youtube/Q_1080p": "fullscreen:1920x1080"
+  },
   "MATRIX_IDS": {
    "tiktok": "TT-M",
    "twitch": "TW-M",
@@ -35,8 +38,103 @@
   },
   "MATRIX_RULE": "coverage",
   "RULE_VERSION": "coverage-v2 (2026-10-18; Addendum Q am. 5: stall events)",
+  "RUNGS": {
+   "tiktok": {
+    "Q_1080p": [
+     3000.0,
+     "declared_average",
+     "tt room stream_data sdk_params vbitrate, HEVC ladder, median over 34 chaos sessions, 2026-10-19"
+    ],
+    "Q_360p": [
+     600.0,
+     "declared_average",
+     "tt room stream_data sdk_params vbitrate, HEVC ladder, median over 34 chaos sessions, 2026-10-19"
+    ],
+    "Q_480p": [
+     1000.0,
+     "declared_average",
+     "tt room stream_data sdk_params vbitrate, HEVC ladder, median over 34 chaos sessions, 2026-10-19"
+    ],
+    "Q_720p": [
+     1800.0,
+     "declared_average",
+     "tt room stream_data sdk_params vbitrate, HEVC ladder, median over 34 chaos sessions, 2026-10-19"
+    ]
+   },
+   "twitch": {
+    "Q_1080p": [
+     7065.9,
+     "declared_peak",
+     "twitch master BANDWIDTH by short side, median of 24 chaos sessions, 2026-10-19"
+    ],
+    "Q_144p": [
+     230.0,
+     "declared_peak",
+     "twitch master BANDWIDTH by short side, median of 24 chaos sessions, 2026-10-19"
+    ],
+    "Q_360p": [
+     630.0,
+     "declared_peak",
+     "twitch master BANDWIDTH by short side, median of 24 chaos sessions, 2026-10-19"
+    ],
+    "Q_480p": [
+     1428.0,
+     "declared_peak",
+     "twitch master BANDWIDTH by short side, median of 24 chaos sessions, 2026-10-19"
+    ],
+    "Q_720p": [
+     3423.0,
+     "declared_peak",
+     "twitch master BANDWIDTH by short side, median of 24 chaos sessions, 2026-10-19"
+    ]
+   },
+   "youtube": {
+    "Q_1080p": [
+     3040.0,
+     "declared_average",
+     "yt adaptiveFormats, vp9 + lowest audio, median of 10 chaos sessions (yt_2..yt_40), 2026-10-19"
+    ],
+    "Q_144p": [
+     255.0,
+     "declared_average",
+     "yt adaptiveFormats, vp9 + lowest audio, median of 10 chaos sessions (yt_2..yt_40), 2026-10-19"
+    ],
+    "Q_240p": [
+     265.0,
+     "declared_average",
+     "yt adaptiveFormats, vp9 + lowest audio, median of 10 chaos sessions (yt_2..yt_40), 2026-10-19"
+    ],
+    "Q_360p": [
+     380.8,
+     "declared_average",
+     "yt adaptiveFormats, vp9 + lowest audio, median of 10 chaos sessions (yt_2..yt_40), 2026-10-19"
+    ],
+    "Q_480p": [
+     672.0,
+     "declared_average",
+     "yt adaptiveFormats, vp9 + lowest audio, median of 10 chaos sessions (yt_2..yt_40), 2026-10-19"
+    ],
+    "Q_720p": [
+     876.8,
+     "declared_average",
+     "yt adaptiveFormats, vp9 + lowest audio, median of 10 chaos sessions (yt_2..yt_40), 2026-10-19"
+    ]
+   }
+  },
+  "RUNG_MARGIN": {
+   "declared_average": 1.4,
+   "declared_peak": 1.1
+  },
+  "SESSION_EPISODES": {
+   "tiktok": 23,
+   "twitch": 23,
+   "youtube": 21
+  },
   "STALL_FLOOR_ONSETS": 3,
-  "TT_ENTRY_FLOOR": 5
+  "STATE_RATE": "midpoint",
+  "STEERING_RULE": "Q am. 15 (2026-10-19; (3) revised at LVQoE 9dfbb62)",
+  "TT_ENTRY_FLOOR": 5,
+  "YT_RUNG_CODEC": "vp9"
  },
  "decode_path": {
   "DEFAULT": {

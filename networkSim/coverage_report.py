@@ -28,7 +28,16 @@ The matrix rule (RULE_VERSION, deterministic):
      matrix gets a yield before the yields decide); else the highest yield for the target: a tier class, its mean
      minutes per session; STALL, its mean onsets per session; an entry state, the matrix's stationary probability of
      it. Ties by matrix id (the first in sort order).
-  3. no deficit: the platform's default matrix.
+  3. no deficit: rotation over the allowed matrices, the least-collected first, ties to the lowest id
+     (coverage.default_rotation; Q am. 15 (2)).
+Q am. 15 (3) (revised 9dfbb62): a tier-class target is drawn only among matrices whose stationary mass in the class's
+state band is >= FLOOR_MINUTES / the session's episodes (yt 2/21, twitch / tt 2/23); the band = the shaper states whose
+rate (STATE_RATE: the midpoint of the state's range) is >= the margin x the tier's rung (RUNGS: kbit/s, kind, source;
+a declared-peak rung, twitch's BANDWIDTH, x 1.1; a declared-average rung, yt's format bitrate / tt's vbitrate, x 1.4).
+A class no allowed matrix qualifies for is skipped (the next deficit is the target) and listed in
+coverage.unreachable_targets. yt Q_1080p couples to the fullscreen geometry (coverage.geometry_forced). The band map
+(band, rung, margin, masses, qualifying matrices) is recorded per session (coverage.bands). STALL steers by onsets
+(am. 5 / am. 15 (1)) and has no band.
 orchestrate writes the record (snapshot, deficits, yields, choice, rule) to data/_summaries/coverage_last.json and
 LVDC_COVERAGE_JSON; exp.py puts it in meta.json coverage, marked applied iff its platform and matrix are the session's.
 
@@ -45,7 +54,7 @@ from pathlib import Path
 
 import numpy as np
 
-from utils.shaping import PLATFORM_MATRICES, stationary_distribution
+from utils.shaping import PLATFORM_MATRICES, SCENARIOS, stationary_distribution
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 RULE_VERSION = "coverage-v2 (2026-10-18; Addendum Q am. 5: stall events)"
@@ -56,10 +65,34 @@ STALL_BAND = {"youtube": (0.046, 0.183), "twitch": (0.029, 0.115), "tiktok": (0.
 CLASSES = {"youtube": ["STALL", "Q_144p", "Q_240p", "Q_360p", "Q_480p", "Q_720p", "Q_1080p"],
            "twitch": ["STALL", "Q_144p", "Q_360p", "Q_480p", "Q_720p", "Q_1080p"],
            "tiktok": ["STALL", "Q_360p", "Q_480p", "Q_720p", "Q_1080p"]}
-DEFAULT_MATRIX = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}
+DEFAULT_MATRIX = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}   # the no-deficit pick before Q am. 15 (2) (record)
 ENTRY_EXCLUDED_CLASSES = ("not_live", "login_wall", "interrupted")   # amendment 3: the entry did not happen as designed
 EXPLORE_MIN = 2
 FLAG_AFTER_SESSIONS = 5                         # supervisor 2026-10-18: a class with zero support after 5 sessions: FLAG
+# Q am. 15 (3), revised 9dfbb62 (levi): the tier class -> state band rule and its inputs
+STEERING_RULE = "Q am. 15 (2026-10-19; (3) revised at LVQoE 9dfbb62)"   # the matrix pick's rule; the floors stay RULE_VERSION
+SESSION_EPISODES = {"youtube": 21, "tiktok": 23, "twitch": 23}   # = orchestrate.EPISODES_V2 (tested)
+STATE_RATE = "midpoint"                         # a state's rate: "midpoint" of its range (am. 15 (3)), or "floor"
+RUNG_MARGIN = {"declared_peak": 1.1, "declared_average": 1.4}
+# kbit/s per tier class: (rung, kind, source). Medians over chaos sessions, read 2026-10-19 (peter's band table):
+# yt: the played codec's (vp9) lowest adaptiveFormats bitrate at the height + the lowest audio, 10 sessions with an inline
+# player response (yt_2..yt_40); twitch: master-playlist BANDWIDTH by short side (audio included), 24 sessions; tt: the
+# HEVC ladder's sdk_params vbitrate (ld / sd / hd / uhd) in the room data, 34 sessions (uhd: 936 / 1080 short side).
+_YT_SRC = "yt adaptiveFormats, vp9 + lowest audio, median of 10 chaos sessions (yt_2..yt_40), 2026-10-19"
+_TW_SRC = "twitch master BANDWIDTH by short side, median of 24 chaos sessions, 2026-10-19"
+_TT_SRC = "tt room stream_data sdk_params vbitrate, HEVC ladder, median over 34 chaos sessions, 2026-10-19"
+RUNGS = {
+    "youtube": {"Q_144p": (255.0, "declared_average", _YT_SRC), "Q_240p": (265.0, "declared_average", _YT_SRC),
+                "Q_360p": (380.8, "declared_average", _YT_SRC), "Q_480p": (672.0, "declared_average", _YT_SRC),
+                "Q_720p": (876.8, "declared_average", _YT_SRC), "Q_1080p": (3040.0, "declared_average", _YT_SRC)},
+    "twitch": {"Q_144p": (230.0, "declared_peak", _TW_SRC), "Q_360p": (630.0, "declared_peak", _TW_SRC),
+               "Q_480p": (1428.0, "declared_peak", _TW_SRC), "Q_720p": (3423.0, "declared_peak", _TW_SRC),
+               "Q_1080p": (7065.9, "declared_peak", _TW_SRC)},
+    "tiktok": {"Q_360p": (600.0, "declared_average", _TT_SRC), "Q_480p": (1000.0, "declared_average", _TT_SRC),
+               "Q_720p": (1800.0, "declared_average", _TT_SRC), "Q_1080p": (3000.0, "declared_average", _TT_SRC)},
+}
+YT_RUNG_CODEC = "vp9"                           # am. 15 (3): yt's rung is the played codec's (vp9 on chaos)
+GEOMETRY_FOR_CLASS = {("youtube", "Q_1080p"): "fullscreen:1920x1080"}   # am. 15 (3) / am. 2: the only yt geometry for it
 SUMMARY_FILE = "_summaries/coverage_last.json"
 
 
@@ -240,6 +273,38 @@ def snapshot(data_dir: Path, platform: str) -> dict:
     return out
 
 
+def state_rate(state: str) -> float:
+    sc = SCENARIOS[state]
+    return (sc.rate_min + sc.rate_max) / 2.0 if STATE_RATE == "midpoint" else float(sc.rate_min)
+
+
+def class_band(platform: str, cls: str) -> dict | None:
+    """Q am. 15 (3): the shaper states whose rate >= margin x the class's rung; None for a class without a rung (STALL)."""
+    r = RUNGS.get(platform, {}).get(cls)
+    if r is None:
+        return None
+    kbit, kind, src = r
+    need = RUNG_MARGIN[kind] * kbit
+    return {"band": sorted((s for s in SCENARIOS if state_rate(s) >= need), key=int), "rung_kbit": kbit, "kind": kind,
+            "margin": RUNG_MARGIN[kind], "need_kbit": round(need, 1), "state_rate": STATE_RATE, "source": src,
+            **({"codec": YT_RUNG_CODEC} if platform == "youtube" else {})}
+
+
+def band_map(platform: str, matrices: dict, ids: list[str]) -> dict:
+    """Per tier class: its band and each allowed matrix's stationary mass in it, and the matrices that qualify (mass
+    >= FLOOR_MINUTES / the session's episodes)."""
+    thr = FLOOR_MINUTES / float(SESSION_EPISODES[platform])
+    out = {}
+    for cls in CLASSES[platform]:
+        b = class_band(platform, cls)
+        if b is None:
+            continue
+        mass = {m: round(sum(p for s, p in stationary_distribution(matrices[m][0]).items() if s in b["band"]), 4)
+                for m in ids}
+        out[cls] = {**b, "mass": mass, "min_mass": round(thr, 4), "qualifies": [m for m in ids if mass[m] >= thr]}
+    return out
+
+
 def deficits(snap: dict, states: list[str] = ()) -> list[dict]:
     """The floors' shortfalls, largest first (ties: class order, the stall band, states)."""
     out = []
@@ -261,10 +326,22 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None) ->
     ids = sorted(allowed or matrices)
     states = sorted({s for m in ids for s in matrices[m][0]}, key=int) if platform == "tiktok" else []
     defs = deficits(snap, states)
-    rec = {"platform": platform, "rule": RULE_VERSION, "allowed": ids, "deficits": defs, "snapshot": snap}
-    if not defs:
-        return {**rec, "matrix": DEFAULT_MATRIX[platform], "target": None, "yields": {}, "why": "no deficit: default"}
-    tgt, pm = defs[0], snap["per_matrix"]
+    bands = band_map(platform, matrices, ids)
+    # am. 15 (3): a tier class no allowed matrix can reach is not drawn; the next deficit is the target
+    unreachable = [d["key"] for d in defs if d["kind"] == "class" and d["key"] in bands and not bands[d["key"]]["qualifies"]]
+    live = [d for d in defs if d["key"] not in unreachable]
+    rec = {"platform": platform, "rule": RULE_VERSION, "steering_rule": STEERING_RULE, "allowed": ids, "deficits": defs,
+           "snapshot": snap, "bands": bands, "unreachable_targets": unreachable, "default_rotation": False, "geometry_forced": None}
+    pm = snap["per_matrix"]
+    if not live:      # am. 15 (2): rotate, the least-collected allowed matrix first, ties to the lowest id
+        n = {m: (pm.get(m) or {}).get("sessions", 0) for m in ids}
+        m = min(ids, key=lambda x: (n[x], x))
+        return {**rec, "matrix": m, "target": None, "yields": {}, "default_rotation": True,
+                "why": "no deficit: rotation, least-collected matrix" + (" (every deficit unreachable)" if defs else "")}
+    tgt = live[0]
+    if tgt["kind"] == "class" and tgt["key"] in bands:     # only matrices that reach the class's band
+        ids = bands[tgt["key"]]["qualifies"]
+        rec["geometry_forced"] = GEOMETRY_FOR_CLASS.get((platform, tgt["key"]))
     if tgt["kind"] == "entry_state":
         yields = {m: round(stationary_distribution(matrices[m][0]).get(tgt["key"], 0.0), 6) for m in ids}
         why = "stationary probability of the state"

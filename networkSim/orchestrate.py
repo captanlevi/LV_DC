@@ -234,6 +234,15 @@ def preclean() -> None:
     subprocess.run(["sudo", "pkill", "-INT", "-f", "[t]cpdump -i ifb"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+LAST_COVERAGE: dict[str, dict] = {}       # platform -> the latest coverage record (geometry_forced: Q am. 15 (3))
+
+
+def coupled_geometry(p: str, geom: str | None) -> str | None:
+    """Q am. 15 (3): the latest coverage target's coupled geometry when it has one (yt Q_1080p -> fullscreen), else
+    the rotation's draw."""
+    return (LAST_COVERAGE.get(p) or {}).get("geometry_forced") or geom
+
+
 def session_matrix(p: str) -> str | None:
     """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
     LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such."""
@@ -245,6 +254,7 @@ def session_matrix(p: str) -> str | None:
         except Exception as e:
             rec["rule_error"] = repr(e)
             print(f"  coverage rule failed ({e!r}): matrix {rec['matrix']} (fixed)")
+    LAST_COVERAGE[p] = rec
     path = _RUNS_DIR / coverage_report.SUMMARY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rec, indent=1, default=str))
@@ -371,6 +381,10 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             _summary()
             sys.exit(EXIT_PREFLIGHT)
         mid = session_matrix(p)
+        forced = coupled_geometry(p, geom) if rotate_geometry else geom
+        if forced != geom:                                    # Q am. 15 (3): the target's coupled geometry
+            print(f"  geometry {forced} (coupled to the coverage target; rotation drew {geom})")
+            geom = forced
         t_session = time.time()
         try:
             rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
