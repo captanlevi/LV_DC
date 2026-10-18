@@ -204,6 +204,61 @@ def test_ti32_dead_after_end_with_the_stream_alive():
     assert B.dead_window([(0.0, 0)], 952)["stream"] is None
 
 
+def test_ti43_dead_window_reference():
+    """peter's ti_43 read (2026-10-18, HEVC): at the second death the FLV stream arrived at about 2 Mbit/s through the dead
+    run (pcap) under shaper state 8 (3636 kbit); the shaped rx was 1729.4 kbit/s, 0.476 of the shaper rate, so the share
+    of the shaper alone read no_media. The reference is min(shaper rate, the pre-dead playing rate): alive. Because the
+    reference never exceeds the shaper rate, the change can only turn a no_media into alive; ti_21's chat-level bytes stay
+    no_media against its playing rate."""
+    srx = [(0.0, 0), (60.0, int(1729.4 * 1000 / 8 * 60))]
+    assert B.dead_window(srx, 3636)["stream"] == "no_media"                   # the recorded misread
+    dw = B.dead_window(srx, 3636, playing_kbps=2000.0)
+    assert dw["stream"] == "alive" and dw["reference_kbit"] == 2000.0 and dw["share_of_shaper"] == 0.476, dw
+    ti21 = [(0.0, 0), (60.0, int(122 * 1000 / 8 * 60))]
+    assert B.dead_window(ti21, 952, playing_kbps=900.0)["stream"] == "no_media"
+    assert B.dead_window(ti21, 952, playing_kbps=None)["reference_kbit"] == 952
+    # the playing rate: the shaped downstream over the 30 s before the dead clock, only while the player progressed
+    w = B.TTRoomWatch()
+    b, t = 0, 1000.0
+    for k in range(40):                                                       # 40 s playing at 2000 kbit/s
+        b += int(2000 * 1000 / 8)
+        w.feed({"has_video": True, "src": True, "rs": 4, "ct": float(k), "buf_end": k + 3.0, "decoded": None}, t,
+               shaped_rx_bytes=b)
+        t += 1.0
+    dead_at = t
+    for k in range(5):                                                        # then rs 0, the stream still arriving
+        b += int(1700 * 1000 / 8)
+        w.feed({"has_video": True, "src": True, "rs": 0, "ct": 0.0, "buf_end": None, "decoded": None}, t,
+               shaped_rx_bytes=b)
+        t += 1.0
+    assert 1980 <= w.playing_kbps(dead_at) <= 2000, w.playing_kbps(dead_at)   # the dead tick's own second: 1700
+    assert w.playing_kbps(dead_at + 30) is None                              # mostly not progressing: no reference
+    assert B.TTRoomWatch().playing_kbps(dead_at) is None and w.playing_kbps(None) is None
+
+
+def test_media_listener_records():
+    """The tt media-internals recorder (supervisor 2026-10-18): Media-domain properties per player, events / errors and
+    error / warning / info messages are written; debug messages and other domains are not; snapshot() for the dead record."""
+    m = B.MediaListener("ws://unused", None)
+    assert m.handle({"method": "Network.dataReceived", "params": {}}, 1.0) is None
+    r = m.handle({"method": "Media.playerPropertiesChanged", "params": {"playerId": "p1", "properties": [
+        {"name": "kVideoDecoderName", "value": "VaapiVideoDecoder"}, {"name": "kIsPlatformVideoDecoder", "value": "true"}]}}, 2.0)
+    assert r["method"] == "playerPropertiesChanged" and r["t"] == 2.0
+    assert m.handle({"method": "Media.playerMessagesLogged", "params": {"playerId": "p1", "messages": [
+        {"level": "debug", "message": "x"}]}}, 3.0) is None
+    r = m.handle({"method": "Media.playerMessagesLogged", "params": {"playerId": "p1", "messages": [
+        {"level": "debug", "message": "x"}, {"level": "error", "message": "VaapiVideoDecoder: decode failed"}]}}, 4.0)
+    assert [x["level"] for x in r["messages"]] == ["error"]
+    m.handle({"method": "Media.playerErrorsRaised", "params": {"playerId": "p1", "errors": [
+        {"errorType": "PipelineStatus", "code": 3}]}}, 5.0)
+    snap = m.snapshot()
+    assert snap["players"]["p1"]["kVideoDecoderName"] == "VaapiVideoDecoder"
+    assert [x["method"] for x in snap["recent"]] == ["playerMessagesLogged", "playerErrorsRaised"]
+    for k in range(B.MEDIA_RECENT_N + 5):
+        m.handle({"method": "Media.playerEventsAdded", "params": {"playerId": "p1", "events": [{"timestamp": k}]}}, 6.0 + k)
+    assert len(m.snapshot()["recent"]) == B.MEDIA_RECENT_N
+
+
 def test_one_reentry_then_the_session_ends():
     """supervisor ruling 2026-10-18: one re-entry of the same room on player_dead, then a death ends the session; the
     re-entry's outcome: playing -> continue, the ended banner -> room_ended (the host ended), else player_dead."""
@@ -367,6 +422,8 @@ def main() -> int:
     test_rates_and_reentry()
     test_tt_start_failure_entry()
     test_ti32_dead_after_end_with_the_stream_alive()
+    test_ti43_dead_window_reference()
+    test_media_listener_records()
     test_one_reentry_then_the_session_ends()
     for t in (test_reenter_room_records_an_entry, test_ti33_reentry_window):
         mp = _Patch()

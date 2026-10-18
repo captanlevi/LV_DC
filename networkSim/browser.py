@@ -512,8 +512,13 @@ TT_LOW_STATES = {1, 2, 3, 4}   # shaper states in which a dead-looking player is
 # PLAYER_DEAD_ALIVE_SHARE of the shaper rate had the stream still arriving ("alive": the player stopped consuming a
 # live stream; ti_32: about 0.9 of the shaper rate, the media flow at full rate, the element's 'end' 2 s before the
 # run), else "no_media" (ti_21: about 0.13). Recorded in meta.json player_dead.dead_window; detection is unchanged.
+# The reference is the smaller of the shaper rate and the shaped downstream while the player was still playing, over
+# the PLAYING_REF_S before the dead clock (supervisor 2026-10-18, peter's ti_43 read): at state 8 (3636 kbit) tt's
+# hd5 stream arrived at about 2 Mbit/s through the dead run (pcap) and the share of the shaper rate alone read no_media.
 SHAPED_IFACE = os.environ.get("LVDC_IFB_INGRESS", "ifb0")
 PLAYER_DEAD_ALIVE_SHARE = 0.5
+PLAYING_REF_S = 30.0              # the pre-dead window whose shaped downstream is the stream's own rate
+PLAYING_REF_MIN_PROGRESS = 0.8    # ... counted only when the player progressed on this share of its ticks
 
 
 # recovery (supervisor ruling 2026-10-18): on player_dead, ONE re-entry of the same room, recorded as an entry (room
@@ -549,14 +554,22 @@ def _shaped_rx_bytes() -> int | None:
         return None
 
 
-def dead_window(srx: list[tuple[float, int]], shaper_kbit: float | None) -> dict:
-    """The shaped downstream over the window in kbit/s, its share of the shaper rate, and the stream verdict."""
+def dead_window(srx: list[tuple[float, int]], shaper_kbit: float | None, playing_kbps: float | None = None) -> dict:
+    """The shaped downstream over the window in kbit/s, its share of the shaper rate, and the stream verdict: "alive"
+    when it is >= PLAYER_DEAD_ALIVE_SHARE of the reference, min(shaper rate, the pre-dead playing rate) (only the shaper
+    rate when the playing rate is unknown)."""
     kbps = ((srx[-1][1] - srx[0][1]) * 8 / 1000 / (srx[-1][0] - srx[0][0])
             if len(srx) >= 2 and srx[-1][0] > srx[0][0] else None)
     share = kbps / shaper_kbit if kbps is not None and shaper_kbit else None
+    refs = [x for x in (shaper_kbit, playing_kbps) if x]
+    ref = min(refs) if refs else None
+    share_ref = kbps / ref if kbps is not None and ref else None
     return {"shaped_rx_kbps": None if kbps is None else round(kbps, 1), "shaper_kbit": shaper_kbit,
             "share_of_shaper": None if share is None else round(share, 3),
-            "stream": None if share is None else ("alive" if share >= PLAYER_DEAD_ALIVE_SHARE else "no_media")}
+            "playing_rx_kbps": None if playing_kbps is None else round(playing_kbps, 1),
+            "reference_kbit": None if ref is None else round(ref, 1),
+            "share_of_reference": None if share_ref is None else round(share_ref, 3),
+            "stream": None if share_ref is None else ("alive" if share_ref >= PLAYER_DEAD_ALIVE_SHARE else "no_media")}
 
 
 def _rx_bytes() -> int | None:
@@ -602,6 +615,19 @@ class TTRoomWatch:
         self.discontinuities: list[dict] = []
         self.rx: list[tuple[float, int]] = []
         self.srx: list[tuple[float, int]] = []        # shaped downstream (diagnostics only)
+        self.hist: list[tuple[float, int, bool]] = []  # (t, shaped downstream, progressed) for playing_kbps (diagnostics)
+
+    def playing_kbps(self, until: float | None) -> float | None:
+        """The shaped downstream in kbit/s over the PLAYING_REF_S before `until` (the dead clock's start), when the
+        player progressed on >= PLAYING_REF_MIN_PROGRESS of those ticks and they span >= 2/3 of it; else None."""
+        if until is None:
+            return None
+        win = [x for x in self.hist if until - PLAYING_REF_S <= x[0] <= until]
+        if len(win) < 2 or win[-1][0] - win[0][0] < PLAYING_REF_S * 2 / 3:
+            return None
+        if sum(1 for x in win if x[2]) < PLAYING_REF_MIN_PROGRESS * len(win):
+            return None
+        return (win[-1][1] - win[0][1]) * 8 / 1000 / (win[-1][0] - win[0][0])
 
     def feed(self, s: dict | None, now: float, shaper_state: int | None = None, rx_bytes: int | None = None,
              shaped_rx_bytes: int | None = None) -> str | None:
@@ -617,6 +643,9 @@ class TTRoomWatch:
         no_src = not s.get("has_video") or not s.get("src") or s.get("rs") == 0
         cur = (s.get("buf_end"), s.get("ct"), s.get("decoded"))
         progressed = not no_src and self.last is not None and cur != self.last
+        if shaped_rx_bytes is not None:
+            self.hist.append((now, shaped_rx_bytes, progressed))
+            self.hist = [x for x in self.hist if now - x[0] <= TT_RX_WINDOW_S + 2 * PLAYING_REF_S]
         if no_src:
             if self.gone_since is None:
                 self.gone_since = now
@@ -1459,6 +1488,99 @@ TICK_STARTUP_TIMEOUT_S = 15
 _USHER_RE = re.compile(r"usher\.ttvnw\.net/api/(?:v2/)?channel/hls/[^/?]+\.m3u8")
 
 
+MEDIA_EVENTS_FILE = "media_events.jsonl"
+MEDIA_MESSAGE_LEVELS = ("error", "warning", "info")   # playerMessagesLogged kept (debug dropped: volume)
+MEDIA_RECENT_N = 40
+
+
+class MediaListener:
+    """tt: Chrome's media-internals over CDP (the Media domain) by a second CDP client on the page, recording only
+    (supervisor 2026-10-18, peter's ti_43 read: the player reset to readyState 0 while the FLV stream kept arriving;
+    this tells a decoder error, e.g. the VA-API HEVC path, from a player-side fault on the next death). Every player's
+    properties (kVideoDecoderName, kIsPlatformVideoDecoder, kResolution, ...), events, errors and its error / warning /
+    info messages go to <session>/media_events.jsonl; snapshot() is attached to the player_dead record. No Chrome flag."""
+
+    def __init__(self, ws_url: str, path: Path | None):
+        self.ws_url, self.path, self.error = ws_url, path, None
+        self.players: dict[str, dict] = {}
+        self.recent: list[dict] = []
+        self.written = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._t: threading.Thread | None = None
+
+    def start(self) -> "MediaListener":
+        self._t = threading.Thread(target=self._run, daemon=True, name="media-listener")
+        self._t.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def handle(self, msg: dict, now: float) -> dict | None:
+        """One CDP message -> the record to write (None for the rest); keeps the players' properties and the recent
+        non-property records for snapshot()."""
+        m, prm = msg.get("method") or "", msg.get("params") or {}
+        if not m.startswith("Media."):
+            return None
+        if m == "Media.playerMessagesLogged":
+            prm = {**prm, "messages": [x for x in prm.get("messages") or [] if x.get("level") in MEDIA_MESSAGE_LEVELS]}
+            if not prm["messages"]:
+                return None
+        rec = {"t": round(now, 3), "method": m[len("Media."):], **prm}
+        with self._lock:
+            if m == "Media.playerPropertiesChanged":
+                props = self.players.setdefault(str(prm.get("playerId")), {})
+                for x in prm.get("properties") or []:
+                    props[x.get("name")] = x.get("value")
+            else:
+                self.recent = (self.recent + [rec])[-MEDIA_RECENT_N:]
+        return rec
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {"players": {k: dict(v) for k, v in self.players.items()}, "recent": list(self.recent),
+                    "written": self.written, "error": self.error}
+
+    def _run(self) -> None:
+        try:
+            ws = websocket.WebSocket()
+            ws.settimeout(1)
+            ws.connect(self.ws_url)
+            ws.send(json.dumps({"id": 1, "method": "Media.enable", "params": {}}))
+        except Exception as exc:
+            self.error = repr(exc)
+            return
+        fh = open(self.path, "a") if self.path else None
+        try:
+            while not self._stop.is_set():
+                try:
+                    msg = json.loads(ws.recv())
+                except websocket.WebSocketTimeoutException:
+                    continue
+                rec = self.handle(msg, time.time())
+                if rec is not None and fh is not None:
+                    fh.write(json.dumps(rec) + "\n")
+                    fh.flush()
+                    self.written += 1
+        except Exception as exc:
+            self.error = repr(exc)
+        finally:
+            for c in (fh, ws):
+                try:
+                    if c is not None:
+                        c.close()
+                except Exception:
+                    pass
+
+
+# every <video>'s error (Chromium puts the pipeline status in its message) and state, at a tt dead trigger
+_VIDEO_ERRORS_JS = """(() => [...document.querySelectorAll('video')].map(v => ({
+  rs: v.readyState, ns: v.networkState, paused: v.paused, w: v.videoWidth, h: v.videoHeight,
+  src: !!(v.currentSrc || v.src || v.srcObject),
+  error: v.error ? {code: v.error.code, message: String(v.error.message || '').slice(0, 400)} : null})))()"""
+
+
 class MasterListener:
     """twitch: the channel's HLS master playlist, read by a second CDP client on the page (Network domain; the body via
     Network.getResponseBody, no request of ours). Its lowest BANDWIDTH is the stuck-player rule's rung (stuck.py)."""
@@ -1833,6 +1955,7 @@ class BrowserSession:
         self.decode_gpu: dict | None = None       # Chrome's GPU video-decode report at launch (decode_path.py; meta.json)
         self.decode_page: dict | None = None      # the page's HEVC probe (MSE / WebCodecs hvc1)
         self._master: MasterListener | None = None   # twitch: the master playlist listener
+        self._media: MediaListener | None = None     # tt: the media-internals recorder (media_events.jsonl)
         self._rung_probe_at = 0.0
         self._recovery_lock = threading.Lock()    # one recovery of either kind per session (am. 6)
         self.tw_pick: dict | None = None          # twitch: directory candidates, recent channels excluded, the pick
@@ -1928,6 +2051,9 @@ class BrowserSession:
         except Exception as e:
             print(f"[browser] Could not pre-clear extension storage: {e}", flush=True)
 
+        if self.platform == "tiktok":
+            self._media = MediaListener(self._ws_url, (Path(self._session_dir) / MEDIA_EVENTS_FILE)
+                                        if self._session_dir else None).start()
         if self.platform == "tiktok" and not self.first_url:
             self.list_url = self._tt_choose_room()
         elif self.platform == "twitch":
@@ -2156,7 +2282,8 @@ class BrowserSession:
                     except (ValueError, AttributeError, TypeError):
                         rate = None
                     pd = {**rec, "dead_s": round(time.time() - (w.dead_since or time.time()), 1),
-                          "dead_window": dead_window(w.srx, rate)}
+                          "dead_window": dead_window(w.srx, rate, w.playing_kbps(w.dead_since)),
+                          "media": self._media_snapshot()}
                     with self._recovery_lock:
                         used = len(self.player_dead_reentries) + len(self.frozen_reentries)
                         r = self._reenter_room(pd) if dead_action(used) == "reenter" else None
@@ -2177,6 +2304,23 @@ class BrowserSession:
                 print(f"[browser] {why.upper()} ({dead}) — aborting the session", flush=True)
                 return
 
+    def _media_snapshot(self) -> dict:
+        """At a tt dead trigger (recording only): every <video>'s error and state, Chrome's video-decode status and the
+        media-internals recorder's players and recent records (MediaListener)."""
+        out: dict = {}
+        try:
+            out["videos"] = self._page.eval(_VIDEO_ERRORS_JS) if self._page else None
+        except Exception as exc:
+            out["videos"] = {"error": repr(exc)[:200]}
+        try:
+            import decode_path
+            g = decode_path.gpu_summary(_browser_call("SystemInfo.getInfo"))
+            out["gpu"] = {k: g.get(k) for k in ("video_decode", "hevc", "error")}
+        except Exception as exc:
+            out["gpu"] = {"error": repr(exc)[:200]}
+        out["media_events"] = self._media.snapshot() if self._media is not None else None
+        return out
+
     def _reenter_room(self, pd: dict, reason: str = "player_dead") -> dict:
         """The one re-entry after a player_dead: navigate to the same room, confirm playback (_tt_confirm_playing:
         play clicked, the playhead advancing within TT_REENTRY_CONFIRM_S, the ended banner read), and record it as an
@@ -2184,6 +2328,8 @@ class BrowserSession:
         room = pd.get("room") or self.channel_url
         rec = {"t_nav": time.time(), "room": room, "reason": reason, "dead_s": pd.get("dead_s"),
                "dead_window": pd.get("dead_window")}
+        if pd.get("media") is not None:
+            rec["media"] = pd["media"]
         detail: dict = {}
         try:
             self._page.navigate(room)
@@ -2378,6 +2524,8 @@ class BrowserSession:
         self._stop.set()
         if self._master is not None:
             self._master.stop()
+        if self._media is not None:
+            self._media.stop()
         if self._rotator:
             self._rotator.join(timeout=5)
         if self._watcher:
