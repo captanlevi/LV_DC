@@ -260,7 +260,7 @@ def test_media_listener_records():
     assert len(m.snapshot()["recent"]) == B.MEDIA_RECENT_N
 
 
-def test_media_snapshot_is_capped(mp):
+def test_media_snapshot_is_capped(monkeypatch):
     """levi's audit of 1bcdc5e: the dead-trigger snapshot runs before the re-entry, so it is capped at
     MEDIA_SNAPSHOT_MAX_S and records snapshot_s; a slow page read leaves timed_out true and keeps what finished."""
     import time as _t
@@ -272,7 +272,7 @@ def test_media_snapshot_is_capped(mp):
         def eval(self, js):
             _t.sleep(self.delay)
             return [{"rs": 0, "error": {"code": 3, "message": "PIPELINE_ERROR_DECODE"}}]
-    mp.setattr(B, "_browser_call", lambda *a, **k: {"gpu": {"featureStatus": {"video_decode": "enabled"}}})
+    monkeypatch.setattr(B, "_browser_call", lambda *a, **k: {"gpu": {"featureStatus": {"video_decode": "enabled"}}})
     b = B.BrowserSession.__new__(B.BrowserSession)
     b._media, b._page = B.MediaListener("ws://unused", None), Page(0.0)
     snap = b._media_snapshot()
