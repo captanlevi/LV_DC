@@ -148,11 +148,23 @@ def test_trio_root_names_and_geometry():
     with tempfile.TemporaryDirectory() as d:
         data = Path(d)
         a = session_names.next_session_dir(data, "youtube", "yt")
-        b = session_names.next_session_dir(data, "youtube", "yt", root=data / "_trio")
+        b = session_names.next_session_dir(data / "_trio", "youtube", "yt", floor=T.TRIO_NAME_FLOOR)
         c = session_names.next_session_dir(data, "youtube", "yt")
-        assert (a, b, c) == (data / "youtube/yt_1", data / "_trio/youtube/yt_2", data / "youtube/yt_3")
-        (data / "_trio/_failed/youtube/yt_9").mkdir(parents=True)                       # a trio name is never reused
-        assert session_names.next_session_dir(data, "youtube", "yt", root=data / "_trio").name == "yt_10"
+        assert (a, b, c) == (data / "youtube/yt_1", data / "_trio/youtube/yt_100001", data / "youtube/yt_2")
+        assert json.loads((data / "_summaries/session_counter_youtube.json").read_text())["last"] == 2   # single's own
+        assert json.loads((data / "_trio/_summaries/session_counter_youtube.json").read_text())["last"] == 100001
+        (data / "_trio/_failed/youtube/yt_100009").mkdir(parents=True)                  # a trio name is never reused
+        assert session_names.next_session_dir(data / "_trio", "youtube", "yt", floor=T.TRIO_NAME_FLOOR).name == "yt_100010"
+        # the pre-start preflight
+        repo = data / "repo"
+        for d in (".venv/bin", "current_data", "labeling", "profiles/youtube"):
+            (repo / d).mkdir(parents=True)
+        (repo / ".venv/bin/python3").write_text("")
+        (repo / "labeling/manifest.json").write_text("{}")
+        pf = T.trio_preflight(["youtube", "twitch"], repo, repo / "profiles", data, tools=("sh",))
+        assert not pf["ok"] and pf["problems"] == ["profile_template_twitch"], pf
+        (repo / "profiles/twitch").mkdir()
+        assert T.trio_preflight(["youtube", "twitch"], repo, repo / "profiles", data, tools=("sh",))["ok"]
         assert all(not g.startswith("fullscreen") for _ in range(6)
                    for g in [geometry.next_geometry(data, "youtube", ("fullscreen",))])
         assert "fullscreen:1920x1080" in geometry.GEOMETRY_CHOICES["youtube"]          # single mode's rotation unchanged
@@ -301,13 +313,14 @@ class FakeProc:
 
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
-          xrandr=None):
+          xrandr=None, trio_pf=None):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry")}
-    saved_pf, saved_nft, saved_stage = O.preflight.run, T.nft_handle_of, T.STAGING
+    saved_pf, saved_nft, saved_stage, saved_tpf = O.preflight.run, T.nft_handle_of, T.STAGING, T.trio_preflight
+    T.trio_preflight = trio_pf or (lambda *a, **k: {"ok": True, "problems": [], "checks": {}})
     O._RUNS_DIR = tmp
-    O._pick = lambda p, nl, now, rg, ex=(): calls.append(("pick", p, ex)) and None or (None, None, None)
+    O._pick = lambda p, nl, now, rg, ex=(), root=None: calls.append(("pick", p, ex, root)) and None or (None, None, None)
     O.session_matrix = lambda p, f=None, ex=(): calls.append(("matrix", p, f, ex)) or "A"
     O.accepted_sessions = lambda p, root=None: calls.append(("accepted", p, root)) and 0 or 0
     O.report_flags = lambda p, t, root=None: []
@@ -335,7 +348,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     finally:
         for k, v in saved.items():
             setattr(O, k, v)
-        O.preflight.run, T.nft_handle_of, T.STAGING = saved_pf, saved_nft, saved_stage
+        O.preflight.run, T.nft_handle_of, T.STAGING, T.trio_preflight = saved_pf, saved_nft, saved_stage, saved_tpf
     return rc, calls
 
 
@@ -364,7 +377,8 @@ def test_run_trio():
             assert env["LVDC_TRIO_RUN"] and log.name == f"{tag}_1.log"
         assert [c[2] for c in calls if c[0] == "matrix"] == [f"_trio/_summaries/coverage_last_{t}.json" for t in ("yt", "tw", "tt")]
         assert all(c[3] == ("fullscreen",) for c in calls if c[0] == "matrix")          # trio v1: no fullscreen
-        assert all(c[2] == ("fullscreen",) for c in calls if c[0] == "pick")
+        assert all(c[2] == ("fullscreen",) and c[3] == tmp / "_trio" for c in calls if c[0] == "pick")
+        assert not (tmp / "_summaries").exists()                 # no write into single mode's paths
         assert {c[2] for c in calls if c[0] == "accepted"} == {tmp / "_trio"}            # trio counts its own root only
         assert "/_trio/_summaries/trio_logs/" in str(spawned[0][2])
         ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
@@ -409,6 +423,12 @@ def test_run_trio():
         assert [c for c in calls if c[0] == "apply"][-1][1].startswith("tc qdisc del")
         os.environ.pop("LVDC_TRIO_LAYOUT", None)
         os.environ.pop("LVDC_TRIO_SCREEN", None)
+
+        # the pre-start preflight (pilot-0: no profiles/ link): nothing touched, no session
+        spawned.clear()
+        rc, calls = _trio(tmp, {"youtube": 5}, spawn,
+                          trio_pf=lambda *a, **k: {"ok": False, "problems": ["profile_template_youtube"], "checks": {}})
+        assert rc == O.EXIT_PREFLIGHT and not spawned and not [c for c in calls if c[0] in ("apply", "make", "preclean")]
 
         # a spawn failure in one slot drains: the running sibling finishes before the teardown
         order = []

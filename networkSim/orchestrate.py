@@ -319,11 +319,14 @@ def _summary() -> None:
         print(f"  (daily summary failed: {e!r})")
 
 
-def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool, exclude_modes: tuple = ()) -> tuple:
+def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool, exclude_modes: tuple = (),
+          root: Path | None = None) -> tuple:
     """The session's channel (yt), category (twitch) and geometry draw, and the skip records they leave (run_batch and,
-    per slot, run_trio)."""
+    per slot, run_trio). root (the trio's data root): its skip records go there, and Addendum P's leave rule, single
+    mode's list upkeep, does not run (every trio write stays under data/_trio)."""
     skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
-    if p == "youtube":
+    out = root or _RUNS_DIR
+    if p == "youtube" and root is None:
         for r in yt_channels.apply_leave_rule(_RUNS_DIR, now):
             print(f"  LIST: {r['handle']} ({r['type']}, {r['role']}) leaves the yt list ({r['evidence']}; Addendum P); "
                   f"commit it in yt_channels.py")
@@ -335,8 +338,8 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
         # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
         channel, pre_skips = yt_channels.pick_live_channel(_RUNS_DIR, exclude=skip | set(yt_skips))
         if pre_skips:
-            (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
-            with open(_RUNS_DIR / yt_channels.PRECHECK_SKIPS_FILE, "a") as fh:
+            (out / "_summaries").mkdir(parents=True, exist_ok=True)
+            with open(out / yt_channels.PRECHECK_SKIPS_FILE, "a") as fh:
                 for s in pre_skips:
                     fh.write(json.dumps(s) + "\n")
                     print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")
@@ -344,8 +347,8 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
     # NOT_LIVE_RETRY_S, like a yt channel)
     category, esports_skip = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else (None, None)
     if esports_skip:      # levi: no league channel live -> the next type; the skip goes to the daily summary
-        (_RUNS_DIR / "_summaries").mkdir(parents=True, exist_ok=True)
-        with open(_RUNS_DIR / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
+        (out / "_summaries").mkdir(parents=True, exist_ok=True)
+        with open(out / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
             fh.write(json.dumps(esports_skip) + "\n")
         print(f"  esports unavailable (none of {esports_skip['checked']} live): drawing {category['name']}")
     geom = (geometry.next_geometry(_RUNS_DIR, p, exclude_modes) if exclude_modes else geometry.next_geometry(_RUNS_DIR, p)) \
@@ -478,14 +481,14 @@ class _TrioStop(Exception):
 
 def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused: dict, not_live: dict,
                  rotate_geometry: bool, yt_matrix: str, capacity_kbit: float | None, run_id: str, summaries: Path,
-                 spawn) -> bool:
+                 spawn, floor: dict | None = None, stop_signal: list | None = None) -> bool:
     """Start the next session in p's slot (run_trio); False when its preflight failed (the trio drains)."""
     s, troot = T.SLOTS[p], _RUNS_DIR / T.TRIO_DIR
     free_gb = shutil.disk_usage(_RUNS_DIR).free / 1e9
     if free_gb < MIN_FREE_GB:
         print(f"\n  Data volume {free_gb:.0f} GB free < {MIN_FREE_GB} GB: draining the trio.")
         raise _TrioStop(EXIT_LOW_DISK)
-    floor = T.trio_root_floor_gb(_RUNS_DIR, preflight.ROOT_MIN_FREE_GB)
+    floor = floor or T.trio_root_floor_gb(_RUNS_DIR, preflight.ROOT_MIN_FREE_GB)
     pf = {**preflight.run(_RUNS_DIR, MIN_FREE_GB, root_min_free_gb=floor["floor_gb"]), "trio_root_floor": floor}
     pf_path = summaries / f"preflight_last_{s.tag}.json"
     pf_path.write_text(json.dumps(pf, indent=1))
@@ -496,7 +499,7 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     before, now = accepted_sessions(p, troot), time.time()
     # the pick and the coverage rule read single mode's data (steering only; trio's own counts are its root's); trio v1
     # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
-    channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES)
+    channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot)
     mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES)
     forced = coupled_geometry(p, geom) if rotate_geometry else geom
     if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES:
@@ -511,6 +514,9 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4)
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
            "LVQOE_SHOT_SOURCE": "x11" if os.environ.get("LVDC_TRIO_LAYOUT") == "fb" else "cdp"}
+    if stop_signal:                     # a stop arrived during the pick: no new session
+        print(f"  TRIO {p}: stop requested during the pick, no session started")
+        return True
     started[p] += 1
     log = troot / TRIO_LOGS / run_id / f"{s.tag}_{started[p]}.log"
     print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {p} slot ({s.tag}) session {started[p]}: "
@@ -554,6 +560,9 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     import trio_slots as T
     apply = apply or T.apply
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    if not _RUNS_DIR.is_dir():           # never create data/ on the root filesystem (a missing data link)
+        print(f"\n  TRIO: the data dir {_RUNS_DIR} does not exist: not starting the trio.")
+        return EXIT_PREFLIGHT
     troot = _RUNS_DIR / T.TRIO_DIR                          # trio sessions' own data root (never pooled silently)
     summaries = troot / "_summaries"
     summaries.mkdir(parents=True, exist_ok=True)
@@ -580,6 +589,14 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
             drain_path.rename(drain_path.with_name(f"{drain_path.name}.{why}_{run_id}"))
 
     _consume_drain("stale")
+    repo = Path(__file__).resolve().parent.parent
+    tpl = Path(os.environ.get("LVDC_PROFILE_TEMPLATES", str(repo / "profiles")))
+    pre = T.trio_preflight([p for p in targets if p in T.SLOTS], repo, tpl, _RUNS_DIR)
+    (summaries / "trio_preflight_last.json").write_text(json.dumps(pre, indent=1))
+    if not pre["ok"]:                    # nothing touched: no tree, no capture, no session
+        print(f"\n  TRIO PREFLIGHT FAILED ({', '.join(pre['problems'])}): not starting the trio.")
+        return EXIT_PREFLIGHT
+    floor = T.trio_root_floor_gb(_RUNS_DIR, preflight.ROOT_MIN_FREE_GB)   # once per run (it stats every pcap)
     old = {s: signal.signal(s, _on_signal) for s in (signal.SIGINT, signal.SIGTERM)}
     preclean()
     for s in T.SLOTS.values():
@@ -627,7 +644,6 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                 else:
                     _account(p, rc, r["before"], r["channel"], r["category"], r["now"], paused, fails, frozen, not_live,
                              troot)
-                _summary()
             draining = bool(stop_signal) or end_rc != 0 or drain_path.exists()
             todo = [p for p in BATCH_ORDER if p in targets and p in T.SLOTS and p not in paused
                     and (max_per_slot is None or started[p] < max_per_slot) and accepted_sessions(p, troot) < targets[p]]
@@ -638,7 +654,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                     continue
                 try:
                     if not _trio_refill(p, T, targets, started, running, paused, not_live, rotate_geometry, yt_matrix,
-                                        capacity_kbit, run_id, summaries, spawn):
+                                        capacity_kbit, run_id, summaries, spawn, floor, stop_signal):
                         end_rc = end_rc or EXIT_PREFLIGHT
                         break
                 except _TrioStop as e:
@@ -673,7 +689,6 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     print(f"\nTRIO {run_id} finished (rc {end_rc})." + (f" Paused: {paused}" if paused else ""))
     for p in targets:
         print(f"  {p}: {accepted_sessions(p, troot)}/{targets[p]} trio sessions accepted, {started[p]} started")
-    _summary()
     return end_rc
 
 

@@ -42,6 +42,9 @@ STAGING = CURRENT_DATA / "trio_staging"
 TRIO_DIR = "_trio"                                  # under the data dir
 SLOTS_LOG = "_summaries/trio_slots.jsonl"           # under the trio root
 DEFAULT_CAPTURE = "_default"                        # under the trio root: the unmarked remainder, one per trio run
+# every trio write goes under the trio root, its session counter too (supervisor 2026-10-19): trio names start above
+# TRIO_NAME_FLOOR (yt_100001, ...), so they never meet single mode's, whose counter the trio never reads or writes
+TRIO_NAME_FLOOR = 100000
 # trio v1 (supervisor 2026-10-19): no fullscreen geometry (one screen, three windows); yt Q_1080p is then unreachable
 EXCLUDED_GEOMETRIES = ("fullscreen",)
 TC_SAMPLE_S = 1.0
@@ -615,6 +618,23 @@ def dns_answers_for(own_pcap: Path, default_dns_pcaps, tshark: str = "tshark") -
     return out, {"own_pcap_addresses": len(own), "default_addresses": len(dflt), "default_kept": kept,
                  "contacted_addresses": len(addrs), "addresses": len(out),
                  "default_pcaps": [str(p) for p in default_dns_pcaps]}
+
+
+def trio_preflight(platforms, repo: Path, templates: Path, data: Path, tools=("tc", "nft", "tcpdump", "mergecap",
+                                                                               "tshark", "make", "xrandr")) -> dict:
+    """Before any slot starts (supervisor 2026-10-19, after pilot-0's missing profiles/ link): what exp.py needs from
+    ignored or local paths and the box's tools. {ok, problems: [..], checks}."""
+    import shutil as _sh
+    checks = {"venv_python": (repo / ".venv" / "bin" / "python3").exists(),
+              "current_data": (repo / "current_data").is_dir(),
+              "data_dir": data.is_dir(),
+              "labeling_extension": (repo / "labeling" / "manifest.json").exists()}
+    for p in platforms:
+        checks[f"profile_template_{p}"] = (templates / p).is_dir()
+    for t in tools:
+        checks[f"tool_{t}"] = bool(_sh.which(t)) or Path(f"/usr/sbin/{t}").exists()
+    problems = [k for k, v in checks.items() if not v]
+    return {"ok": not problems, "problems": problems, "checks": checks, "templates": str(templates), "at": time.time()}
 
 
 def conntrack_timeouts(proc: Path = Path("/proc/sys/net/netfilter")) -> dict:

@@ -61,10 +61,10 @@ CHROME_EXTRA: list[str] = []   # trio "fb" layout: the window's position at laun
 trio_slots = None        # the module, imported only with --slot
 
 
-def make_session_dir(platform: str, root: Path | None = None) -> Path:
+def make_session_dir(platform: str, root: Path | None = None, floor: int = 0) -> Path:
     # a name is never reused, also not a removed or _failed session's (session_names: a monotonic persisted counter);
-    # root: a trio session's own data root (data/_trio), named from the same counter
-    return session_names.next_session_dir(DATA_DIR, platform, PLATFORM_ABBREV[platform], root=root)
+    # root / floor: a trio session's own data root (data/_trio) and counter, its names above trio_slots.TRIO_NAME_FLOOR
+    return session_names.next_session_dir(root or DATA_DIR, platform, PLATFORM_ABBREV[platform], floor=floor)
 
 
 def run_(cmd):
@@ -670,7 +670,8 @@ if __name__ == "__main__":
         session_dir = Path(__file__).parent.parent / "current_data"
         session_dir.mkdir(parents=True, exist_ok=True)
     else:
-        session_dir = make_session_dir(platform, None if SLOT is None else DATA_DIR / trio_slots.TRIO_DIR)
+        session_dir = (make_session_dir(platform) if SLOT is None else
+                       make_session_dir(platform, DATA_DIR / trio_slots.TRIO_DIR, trio_slots.TRIO_NAME_FLOOR))
     print(f"Session directory: {session_dir}")
     template = None if args.empty_profile else (args.profile_template or PROFILE_TEMPLATES / platform)
     chrome_profile, profile_template = fresh_chrome_profile(session_dir, template)

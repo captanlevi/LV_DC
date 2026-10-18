@@ -23,26 +23,22 @@ def _highest_existing(data_dir: Path, platform: str, abbrev: str) -> int:
     return max(ns, default=0)
 
 
-def next_session_dir(data_dir: Path, platform: str, abbrev: str, root: Path | None = None) -> Path:
-    """Create and return data/<platform>/<abbrev>_<n> with n above every name ever handed out; persist n. root (t53 trio:
-    data/_trio): the dir goes under root/<platform>, the name still from data_dir's counter, so no name is shared
-    between the roots."""
+def next_session_dir(data_dir: Path, platform: str, abbrev: str, floor: int = 0) -> Path:
+    """Create and return data/<platform>/<abbrev>_<n> with n above every name ever handed out; persist n. floor (t53
+    trio: data_dir = data/_trio, its own counter): n above it too, so trio names never meet single mode's."""
     data_dir = Path(data_dir)
     cp = counter_path(data_dir, platform)
     try:
         last = int(json.loads(cp.read_text())["last"])
     except (OSError, ValueError, KeyError, TypeError):
         last = 0
-    n = max(last, _highest_existing(data_dir, platform, abbrev)) + 1
-    if root is not None:
-        n = max(n, _highest_existing(root, platform, abbrev) + 1)
-    while any((d / platform / f"{abbrev}_{n}").exists() or (d / "_failed" / platform / f"{abbrev}_{n}").exists()
-              for d in [data_dir] + ([Path(root)] if root is not None else [])):
+    n = max(last, _highest_existing(data_dir, platform, abbrev), floor) + 1
+    while (data_dir / platform / f"{abbrev}_{n}").exists() or (data_dir / "_failed" / platform / f"{abbrev}_{n}").exists():
         n += 1
     cp.parent.mkdir(parents=True, exist_ok=True)
     tmp = cp.with_suffix(".tmp")
     tmp.write_text(json.dumps({"platform": platform, "abbrev": abbrev, "last": n}))
     os.replace(tmp, cp)
-    sd = Path(root if root is not None else data_dir) / platform / f"{abbrev}_{n}"
+    sd = data_dir / platform / f"{abbrev}_{n}"
     sd.mkdir(parents=True, exist_ok=True)
     return sd
