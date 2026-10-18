@@ -237,6 +237,11 @@
     "theater:1920x1080",
     "fullscreen:1920x1080"
    ]
+  },
+  "MODE_CHROME_ARGS": {
+   "fullscreen": [
+    "--test-type"
+   ]
   }
  },
  "low_state": {

@@ -147,9 +147,8 @@ def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window
         # decode flags (decode_path.py: tt's HEVC path) and the geometry's launch args (geometry.py: a `@D` device scale
         # factor) go in as make variables
         import geometry
-        run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"]
-            + ([f"WINDOW_SIZE={window_size}"] if window_size else [])
-            + geometry.merge_make_vars(decode_path.make_vars(platform or ""), geometry.chrome_args(geometry_spec)))
+        run(["make", "start_chrome"] + geometry.start_chrome_make_vars(session_dir, chrome_profile, window_size, platform,
+                                                                      geometry_spec))
         return True
     except Exception as e:
         print(e)

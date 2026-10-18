@@ -144,7 +144,7 @@ def test_fullscreen():
     fullscreen:WxH (yt only) = window W x H, then the player's own fullscreen by the `f` key (a CDP key event), else a
     CDP click on its button; the pointer parked over the picture; the X11 shot is the whole screen in device px."""
     import geometry as G
-    assert G.parse("fullscreen:1920x1080") == ("fullscreen", 1920, 1080) and G.chrome_args("fullscreen:1920x1080") == []
+    assert G.parse("fullscreen:1920x1080") == ("fullscreen", 1920, 1080) and G.chrome_args("fullscreen:1920x1080") == ["--test-type"]   # hot-fix 4: no --no-sandbox infobar
     assert "fullscreen:1920x1080" in G.GEOMETRY_CHOICES["youtube"]
     assert not any(c.startswith("fullscreen") for c in G.GEOMETRY_CHOICES["twitch"] + G.GEOMETRY_CHOICES["tiktok"])
     assert B._fullscreen_on_screen({"fullscreen": True, "viewport": [1920, 1080], "screen": [1920, 1080], "dpr": 1}) == \
