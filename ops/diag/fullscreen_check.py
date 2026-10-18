@@ -41,6 +41,12 @@ def main() -> int:
     out = {"playing_t": st.get("t")}
     out["fullscreen"] = B.yt_fullscreen(page, target_id=t["id"])
     out["origin"] = B.calibrate_shot_origin(page)
+    try:                                                 # the window's state at the end (CDP; X11 fullscreen = this)
+        wid = B._browser_call("Browser.getWindowForTarget", {"targetId": t["id"]}).get("windowId")
+        out["window_at_end"] = B._browser_call("Browser.getWindowBounds", {"windowId": wid}).get("bounds")
+    except Exception as e:
+        out["window_at_end"] = {"error": repr(e)}
+    out["fullscreen_trace"] = json.loads(page.eval("JSON.stringify(window.__lvqoeFs || null)") or "null")
     pr = json.loads(page.eval(B._PLAYER_RECT_JS) or "{}")
     fs = B._fullscreen_on_screen(pr) if out["origin"].get("fullscreen_screen") else None
     vp = B._viewport_on_screen(json.loads(page.eval(B._VIEWPORT_JS) or "{}"))

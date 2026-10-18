@@ -915,8 +915,10 @@ def yt_theater(page: "CDPPage", settle_s: float = 1.5) -> dict:
 # click cannot enter fullscreen), else by a CDP mouse click on its fullscreen button; then the pointer is parked over
 # the picture, off the control bars, so the controls auto-hide. The state after it is recorded (meta.json
 # player_pin.fullscreen). Layout only, never quality.
-# `on` is the PLAYER's fullscreen (t37 hot-fix 2, shagun on chaos: after the window's fullscreen the document element
-# is document.fullscreenElement, so a bare fullscreenElement read "already" and the player never entered its own)
+# `on` is yt's own player fullscreen: yt fullscreens the document element and marks it as #movie_player.ytp-fullscreen /
+# ytd-watch-flexy[fullscreen] (hot-fix 3, shagun's check of 7c2711a: the f key entered at 150 ms, the test "#movie_player
+# is the fullscreen element" read it as off and the fallback button click toggled it off at 1485 ms); a bare
+# document.fullscreenElement is not enough either (hot-fix 2)
 _FULLSCREEN_STATE_JS = """
 (function() {
     const fe = document.fullscreenElement;
@@ -927,7 +929,7 @@ _FULLSCREEN_STATE_JS = """
     const pr = mp ? mp.getBoundingClientRect() : null;
     const flexy = document.querySelector('ytd-watch-flexy');
     const chat = document.querySelector('ytd-live-chat-frame');
-    const playerFs = !!(fe && fe !== document.documentElement && mp && (fe === mp || fe.contains(mp)));
+    const playerFs = !!(fe && mp && (mp.classList.contains('ytp-fullscreen') || (flexy && flexy.hasAttribute('fullscreen'))));
     return JSON.stringify({on: playerFs, element: fe ? (fe.id || fe.tagName.toLowerCase()) : null,
                            doc_fullscreen: fe === document.documentElement,
                            flexy_fullscreen: flexy ? flexy.hasAttribute('fullscreen') : null,
@@ -1040,7 +1042,14 @@ def yt_fullscreen(page: "CDPPage", settle_s: float = 4.0, target_id: str | None 
             time.sleep(1.0)
             st = json.loads(page.eval(_FULLSCREEN_STATE_JS) or "{}")
             rec["action"] = "key_f"
-            if not st.get("on") and st.get("button"):
+            # the fallback only when the key changed nothing: a fullscreenchange to on means the key entered, and a
+            # click would toggle it off again (hot-fix 3: 7c2711a's click did exactly that)
+            try:
+                entered = any(e[1] is True for e in json.loads(page.eval("JSON.stringify(window.__lvqoeFs || [])") or "[]"))
+            except (TypeError, ValueError, IndexError):
+                entered = False
+            rec["key_entered"] = entered
+            if not st.get("on") and not entered and st.get("button"):
                 x, y = st["button"]
                 _mouse(page, "mouseMoved", x, y)              # the button sits in the auto-hiding control bar
                 time.sleep(0.3)

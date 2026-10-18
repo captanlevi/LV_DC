@@ -170,7 +170,9 @@ def test_fullscreen():
             if js is B._YT_HIDE_CHAT_JS:
                 self.chat = True
                 return json.dumps({"action": "clicked"})
-            return json.dumps({"on": self.on, "element": "movie_player" if self.on else "html",
+            if "__lvqoeFs ||" in js:
+                return json.dumps([[100, True]] if self.on else [])
+            return json.dumps({"on": self.on, "element": "html" if self.on else None, "flexy_fullscreen": self.on,
                                "doc_fullscreen": not self.on, "player": [1920, 1080] if self.on else [1243, 699],
                                "player_rect": [0, 0, 1920, 1080] if self.on else [0, 0, 1400, 1080],
                                "screen": [1920, 1080], "viewport": [1920, 1080], "dpr": 1,
@@ -191,6 +193,21 @@ def test_fullscreen():
     pg = Page()
     pg.on = True
     assert B.yt_fullscreen(pg, settle_s=0)["action"] == "already"
+
+    class Toggled(Page):                       # hot-fix 3 (7c2711a on chaos): the key entered, the state read said off
+        def call(self, method, params=None):
+            self.calls.append((method, (params or {}).get("type"), (params or {}).get("key")))
+            if method == "Input.dispatchKeyEvent" and params.get("type") == "keyDown":
+                self.entered = True
+            return {}
+
+        def eval(self, js, await_promise=False):
+            if "__lvqoeFs ||" in js:
+                return json.dumps([[150, True]] if getattr(self, "entered", False) else [])
+            return super().eval(js)
+    pg = Toggled()
+    r = B.yt_fullscreen(pg, settle_s=0)
+    assert r["key_entered"] and r["action"] == "key_f" and not any(c[1] == "mousePressed" for c in pg.calls), r
     B._browser_call = real_bc
 
 
