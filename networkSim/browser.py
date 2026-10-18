@@ -1830,6 +1830,8 @@ class BrowserSession:
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
         self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
+        self.decode_gpu: dict | None = None       # Chrome's GPU video-decode report at launch (decode_path.py; meta.json)
+        self.decode_page: dict | None = None      # the page's HEVC probe (MSE / WebCodecs hvc1)
         self._master: MasterListener | None = None   # twitch: the master playlist listener
         self._rung_probe_at = 0.0
         self._recovery_lock = threading.Lock()    # one recovery of either kind per session (am. 6)
@@ -1893,6 +1895,12 @@ class BrowserSession:
             raise RuntimeError("Could not get a CDP page target")
 
         print(f"[browser] Connected to CDP: {ws_url[:60]}...", flush=True)
+        try:   # the decode path as Chrome reports it, once at launch (decode_path.py; a covariate)
+            import decode_path
+            self.decode_gpu = decode_path.gpu_summary(_browser_call("SystemInfo.getInfo"))
+        except Exception as exc:
+            self.decode_gpu = {"error": repr(exc)[:200]}
+        print(f"[browser] Decode path: {self.decode_gpu}", flush=True)
         self._ws_url = ws_url
         self._page = page
         # A hidden / occluded page does not start yt playback and throttles the extension's 1 Hz timer (laptop test
@@ -1977,6 +1985,11 @@ class BrowserSession:
         except Exception as exc:
             self.login_state = {"state": "unknown", "error": repr(exc)}
         print(f"[browser] Login state: {self.login_state}", flush=True)
+        try:
+            import decode_path
+            self.decode_page = json.loads(self._page.eval(decode_path.HEVC_PROBE_JS, await_promise=True) or "null")
+        except Exception as exc:
+            self.decode_page = {"error": repr(exc)[:200]}
         if self.platform == "tiktok":
             self.room_rotation["rooms"].append({"t_playing": time.time(), "room": self.channel_url, "ok": True,
                                                 "first": True})

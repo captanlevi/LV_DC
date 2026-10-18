@@ -35,6 +35,7 @@ import session_meta
 import session_names
 import compute_load
 import coverage_report
+import decode_path
 import tw_categories
 import yt_channels
 
@@ -139,11 +140,13 @@ def fresh_chrome_profile(session_dir: Path, template: Path | None) -> tuple[Path
                   **dir_sha256(prof)}
 
 
-def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window_size: str | None = None) -> bool:
+def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window_size: str | None = None,
+                                 platform: str | None = None) -> bool:
     try:
-        # the key log goes to <session_dir>/ssl_keys.log (kept); the profile is the session's fresh one
+        # the key log goes to <session_dir>/ssl_keys.log (kept); the profile is the session's fresh one; the platform's
+        # decode flags (decode_path.py: tt's HEVC path) go in as make variables
         run(["make", "start_chrome", f"SESSION_DIR={session_dir}", f"CHROME_PROFILE={chrome_profile}"]
-            + ([f"WINDOW_SIZE={window_size}"] if window_size else []))
+            + ([f"WINDOW_SIZE={window_size}"] if window_size else []) + decode_path.make_vars(platform or ""))
         return True
     except Exception as e:
         print(e)
@@ -643,7 +646,7 @@ if __name__ == "__main__":
     if is_capture and initialize_pcap(session_dir) == False:
         raise ValueError("Cannot initialize pcap capture")
 
-    if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform)) == False:
+    if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform), platform) == False:
         raise ValueError("Cannot open chrome with SSL key log enabled")
 
     browser = None
@@ -718,6 +721,7 @@ if __name__ == "__main__":
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
                               lowest_rung=browser.lowest_rung,
+                              decode_path={**decode_path.spec(platform), "gpu": browser.decode_gpu, "page": browser.decode_page},
                               tw_pick=browser.tw_pick, room_play_clicks=browser.room_play_clicks,
                               room_discontinuities=browser.room_discontinuities)
             if platform == "youtube" and not args.channel_handle and browser.list_url:

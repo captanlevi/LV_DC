@@ -17,7 +17,7 @@ def check(cond, msg):
     return bool(cond)
 
 
-def stub(v6_lines=0, findmnt="/media/u/memories", held="google-chrome-stable", timers="inactive " * 4):
+def stub(v6_lines=0, findmnt="/media/u/memories", held="google-chrome-stable intel-media-va-driver-non-free libva2", timers="inactive " * 4):
     calls = []
 
     def sh(cmd, timeout=10.0):
@@ -60,10 +60,15 @@ def main():
         r = P.check_volume(link, 0.0, sh)
         ok &= check(not r["ok"] and not r["on_external"], "symlinked data/ on the root fs (volume not mounted) -> not ok")
 
-    sh, _ = stub(held="google-chrome-stable", timers="inactive inactive inactive inactive")
+    ok &= check(P.HELD_PACKAGES == tuple("google-chrome-stable intel-media-va-driver-non-free libva2".split()), "holds: Chrome and the VA-API driver (tt HEVC decode)")
+    sh, _ = stub(held="google-chrome-stable intel-media-va-driver-non-free libva2", timers="inactive inactive inactive inactive")
     r = P.check_holds(sh)
     ok &= check(r["ok"] or not r["applicable"], f"holds intact -> ok ({r})")
     if r["applicable"]:
+        sh, _ = stub(held="google-chrome-stable", timers="inactive inactive inactive inactive")
+        r = P.check_holds(sh)
+        ok &= check(not r["ok"] and r["held_missing"] == ["intel-media-va-driver-non-free", "libva2"],
+                    "the driver unheld -> not ok")
         sh, _ = stub(held="", timers="inactive active inactive inactive")
         r = P.check_holds(sh)
         ok &= check(not r["ok"] and r["held_missing"] and r["timers_active"] == ["apt-daily.timer"],

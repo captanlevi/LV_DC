@@ -7,7 +7,7 @@ path (ipv6_media FAIL) before anyone looked. The README's "before every start" l
   shaper   tc is installed and the ifb module is loaded (exp.py builds the qdiscs per session after preclean)
   volume   the data root resolves to a mounted volume (not the root filesystem when data/ is a symlink) with at least
            MIN_FREE_GB free
-  holds    google-chrome-stable is apt-held and the OS download timers are inactive (Linux / apt only)
+  holds    HELD_PACKAGES (Chrome, the VA-API driver) are apt-held and the OS download timers are inactive (Linux / apt only)
   rootfs   the root filesystem (Chrome's per-session profile clones, logs, tmp) has at least ROOT_MIN_FREE_GB free
            (supervisor 2026-10-18: chaos's root fell to 3.3 GB while the data volume had hundreds)
 
@@ -28,7 +28,8 @@ from pathlib import Path
 SYSCTL_FILE = Path(os.environ.get("LVDC_NOIPV6_SYSCTL", "/etc/sysctl.d/99-lvqoe-collection-noipv6.conf"))
 IFACE = os.environ.get("LVDC_IFACE", "wlp0s20f3")
 ROOT_MIN_FREE_GB = float(os.environ.get("LVDC_ROOT_MIN_FREE_GB", "5"))
-HELD_PACKAGES = ("google-chrome-stable",)
+# the collection Chrome, and (2026-10-18, shagun's driver upgrade for tt's HEVC decode) the VA-API driver it decodes with
+HELD_PACKAGES = ("google-chrome-stable", "intel-media-va-driver-non-free", "libva2")
 OS_TIMERS = ("unattended-upgrades", "apt-daily.timer", "apt-daily-upgrade.timer", "fwupd-refresh.timer")
 
 

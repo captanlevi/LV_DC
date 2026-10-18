@@ -30,6 +30,8 @@ defaults (override in the environment or in `ops/env.local.sh`, gitignored). Eac
 - Code reaches the box over ssh (`git push <box>:<repo> <ref>:refs/heads/<name>`) or at a pause, never by a fetch
   while a session captures.
 
+**Driver hold (2026-10-18):** the Intel VA-API driver (`intel-media-va-driver-non-free`, `libva2`) is apt-held like Chrome. Preflight refuses a session when either hold is gone (tt's HEVC decode depends on it). Versions are in `current_data/driver_upgrade/hold.log` on the box.
+
 **Not here:** the operator's hourly health check and 6-hourly self-audit are session crons on the operator's side, not
 on the box.
 - Both read the per-session flags in `data/_summaries/flags.jsonl`. orchestrate appends a row after every session whose check

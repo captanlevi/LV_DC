@@ -192,17 +192,26 @@ WINDOW_FLAG := $(if $(WINDOW_SIZE),--window-size=$(WINDOW_SIZE),)
 # ignores --disable-background-networking / --disable-component-update and took 41-42 MB in the first ~70 s of a
 # session inside the shaped link (chaos captest3; laptop: 42.3 MB with the old list, 0.0 MB with this one, t37)
 CHROME_DISABLE_FEATURES = ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel
+comma := ,
+# per-platform decode flags (decode_path.py; exp.py passes them for tt's HEVC path, 2026-10-18): extra features to
+# disable join the one list above; features to enable, extra args and env assignments before the binary
+CHROME_DISABLE_FEATURES_EXTRA ?=
+CHROME_ENABLE_FEATURES ?=
+CHROME_EXTRA_ARGS ?=
+CHROME_ENV ?=
+DISABLE_FEATURES_ALL := $(CHROME_DISABLE_FEATURES)$(if $(CHROME_DISABLE_FEATURES_EXTRA),$(comma)$(CHROME_DISABLE_FEATURES_EXTRA),)
+ENABLE_FEATURES_FLAG := $(if $(CHROME_ENABLE_FEATURES),--enable-features=$(CHROME_ENABLE_FEATURES),)
 
 start_chrome:
 	@echo "🚀 Starting Chrome with remote debugging..."
 	@LAUNCH_USER=$${SUDO_USER:-$${USER}}; \
 	mkdir -p $(CHROME_PROFILE); \
 	chown -R $$LAUNCH_USER $(CHROME_PROFILE) 2>/dev/null || true; \
-	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=$(CHROME_DISABLE_FEATURES) --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check $(WINDOW_FLAG) --load-extension=$(LABELING_DIR) about:blank"; \
+	CHROME_ARGS="--no-sandbox --user-data-dir=$(CHROME_PROFILE) --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=$(DISABLE_FEATURES_ALL) $(ENABLE_FEATURES_FLAG) $(CHROME_EXTRA_ARGS) --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check $(WINDOW_FLAG) --load-extension=$(LABELING_DIR) about:blank"; \
 	if [ "$$LAUNCH_USER" = "$$(id -un)" ]; then \
-		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
+		env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_ENV) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	else \
-		sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
+		sudo -u $$LAUNCH_USER env SSLKEYLOGFILE=$(SSL_KEY_LOG_FILE) $(CHROME_ENV) $(CHROME_BIN) $$CHROME_ARGS > $(CHROME_LOG) 2>&1 & \
 	fi; \
 	echo $$! > $(CAPTURE_DIR)/chrome.pid
 	@echo "✅ Chrome launched (debug port 9222, log → $(CHROME_LOG))"
