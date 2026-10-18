@@ -334,6 +334,30 @@ def test_dns_answers():
         assert rep["dns_fail"] == ["youtube/yt_7"]
 
 
+def test_split_detail():
+    """Supervisor (i): a flow split between a session and the default class, by when its default packets came."""
+    me, cdn = "10.0.0.2", "142.250.1.1"
+    s_rows = [_pkt(100.0 + i, me, cdn, "udp", 50001, 443, 1200, sni="rr1---sn-x.googlevideo.com" if i == 0 else "")
+              for i in range(10)]                                                    # flow A: 100..109
+    s_rows += [_pkt(t, me, cdn, "udp", 50002, 443, 1200) for t in (100.0, 105.0, 200.0, 201.0)]   # flow B: a 95 s gap
+    s_rows += [_pkt(t, me, cdn, "tcp", 50003, 443, 1500) for t in (100.0, 101.0, 102.0)]           # flow C
+    s_rows += [_pkt(t, me, cdn, "tcp", 50004, 443, 1500) for t in (100.0, 110.0)]                  # flow D
+    d_rows = [_pkt(115.0, me, cdn, "udp", 50001, 443, 66),                                         # A: after its end
+              _pkt(180.0, cdn, me, "udp", 443, 50002, 1200),                                       # B: after the idle gap
+              _pkt(101.5, cdn, me, "tcp", 443, 50003, 1500),                                       # C: mid-flow
+              _pkt(90.0, me, cdn, "tcp", 50004, 443, 74)]                                          # D: before its first
+    d_rows[0]["tcp.flags.str"] = ""
+    d_rows[2]["tcp.flags.str"] = "·······A····"
+    default = F.summarise(d_rows, keep_udp=True, keep_pkts=True)
+    s = F.summarise(s_rows, keep_pkts=set(default["flows"]))
+    det = F.split_detail(s, default, "youtube")
+    assert det["by_class"] == {"after_last": 1, "after_idle": 1, "mid_flow": 1, "before_first": 1}, det["by_class"]
+    assert det["media_flows_by_class"] == {"after_last": 1}
+    assert det["default_packets_by_direction"] == {"up": 2, "down": 2}
+    rows = {r["flow"][1][1] if r["flow"][1][0] == me else r["flow"][2][1]: r for r in det["rows"]}
+    assert rows[50002]["max_gap_before_s"] == 75.0 and rows[50003]["tcp_flags"] == {"·······A····": 1}
+
+
 def test_check_session_reads_dns_answers():
     """pilot-0 fix 2 (levi): a flow with no SNI and no DNS in its own pcap is named from the session's dns_answers.json
     (yt_100001's 88 MB QUIC media flow read as exogenous background); the pcap's own sources come first."""

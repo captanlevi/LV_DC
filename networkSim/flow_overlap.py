@@ -38,7 +38,7 @@ from trio_slots import conntrack_timeouts                # noqa: E402
 DNS_LEAD_S = 120.0
 FIELDS = ["frame.time_epoch", "frame.len", "ip.src", "ip.dst", "ipv6.src", "ipv6.dst", "ip.proto", "tcp.srcport", "tcp.dstport",
           "udp.srcport", "udp.dstport", "quic.dcid", "quic.scid", "tls.handshake.extensions_server_name",
-          "dns.qry.name", "dns.flags.response", "dns.count.answers"]
+          "dns.qry.name", "dns.flags.response", "dns.count.answers", "tcp.flags.str", "quic.header_form"]
 
 
 def tshark_rows(pcap: Path, tshark: str = "tshark") -> list[dict]:
@@ -70,13 +70,14 @@ def _is_quic(k: tuple) -> bool:
     return k[0] == "udp" and 443 in (k[1][1], k[2][1])
 
 
-def summarise(rows: list[dict], keep_udp: bool = False) -> dict:
+def summarise(rows: list[dict], keep_udp: bool = False, keep_pkts=None) -> dict:
     """flows {key: [first, last, packets, bytes]}, cids {cid: [first, last]}, snis {name: first}, flow_sni {key: name},
     dns answers {name: [t]}, dns_packets, bytes; keep_udp: also every UDP packet as (t, key, bytes) (the default
     capture's QUIC check)."""
     flows: dict = {}
     flow_sni: dict = {}
     udp: list = []
+    pkts: dict = {}          # keep_pkts: True (every flow) or a set of keys -> [(t, src, bytes, tcp flags, quic form)]
     cids: dict = {}
     snis: dict = {}
     dns: dict = {}
@@ -93,6 +94,10 @@ def summarise(rows: list[dict], keep_udp: bool = False) -> dict:
             f[0], f[1], f[2], f[3] = min(f[0], t), max(f[1], t), f[2] + 1, f[3] + n
             if keep_udp and k[0] == "udp":
                 udp.append((t, k, n))
+            if keep_pkts is True or (keep_pkts and k in keep_pkts):
+                src = (_split(r.get("ip.src")) or _split(r.get("ipv6.src")) or [""])[0]
+                pkts.setdefault(k, []).append((t, src, n, (_split(r.get("tcp.flags.str")) or [""])[0],
+                                               (_split(r.get("quic.header_form")) or [""])[0]))
         for c in _split(r.get("quic.dcid")) + _split(r.get("quic.scid")):
             if len(c.replace(":", "")) >= 8:                      # zero-length / tiny CIDs say nothing about owners
                 s = cids.setdefault(c, [t, t])
@@ -109,7 +114,63 @@ def summarise(rows: list[dict], keep_udp: bool = False) -> dict:
                     for n in names:
                         dns.setdefault(n.lower(), []).append(t)
     return {"flows": flows, "cids": cids, "snis": snis, "flow_sni": flow_sni, "dns": dns, "dns_packets": dns_packets,
-            "udp": udp}
+            "udp": udp, "pkts": pkts}
+
+
+def _client(s: dict) -> str | None:
+    from collections import Counter
+    cnt = Counter(ip for k in s["flows"] for ip in (k[1][0], k[2][0]))
+    return cnt.most_common(1)[0][0] if cnt else None
+
+
+IDLE_S = 30.0       # conntrack's UDP timeout at pilot-0 (unreplied); the stream timeout was 120 s
+
+
+def split_detail(s: dict, default: dict, platform: str) -> dict:
+    """Supervisor (i), pilot-0: every flow seen both in the session's pcap and in the default capture: which
+    direction's packets sit in the default class and when, relative to the flow in the session's pcap. Per flow a class:
+      before_first   default packets before the flow's first packet in the session pcap
+      after_last     all after its last one (teardown residue: TIME_WAIT ACKs, RSTs, a server's late packets)
+      after_idle     inside the flow, each after a session-side gap > IDLE_S (conntrack expiry: the mark lost)
+      mid_flow       inside the flow with no such gap (an owner / marking fault)
+    with direction (up = from the client), TCP flags, QUIC header forms and bytes."""
+    import collections
+    me = _client(s)
+    media = {k for k, n in s["flow_sni"].items() if is_media(n, platform)}
+    rows, classes = [], collections.Counter()
+    for k in sorted(set(s["flows"]) & set(default["flows"])):
+        mine = sorted(p[0] for p in s["pkts"].get(k, [])) or [s["flows"][k][0], s["flows"][k][1]]
+        dp = default["pkts"].get(k, [])
+        if not dp:
+            continue
+        cls = collections.Counter()
+        gaps = []
+        for t, src, n, fl, qf in dp:
+            if t < mine[0]:
+                cls["before_first"] += 1
+            elif t > mine[-1]:
+                cls["after_last"] += 1
+            else:
+                import bisect
+                i = bisect.bisect_right(mine, t) - 1
+                g = t - mine[i] if i >= 0 else 0.0
+                gaps.append(g)
+                cls["after_idle" if g > IDLE_S else "mid_flow"] += 1
+        main = ("mid_flow" if cls["mid_flow"] else "after_idle" if cls["after_idle"] else
+                "before_first" if cls["before_first"] else "after_last")
+        classes[main] += 1
+        rows.append({"flow": list(k), "media": k in media, "class": main, "per_class": dict(cls),
+                     "default_packets": len(dp), "default_bytes": sum(p[2] for p in dp),
+                     "up": sum(p[1] == me for p in dp), "down": sum(p[1] != me for p in dp),
+                     "tcp_flags": dict(collections.Counter(p[3] for p in dp if p[3])),
+                     "quic_forms": dict(collections.Counter(p[4] for p in dp if p[4])),
+                     "max_gap_before_s": round(max(gaps), 2) if gaps else None,
+                     "session_span": [round(mine[0], 3), round(mine[-1], 3)],
+                     "default_span": [round(dp[0][0], 3), round(dp[-1][0], 3)]})
+    return {"flows": len(rows), "by_class": dict(classes),
+            "media_flows_by_class": dict(collections.Counter(r["class"] for r in rows if r["media"])),
+            "default_packets_by_direction": {"up": sum(r["up"] for r in rows), "down": sum(r["down"] for r in rows)},
+            "rows": rows[:200]}
 
 
 def quic_share(s: dict) -> dict:
@@ -226,6 +287,7 @@ def main(argv=None) -> int:
     ap.add_argument("--default", type=Path, default=None, help="the run's default-capture dir (merged.pcap)")
     ap.add_argument("--tshark", default=shutil.which("tshark") or "tshark")
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--detail", action="store_true", help="the split flows' packets in the default class (split_detail)")
     a = ap.parse_args(argv)
     dirs = list(a.sessions)
     dflt = a.default
@@ -235,6 +297,9 @@ def main(argv=None) -> int:
     if not dirs:
         print("no sessions", file=sys.stderr)
         return 2
+    default = None
+    if dflt and (dflt / "merged.pcap").exists():
+        default = summarise(tshark_rows(dflt / "merged.pcap", a.tshark), keep_udp=True, keep_pkts=True if a.detail else None)
     sessions = {}
     for d in dirs:
         meta = json.loads((d / "meta.json").read_text())
@@ -244,12 +309,13 @@ def main(argv=None) -> int:
             return 2
         sessions[f"{d.parent.name}/{d.name}"] = {"platform": meta.get("platform"),
                                                  "window": [meta.get("started_at") or 0, meta.get("ended_at") or 1e12],
-                                                 "s": summarise(tshark_rows(pcap, a.tshark)),
+                                                 "s": summarise(tshark_rows(pcap, a.tshark), keep_pkts=(
+                                                     set(default["flows"]) if a.detail and default else None)),
                                                  "dns_answers_file": str(d / "dns_answers.json")}
-    default = (summarise(tshark_rows(dflt / "merged.pcap", a.tshark), keep_udp=True)
-               if dflt and (dflt / "merged.pcap").exists() else None)
     rep = {"run": a.run, "session_dirs": [str(d) for d in dirs], "default_dir": str(dflt) if dflt else None,
            "conntrack_timeouts_now": conntrack_timeouts(), **report(sessions, default)}
+    if a.detail and default:
+        rep["split_detail"] = {n: split_detail(x["s"], default, x["platform"]) for n, x in sessions.items()}
     text = json.dumps(rep, indent=1, default=str)
     if a.out:
         a.out.write_text(text)
