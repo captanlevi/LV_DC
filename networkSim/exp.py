@@ -856,6 +856,10 @@ if __name__ == "__main__":
             meta_extra["concurrency"] = TRIO
         session_meta.finish(session_dir, channel_url, **meta_extra)   # while Chrome is still up (records its version)
         kill_chrome(chrome_profile)
+        if SLOT is not None:   # trio: in-flight packets land, then the slot's filters go, then its capture stops
+            time.sleep(1.0)
+            TRIO["slot_detach"] = trio_slots.apply(trio_slots.slot_detach_cmds(SLOT), check=False)
+            time.sleep(0.5)
 
         if is_capture and finalize_pcap(session_dir) == False:
             raise ValueError("Cannot finalize pcap capture")

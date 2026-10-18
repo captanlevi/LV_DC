@@ -92,6 +92,7 @@ class Slot:
 
 
 MARK_EPOCHS = 16
+ORPHAN_PRIO = 40          # the shared drop for a mark of ours with no slot filter (after the slots' 10-12, before 50)
 # conntrack's UDP stream timeout while a trio runs (pilot-0 read, levi 1b: at the box's 120 s an idle QUIC flow lost its
 # entry and so its mark, and the server's next packets reached the unshaped default class); set by run_trio, restored
 TRIO_UDP_STREAM_TIMEOUT_S = 3600
@@ -143,11 +144,15 @@ def shared_up_cmds(iface: str = IFACE_DEFAULT) -> list[str]:
           f"tc qdisc add dev {iface} handle ffff: ingress"]
     c += _mgmt_filters(iface, "ffff:", "action ok")
     c += [f"tc filter add dev {iface} parent ffff: protocol all prio 5 matchall action connmark continue",
+          # a mark of ours that no slot filter takes (a finished session's late packets: its epoch's filters are gone)
+          # is dropped, never sent to the unshaped default class (pilot-0, levi 1 / 7)
+          f"tc filter add dev {iface} parent ffff: protocol all prio {ORPHAN_PRIO} handle 0x10/0xf0 fw action drop",
           f"tc filter add dev {iface} parent ffff: protocol all prio 50 matchall action mirred egress redirect dev lvi_def",
           f"tc qdisc add dev {iface} root handle 1: htb default 30",
           f"tc class add dev {iface} parent 1: classid 1:20 htb rate 1000mbit",
           f"tc class add dev {iface} parent 1: classid 1:30 htb rate 1000mbit"]
     c += _mgmt_filters(iface, "1:", "flowid 1:20")
+    c.append(f"tc filter add dev {iface} parent 1: protocol all prio {ORPHAN_PRIO} handle 0x10/0xf0 fw action drop")
     c.append(f"tc filter add dev {iface} parent 1: protocol all prio 50 matchall flowid 1:30 "
              f"action mirred egress mirror dev lvo_def")
     return c
@@ -177,6 +182,12 @@ def slot_up_cmds(s: Slot, iface: str = IFACE_DEFAULT) -> list[str]:
             f"action mirred egress redirect dev {s.ifb_in}",
             f"tc filter add dev {iface} parent 1: protocol all prio {s.prio} handle {s.mark:#x} fw "
             f"flowid {s.egress_class} action mirred egress mirror dev {s.ifb_out}"]
+
+
+def slot_detach_cmds(s: Slot, iface: str = IFACE_DEFAULT) -> list[str]:
+    """The slot's two classifying filters only: from then its packets (the dead Chrome's late ones) match the orphan
+    drop, so nothing more reaches its IFBs and its capture stops with received == captured (pilot-0, levi 7)."""
+    return [f"tc filter del dev {iface} parent ffff: prio {s.prio}", f"tc filter del dev {iface} parent 1: prio {s.prio}"]
 
 
 def slot_down_cmds(s: Slot, iface: str = IFACE_DEFAULT, nft_handle: int | None = None) -> list[str]:

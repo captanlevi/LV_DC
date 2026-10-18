@@ -57,6 +57,10 @@ def test_leak_fixes():
     e3 = yt.with_epoch(100003)
     assert (e3.mark, e3.egress_class, e3.prio, e3.tag) == (0x311, "1:311", 10, "yt") and e3.record()["epoch"] == 3
     assert yt.with_epoch(16).mark == 0x11 and T.SLOTS["tiktok"].with_epoch(5).mark == 0x513
+    drop = [c for c in up if "handle 0x10/0xf0 fw action drop" in c]
+    assert len(drop) == 2 and all("prio 40" in c for c in drop)           # ingress and egress, after the slots' prios
+    assert T.slot_detach_cmds(yt, IF) == ["tc filter del dev wlp0s20f3 parent ffff: prio 10",
+                                          "tc filter del dev wlp0s20f3 parent 1: prio 10"]
     j = "\n".join(T.slot_up_cmds(e3, IF))
     assert "meta mark set 0x311 ct mark set meta mark" in j and "handle 0x311 fw" in j and "flowid 1:311" in j
     with tempfile.TemporaryDirectory() as d:
