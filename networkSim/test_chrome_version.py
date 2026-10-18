@@ -2,6 +2,7 @@
 """meta.chrome (tw_43, shagun 2026-10-19: the end read was refused once and check_session failed the whole session on
 chrome.browser): the version is read once the browser attached (chrome_start, 3 tries); at finish the end read gets
 CHROME_END_TRIES attempts and, when Chrome no longer answers, the start read stands with the end error beside it.
+check_session (retro, supervisor): no browser with an error recorded is the reported flag chrome_version_missing.
 
     python3 test_chrome_version.py        (exit 0 = pass)
 """
@@ -52,6 +53,19 @@ def main() -> int:
             assert c["browser"] is None and "refused" in c["error"], c
     finally:
         S.urllib.request.urlopen, S.time.sleep = real_open, real_sleep
+    # check_session (supervisor, tw_43 retro): no browser with an error recorded is a reported flag, not meta incomplete
+    import check_session as CS
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d)
+        err = "URLError(ConnectionRefusedError(111, 'Connection refused'))"
+        (sd / "meta.json").write_text(json.dumps({"chrome": {"browser": None, "error": err}}))
+        m, missing = CS.meta_check(sd)
+        assert "chrome.browser" not in missing, missing
+        f = CS.chrome_version_missing(m)
+        assert f == {"flag": "chrome_version_missing", "error": err, "chrome_start": None}, f
+        (sd / "meta.json").write_text(json.dumps({"chrome": {"browser": None}}))    # no error recorded: still a failure
+        assert "chrome.browser" in CS.meta_check(sd)[1]
+        assert CS.chrome_version_missing({"chrome": {"browser": "Chrome/141.0"}}) is None
     print("test_chrome_version: ok")
     return 0
 

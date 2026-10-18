@@ -368,6 +368,16 @@ def entry_window(ents: list[dict] | None, window: tuple[float, float] | None) ->
     return float(t), window[0]
 
 
+def chrome_version_missing(meta: dict) -> dict | None:
+    """A session that ran whose Chrome version read failed with an error recorded (tw_43, shagun 2026-10-19: refused at
+    finish, before chrome_start existed; supervisor: a version string never fails a session that ran): a reported flag,
+    not meta incomplete. Retro-computable from meta alone. A chrome record with no browser and no error still fails."""
+    ch = meta.get("chrome")
+    if not isinstance(ch, dict) or ch.get("browser") or not ch.get("error"):
+        return None
+    return {"flag": "chrome_version_missing", "error": str(ch["error"])[:200], "chrome_start": meta.get("chrome_start")}
+
+
 def fullscreen_not_screen(meta: dict) -> dict | None:
     """t37 hot-fix (shagun on yt_44): the player's fullscreen ran with a viewport smaller than the screen (a windowed
     Chrome), so the session played under a window-sized player and its shots did not cover the screen. From meta alone
@@ -828,7 +838,7 @@ def meta_check(sd: Path) -> tuple[dict, list[str]]:
         return {}, ["meta.json missing"]
     m = json.loads(p.read_text())
     missing = [k for k in META_REQUIRED if m.get(k) in (None, "", {}, [])]
-    if isinstance(m.get("chrome"), dict) and not m["chrome"].get("browser"):
+    if isinstance(m.get("chrome"), dict) and not m["chrome"].get("browser") and not chrome_version_missing(m):
         missing.append("chrome.browser")
     if isinstance(m.get("lvdc_commit"), dict) and not m["lvdc_commit"].get("sha"):
         missing.append("lvdc_commit.sha")
@@ -1019,7 +1029,7 @@ def main() -> int:
                               recovered_frozen=bool(lab.get("recovered_frozen")))
     slow_start = E.slow_start_shaped(ents)
     sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
-    for fns in (fullscreen_not_screen(meta), fullscreen_player_lt_screen(meta)):
+    for fns in (fullscreen_not_screen(meta), fullscreen_player_lt_screen(meta), chrome_version_missing(meta)):
         if fns:
             sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
     import decode_path as DP
