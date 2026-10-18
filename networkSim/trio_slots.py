@@ -41,6 +41,9 @@ STAGING = CURRENT_DATA / "trio_staging"
 # coverage snapshot, checkpoint list and verify loop never see them: am. 13's "never pooled silently", mechanically)
 TRIO_DIR = "_trio"                                  # under the data dir
 SLOTS_LOG = "_summaries/trio_slots.jsonl"           # under the trio root
+# a trio session's own extra files (its default-class DNS capture, tcpdump's counters) sit in <session>/trio/, so the
+# session dir holds one pcap, in single mode's form (pilot-0, levi 3: LVQoE's pcap finder ignores a dir with two)
+SESSION_TRIO_DIR = "trio"
 DEFAULT_CAPTURE = "_default"                        # under the trio root: the unmarked remainder, one per trio run
 # every trio write goes under the trio root, its session counter too (supervisor 2026-10-19): trio names start above
 # TRIO_NAME_FLOOR (yt_100001, ...), so they never meet single mode's, whose counter the trio never reads or writes
@@ -666,8 +669,8 @@ def run_dns_pcaps(slots_log: Path, troot: Path, run: str | None, session: str) -
     for s, plat in started.items():
         if s in ended and plat:
             for d in (troot / plat / s, troot / "_failed" / plat / s):
-                if (d / "dns_default.pcap").exists():
-                    out.append(d / "dns_default.pcap")
+                if (d / SESSION_TRIO_DIR / "dns_default.pcap").exists():
+                    out.append(d / SESSION_TRIO_DIR / "dns_default.pcap")
                     break
     return sorted(out)
 

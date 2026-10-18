@@ -306,10 +306,11 @@ def test_dns_answers():
         assert ans == {"151.101.1.1": ["video-weaver.x.ttvnw.net"], "142.250.1.1": ["rr1---sn-x.googlevideo.com"]}, ans
         assert rec["default_kept"] == 2 and rec["default_addresses"] == 3
         troot = d / "_trio"
-        (troot / "youtube" / "yt_4").mkdir(parents=True)
-        (troot / "youtube" / "yt_4" / "dns_default.pcap").write_bytes(b"")
-        (troot / "_failed" / "twitch" / "tw_5").mkdir(parents=True)
-        (troot / "_failed" / "twitch" / "tw_5" / "dns_default.pcap").write_bytes(b"")
+        (troot / "youtube" / "yt_4" / "trio").mkdir(parents=True)
+        (troot / "youtube" / "yt_4" / "trio" / "dns_default.pcap").write_bytes(b"")
+        (troot / "youtube" / "yt_4" / "dns_default.pcap").write_bytes(b"")     # an old layout's file: not read
+        (troot / "_failed" / "twitch" / "tw_5" / "trio").mkdir(parents=True)
+        (troot / "_failed" / "twitch" / "tw_5" / "trio" / "dns_default.pcap").write_bytes(b"")
         log = troot / "_summaries" / "trio_slots.jsonl"
         for r in ({"event": "start", "session": "yt_4", "platform": "youtube", "run": "R", "t": 1},
                   {"event": "start", "session": "tw_5", "platform": "twitch", "run": "R", "t": 2},
@@ -318,7 +319,7 @@ def test_dns_answers():
                   {"event": "end", "session": "yt_4", "t": 5}, {"event": "end", "session": "tw_5", "t": 6}):
             T.slots_log_append(log, r)
         got = T.run_dns_pcaps(log, troot, "R", "yt_7")
-        assert got == sorted([troot / "_failed/twitch/tw_5/dns_default.pcap", troot / "youtube/yt_4/dns_default.pcap"])
+        assert got == sorted([troot / "_failed/twitch/tw_5/trio/dns_default.pcap", troot / "youtube/yt_4/trio/dns_default.pcap"])
         # flow_overlap reads dns_answers.json: a contacted media address with no name is a DNS fail
         me = "10.0.0.2"
         s = F.summarise([_pkt(100.0, me, "142.250.1.1", "udp", 50001, 443, 1300, "aabbccddeeff0011",

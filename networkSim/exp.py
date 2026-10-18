@@ -872,8 +872,9 @@ if __name__ == "__main__":
                     _shutil.which("tshark") or "tshark")
                 if answers:        # as LVQoE writes it (save_dns_answers); none -> LVQoE scans the pcap, also none
                     (session_dir / "dns_answers.json").write_text(json.dumps(answers, indent=2, sort_keys=True))
+                (session_dir / trio_slots.SESSION_TRIO_DIR).mkdir(exist_ok=True)   # one pcap in the session dir
                 for _f in list(staging.glob("tcpdump_*.err")) + list(staging.glob("dns_default.*")):
-                    _shutil.move(str(_f), str(session_dir / _f.name))
+                    _shutil.move(str(_f), str(session_dir / trio_slots.SESSION_TRIO_DIR / _f.name))
                 TRIO["staging_left"] = sorted(x.name for x in staging.iterdir())
                 if not TRIO["staging_left"]:
                     staging.rmdir()
