@@ -14,8 +14,9 @@ OPS=${OPS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 : "${LVDC_LANG:=en_AU.UTF-8}"                            # LANG of the ssh-identical relaunch environment
 : "${LVDC_UID:=$(id -u)}"
 : "${LVQOE_PY:=$HOME/Desktop/LV/.venv/bin/python}"       # LVQoE's interpreter (verify_loop.sh)
-: "${LVQOE_VERIFY_DIR:=$HOME/Desktop/LV_verify}"         # an LVQoE checkout with verify_session.py
-: "${LVQOE_FRAMES_DIR:=$HOME/Desktop/LV/.worktrees/shagun-frames-7cf92ae}"   # an LVQoE worktree with extract_frames.py
+# the one LVQoE worktree the verify / frames loop runs (verify_session.py and extract_frames.py), at a pinned commit;
+# moving the loop to a new LVQoE commit = a new worktree + this default (supervisor 2026-10-18: master 010c47c)
+: "${LVQOE_LOOP_DIR:=$HOME/Desktop/LV/.worktrees/shagun-loop-010c47c}"
 # verify / frames jobs run away from the collector (shagun 2026-10-18, compute-load covariate): nice 19, pinned to the
 # upper half of the CPUs (chaos: 12-23, off the collector's P-cores); plain nice where taskset or cores are lacking
 if [ -z "${LVDC_COMPUTE_PIN+x}" ]; then

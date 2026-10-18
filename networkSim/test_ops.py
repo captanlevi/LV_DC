@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """ops/ (t43, shagun's on-box layer): every script parses, sources env.sh, and names no box-specific path outside
 env.sh (paths are variables, chaos's values the defaults); nothing in ops/ edits a tracked file (meta.json's
-lvdc_commit.dirty must stay false); the autostart template is filled by install_autostart.sh.
+lvdc_commit.dirty must stay false); the autostart template is filled by install_autostart.sh; the verify /
+frames loop names one LVQoE worktree (LVQOE_LOOP_DIR).
 
     python3 test_ops.py        (exit 0 = pass)
 """
@@ -28,6 +29,12 @@ def main() -> int:
     for p in sorted((OPS / "diag").glob("*.py")):
         assert "captanlevi" not in p.read_text() and "/media/" not in p.read_text(), p.name
     assert "@OPS@" in (OPS / "autostart" / "lvqoe-batch-resume.desktop.in").read_text()
+    # the verify / frames loop runs from ONE LVQoE worktree (supervisor 2026-10-18): an autostart relaunch takes env.sh's
+    # default, so no second, stale checkout variable may remain
+    env, loop = (OPS / "env.sh").read_text(), (OPS / "verify_loop.sh").read_text()
+    assert len(re.findall(r'^: "\$\{LVQOE_LOOP_DIR:=', env, re.M)) == 1
+    assert set(re.findall(r"\$\{?(LVQOE_\w+_DIR)", loop)) == {"LVQOE_LOOP_DIR"}
+    assert not re.search(r"LVQOE_(VERIFY|FRAMES)_DIR", env + loop)
     print("test_ops: ok")
     return 0
 

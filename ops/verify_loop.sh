@@ -11,13 +11,13 @@ while true; do
     head -1 "$c" | grep -q "PASS" || continue
     if [ ! -f "$s/verify.json" ]; then
       t0=$(date +%s)
-      (cd "$LVQOE_VERIFY_DIR" && PYTHONDONTWRITEBYTECODE=1 $LVDC_COMPUTE_PIN "$LVQOE_PY" verify_session.py "$s" --ingest > "$s/verify.log" 2>&1)
-      rc=$?; echo "$(date -Is) verify ${s#$D/} rc=$rc ($(( $(date +%s)-t0 )) s; 0 PASS / 2 suspicious / 1 error)" >> "$E"
+      (cd "$LVQOE_LOOP_DIR" && PYTHONDONTWRITEBYTECODE=1 $LVDC_COMPUTE_PIN "$LVQOE_PY" verify_session.py "$s" --ingest > "$s/verify.log" 2>&1)
+      rc=$?; echo "$(date -Is) verify ${s#$D/} rc=$rc ($(( $(date +%s)-t0 )) s; 0 PASS / 2 suspicious / 1 error; lvqoe $(git -C "$LVQOE_LOOP_DIR" rev-parse --short HEAD))" >> "$E"
     fi
     if [ ! -f "$s/frames.jsonl" ]; then
       t0=$(date +%s)
-      (cd "$LVQOE_FRAMES_DIR" && PYTHONDONTWRITEBYTECODE=1 $LVDC_COMPUTE_PIN .venv/bin/python extract_frames.py "$s" > "$s/frames.log" 2>&1)
-      rc=$?; echo "$(date -Is) frames ${s#$D/} rc=$rc ($(( $(date +%s)-t0 )) s; lvqoe $(git -C "$LVQOE_FRAMES_DIR" rev-parse --short HEAD))" >> "$E"
+      (cd "$LVQOE_LOOP_DIR" && PYTHONDONTWRITEBYTECODE=1 $LVDC_COMPUTE_PIN .venv/bin/python extract_frames.py "$s" > "$s/frames.log" 2>&1)
+      rc=$?; echo "$(date -Is) frames ${s#$D/} rc=$rc ($(( $(date +%s)-t0 )) s; lvqoe $(git -C "$LVQOE_LOOP_DIR" rev-parse --short HEAD))" >> "$E"
     fi
   done
   sleep 60
