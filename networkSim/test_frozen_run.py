@@ -60,12 +60,30 @@ v.paused = true; frozen(2); v.readyState = 4; tick(); tick();
 const startWhilePaused = sent.filter(e => e.type === "start").length - startsBefore;
 v.paused = false; tick();
 const startAfterPlay = sent.filter(e => e.type === "start").length - startsBefore;
-play(5); frozen(3);
+play(12); frozen(3);                                 // a real advance (>= 10 advancing ticks) ends a run
+// chaos tw_27 (2026-10-18): a frozen player under the spinner; the resumer presses play (pause / start events clear
+// the stall label) and twitch re-attaches a new <video> at the same playhead (video_start): the run goes on through both
+play(12);
+const tw27From = out.length;
+for (let i = 0; i < 20; i++) { v.readyState = 2; tick(); }
+v.paused = true; tick(); v.paused = false; v.readyState = 4; tick(); tick();       // the resume press: label to playing
+for (let i = 0; i < 20; i++) { v.readyState = 2; tick(); }
+const u = mkVideo(); u.currentTime = v.currentTime; u.readyState = 2; videos = [u, v];
+ctx.__attach(u);
+for (let i = 0; i < 20; i++) { tick(); }                                           // the re-attached element, still frozen
+// tw_27's second element: 4-tick play bursts from 0 between re-attaches to the stuck one are not a real advance
+const b = mkVideo(); b.currentTime = 0;
+for (let k = 0; k < 2; k++) {
+  videos = [b, u]; ctx.__attach(b); for (let i = 0; i < 4; i++) { b.currentTime += 1; tick(); }
+  videos = [u, b]; ctx.__attach(u); for (let i = 0; i < 5; i++) { tick(); }
+}
+videos = [v]; ctx.__attach(v); play(12);                                            // a real advance ends the run
+const tw27Max = Math.max(...out.slice(tw27From));
 // the platform swaps in a replacement element that is still buffering, mid-stall: video_start clears the stall label,
 // so the new element's own "stall" must be emitted (stall state is per element, re-evaluated on attach)
 const w = mkVideo(); w.readyState = 2; videos = [w, v]; v.isConnected = false;
 ctx.__attach(w); tick(); tick();
-fs.writeFileSync(process.argv[3], JSON.stringify({ frozen_s: out, events: sent, startWhilePaused, startAfterPlay }));
+fs.writeFileSync(process.argv[3], JSON.stringify({ frozen_s: out, events: sent, startWhilePaused, startAfterPlay, tw27Max }));
 """
 
 
@@ -85,10 +103,13 @@ def main() -> int:
     js_max = max(d["frozen_s"])
     types = [e["type"] for e in d["events"]]
     after_swap = types[types.index("video_start", 1):] if types.count("video_start") > 1 else []
-    ok = abs(py - js_max) < 1e-6 and py > 0 and "stall" in after_swap and d["startWhilePaused"] == 0 and d["startAfterPlay"] >= 1
+    runs = check_session.frozen_runs(rows)
+    tw27_py = max(b - a for a, b in runs[-3:])
+    ok = (abs(py - js_max) < 1e-6 and py > 0 and "stall" in after_swap and d["startWhilePaused"] == 0
+          and d["startAfterPlay"] >= 1 and d["tw27Max"] >= 80 and abs(tw27_py - d["tw27Max"]) < 1e-6)
     print(json.dumps({"python_frozen_s": py, "content_js_max_frozen_s": js_max, "events": len(rows),
                       "stall_after_swap": "stall" in after_swap, "start_while_paused": d["startWhilePaused"],
-                      "start_after_play": d["startAfterPlay"], "pass": ok}))
+                      "start_after_play": d["startAfterPlay"], "tw27_like_run_js_py": [d["tw27Max"], tw27_py], "pass": ok}))
     return 0 if ok else 1
 
 

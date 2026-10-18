@@ -116,18 +116,31 @@ def compute_entries(rows: list[dict], meta: dict, net_labels: list[dict]) -> lis
         te = first_tick_at(rows, r.get("room"), after=tn) if r.get("room") else None
         out.append({"kind": "room_reentry", "t": te or tn, "url": r.get("room"), "rotation_ok": r.get("ok"),
                     "reason": r.get("reason", "rotation"),
-                    **({"dead_window": r.get("dead_window"), "outcome": r.get("outcome")} if r.get("reason") == "player_dead" else {})})
+                    **({"dead_window": r.get("dead_window"), "outcome": r.get("outcome")} if r.get("reason") == "player_dead" else {}),
+                    **({"outcome": r.get("outcome")} if r.get("reason") == "player_frozen" else {})})
+    # Addendum Q am. 6: the stuck-player re-entry of the same channel (yt / twitch; tt's is a room re-entry above)
+    if meta.get("platform") != "tiktok":
+        for r in meta.get("frozen_reentries") or []:
+            tn = r.get("t_enter") or r.get("t_nav")
+            if tn:
+                out.append({"kind": "reentry", "t": first_tick_at(rows, None, after=tn) or tn, "url": r.get("url"),
+                            "reason": "player_frozen", "outcome": r.get("outcome")})
     # levi 2026-10-17: a tt start failure (live rooms found, none played) is a failed, unshaped stream entry, even with
     # no ticks or a room that played briefly before the picker gave up on it
     start_failed = meta.get("platform") == "tiktok" and NOT_LIVE_MARK in (meta.get("abort_reason") or "")
     if start_failed and not any(e["kind"] == "stream" for e in out):
         out.insert(0, {"kind": "stream", "t": meta.get("started_at") or 0.0, "url": meta.get("channel_url")})
+    # Addendum Q am. 5 / 6: a censored stall that began within 60 s of an entry fails that entry
+    cen = meta.get("censored") or {}
+    stall0 = (cen.get("frozen_window") or [None])[0]
     for e in out:
         s = sustained_at(rows, e["t"])
         e.update(shaper_at_entry=shaper_at(net_labels, e["t"]), first_shaped_after=first_shaped_after(net_labels, e["t"]),
                  sustained_60s=s is not None, sustained_at=s)
         if start_failed and e["kind"] == "stream":
             e.update(sustained_60s=False, start_failed=True)
+        if stall0 is not None and 0 <= stall0 - e["t"] <= SUSTAIN_WINDOW_S:
+            e.update(sustained_60s=False, censored_stall=True)
     return out
 
 

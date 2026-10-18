@@ -15,11 +15,25 @@ let inStall = false;
 // v2 (LVQoE t35): element / source identity, to report a swap on the first tick after it
 let lastSrc = null;
 let lastElement = null;
-// addendum N (LVQoE, 2026-10-17): the stall-only frozen-playhead run, computed on the emitted stream exactly as
-// check_session.frozen_playhead_run() does (stall label on from a "stall" event to a "start" / "video_start" event;
-// non-ad tick; playhead within FROZEN_TOL_S of the run's first tick). The top frame publishes its length in seconds as
-// <html data-lvqoe-frozen-s>; browser.py's watchdog aborts the session past the platform's T (check_session table).
+// addendum N (LVQoE, 2026-10-17) as fixed 2026-10-18 (supervisor, chaos tw_27: the twitch player froze for 18 min, but
+// the self-pause resumer's presses and the element re-attaches cleared the stall label and split the run below T): the
+// frozen-playhead run, computed on the emitted stream exactly as check_session.frozen_runs() does. After the playhead
+// has first moved by more than FROZEN_TOL_S, a run opens at the first non-ad tick whose playhead did not advance
+// (paused or playing, whatever the label says) and ends only at a real advance: FROZEN_ADVANCE_TICKS consecutive ticks
+// each advancing by FROZEN_ADV_MIN_S..FROZEN_ADV_MAX_S (tw_27: a second element played 2-5 s bursts from 0 between
+// re-attaches to the stuck one), the run ending where that advance began; an ad tick also ends it; a tick without a
+// playhead keeps an open run going. While an advance streak is under way the published length holds at its start.
+// The top frame publishes the length in seconds as <html data-lvqoe-frozen-s>; browser.py's watchdog (the platform's
+// T) and the stuck-player rule (Addendum Q am. 6, T2 above the lowest rung) read it.
 const FROZEN_TOL_S = 1.0;
+const FROZEN_ADVANCE_TICKS = 10;
+const FROZEN_ADV_MIN_S = 0.2;
+const FROZEN_ADV_MAX_S = 3.0;
+let frozenFirstCt = null;
+let frozenPlayed = false;
+let frozenPrevCt = null;
+let frozenAdv = 0;
+let frozenAdvTs = null;
 let labelStall = false;
 // raw playhead state per tick (supervisor 2026-10-17, chaos tw_10: twitch pauses its player on a stall; the safety net's
 // "start" at readyState >= 3 came while the element stayed paused, and 250 s of a frozen playhead read as playing).
@@ -216,14 +230,28 @@ function emit(type) {
       stillSinceTs = evt.ts;
     }
     evt.playhead_still_s = stillSinceTs === null ? null : (evt.ts - stillSinceTs) / 1000;
-    if (!labelStall || evt.is_ad || ct === null || ct === undefined || !isFinite(ct)) {
-      frozenT0 = null;
-    } else if (frozenT0 === null || Math.abs(ct - frozenCt0) > FROZEN_TOL_S) {
-      frozenT0 = evt.ts;
-      frozenCt0 = ct;
+    if (evt.is_ad) {
+      frozenT0 = null; frozenAdv = 0; frozenAdvTs = null; frozenPrevCt = null;
+    } else if (ct !== null && ct !== undefined && isFinite(ct)) {
+      if (frozenFirstCt === null) frozenFirstCt = ct;
+      if (!frozenPlayed && Math.abs(ct - frozenFirstCt) > FROZEN_TOL_S) frozenPlayed = true;
+      const step = frozenPrevCt === null ? null : ct - frozenPrevCt;
+      const adv = step !== null && step > FROZEN_ADV_MIN_S && step <= FROZEN_ADV_MAX_S;
+      frozenPrevCt = ct;
+      if (!frozenPlayed) {
+        frozenT0 = null; frozenAdv = 0; frozenAdvTs = null;
+      } else if (adv) {
+        if (frozenAdv === 0) frozenAdvTs = evt.ts;
+        frozenAdv += 1;
+        if (frozenAdv >= FROZEN_ADVANCE_TICKS) frozenT0 = null;
+      } else {
+        frozenAdv = 0; frozenAdvTs = null;
+        if (frozenT0 === null) frozenT0 = evt.ts;
+      }
     }
     if (window === window.top) {
-      document.documentElement.dataset.lvqoeFrozenS = String(frozenT0 === null ? 0 : (evt.ts - frozenT0) / 1000);
+      document.documentElement.dataset.lvqoeFrozenS = String(frozenT0 === null ? 0 :
+        ((frozenAdv > 0 ? frozenAdvTs : evt.ts) - frozenT0) / 1000);
       // the stall label, for browser.py's tt dead-room watcher (a stall is never a dead room; player_frozen owns it)
       // and its self-pause resumer (after_stall)
       document.documentElement.dataset.lvqoeStall = labelStall ? "1" : "0";

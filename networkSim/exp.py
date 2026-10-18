@@ -716,6 +716,8 @@ if __name__ == "__main__":
                               login_state=browser.login_state, room_rotation=browser.room_rotation,
                               tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
+                              frozen_reentries=browser.frozen_reentries, censored=browser.censored,
+                              lowest_rung=browser.lowest_rung,
                               tw_pick=browser.tw_pick, room_play_clicks=browser.room_play_clicks,
                               room_discontinuities=browser.room_discontinuities)
             if platform == "youtube" and not args.channel_handle and browser.list_url:

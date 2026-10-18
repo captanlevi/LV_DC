@@ -11,21 +11,23 @@ the latency to broadcaster from player_stats.jsonl's Video Stats records.
 Accepted = check.json PASS and session_class normal (none recorded: PASS), outside _failed (Addendum Q: no outcome-based
 exclusion; the class mix never decides inclusion).
 
-Snapshot per platform (Addendum Q): per class of the platform alphabet, the accepted sessions with >= FLOOR_MINUTES of
-it (tt tier classes count HEVC-ladder sessions only, meta tt_stream.codec; amendment 2); the pooled stall share; tt:
+Snapshot per platform (Addendum Q): per tier class of the platform alphabet, the accepted sessions with >= FLOOR_MINUTES
+of it (tt tier classes count HEVC-ladder sessions only, meta tt_stream.codec; amendment 2); STALL (amendment 5): the
+sessions with >= STALL_FLOOR_ONSETS stall onsets (an event = a run of consecutive STALL ticks), the pooled onset count
+and the run-duration distribution; stall minutes and the pooled share are covariates (the share band is reported, no
+longer a target); tt:
 room entries per entry state over every checked session, accepted or _failed, except not_live / login_wall / interrupted
 (amendment 3: startup_failure / player_dead sessions are the startup reading's events); a stream entry counts at the
 first shaped state after it, a re-entry at the state in force; per matrix: accepted sessions, mean minutes per class,
-pooled stall share.
+mean stall onsets, pooled stall share.
 
 The matrix rule (RULE_VERSION, deterministic):
-  1. target = the largest deficit to its floor: a class, FLOOR_SESSIONS - its sessions; the stall band, the shortfall as
-     a share of the band edge times FLOOR_SESSIONS; a tt entry state, TT_ENTRY_FLOOR - its entries. Ties: class order,
-     then the stall band, then states.
-  2. matrix = of the allowed matrices, one with fewer than EXPLORE_MIN accepted sessions first (class / stall targets:
-     every matrix gets a yield before the yields decide); else the highest yield for the target: a class, its mean
-     minutes per session; stall too low / too high, the matrix's pooled stall share, highest / lowest; an entry state,
-     the matrix's stationary probability of it. Ties by matrix id (the first in sort order).
+  1. target = the largest deficit to its floor: a class (STALL included), FLOOR_SESSIONS - its sessions; a tt entry
+     state, TT_ENTRY_FLOOR - its entries. Ties: class order, then states.
+  2. matrix = of the allowed matrices, one with fewer than EXPLORE_MIN accepted sessions first (class targets: every
+     matrix gets a yield before the yields decide); else the highest yield for the target: a tier class, its mean
+     minutes per session; STALL, its mean onsets per session; an entry state, the matrix's stationary probability of
+     it. Ties by matrix id (the first in sort order).
   3. no deficit: the platform's default matrix.
 orchestrate writes the record (snapshot, deficits, yields, choice, rule) to data/_summaries/coverage_last.json and
 LVDC_COVERAGE_JSON; exp.py puts it in meta.json coverage, marked applied iff its platform and matrix are the session's.
@@ -46,8 +48,9 @@ import numpy as np
 from utils.shaping import PLATFORM_MATRICES, stationary_distribution
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-RULE_VERSION = "coverage-v1 (2026-10-18)"
+RULE_VERSION = "coverage-v2 (2026-10-18; Addendum Q am. 5: stall events)"
 FLOOR_SESSIONS, FLOOR_MINUTES = 5, 2.0          # Addendum Q: N = 5 sessions with >= M = 2 minutes of every class
+STALL_FLOOR_ONSETS = 3                          # am. 5: the STALL floor counts sessions with >= K = 3 stall onsets
 TT_ENTRY_FLOOR = 5                              # Addendum Q: every tt shaper state at >= 5 room entries
 STALL_BAND = {"youtube": (0.046, 0.183), "twitch": (0.029, 0.115), "tiktok": (0.037, 0.147)}
 CLASSES = {"youtube": ["STALL", "Q_144p", "Q_240p", "Q_360p", "Q_480p", "Q_720p", "Q_1080p"],
@@ -95,9 +98,9 @@ def session_classes(sd: Path) -> dict:
     """{minutes per class, stall_share, buffer_s quantiles over the playing ticks} from labels.csv."""
     p = Path(sd) / "labels.csv"
     if not p.exists():
-        return {"minutes": {}, "stall_share": None, "buffer_s": None}
+        return {"minutes": {}, "stall_share": None, "buffer_s": None, "stall_onsets": 0, "stall_runs_s": []}
     ticks: dict = collections.Counter()
-    buf, stall = [], False
+    buf, stall, runs, cur = [], False, [], 0
     with open(p, newline="") as fh:
         for r in csv.DictReader(fh):
             ty = r.get("type")
@@ -109,16 +112,23 @@ def session_classes(sd: Path) -> dict:
                 continue
             if stall:
                 ticks["STALL"] += 1
+                cur += 1
                 continue
+            if cur:
+                runs.append(cur)                   # am. 5: a stall event = a run of consecutive STALL slots
+                cur = 0
             c = quality_class(_f(r.get("video_w")) or 0, _f(r.get("video_h")) or 0)
             if c:
                 ticks[c] += 1
                 b = _f(r.get("buffered_ahead_s"))
                 if b is not None:
                     buf.append(b)
+    if cur:
+        runs.append(cur)
     n = sum(ticks.values())
     return {"minutes": {k: round(v / 60, 3) for k, v in sorted(ticks.items())},
-            "stall_share": round(ticks["STALL"] / n, 4) if n else None, "buffer_s": _q(buf)}
+            "stall_share": round(ticks["STALL"] / n, 4) if n else None, "buffer_s": _q(buf),
+            "stall_onsets": len(runs), "stall_runs_s": runs}
 
 
 def twitch_latency(sd: Path) -> dict | None:
@@ -178,7 +188,9 @@ def snapshot(data_dir: Path, platform: str) -> dict:
     cnt, mins = dict.fromkeys(classes, 0), dict.fromkeys(classes, 0.0)
     st_min = lab_min = 0.0
     entries, codecs = collections.Counter(), collections.Counter()
-    pm = collections.defaultdict(lambda: {"n": 0, "n_tier": 0, "min": collections.Counter(), "stall": 0.0, "lab": 0.0})
+    pm = collections.defaultdict(lambda: {"n": 0, "n_tier": 0, "min": collections.Counter(), "stall": 0.0, "lab": 0.0,
+                                          "onsets": 0})
+    onsets, run_s = 0, []
     sessions = accepted_sessions(data_dir, platform)
     for sd in sessions:
         meta = _load(sd / "meta.json")
@@ -195,19 +207,28 @@ def snapshot(data_dir: Path, platform: str) -> dict:
         m["n_tier"] += tier_ok
         m["stall"] += st
         m["lab"] += tot
+        m["onsets"] += sc["stall_onsets"]
+        onsets += sc["stall_onsets"]
+        run_s += sc["stall_runs_s"]
         for c in classes:
             if c != "STALL" and not tier_ok:
                 continue
             v = sc["minutes"].get(c, 0.0)
             mins[c] += v
             m["min"][c] += v
-            cnt[c] += v >= FLOOR_MINUTES
+            cnt[c] += (sc["stall_onsets"] >= STALL_FLOOR_ONSETS) if c == "STALL" else (v >= FLOOR_MINUTES)
     out = {"platform": platform, "rule": RULE_VERSION, "n_sessions": len(sessions),
-           "classes": {c: {"sessions_ge_min": cnt[c], "minutes": round(mins[c], 2)} for c in classes},
+           "classes": {c: {"sessions_ge_min": cnt[c], "minutes": round(mins[c], 2),
+                           "criterion": f">= {STALL_FLOOR_ONSETS} onsets" if c == "STALL" else f">= {FLOOR_MINUTES} min"}
+                       for c in classes},
+           "stall_onsets_pooled": onsets,
+           "stall_run_s": {"n": len(run_s), **(_q(run_s) or {})},
+           # am. 5: stall minutes and the pooled share are covariates now; the band is reported, not a target
            "stall_share_pooled": round(st_min / lab_min, 4) if lab_min else None, "stall_band": list(STALL_BAND[platform]),
            "per_matrix": {k: {"sessions": v["n"], "tier_sessions": v["n_tier"],
                               "class_minutes_mean": {c: round(v["min"][c] / (v["n"] if c == "STALL" else v["n_tier"]), 3)
                                                      if (v["n"] if c == "STALL" else v["n_tier"]) else None for c in classes},
+                              "stall_onsets_mean": round(v["onsets"] / v["n"], 3) if v["n"] else None,
                               "stall_share": round(v["stall"] / v["lab"], 4) if v["lab"] else None}
                           for k, v in sorted(pm.items())}}
     if platform == "tiktok":
@@ -225,12 +246,7 @@ def deficits(snap: dict, states: list[str] = ()) -> list[dict]:
     for i, (c, v) in enumerate(snap["classes"].items()):
         if v["sessions_ge_min"] < FLOOR_SESSIONS:
             out.append({"kind": "class", "key": c, "deficit": float(FLOOR_SESSIONS - v["sessions_ge_min"]), "order": i})
-    lo, hi = snap["stall_band"]
-    s = snap.get("stall_share_pooled")
-    if s is not None and s < lo:
-        out.append({"kind": "stall_low", "key": "stall_share", "deficit": round(FLOOR_SESSIONS * (lo - s) / lo, 4), "order": 50})
-    elif s is not None and s > hi:
-        out.append({"kind": "stall_high", "key": "stall_share", "deficit": round(FLOOR_SESSIONS * (s - hi) / hi, 4), "order": 50})
+    # am. 5: the stall-share band is retired as a target (reported in the snapshot only)
     if "tt_entries_by_state" in snap:
         for st in sorted(states, key=int):
             n = snap["tt_entries_by_state"].get(st, 0)
@@ -258,13 +274,12 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None) ->
         if young:
             return {**rec, "matrix": young[0], "target": tgt, "yields": {},
                     "why": f"explore: fewer than {EXPLORE_MIN} accepted sessions on {young}"}
-        if tgt["kind"] == "class":
+        if tgt["key"] == "STALL":
+            yields = {m: pm[m].get("stall_onsets_mean") or 0.0 for m in ids}
+            why = "mean stall onsets per session"
+        else:
             yields = {m: pm[m]["class_minutes_mean"][tgt["key"]] or 0.0 for m in ids}
             why = "mean minutes of the class per session"
-        else:
-            sign = 1 if tgt["kind"] == "stall_low" else -1
-            yields = {m: sign * (pm[m]["stall_share"] or 0.0) for m in ids}
-            why = f"pooled stall share ({'highest' if sign > 0 else 'lowest'})"
     top = max(yields.values())
     return {**rec, "matrix": min(m for m in ids if yields[m] == top), "target": tgt, "yields": yields, "why": why}
 
@@ -288,7 +303,7 @@ def coverage_flags(snap: dict) -> list[str]:
     if n < FLAG_AFTER_SESSIONS:
         return []
     hevc = (snap.get("tt_codec_sessions") or {}).get("hevc", 0)
-    return [f"FLAG {p}: {c} has zero support after {n} accepted sessions (none with >= {FLOOR_MINUTES} min; "
+    return [f"FLAG {p}: {c} has zero support after {n} accepted sessions (none with {v['criterion']}; "
             f"{v['minutes']} min in all)" + (f"; tt tiers count HEVC sessions only: {hevc} of {n}" if p == "tiktok" and c != "STALL" else "")
             for c, v in snap["classes"].items() if v["sessions_ge_min"] == 0]
 
@@ -345,14 +360,15 @@ def markdown(rep: dict) -> list[str]:
     md += [f"- {x}" for x in flags] + ([""] if flags else [])
     for p, v in rep["platforms"].items():
         s = v["snapshot"]
-        md += [f"**{p}**: {s['n_sessions']} accepted; stall share {s['stall_share_pooled']} (band {s['stall_band']}); "
+        md += [f"**{p}**: {s['n_sessions']} accepted; stall onsets {s['stall_onsets_pooled']}, run s {s['stall_run_s']}; "
+               f"stall share {s['stall_share_pooled']} (covariate; old band {s['stall_band']}); "
                f"buffer median over sessions {v['buffer_median_s_over_sessions']}"
                + (f"; latency to broadcaster {v['twitch_latency_median_s_over_sessions']}" if p == "twitch" else "")
                + (f"; codec sessions {s['tt_codec_sessions']} (tiers: hevc only); entries by state "
                   f"{s['tt_entries_by_state']} (over {s['tt_entry_sessions']} sessions, any class but not_live / login_wall / "
                   f"interrupted)" if p == "tiktok" else ""), "",
-               "| class | sessions >= floor min | minutes |", "|---|---|---|"]
-        md += [f"| {c} | {x['sessions_ge_min']} | {x['minutes']} |" for c, x in s["classes"].items()]
+               "| class | sessions meeting the floor | criterion | minutes |", "|---|---|---|---|"]
+        md += [f"| {c} | {x['sessions_ge_min']} | {x['criterion']} | {x['minutes']} |" for c, x in s["classes"].items()]
         md += ["", "deficits: " + (", ".join(f"{d['key']} {d['deficit']}" for d in v["deficits"]) or "none"), ""]
     return md
 

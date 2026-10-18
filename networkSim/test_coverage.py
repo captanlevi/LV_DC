@@ -51,6 +51,9 @@ def session(root, platform, name, spans, verdict="PASS", s_class="normal", matri
     return sd
 
 
+STALL3 = [("STALL", 50), ("Q_360p", 5), ("STALL", 50), ("Q_360p", 5), ("STALL", 50)]   # 3 onsets (am. 5 floor)
+
+
 def ent(kind, state):
     return ({"kind": kind, "shaper_at_entry": {"state": "unshaped"}, "first_shaped_after": {"state": state}}
             if kind == "stream" else {"kind": kind, "shaper_at_entry": {"state": state}})
@@ -68,6 +71,10 @@ def main():
         sc = C.session_classes(sd)
         assert sc["minutes"] == {"Q_480p": 2.5, "Q_720p": 3.0, "STALL": 0.5}, sc        # ad ticks left out
         assert sc["stall_share"] == round(30 / 360, 4) and sc["buffer_s"]["median"] == 10, sc
+        assert sc["stall_onsets"] == 1 and sc["stall_runs_s"] == [30], sc              # am. 5: a run = one event
+        sd3 = session(d, "youtube", "yt_9", [("Q_480p", 20), ("STALL", 4), ("Q_480p", 20), ("STALL", 2), ("Q_360p", 9),
+                                             ("STALL", 7)], verdict="FAIL")
+        assert (C.session_classes(sd3)["stall_onsets"], C.session_classes(sd3)["stall_runs_s"]) == (3, [4, 2, 7])
         session(d, "youtube", "yt_2", [("Q_1080p", 300)], verdict="FAIL")
         session(d, "youtube", "yt_3", [("Q_1080p", 300)], s_class="player_frozen")
         (d / "_failed" / "youtube").mkdir(parents=True)
@@ -79,7 +86,7 @@ def main():
     # the rule: the largest deficit first; explore matrices with < EXPLORE_MIN sessions; then the highest yield; ties by id
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
-        allc = [(c, 150) for c in C.CLASSES["youtube"]]
+        allc = STALL3 + [(c, 150) for c in C.CLASSES["youtube"] if c != "STALL"]
         for i in range(5):
             session(d, "youtube", f"a{i}", [c for c in allc if c[0] != "Q_1080p"] + [("Q_1080p", 30)], matrix="A")
         snap = C.snapshot(d, "youtube")
@@ -95,30 +102,33 @@ def main():
         assert C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"], ["A", "B"])["matrix"] == "B"
         r2 = C.pick_matrix(C.snapshot(d, "youtube"), PLATFORM_MATRICES["youtube"])
         assert json.dumps(r, sort_keys=True) == json.dumps(r2, sort_keys=True)      # deterministic
-        tie = dict(snap, per_matrix={m: {"sessions": 3, "tier_sessions": 3, "stall_share": 0.1,
+        tie = dict(snap, per_matrix={m: {"sessions": 3, "tier_sessions": 3, "stall_share": 0.1, "stall_onsets_mean": 2.0,
                                           "class_minutes_mean": dict.fromkeys(C.CLASSES["youtube"], 1.0)} for m in ("A", "B", "current")})
         assert C.pick_matrix(tie, PLATFORM_MATRICES["youtube"])["matrix"] == "A"     # equal yields: first id
 
-    # stall band: over the band -> the lowest-stall matrix; all floors met -> default
+    # am. 5: STALL support = sessions with >= 3 onsets; minutes and the share are covariates (a long single stall and a
+    # share far over the old band are no target); the STALL yield = mean onsets per session; all floors met -> default
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         allc = [(c, 150) for c in C.CLASSES["twitch"] if c != "STALL"]
         for i in range(3):
-            session(d, "twitch", f"m{i}", allc + [("STALL", 400)], matrix="TW-M")
-            session(d, "twitch", f"c{i}", allc + [("STALL", 130)], matrix="current")
+            session(d, "twitch", f"m{i}", allc + [("STALL", 400)], matrix="TW-M")                       # 1 onset each
+            session(d, "twitch", f"c{i}", allc + [("STALL", 20), ("Q_480p", 5), ("STALL", 20)], matrix="current")
         snap = C.snapshot(d, "twitch")
-        assert snap["stall_share_pooled"] > C.STALL_BAND["twitch"][1]
+        assert snap["stall_share_pooled"] > C.STALL_BAND["twitch"][1] and snap["classes"]["STALL"]["sessions_ge_min"] == 0
+        assert snap["stall_onsets_pooled"] == 9 and snap["stall_run_s"]["n"] == 9, snap
+        assert [d_["key"] for d_ in C.deficits(snap)] == ["STALL"]                   # the band is not a target
         r = C.pick_matrix(snap, PLATFORM_MATRICES["twitch"])
-        assert r["target"]["kind"] == "stall_high" and r["matrix"] == "TW-L" and r["why"].startswith("explore"), r
+        assert r["target"]["key"] == "STALL" and r["matrix"] == "TW-L" and r["why"].startswith("explore"), r
         r = C.pick_matrix(snap, PLATFORM_MATRICES["twitch"], ["TW-M", "current"])
-        assert r["target"]["kind"] == "stall_high" and r["matrix"] == "current", r
-        ok = dict(snap, stall_share_pooled=0.05, classes={c: {"sessions_ge_min": 5, "minutes": 50} for c in snap["classes"]})
+        assert r["matrix"] == "current" and r["yields"] == {"TW-M": 1.0, "current": 2.0}, r     # more onsets per session
+        ok = dict(snap, classes={c: {"sessions_ge_min": 5, "minutes": 50, "criterion": ""} for c in snap["classes"]})
         assert C.pick_matrix(ok, PLATFORM_MATRICES["twitch"])["matrix"] == "TW-M"
 
     # tt: tier floors count HEVC sessions only; stall and entry states count every accepted session
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
-        allc = [(c, 150) for c in C.CLASSES["tiktok"]]
+        allc = STALL3 + [(c, 150) for c in C.CLASSES["tiktok"] if c != "STALL"]
         states = sorted({s for m in PLATFORM_MATRICES["tiktok"].values() for s in m[0]}, key=int)
         for i in range(5):
             session(d, "tiktok", f"h{i}", allc, matrix="TT-M", codec="h264",

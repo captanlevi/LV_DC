@@ -28,6 +28,7 @@ import websocket  # websocket-client
 
 from yt_channels import YT_CHANNELS, url_of
 from check_session import FROZEN_PLAYHEAD_MAX_S, PLAYER_DEAD_MAX_S
+import stuck
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -1449,17 +1450,106 @@ class SelfPauseResumer:
                 "paused_s": round(now - self.paused_since, 3)}
 
 
-# addendum N: content.js's stall-only frozen-playhead run, in seconds (same measure as check_session.frozen_playhead_run)
+# addendum N (fixed 2026-10-18): content.js's frozen-playhead run, in seconds (= check_session.frozen_runs); the
+# backstop watchdog and the stuck-player rule (stuck.py) read the same value
 _FROZEN_JS = "Number(document.documentElement.dataset.lvqoeFrozenS || 0)"
 TICK_STARTUP_TIMEOUT_S = 15
 
 
+_USHER_RE = re.compile(r"usher\.ttvnw\.net/api/(?:v2/)?channel/hls/[^/?]+\.m3u8")
+
+
+class MasterListener:
+    """twitch: the channel's HLS master playlist, read by a second CDP client on the page (Network domain; the body via
+    Network.getResponseBody, no request of ours). Its lowest BANDWIDTH is the stuck-player rule's rung (stuck.py)."""
+
+    def __init__(self, ws_url: str):
+        self.ws_url, self.latest, self.error = ws_url, None, None
+        self._stop = threading.Event()
+        self._t: threading.Thread | None = None
+
+    def start(self) -> "MasterListener":
+        self._t = threading.Thread(target=self._run, daemon=True, name="master-listener")
+        self._t.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _run(self) -> None:
+        import base64
+        from urllib.parse import urlsplit
+        try:
+            ws = websocket.WebSocket()
+            ws.settimeout(1)
+            ws.connect(self.ws_url)
+        except Exception as exc:
+            self.error = repr(exc)
+            return
+        seq, wanted, pending = 0, {}, {}
+
+        def send(method: str, params: dict) -> int:
+            nonlocal seq
+            seq += 1
+            ws.send(json.dumps({"id": seq, "method": method, "params": params}))
+            return seq
+        try:
+            send("Network.enable", {"maxTotalBufferSize": 4_000_000, "maxResourceBufferSize": 500_000})
+            while not self._stop.is_set():
+                try:
+                    msg = json.loads(ws.recv())
+                except websocket.WebSocketTimeoutException:
+                    continue
+                m, prm = msg.get("method"), msg.get("params") or {}
+                if m == "Network.responseReceived" and _USHER_RE.search((prm.get("response") or {}).get("url", "")):
+                    wanted[prm.get("requestId")] = prm["response"]["url"]
+                elif m == "Network.loadingFinished" and prm.get("requestId") in wanted:
+                    pending[send("Network.getResponseBody", {"requestId": prm["requestId"]})] = wanted.pop(prm["requestId"])
+                elif msg.get("id") in pending:
+                    url, res = pending.pop(msg["id"]), msg.get("result") or {}
+                    body = res.get("body") or ""
+                    if res.get("base64Encoded"):
+                        body = base64.b64decode(body).decode("utf-8", "replace")
+                    kbit = stuck.rung_from_master(body)
+                    if kbit:
+                        self.latest = {"kbit": kbit, "t": time.time(), "path": urlsplit(url).path}
+        except Exception as exc:
+            self.error = repr(exc)
+        finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+
+def _confirm_advancing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
+    """After a re-entry (yt / twitch): play pressed while paused; the playhead advancing >= 2 s at readyState >= 3 within
+    `seconds`."""
+    first, st = None, {}
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            st = json.loads(page.eval(_PLAYER_STATE_JS) or "null") or {}
+            if st.get("paused"):
+                page.eval(_PLAY_JS)
+            ct = page.eval(_CURRENT_TIME_JS)
+        except Exception:
+            ct = None
+        if ct is not None and ct >= 0 and (st.get("readyState") or st.get("rs") or 0) >= 3:
+            first = ct if first is None else first
+            if ct - first >= 2.0:
+                return True, {"ct": ct}
+        time.sleep(1)
+    return False, {"not_playing": True, **{k: st.get(k) for k in ("paused", "readyState", "rs") if k in st}}
+
+
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
-                     on_wall=None, on_frozen=None) -> None:
+                     on_wall=None, on_frozen=None, on_stuck=None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
     Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
-    calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table). Presses
-    play on a self-paused player (SelfPauseResumer)."""
+    calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table); passes the
+    same frozen run to on_stuck(seconds) every second (the stuck-player rule, stuck.py). Presses play on a self-paused
+    player (SelfPauseResumer)."""
     skip_js = _SKIP_AD_JS.get(platform, "null")
     walled = False
     frozen_max_s = FROZEN_PLAYHEAD_MAX_S.get(platform)
@@ -1501,12 +1591,17 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                     on_wall()
             except Exception:
                 pass
-        if on_frozen is not None and frozen_max_s is not None and not froze:
+        if on_frozen is not None or on_stuck is not None:
             try:
                 frozen_s = float(page.eval(_FROZEN_JS) or 0)
             except Exception:
                 frozen_s = 0.0
-            if frozen_s > frozen_max_s:
+            if on_stuck is not None:
+                try:
+                    on_stuck(frozen_s)
+                except Exception as exc:
+                    print(f"[browser] stuck-player check failed: {exc!r}", flush=True)
+            if on_frozen is not None and frozen_max_s is not None and not froze and frozen_s > frozen_max_s:
                 froze = True
                 on_frozen(frozen_s)
 
@@ -1732,6 +1827,12 @@ class BrowserSession:
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
+        self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
+        self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
+        self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
+        self._master: MasterListener | None = None   # twitch: the master playlist listener
+        self._rung_probe_at = 0.0
+        self._recovery_lock = threading.Lock()    # one recovery of either kind per session (am. 6)
         self.tw_pick: dict | None = None          # twitch: directory candidates, recent channels excluded, the pick
         self.room_play_clicks = 0                 # tt: play clicks on a paused, flat player (room watcher)
         self.room_discontinuities: list = []      # tt: player source drops that came back (room watcher)
@@ -1822,6 +1923,7 @@ class BrowserSession:
         if self.platform == "tiktok" and not self.first_url:
             self.list_url = self._tt_choose_room()
         elif self.platform == "twitch":
+            self._master = MasterListener(self._ws_url).start()
             self.tw_pick = {}
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
                                               exclude=recent_tw_channels(self._session_dir), record=self.tw_pick)
@@ -1912,7 +2014,8 @@ class BrowserSession:
         log_path = (self._session_dir / "ad_actions.jsonl") if self._session_dir else None
         self._watcher = threading.Thread(
             target=_ad_watcher_loop,
-            args=(self._page, self.platform, self._stop, log_path, self._on_wall, self._on_frozen),
+            args=(self._page, self.platform, self._stop, log_path, self._on_wall, self._on_frozen,
+                  self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None),
             daemon=True,
             name="ad-watcher",
         )
@@ -2041,8 +2144,10 @@ class BrowserSession:
                         rate = None
                     pd = {**rec, "dead_s": round(time.time() - (w.dead_since or time.time()), 1),
                           "dead_window": dead_window(w.srx, rate)}
-                    if dead_action(len(self.player_dead_reentries)) == "reenter":
-                        r = self._reenter_room(pd)
+                    with self._recovery_lock:
+                        used = len(self.player_dead_reentries) + len(self.frozen_reentries)
+                        r = self._reenter_room(pd) if dead_action(used) == "reenter" else None
+                    if r is not None:
                         print(f"[browser] PLAYER_DEAD: re-entered the room ({r['outcome']})", flush=True)
                         if r["outcome"] == "continue":
                             w = TTRoomWatch()
@@ -2059,12 +2164,12 @@ class BrowserSession:
                 print(f"[browser] {why.upper()} ({dead}) — aborting the session", flush=True)
                 return
 
-    def _reenter_room(self, pd: dict) -> dict:
+    def _reenter_room(self, pd: dict, reason: str = "player_dead") -> dict:
         """The one re-entry after a player_dead: navigate to the same room, confirm playback (_tt_confirm_playing:
         play clicked, the playhead advancing within TT_REENTRY_CONFIRM_S, the ended banner read), and record it as an
         entry in room_rotation's rooms (entries.py) and in player_dead_reentries (meta.json)."""
         room = pd.get("room") or self.channel_url
-        rec = {"t_nav": time.time(), "room": room, "reason": "player_dead", "dead_s": pd.get("dead_s"),
+        rec = {"t_nav": time.time(), "room": room, "reason": reason, "dead_s": pd.get("dead_s"),
                "dead_window": pd.get("dead_window")}
         detail: dict = {}
         try:
@@ -2084,7 +2189,8 @@ class BrowserSession:
             rec.update(ok=False, error=repr(exc))
         rec["outcome"] = reentry_outcome(rec.get("ok", False), detail)
         self.room_rotation["rooms"].append(rec)
-        self.player_dead_reentries.append(rec)
+        if reason == "player_dead":
+            self.player_dead_reentries.append(rec)
         return rec
 
     def _room_rotation_loop(self) -> None:
@@ -2124,6 +2230,114 @@ class BrowserSession:
             self._room_grace_until = time.time() + 15      # settle in the new room, then watch it
             print(f"[browser] Room rotation: {rec}", flush=True)
 
+    # ------------------------------------------------------------------ the stuck-player rule (Addendum Q am. 6)
+    def _current_rung(self) -> dict:
+        """The lowest-rung record (stuck.rung_record): twitch from the master listener, yt / tt from page JS (retried
+        every 30 s while only the fallback is known)."""
+        kbit, src, detail = None, None, None
+        if self.platform == "twitch" and self._master is not None and self._master.latest:
+            kbit, src, detail = self._master.latest["kbit"], "hls_master_lowest_bandwidth", {"path": self._master.latest["path"]}
+        elif self.platform in ("youtube", "tiktok"):
+            if self.lowest_rung and self.lowest_rung.get("source") != "fallback":
+                return self.lowest_rung
+            if time.time() - self._rung_probe_at >= 30:
+                self._rung_probe_at = time.time()
+                try:
+                    js = stuck.YT_FORMATS_JS if self.platform == "youtube" else stuck.TT_ROOM_JS
+                    kbit, src, detail = stuck.rung_from_page(self.platform, self._page.eval(js))
+                except Exception as exc:
+                    detail = {"error": repr(exc)[:200]}
+            elif self.lowest_rung:
+                return self.lowest_rung
+        rec = stuck.rung_record(self.platform, kbit, src, detail)
+        if rec != self.lowest_rung:
+            self.lowest_rung = {**rec, "t": time.time()}
+        return self.lowest_rung
+
+    def _stuck_tick(self, frozen_s: float) -> None:
+        """Every second, from the ad watcher: T2 on the frozen run above the lowest rung -> one re-entry, else censor."""
+        if self.abort_reason is not None or frozen_s <= 0:
+            return
+        now = time.time()
+        rung = self._current_rung()
+        labels = getattr(self, "net_labels", None) or []
+        t2, t2_start = stuck.t2_clock(frozen_s, now, labels, rung.get("kbit"))
+        if t2 is None or t2 < stuck.T2_S:
+            return
+        try:
+            url = self._page.eval("location.href")
+        except Exception:
+            url = None
+        rec = {"t_trigger": now, "frozen_s": round(frozen_s, 1), "frozen_window": [now - frozen_s, now],
+               "t2_s": round(t2, 1), "t2_window": [t2_start, now], "rung": rung, "shaper": stuck.shaper_at(labels, now),
+               "url": url or self.channel_url}
+        with self._recovery_lock:
+            used = len(self.player_dead_reentries) + len(self.frozen_reentries)
+            if stuck.action(used) == "reenter":
+                r = self._reenter_frozen(rec)
+                print(f"[browser] STUCK PLAYER: frozen {frozen_s:.0f} s, {t2:.0f} s above the lowest rung "
+                      f"({rung.get('kbit')} kbit, {rung.get('source')}): re-entered ({r['outcome']})", flush=True)
+                if r["outcome"] == "continue":
+                    return
+                if r["outcome"] == "room_ended":          # tt: the re-entry found the ended banner (the host ended)
+                    self.room_ended = {"reason": "ended_page", "after_frozen_reentry": True, "at": time.time()}
+                    if self.abort_reason is None:
+                        self.abort_reason, self.abort_at = "room_ended", time.time()
+                    return
+                why = "reentry_not_playing"
+            else:
+                why = "second_freeze" if self.frozen_reentries else "freeze_after_recovery"
+        self.censored = {**rec, "reason": why, "t": time.time()}
+        if self.abort_reason is None:
+            self.abort_reason, self.abort_at = "player_frozen", time.time()
+        print(f"[browser] PLAYER FROZEN (stuck-player rule, {why}): censored at {self.censored['t']:.0f}, shaper "
+              f"{rec['shaper']} — aborting the session", flush=True)
+
+    def _reenter_frozen(self, rec: dict) -> dict:
+        """The one stuck-player re-entry: the same room (tt, through _reenter_room's confirmation) or channel (yt /
+        twitch: navigate, confirm the playhead advancing within stuck.REENTRY_CONFIRM_S, redo the entry setup)."""
+        if self.platform == "tiktok":
+            self._room_grace_until = time.time() + stuck.REENTRY_CONFIRM_S + 30
+            r = self._reenter_room({"room": rec.get("url"), "dead_s": None, "dead_window": None}, reason="player_frozen")
+            r.update({k: v for k, v in rec.items() if k not in ("url",)})
+            self.frozen_reentries.append(r)
+            self._room_grace_until = time.time() + 15
+            return r
+        r = {**rec, "t_nav": time.time(), "reason": "player_frozen"}
+        try:
+            self._page.navigate(rec["url"])
+            _wait_for_load(self._page, timeout=15)
+            r["t_enter"] = time.time()
+            ok, detail = _confirm_advancing(self._page, stuck.REENTRY_CONFIRM_S)
+            r.update(ok=bool(ok), t_playing=time.time() if ok else None, confirm=detail,
+                     confirm_s=stuck.REENTRY_CONFIRM_S, url_after=self._page.eval("location.href"))
+            if ok:
+                r["setup"] = self._after_reentry_setup()
+        except Exception as exc:
+            r.update(ok=False, error=repr(exc))
+        r["outcome"] = "continue" if r.get("ok") else "player_frozen"
+        self.frozen_reentries.append(r)
+        return r
+
+    def _after_reentry_setup(self) -> dict:
+        """What start() did after the entry that a page load undoes: the chat closed, yt captions off and theater mode,
+        twitch Video Stats; and the geometry after it."""
+        out: dict = {}
+        try:
+            if self.close_chat and self.platform in _CLOSE_CHAT_JS:
+                time.sleep(2)
+                out["chat"] = self._page.eval(_CLOSE_CHAT_JS[self.platform])
+            if self.platform == "youtube":
+                out["captions"] = self._page.eval(_CAPTIONS_OFF_JS)
+                if (self.geometry_target or "").startswith("theater"):
+                    out["theater"] = yt_theater(self._page)
+            if self.platform == "twitch":
+                out["video_stats"] = self._page.eval(_TWITCH_VIDEO_STATS_JS, await_promise=True)
+            out["geometry"] = json.loads(self._page.eval(_GEOMETRY_JS) or "null")
+        except Exception as exc:
+            out["error"] = repr(exc)[:200]
+        return out
+
     def _on_wall(self) -> None:
         self.abort_reason, self.abort_at = "login_wall", time.time()
         print("[browser] LOGIN WALL detected (content.js login_wall) — aborting the session", flush=True)
@@ -2149,6 +2363,8 @@ class BrowserSession:
                 pass
 
         self._stop.set()
+        if self._master is not None:
+            self._master.stop()
         if self._rotator:
             self._rotator.join(timeout=5)
         if self._watcher:

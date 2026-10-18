@@ -163,27 +163,85 @@ def ad_spans(meta: list[dict], signal_set=SPAN_TYPE_SIGNALS) -> tuple[list[list[
     return [[lo - AD_PAD_S, hi + AD_PAD_S] for lo, hi in spans], swap_only
 
 
-def frozen_playhead_run(rows: list[dict]) -> float:
-    """Longest stall-only frozen-playhead run, in seconds (addendum N): over res_meta ticks with the stall label on
-    (stall ... start / video_start), not an ad tick and with a parseable current_time, a run starts when there is none
-    open or the playhead has moved more than FROZEN_PLAYHEAD_TOL_S from the run's first tick; any other tick ends it."""
-    stall, t0, ct0, longest = False, None, None, 0.0
+FROZEN_ADVANCE_TICKS = 10                 # a real advance: this many consecutive advancing ticks (content.js twin)
+FROZEN_ADV_STEP_S = (0.2, 3.0)            # an advancing tick moves the playhead by more than / at most this
+
+
+def frozen_runs(rows: list[dict]) -> list[tuple[float, float]]:
+    """Frozen-playhead runs (first tick, end, s), addendum N as fixed 2026-10-18 (supervisor, chaos tw_27: resume
+    presses, element re-attaches and a second element's 2-5 s play bursts split an 18-min freeze below T). After the
+    playhead has first moved more than FROZEN_PLAYHEAD_TOL_S, a run opens at the first non-ad res_meta tick whose
+    playhead did not advance (paused or playing, whatever the label) and ends only at a real advance:
+    FROZEN_ADVANCE_TICKS consecutive ticks each advancing by FROZEN_ADV_STEP_S, the run ending where that advance began;
+    an ad tick ends it at its last tick; a tick without a parseable current_time keeps an open run going. content.js
+    publishes the same measure live (the length held at a streak's start while it is under way)."""
+    lo, hi = FROZEN_ADV_STEP_S
+    runs, t0, last, first_ct, played, prev, adv, adv_t = [], None, None, None, False, None, 0, None
+
+    def close():
+        runs.append((t0 / 1000.0, (adv_t if adv else last) / 1000.0))
     for r in rows:
-        ty = r.get("type")
-        if ty == "stall":
-            stall = True
-        elif ty in ("start", "video_start"):
-            stall = False
-        if ty != "res_meta":
+        if r.get("type") != "res_meta":
             continue
         t, ct = _f(r.get("ts")), _f(r.get("current_time"))
-        if not stall or _true(r.get("is_ad")) or t is None or ct is None:
-            t0 = None
+        if _true(r.get("is_ad")):
+            if t0 is not None:
+                close()
+            t0, adv, adv_t, prev = None, 0, None, None
             continue
-        if t0 is None or abs(ct - ct0) > FROZEN_PLAYHEAD_TOL_S:
-            t0, ct0 = t, ct
-        longest = max(longest, (t - t0) / 1000.0)
-    return longest
+        if t is None or ct is None:
+            if t is not None and t0 is not None and not adv:
+                last = t                              # time passes on an open run (content.js publishes ts - T0)
+            continue
+        first_ct = ct if first_ct is None else first_ct
+        played = played or abs(ct - first_ct) > FROZEN_PLAYHEAD_TOL_S
+        step = None if prev is None else ct - prev
+        prev = ct
+        if not played:
+            t0, adv, adv_t = None, 0, None
+            continue
+        if step is not None and lo < step <= hi:
+            if not adv:
+                adv_t = t
+            adv += 1
+            if t0 is not None and adv >= FROZEN_ADVANCE_TICKS:
+                close()
+                t0 = None
+            continue
+        adv, adv_t = 0, None
+        if t0 is None:
+            t0 = t
+        last = t
+    if t0 is not None:
+        close()
+    return runs
+
+
+def frozen_playhead_run(rows: list[dict]) -> float:
+    """Longest frozen-playhead run, in seconds (frozen_runs)."""
+    return max((b - a for a, b in frozen_runs(rows)), default=0.0)
+
+
+def recovered_frozen(rows: list[dict], frozen_reentries: list[dict] | None, n_dead_recovered: int = 0) -> dict:
+    """Addendum Q am. 6: the frozen run that holds an outcome-continue stuck-player re-entry's t_nav (from 2 s before its
+    first tick to 5 s after its last: the page load) is not the player_frozen measure; it is reported with its window
+    and the part after the shaper went back above the lowest rung (the T2 window, a sensitivity). One recovery of either
+    kind per session: with a player_dead recovery too, nothing is excluded."""
+    runs = frozen_runs(rows)
+    cont = [r for r in frozen_reentries or [] if r.get("outcome") == "continue" and r.get("t_nav")]
+    rec = [(run, r) for run in runs for r in cont if run[0] - 2.0 <= r["t_nav"] <= run[1] + 5.0]
+    ok = len(rec) == 1 and n_dead_recovered == 0
+    keep = [x for x in runs if not ok or x != rec[0][0]]
+    out = {"max_s": max((b - a for a, b in keep), default=0.0), "max_all_s": max((b - a for a, b in runs), default=0.0),
+           "recovered": None}
+    if ok:
+        (a, b), r = rec[0]
+        w = r.get("t2_window") or [None, None]
+        out["recovered"] = {"recovered_frozen_s": round(b - a, 1), "window": [a, b], "t_nav": r["t_nav"],
+                            "t_playing": r.get("t_playing"), "post_recovery_window": w,
+                            "post_recovery_s": round(w[1] - w[0], 1) if None not in w else None,
+                            "rung": r.get("rung"), "shaper": r.get("shaper")}
+    return out
 
 
 PAUSED_WHILE_PLAYING_MAX = 0.05     # levi 2026-10-17 (tw_10): reported; above it the session is suspicious
@@ -273,7 +331,8 @@ def shot_effects(rows: list[dict], sd: Path, near_s: float = 1.0) -> dict | None
             "client_size_off_mode_elsewhere": sum(1 for s_, n in zip(sizes, near) if not n and s_ != mode)}
 
 
-def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None) -> dict:
+def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
+                 frozen_reentries: list[dict] | None = None) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
         return {"n_res_meta": len(meta)}
@@ -310,6 +369,9 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
     near = sum(1 for t in tier_changes if any(abs(t - s) <= SWAP_BOUNDARY_S for s in sw_t))
     per_signal = collections.Counter(s for r in meta for s in (r.get("ad_signals") or "").split("|") if s)
     dp = E.dead_player(rows, reentries)   # levi 2026-10-18: a run recovered by the re-entry is reported, not the verdict
+    fp = recovered_frozen(rows, frozen_reentries, n_dead_recovered=dp["recovered_runs"])
+    if dp["recovered"] and any(r.get("outcome") == "continue" for r in frozen_reentries or []):
+        dp = {**dp, "max_s": dp["max_all_s"], "recovered": None}   # one recovery of either kind per session (am. 6)
     out = {
         "n_res_meta": len(meta), "duration_s": dur,
         "tick_presence": present / seconds,
@@ -322,7 +384,8 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
         "swap_only_ad_spans": swap_only,
         "src_changed_ticks": len(sw_t),
         "stall_share": sum(stalled) / len(stalled) if stalled else None,
-        "frozen_playhead_max_s": frozen_playhead_run(rows),
+        "frozen_playhead_max_s": fp["max_s"], "frozen_playhead_max_all_s": fp["max_all_s"],
+        "recovered_frozen": fp["recovered"],
         "paused_while_playing_share": paused_while_playing_share(rows),
         "frozen_playhead_T_s": FROZEN_PLAYHEAD_MAX_S.get(platform),
         "dead_player_max_s": dp["max_s"], "dead_player_max_all_s": dp["max_all_s"],
@@ -783,7 +846,7 @@ def main() -> int:
     meta, meta_missing = meta_check(sd)
     platform = meta.get("platform") or sd.parent.name
     label_rows = read_labels(sd)
-    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"))
+    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"))
     lab["shot_effects"] = shot_effects(label_rows, sd)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
@@ -831,7 +894,7 @@ def main() -> int:
         ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_max_s"),
                               lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"),
-                              recovered=bool(lab.get("recovered_dead")))
+                              recovered=bool(lab.get("recovered_dead") or lab.get("recovered_frozen")))
     slow_start = E.slow_start_shaped(ents)
     sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
     out = {"session": str(sd), "platform": platform, "verdict": v, "session_class": s_class, "entries": ents,
@@ -840,7 +903,8 @@ def main() -> int:
            "max_background_share": a.max_background_share, "labels": lab, "traffic": net, "shots": shots,
            "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats, "motion": motion_s,
            "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap"),
-           "stream_regime": sreg["regime"], "suspicious": sreg["suspicious"]}
+           "stream_regime": sreg["regime"], "suspicious": sreg["suspicious"],
+           "censored": meta.get("censored"), "lowest_rung": meta.get("lowest_rung")}
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class})", ""] + [f"- {r}" for r in why] + \
         [f"- SUSPICIOUS (reported; verdict unchanged): {x}" for x in sreg["suspicious"]] + ["",
@@ -849,6 +913,9 @@ def main() -> int:
           f"| slow start under shaping (stream not sustained in 60 s, first shaped state <= {E.SLOW_START_MAX_STATE}; covariate, class stays) | {slow_start} |",
           f"| entries: kind / state at entry / first shaped state / sustained >= 5 s within 60 s | {[(x.get('kind'), (x.get('shaper_at_entry') or {}).get('state'), (x.get('first_shaped_after') or {}).get('state'), x.get('sustained_60s')) for x in ents]} |",
           f"| longest dead-player run after playback (readyState 0 / no media), s / T | {lab.get('dead_player_max_s')} / {lab.get('dead_player_T_s')} |",
+          f"| recovered frozen run (Addendum Q am. 6: the run holding an outcome-continue stuck-player re-entry; covariate) s / window / post-recovery s | {(lab.get('recovered_frozen') or {}).get('recovered_frozen_s')} / {(lab.get('recovered_frozen') or {}).get('window')} / {(lab.get('recovered_frozen') or {}).get('post_recovery_s')} |",
+          f"| censored (am. 6 stuck player: reason / time / shaper / rung) | {(meta.get('censored') or {}).get('reason')} / {(meta.get('censored') or {}).get('t')} / {(meta.get('censored') or {}).get('shaper')} / {(meta.get('censored') or {}).get('rung')} |",
+          f"| lowest rung (stuck-player rule: kbit / source) | {(meta.get('lowest_rung') or {}).get('kbit')} / {(meta.get('lowest_rung') or {}).get('source')} |",
           f"| recovered dead run (levi (a): the run holding an outcome-continue re-entry, not the verdict / class; covariate) s / window / class rule | {(lab.get('recovered_dead') or {}).get('recovered_dead_s')} / {(lab.get('recovered_dead') or {}).get('window')} / {E.RECOVERED_DEAD_CLASS} |",
           f"| duration (min) | {dur / 60:.1f} |" if dur else "| duration | — |",
           f"| res_meta tick presence (share of seconds) | {lab.get('tick_presence')} |",
@@ -859,7 +926,7 @@ def main() -> int:
           f"| Addendum D: swap-only ad spans (must be 0) | {lab.get('swap_only_ad_spans')} |",
           f"| Addendum D: tier changes with src_changed within ± 2 s | {lab.get('tier_changes_with_swap_within_2s_share')} (of {lab.get('tier_changes')}) |",
           f"| stall share | {lab.get('stall_share')} |",
-          f"| longest frozen-playhead stall run, s / T (FAIL above; addendum N) | {lab.get('frozen_playhead_max_s')} / {lab.get('frozen_playhead_T_s')} |",
+          f"| longest frozen-playhead run (paused or playing; only a playhead advance ends it), s / T (FAIL above; addendum N, fixed 2026-10-18) | {lab.get('frozen_playhead_max_s')} / {lab.get('frozen_playhead_T_s')} |",
           f"| paused while labelled playing (share of playing ticks; suspicious > {PAUSED_WHILE_PLAYING_MAX}) | {lab.get('paused_while_playing_share')} |",
           f"| I10: stall ticks with the playhead advancing (FAIL > {STALL_ADVANCING_SHARE_MAX}; >= {I10_MIN_STALL_TICKS} stall ticks) | {lab.get('stall_advancing_share')} |",
           f"| tier mix (quality time, ads masked) | {lab.get('tier_mix_quality_time')} |",
