@@ -93,10 +93,10 @@ def main():
         d = Path(d)
         O._RUNS_DIR = d
         sus = [{"flag": "unexpected_codec"}, {"flag": "single_rung_ladder"}]
-        sess(d, "tiktok", "ti_1", check={"verdict": "PASS", "suspicious": sus})
+        sess(d, "tiktok", "ti_1", meta={"started_at": 1000.0}, check={"verdict": "PASS", "suspicious": sus})
         rows = O.report_flags("tiktok", 0)
         assert rows and rows[0]["new"] == ["unexpected_codec", "single_rung_ladder"], rows
-        sess(d, "_failed/tiktok", "ti_2", check={"verdict": "FAIL", "suspicious": sus[:1]})
+        sess(d, "_failed/tiktok", "ti_2", meta={"started_at": 2000.0}, check={"verdict": "FAIL", "suspicious": sus[:1]})
         import time
         rows = O.report_flags("tiktok", time.time() - 5)
         assert {r["session"] for r in rows} == {"ti_1", "ti_2"} and all(r["new"] == [] for r in rows), rows
@@ -104,7 +104,8 @@ def main():
 
         # coverage FLAG lines: a class with zero support after FLAG_AFTER_SESSIONS accepted sessions; regime flags per platform
         for i in range(C.FLAG_AFTER_SESSIONS):
-            sd = sess(d, "tiktok", f"a{i}", meta={"tt_stream": {"codec": "h264"}, "shaper": {"matrix_id": "TT-M"}},
+            sd = sess(d, "tiktok", f"a{i}", meta={"tt_stream": {"codec": "h264"}, "shaper": {"matrix_id": "TT-M"},
+                                                  "started_at": 3000.0 + i},
                       check={"verdict": "PASS", "session_class": "normal", "suspicious": sus})
             (sd / "labels.csv").write_text("ts,type,video_w,video_h,is_ad\n" + "".join(f"{1e12 + k * 1e3},res_meta,1280,720,False\n" for k in range(200)))
         md = "\n".join(C.markdown(C.report(d, ("tiktok",))))

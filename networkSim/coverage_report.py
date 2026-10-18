@@ -310,12 +310,14 @@ def coverage_flags(snap: dict) -> list[str]:
 
 def regime_flags(data_dir: Path, platform: str) -> list[str]:
     """FLAG lines from check.json suspicious (stream_regime.py), accepted and _failed sessions: per flag, the sessions
-    raising it, the first and the latest (check.json write order)."""
+    raising it, the first and the latest (by meta.json started_at, else the check.json write time; then the name)."""
     rows = []
     for c in list((Path(data_dir) / platform).glob("*/check.json")) + list((Path(data_dir) / "_failed" / platform).glob("*/check.json")):
         chk = _load(c)
         if chk:
-            rows.append((c.stat().st_mtime, c.parent.name, [x.get("flag") for x in chk.get("suspicious") or []]))
+            t = _load(c.parent / "meta.json").get("started_at")
+            t = float(t) if isinstance(t, (int, float)) else c.stat().st_mtime     # session order: its start, else the check
+            rows.append((t, c.parent.name, [x.get("flag") for x in chk.get("suspicious") or []]))
     rows.sort()
     by = collections.defaultdict(list)
     for _, name, flags in rows:
