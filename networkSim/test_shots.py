@@ -29,6 +29,14 @@ def main() -> int:
     assert B._player_on_screen(vp, {"rect": [10, 20, 1238, 696], "inner": [1850, 868]}) == (64, 222, 1238, 696)
     assert B._player_on_screen(vp, {"rect": [1800, 0, 400, 300], "inner": [1850, 868]}) == (1854, 202, 50, 300)
     assert B._player_on_screen(vp, None) is None
+    # device scale 1.5 (geometry theater:1920x1080@1.5; levi's question on b311277): the index's player rect is CSS px
+    # with its dpr; the X11 region is device px. Laptop check 2026-10-18 (Chrome --force-device-scale-factor=1.5, a
+    # <video> at CSS [100, 50, 640, 360] in a 1200x713 CSS viewport): the captured frame was 1800x1070 and the box sat
+    # at [150, 75, 960, 540], which _player_on_screen returns
+    assert B._player_on_screen((0, 0, 1800, 1070), {"rect": [100, 50, 640, 360], "inner": [1200, 713], "dpr": 1.5}) == \
+        (150, 75, 960, 540)
+    v15 = {"sx": 22, "sy": 47, "ow": 1200, "oh": 800, "iw": 1200, "ih": 713, "dpr": 1.5}
+    assert B._viewport_on_screen(v15) == (33, 201, 1800, 1070)                 # window metrics (CSS px) x dpr
     if sys.platform == "darwin":
         assert B._grab_x11((0, 0, 100, 100)) is None   # no X display here: the CDP fallback takes the shot
     print("test_shots: ok")
