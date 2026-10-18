@@ -1491,6 +1491,7 @@ _USHER_RE = re.compile(r"usher\.ttvnw\.net/api/(?:v2/)?channel/hls/[^/?]+\.m3u8"
 MEDIA_EVENTS_FILE = "media_events.jsonl"
 MEDIA_MESSAGE_LEVELS = ("error", "warning", "info")   # playerMessagesLogged kept (debug dropped: volume)
 MEDIA_RECENT_N = 40
+MEDIA_SNAPSHOT_MAX_S = 2.0   # the dead-trigger snapshot's cap: it delays the re-entry (levi's audit of 1bcdc5e)
 
 
 class MediaListener:
@@ -2306,20 +2307,27 @@ class BrowserSession:
 
     def _media_snapshot(self) -> dict:
         """At a tt dead trigger (recording only): every <video>'s error and state, Chrome's video-decode status and the
-        media-internals recorder's players and recent records (MediaListener)."""
-        out: dict = {}
-        try:
-            out["videos"] = self._page.eval(_VIDEO_ERRORS_JS) if self._page else None
-        except Exception as exc:
-            out["videos"] = {"error": repr(exc)[:200]}
-        try:
-            import decode_path
-            g = decode_path.gpu_summary(_browser_call("SystemInfo.getInfo"))
-            out["gpu"] = {k: g.get(k) for k in ("video_decode", "hevc", "error")}
-        except Exception as exc:
-            out["gpu"] = {"error": repr(exc)[:200]}
-        out["media_events"] = self._media.snapshot() if self._media is not None else None
-        return out
+        media-internals recorder's players and recent records (MediaListener). It runs before the re-entry, so it is
+        capped at MEDIA_SNAPSHOT_MAX_S (levi's audit of 1bcdc5e): the page and SystemInfo reads run in a worker joined
+        for that long; whatever finished is kept, with snapshot_s and timed_out."""
+        t0 = time.time()
+        out: dict = {"media_events": self._media.snapshot() if self._media is not None else None}
+
+        def work() -> None:
+            try:
+                out["videos"] = self._page.eval(_VIDEO_ERRORS_JS) if self._page else None
+            except Exception as exc:
+                out["videos"] = {"error": repr(exc)[:200]}
+            try:
+                import decode_path
+                g = decode_path.gpu_summary(_browser_call("SystemInfo.getInfo"))
+                out["gpu"] = {k: g.get(k) for k in ("video_decode", "hevc", "error")}
+            except Exception as exc:
+                out["gpu"] = {"error": repr(exc)[:200]}
+        th = threading.Thread(target=work, daemon=True, name="media-snapshot")
+        th.start()
+        th.join(MEDIA_SNAPSHOT_MAX_S)
+        return {**out, "timed_out": th.is_alive(), "snapshot_s": round(time.time() - t0, 3)}
 
     def _reenter_room(self, pd: dict, reason: str = "player_dead") -> dict:
         """The one re-entry after a player_dead: navigate to the same room, confirm playback (_tt_confirm_playing:

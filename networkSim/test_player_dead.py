@@ -259,6 +259,30 @@ def test_media_listener_records():
     assert len(m.snapshot()["recent"]) == B.MEDIA_RECENT_N
 
 
+def test_media_snapshot_is_capped(mp):
+    """levi's audit of 1bcdc5e: the dead-trigger snapshot runs before the re-entry, so it is capped at
+    MEDIA_SNAPSHOT_MAX_S and records snapshot_s; a slow page read leaves timed_out true and keeps what finished."""
+    import time as _t
+
+    class Page:
+        def __init__(self, delay):
+            self.delay = delay
+
+        def eval(self, js):
+            _t.sleep(self.delay)
+            return [{"rs": 0, "error": {"code": 3, "message": "PIPELINE_ERROR_DECODE"}}]
+    mp.setattr(B, "_browser_call", lambda *a, **k: {"gpu": {"featureStatus": {"video_decode": "enabled"}}})
+    b = B.BrowserSession.__new__(B.BrowserSession)
+    b._media, b._page = B.MediaListener("ws://unused", None), Page(0.0)
+    snap = b._media_snapshot()
+    assert not snap["timed_out"] and snap["videos"][0]["error"]["code"] == 3 and snap["gpu"]["video_decode"] == "enabled"
+    assert snap["snapshot_s"] < 1.0 and snap["media_events"]["players"] == {}
+    b._page = Page(B.MEDIA_SNAPSHOT_MAX_S + 1.5)
+    t0 = _t.time()
+    snap = b._media_snapshot()
+    assert snap["timed_out"] and "videos" not in snap and _t.time() - t0 < B.MEDIA_SNAPSHOT_MAX_S + 0.5, snap
+
+
 def test_one_reentry_then_the_session_ends():
     """supervisor ruling 2026-10-18: one re-entry of the same room on player_dead, then a death ends the session; the
     re-entry's outcome: playing -> continue, the ended banner -> room_ended (the host ended), else player_dead."""
@@ -425,7 +449,7 @@ def main() -> int:
     test_ti43_dead_window_reference()
     test_media_listener_records()
     test_one_reentry_then_the_session_ends()
-    for t in (test_reenter_room_records_an_entry, test_ti33_reentry_window):
+    for t in (test_reenter_room_records_an_entry, test_ti33_reentry_window, test_media_snapshot_is_capped):
         mp = _Patch()
         try:
             t(mp)
