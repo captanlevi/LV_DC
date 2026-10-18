@@ -44,6 +44,10 @@ def main() -> int:
     a = ap.parse_args()
     if a.port == 9222:
         raise SystemExit("never the batch Chrome (9222): use a throwaway Chrome on 9333 / 9334")
+    import os
+    # over ssh there is no DISPLAY and Chrome never comes up (shagun 2026-10-19): the collection display, as ops/env.sh
+    os.environ.setdefault("DISPLAY", ":0")
+    os.environ.setdefault("XAUTHORITY", f"/run/user/{os.getuid()}/gdm/Xauthority")
     import exp as E
     session_dir, profile = Path("/tmp/fscheck_session"), Path(f"/tmp/fscheck_profile_{int(time.time())}")
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -52,6 +56,7 @@ def main() -> int:
     spec, mv = launch_vars(a.port, session_dir, profile)
     cmd = subprocess.run(["make", "-s", "-n", "start_chrome"] + mv, cwd=NSIM, capture_output=True, text=True).stdout
     launch = {"geometry": spec, "make_vars": mv, "chrome_command": cmd.strip()[-1500:],
+              "display": os.environ.get("DISPLAY"),
               "test_type": "--test-type" in cmd, "no_sandbox": "--no-sandbox" in cmd}
     subprocess.run(["make", "-s", "start_chrome"] + mv, cwd=NSIM)
     try:
