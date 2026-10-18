@@ -28,7 +28,8 @@ def test_list():
     assert "@Sypherpkvods" not in handles and [c["handle"] for c in Y.REMOVED_CHANNELS] == ["@Sypherpkvods"]
     assert any(c["handle"] == "@Sypherpkvods" and c["change"] == "removed" for c in Y.LIST_CHANGES)
     gaming = [c for c in Y.YT_CHANNELS if c["type"] == "gaming"]
-    assert {(c["handle"], c["role"]) for c in gaming} == {("@RetroWorldVideos", "primary"), ("@BeanBoltTV", "spare")}
+    assert {(c["handle"], c["role"]) for c in gaming} == {("@RetroWorldVideos", "primary"), ("@BeanBoltTV", "primary")}
+    assert any(c["handle"] == "@BeanBoltTV" and c["change"] == "promoted" for c in Y.LIST_CHANGES)    # 2026-10-18
 
 
 def test_leave_rule():
@@ -77,13 +78,13 @@ def test_precheck_observations():
         new = Y.apply_leave_rule(d, t0 + 14 * H)
         assert [(r["handle"], r["not_live_at"]) for r in new] == [("@dwnews", [t0, t0 + 7 * H, t0 + 13 * H])], new
         # a leave that leaves news with one owner puts its spare up for the live check
-        assert Y.spares_needing_promotion(Y.disk_leaves(d)) == ["@channelnewsasia", "@BeanBoltTV"]
+        assert Y.spares_needing_promotion(Y.disk_leaves(d)) == ["@channelnewsasia"]
 
 
 def test_spares_needing_promotion():
-    assert Y.spares_needing_promotion([]) == ["@BeanBoltTV"]                    # gaming lost Sypherpk
+    assert Y.spares_needing_promotion([]) == []                                 # BeanBoltTV promoted 2026-10-18
     two = [{"handle": "@MonsterJam"}, {"handle": "@FUELTVMoto"}]
-    assert Y.spares_needing_promotion(two) == ["@FuboSports", "@BeanBoltTV"]
+    assert Y.spares_needing_promotion(two) == ["@FuboSports"]
 
 
 def test_promotion():

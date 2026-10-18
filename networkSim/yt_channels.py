@@ -48,7 +48,7 @@ YT_CHANNELS: list[dict] = [
     {"handle": "@ScottishWildlifeGarden", "type": "nature_cams", "owner": "Scottish Wildlife Garden", "role": "primary"},
     {"handle": "@channelnewsasia", "type": "news", "owner": "Mediacorp (CNA)", "role": "spare"},
     {"handle": "@FuboSports", "type": "sport", "owner": "Fubo Sports Network", "role": "spare"},
-    {"handle": "@BeanBoltTV", "type": "gaming", "owner": "BeanBoltTV", "role": "spare"},
+    {"handle": "@BeanBoltTV", "type": "gaming", "owner": "BeanBoltTV", "role": "primary"},   # promoted 2026-10-18
     {"handle": "@SkyofFairyTales", "type": "music", "owner": "Sky of Fairy Tales", "role": "spare"},
     {"handle": "@dakotaspond", "type": "nature_cams", "owner": "Dakota's Pond", "role": "spare"},
     {"handle": "@TipTank247", "type": "nature_cams", "owner": "TipTank247", "role": "spare"},
@@ -63,6 +63,12 @@ LIST_CHANGES: list[dict] = [
     {"date": "2026-10-17", "change": "removed", "handle": "@Sypherpkvods", "type": "gaming", "role": "primary",
      "rule": "prereg Addendum P (levi)",
      "evidence": "0 accepted sessions, 3 not-live failures on chaos (yt_7, yt_12, yt_30); /live redirects to the channel page"},
+    {"date": "2026-10-18", "change": "promoted", "handle": "@BeanBoltTV", "type": "gaming", "role": "primary",
+     "rule": "prereg Addendum P (levi): a spare is promoted after its live check (>= 3 live checks >= 6 h apart spanning "
+             ">= 24 h, no not-live inside the span)",
+     "evidence": "channel_checks/yt_live_checks.jsonl: live at ts 1792231224.3 (2026-10-17T10:00Z), 1792255231.3 "
+                 "(2026-10-17T16:40Z), 1792298394.1 (2026-10-18T04:39Z), 1792320384.0 (2026-10-18T10:46Z); span 24.8 h; "
+                 "top 1440p; a different owner from the gaming primary @RetroWorldVideos"},
 ]
 LEAVE_WINDOW_S = 48 * 3600
 LEAVE_NOT_LIVE = 3
