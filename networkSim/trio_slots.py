@@ -485,6 +485,18 @@ def siblings(path: Path, session: str, t0: float, t1: float | None) -> list[dict
     return out
 
 
+def conntrack_timeouts(proc: Path = Path("/proc/sys/net/netfilter")) -> dict:
+    """The conntrack timeouts in force (a QUIC flow idle past the UDP stream timeout loses its ct mark, and its next
+    downstream packets reach the unmarked default class until an egress packet re-marks it)."""
+    out = {}
+    for k in ("nf_conntrack_udp_timeout", "nf_conntrack_udp_timeout_stream", "nf_conntrack_tcp_timeout_established"):
+        try:
+            out[k] = int((proc / k).read_text().strip())
+        except (OSError, ValueError):
+            out[k] = None
+    return out
+
+
 def trio_root_floor_gb(runs_dir: Path, single_floor_gb: float, platforms=("youtube", "twitch", "tiktok")) -> dict:
     """A2: in trio mode the root filesystem floor = single mode's + three times the largest per-session pcap observed
     (merged.pcap of accepted and _failed sessions)."""

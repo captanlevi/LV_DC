@@ -182,38 +182,54 @@ def test_siblings_and_floor():
         assert fl == {"single_floor_gb": 5.0, "largest_pcap_gb": 3.0, "floor_gb": 14.0}
 
 
+def _pkt(t, src, dst, proto, sport, dport, n=100, dcid="", sni="", qname="", resp="", ans=""):
+    r = dict.fromkeys(F.FIELDS, "")
+    r.update({"frame.time_epoch": str(t), "frame.len": str(n), "ip.src": src, "ip.dst": dst, "quic.dcid": dcid,
+              "tls.handshake.extensions_server_name": sni, "dns.qry.name": qname, "dns.flags.response": resp,
+              "dns.count.answers": ans})
+    r["tcp.srcport" if proto == "tcp" else "udp.srcport"] = str(sport)
+    r["tcp.dstport" if proto == "tcp" else "udp.dstport"] = str(dport)
+    return r
+
+
 def test_flow_overlap():
-    def rows(pairs):
-        return [dict(zip(F.FIELDS, r)) for r in pairs]
-    E = ""
-    yt = rows([("100.0", "10.0.0.2", "142.250.1.1", E, E, "17", E, E, "50001", "443", "aabbccddeeff0011", E,
-                "rr1---sn-x.googlevideo.com", E, E, E),
-               ("101.0", "142.250.1.1", "10.0.0.2", E, E, "17", E, E, "443", "50001", "1122334455667788", E, E, E, E, E),
-               ("99.0", "10.0.0.2", "8.8.8.8", E, E, "17", E, E, "40000", "53", E, E, E,
-                "rr1---sn-x.googlevideo.com", "1", "1")])
-    tw = rows([("100.5", "10.0.0.2", "151.101.1.1", E, E, "6", "50100", "443", E, E, E, E,
-                "video-weaver.fra02.hls.ttvnw.net", E, E, E)])
-    dflt = rows([("98.0", "127.0.0.53", "10.0.0.2", E, E, "17", E, E, "53", "41000", E, E, E,
-                  "video-weaver.fra02.hls.ttvnw.net", "1", "2")])
+    me = "10.0.0.2"
+    yt = [_pkt(100.0, me, "142.250.1.1", "udp", 50001, 443, 1300, "aabbccddeeff0011", "rr1---sn-x.googlevideo.com"),
+          _pkt(101.0, "142.250.1.1", me, "udp", 443, 50001, 1300, "1122334455667788"),
+          _pkt(101.5, me, "172.217.1.1", "tcp", 50002, 443, 400, sni="www.youtube.com"),
+          _pkt(99.0, me, "8.8.8.8", "udp", 40000, 53, 80, qname="rr1---sn-x.googlevideo.com", resp="1", ans="1")]
+    tw = [_pkt(100.5, me, "151.101.1.1", "tcp", 50100, 443, 900, sni="video-weaver.fra02.hls.ttvnw.net")]
+    dflt = [_pkt(98.0, "127.0.0.53", me, "udp", 53, 41000, 90, qname="video-weaver.fra02.hls.ttvnw.net", resp="1", ans="2")]
     s = {"youtube/yt_1": {"platform": "youtube", "window": [95.0, 200.0], "s": F.summarise(yt)},
          "twitch/tw_1": {"platform": "twitch", "window": [96.0, 200.0], "s": F.summarise(tw)}}
-    rep = F.report(s, F.summarise(dflt))
+    rep = F.report(s, F.summarise(dflt, keep_udp=True))
     assert not rep["leak"], rep
-    assert rep["sessions"]["youtube/yt_1"]["dns"]["answered_own_pcap"] == 1
-    assert rep["sessions"]["twitch/tw_1"]["dns"]["answered_default_capture"] == 1
+    y = rep["sessions"]["youtube/yt_1"]
+    assert y["dns"]["answered_own_pcap"] == 1 and rep["sessions"]["twitch/tw_1"]["dns"]["answered_default_capture"] == 1
+    assert y["quic"] == {"bytes_share": round(2600 / 3080, 4), "flows_share": round(1 / 3, 4), "quic_flows": 1, "flows": 3}
+    assert y["default_udp_from_media_addresses"]["packets"] == 0 and y["default_udp_from_media_addresses"]["media_addresses"] == 1
     assert F.family("rr1---sn-x.googlevideo.com") == "youtube" and F.family("www.google.com") is None
     # a leak: the tw session also holds a yt flow, a QUIC CID and a yt SNI
-    tw_leak = tw + rows([("100.5", "10.0.0.2", "142.250.1.1", E, E, "17", E, E, "50001", "443", "aabbccddeeff0011",
-                          E, "rr1---sn-x.googlevideo.com", E, E, E)])
-    s["twitch/tw_1"]["s"] = F.summarise(tw_leak)
-    rep = F.report(s, F.summarise(dflt))
+    s["twitch/tw_1"]["s"] = F.summarise(tw + [_pkt(100.5, me, "142.250.1.1", "udp", 50001, 443, 1300, "aabbccddeeff0011",
+                                                    "rr1---sn-x.googlevideo.com")])
+    rep = F.report(s, F.summarise(dflt, keep_udp=True))
     assert rep["leak"] and rep["pairs"][0]["shared_flows"] == 1 and rep["pairs"][0]["shared_quic_cids"] == 1
     assert rep["sessions"]["twitch/tw_1"]["sibling_family_snis"] == {"youtube": ["rr1---sn-x.googlevideo.com"]}
-    # L-A3: yt media in the default class during the yt session
+    # L-A3: yt media (by SNI) in the default class during the yt session
     s["twitch/tw_1"]["s"] = F.summarise(tw)
-    rep = F.report(s, F.summarise(dflt + rows([("120.0", "10.0.0.2", "142.250.9.9", E, E, "6", "50200", "443", E, E,
-                                                     E, E, "rr5---sn-y.googlevideo.com", E, E, E)])))
+    rep = F.report(s, F.summarise(dflt + [_pkt(120.0, me, "142.250.9.9", "tcp", 50200, 443, sni="rr5---sn-y.googlevideo.com")],
+                                  keep_udp=True))
     assert rep["leak"] and rep["sessions"]["youtube/yt_1"]["default_media_snis_in_window"] == ["rr5---sn-y.googlevideo.com"]
+    # the conntrack-timeout case: a short-header QUIC packet from the yt media address, unmarked, on a new client port
+    rep = F.report(s, F.summarise(dflt + [_pkt(150.0, "142.250.1.1", me, "udp", 443, 50009, 1200, "99887766aabbccdd")],
+                                  keep_udp=True))
+    hit = rep["sessions"]["youtube/yt_1"]["default_udp_from_media_addresses"]
+    assert rep["leak"] and hit["packets"] == 1 and hit["quic_packets"] == 1 and hit["bytes"] == 1200
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "nf_conntrack_udp_timeout").write_text("30\n")
+        (Path(d) / "nf_conntrack_udp_timeout_stream").write_text("120\n")
+        assert T.conntrack_timeouts(Path(d)) == {"nf_conntrack_udp_timeout": 30, "nf_conntrack_udp_timeout_stream": 120,
+                                                 "nf_conntrack_tcp_timeout_established": None}
 
 
 class FakeProc:

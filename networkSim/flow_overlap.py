@@ -10,7 +10,10 @@ Per trio run, over its sessions' merged.pcap and the unmarked remainder's (data/
     a session's pcap;
   - L-A3: a platform's media SNI in the default capture during that platform's session (unshaped media);
   - DNS presence (L-C6): per session, its media host names with a DNS answer, in its own pcap (Chrome's resolver) or in
-    the default capture (the system resolver), between its start - DNS_LEAD_S and its end.
+    the default capture (the system resolver), between its start - DNS_LEAD_S and its end;
+  - QUIC under the mark (rushi, supervisor 2026-10-19): per session the QUIC (UDP 443) share of its bytes and flows,
+    and any UDP packet in the default capture, during the session, to or from an address its media flows used (a QUIC
+    flow whose conntrack entry expired arrives unmarked: the conntrack-timeout case); the box's conntrack UDP timeouts.
 Output: JSON on stdout (or --out). Exit 0 = no leak, 1 = a leak, 2 = input missing.
 
     python3 flow_overlap.py --run <trio run id> [--data DATA_DIR] [--out report.json]
@@ -29,9 +32,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from check_session import MEDIA_HOSTS, PLATFORM_PAGE   # noqa: E402  (one host-family definition)
+from trio_slots import conntrack_timeouts                # noqa: E402
 
 DNS_LEAD_S = 120.0
-FIELDS = ["frame.time_epoch", "ip.src", "ip.dst", "ipv6.src", "ipv6.dst", "ip.proto", "tcp.srcport", "tcp.dstport",
+FIELDS = ["frame.time_epoch", "frame.len", "ip.src", "ip.dst", "ipv6.src", "ipv6.dst", "ip.proto", "tcp.srcport", "tcp.dstport",
           "udp.srcport", "udp.dstport", "quic.dcid", "quic.scid", "tls.handshake.extensions_server_name",
           "dns.qry.name", "dns.flags.response", "dns.count.answers"]
 
@@ -61,10 +65,17 @@ def flow_key(r: dict) -> tuple | None:
     return None
 
 
-def summarise(rows: list[dict]) -> dict:
-    """flows {key: [first, last, packets]}, cids {cid: [first, last]}, snis {name: first}, dns answers {name: [t]},
-    dns_packets (how many DNS packets the pcap holds)."""
+def _is_quic(k: tuple) -> bool:
+    return k[0] == "udp" and 443 in (k[1][1], k[2][1])
+
+
+def summarise(rows: list[dict], keep_udp: bool = False) -> dict:
+    """flows {key: [first, last, packets, bytes]}, cids {cid: [first, last]}, snis {name: first}, flow_sni {key: name},
+    dns answers {name: [t]}, dns_packets, bytes; keep_udp: also every UDP packet as (t, key, bytes) (the default
+    capture's QUIC check)."""
     flows: dict = {}
+    flow_sni: dict = {}
+    udp: list = []
     cids: dict = {}
     snis: dict = {}
     dns: dict = {}
@@ -75,15 +86,20 @@ def summarise(rows: list[dict]) -> dict:
         except ValueError:
             continue
         k = flow_key(r)
+        n = int((_split(r.get("frame.len")) or ["0"])[0] or 0)
         if k is not None:
-            f = flows.setdefault(k, [t, t, 0])
-            f[0], f[1], f[2] = min(f[0], t), max(f[1], t), f[2] + 1
+            f = flows.setdefault(k, [t, t, 0, 0])
+            f[0], f[1], f[2], f[3] = min(f[0], t), max(f[1], t), f[2] + 1, f[3] + n
+            if keep_udp and k[0] == "udp":
+                udp.append((t, k, n))
         for c in _split(r.get("quic.dcid")) + _split(r.get("quic.scid")):
             if len(c.replace(":", "")) >= 8:                      # zero-length / tiny CIDs say nothing about owners
                 s = cids.setdefault(c, [t, t])
                 s[0], s[1] = min(s[0], t), max(s[1], t)
-        for n in _split(r.get("tls.handshake.extensions_server_name")):
-            snis.setdefault(n.lower(), t)
+        for name in _split(r.get("tls.handshake.extensions_server_name")):
+            snis.setdefault(name.lower(), t)
+            if k is not None:
+                flow_sni.setdefault(k, name.lower())
         names = _split(r.get("dns.qry.name"))
         if names:
             dns_packets += 1
@@ -91,7 +107,25 @@ def summarise(rows: list[dict]) -> dict:
                 if any(x not in ("", "0") for x in _split(r.get("dns.count.answers"))):
                     for n in names:
                         dns.setdefault(n.lower(), []).append(t)
-    return {"flows": flows, "cids": cids, "snis": snis, "dns": dns, "dns_packets": dns_packets}
+    return {"flows": flows, "cids": cids, "snis": snis, "flow_sni": flow_sni, "dns": dns, "dns_packets": dns_packets,
+            "udp": udp}
+
+
+def quic_share(s: dict) -> dict:
+    fl = s["flows"]
+    tot_b = sum(v[3] for v in fl.values())
+    q = {k: v for k, v in fl.items() if _is_quic(k)}
+    return {"bytes_share": round(sum(v[3] for v in q.values()) / tot_b, 4) if tot_b else None,
+            "flows_share": round(len(q) / len(fl), 4) if fl else None, "quic_flows": len(q), "flows": len(fl)}
+
+
+def media_addresses(s: dict, platform: str) -> set:
+    """The remote addresses of the session's media flows (named by SNI): both endpoints less the client's (the address
+    on most flows)."""
+    from collections import Counter
+    cnt = Counter(ip for k in s["flows"] for ip in (k[1][0], k[2][0]))
+    me = cnt.most_common(1)[0][0] if cnt else None
+    return {ip for k, name in s["flow_sni"].items() if is_media(name, platform) for ip in (k[1][0], k[2][0]) if ip != me}
 
 
 def family(name: str) -> str | None:
@@ -139,6 +173,7 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
         own = [h for h in media if answered(h, s["dns"])]
         dflt = [h for h in media if h not in own and default is not None and answered(h, default["dns"])]
         rec = {"platform": plat, "window": [t0, t1], "flows": len(s["flows"]), "quic_cids": len(s["cids"]),
+               "quic": quic_share(s),
                "sibling_family_snis": fam, "media_hosts": len(media),
                "dns": {"answered_own_pcap": len(own), "answered_default_capture": len(dflt),
                        "unanswered": sorted(set(media) - set(own) - set(dflt)), "dns_packets_in_own_pcap": s["dns_packets"]}}
@@ -148,10 +183,17 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
             rec["quic_cids_also_in_default"] = len(s["cids"].keys() & default["cids"].keys())
             rec["default_media_snis_in_window"] = sorted(h for h, t in default["snis"].items()
                                                          if is_media(h, plat) and t0 <= t <= t1)
+            ips = media_addresses(s, plat)
+            hit = [(t, k, b) for t, k, b in default.get("udp") or [] if t0 <= t <= t1 and (k[1][0] in ips or k[2][0] in ips)]
+            rec["default_udp_from_media_addresses"] = {"packets": len(hit), "bytes": sum(b for _, _, b in hit),
+                                                       "quic_packets": sum(1 for _, k, _ in hit if _is_quic(k)),
+                                                       "flows": sorted({str(list(k)) for _, k, _ in hit})[:5],
+                                                       "media_addresses": len(ips)}
         per[n] = rec
     leak = (any(p["shared_flows"] or p["shared_quic_cids"] for p in pairs)
             or any(r["sibling_family_snis"] or r.get("flows_also_in_default") or r.get("quic_cids_also_in_default")
-                   or r.get("default_media_snis_in_window") for r in per.values()))
+                   or r.get("default_media_snis_in_window") or (r.get("default_udp_from_media_addresses") or {}).get("packets")
+                   for r in per.values()))
     return {"pairs": pairs, "sessions": per, "default_capture": default is not None,
             "default_flows": len(default["flows"]) if default else None, "leak": leak}
 
@@ -194,9 +236,10 @@ def main(argv=None) -> int:
         sessions[f"{d.parent.name}/{d.name}"] = {"platform": meta.get("platform"),
                                                  "window": [meta.get("started_at") or 0, meta.get("ended_at") or 1e12],
                                                  "s": summarise(tshark_rows(pcap, a.tshark))}
-    default = summarise(tshark_rows(dflt / "merged.pcap", a.tshark)) if dflt and (dflt / "merged.pcap").exists() else None
+    default = (summarise(tshark_rows(dflt / "merged.pcap", a.tshark), keep_udp=True)
+               if dflt and (dflt / "merged.pcap").exists() else None)
     rep = {"run": a.run, "session_dirs": [str(d) for d in dirs], "default_dir": str(dflt) if dflt else None,
-           **report(sessions, default)}
+           "conntrack_timeouts_now": conntrack_timeouts(), **report(sessions, default)}
     text = json.dumps(rep, indent=1, default=str)
     if a.out:
         a.out.write_text(text)
