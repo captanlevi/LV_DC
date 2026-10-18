@@ -53,6 +53,7 @@ EXIT_PLAYER_DEAD = 7     # exp.py's exit code when the tt player sat at readySta
 # aborts that are not failures of the platform: they do not count toward MAX_CONSECUTIVE_FAIL
 NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended", EXIT_PLAYER_DEAD: "player_dead"}
 
+TRIO_SHOT_SOURCE = {"cdp": "cdp", "fb": "x11", "composite": "composite"}   # trio layout -> LVQOE_SHOT_SOURCE
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume has less than MIN_FREE_GB free
 EXIT_PREFLIGHT = 8    # orchestrate.py's own exit code when the per-session preflight fails (preflight.py)
 
@@ -516,9 +517,10 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
                           episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix, channel=channel,
                           geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
-    # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4)
+    # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
+    # window's own XComposite pixmap in the "composite" layout (pilot-1, probe v3)
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
-           "LVQOE_SHOT_SOURCE": "x11" if os.environ.get("LVDC_TRIO_LAYOUT") == "fb" else "cdp"}
+           "LVQOE_SHOT_SOURCE": TRIO_SHOT_SOURCE.get(os.environ.get("LVDC_TRIO_LAYOUT") or "cdp", "cdp")}
     if stop_signal:                     # a stop arrived during the pick: no new session
         print(f"  TRIO {p}: stop requested during the pick, no session started")
         return True
@@ -559,7 +561,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     pieces, exp.py slot_up). Drain (TRIO_DRAIN_FILE, or SIGINT / SIGTERM, which are also passed to every running
     session) stops refilling; once every slot has ended the default capture is merged and the shared tree removed.
     layout: "cdp" (pilot-0: windows at the origin, CDP shots) or "fb" (design §4: the X framebuffer enlarged to three
-    monitor widths for the run, restored at its end; slot k's window at k x the width; X11 shots).
+    monitor widths for the run, restored at its end; slot k's window at k x the width; X11 shots) or "composite"
+    (pilot-1: windows at the origin as cdp, each shot a crop of the window's own XComposite pixmap).
     Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT when that ended it."""
     import signal
     import trio_slots as T
@@ -794,9 +797,11 @@ if __name__ == "__main__":
     parser.add_argument("--link-capacity-kbit", type=float, default=None,
                         help="--concurrent: the measured multi-stream goodput (the gate 1 dry run); each session records "
                              "it and flags seconds whose summed slot rates exceed it (L-A2).")
-    parser.add_argument("--trio-layout", choices=["cdp", "fb"], default="cdp",
+    parser.add_argument("--trio-layout", choices=sorted(TRIO_SHOT_SOURCE), default="cdp",
                         help="--concurrent: cdp = windows at the origin, CDP shots (pilot-0); fb = the X framebuffer "
-                             "enlarged to three monitor widths, one window per width, X11 shots (design §4; pilot-1).")
+                             "enlarged to three monitor widths, one window per width, X11 shots (design §4; probe v1-v3: "
+                             "GNOME Shell keeps windows on the monitor); composite = windows at the origin, each shot a "
+                             "crop of the window's own XComposite pixmap (pilot-1, probe v3 8d0270c).")
     parser.add_argument("--max-per-slot", type=int, default=None,
                         help="--concurrent: stop refilling a slot after this many sessions (the pilot: 1).")
     parser.add_argument("--iface", default=os.environ.get("LVDC_IFACE", "wlp0s20f3"),

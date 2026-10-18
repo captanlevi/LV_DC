@@ -517,6 +517,13 @@ def test_run_trio():
                for c, e, _ in spawned}
         assert lay["yt"]["origin"] == [0, 0] and lay["tt"]["origin"] == [3840, 0] and lay["tt"]["x_screen_px"] == [5760, 1080]
         assert T.layout_of(T.SLOTS["twitch"], {}) == {"layout": "cdp"}
+        # the "composite" layout (pilot-1, probe v3): windows at the origin, each slot's shots from its window's pixmap
+        spawned.clear()
+        rc, _ = _trio(tmp, {"twitch": 5}, spawn, layout="composite")
+        assert rc == 0 and spawned and all(e["LVQOE_SHOT_SOURCE"] == "composite" and e["LVDC_TRIO_LAYOUT"] == "composite"
+                                           for _, e, _ in spawned)
+        assert T.layout_of(T.SLOTS["twitch"], {"LVDC_TRIO_LAYOUT": "composite"}) == {"layout": "composite"}
+        assert O.TRIO_SHOT_SOURCE == {"cdp": "cdp", "fb": "x11", "composite": "composite"}
         # it did not grow (a window manager that keeps the screen): no session, EXIT_PREFLIGHT, restored, torn down
         fbs.clear()
         spawned.clear()

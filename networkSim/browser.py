@@ -2023,6 +2023,103 @@ def calibration_verdict(residual: float | None, gap: float | None) -> bool:
     return residual is not None and residual <= SHOT_CALIB_MAX_RESIDUAL and gap is not None and gap >= SHOT_CALIB_MIN_GAP
 
 
+# t53 pilot-1, trio layout "composite" (probe v3, 8d0270c: an occluded window's own XComposite pixmap matched its CDP
+# capture, about 1 against about 100 for the other window's): each slot's shots are crops of its own window's pixmap.
+# The window is found by the browser's pid (_NET_WM_PID; the pid from /proc by the CDP port); the viewport's position in
+# the frame is calibrated once per session against the window's own CDP capture (the identity check: these are this
+# window's pixels), accepted as the X11 calibration is. Per grab, a staleness record: the player crop barely changed
+# (mean |diff| < COMPOSITE_STALE_DIFF on a 64 x 36 grey thumbnail) while the playhead advanced > COMPOSITE_STALE_CT_S.
+COMPOSITE_STALE_DIFF = 0.5
+COMPOSITE_STALE_CT_S = 0.5
+_PLAYHEAD_JS = "(function(){var v=document.querySelector('video');return v?v.currentTime:null;})()"
+
+
+def calibrate_composite(page: "CDPPage") -> dict:
+    """The composite layout's calibration (see above); never raises. accepted: the frame grab holds the window's own
+    viewport (calibration_verdict on the match, the <video> rect masked: the picture moves between the captures)."""
+    t0 = time.time()
+    rec: dict = {"method": "composite_vs_cdp_match", "at": t0, "offset": None, "residual": None, "gap": None,
+                 "accepted": False, "frame": None,
+                 "thresholds": {"max_residual": SHOT_CALIB_MAX_RESIDUAL, "min_gap": SHOT_CALIB_MIN_GAP,
+                                "margin_px": SHOT_CALIB_MARGIN_PX, "scale": SHOT_CALIB_SCALE}}
+    try:
+        import base64
+        import io
+        import numpy as np
+        from PIL import Image
+        import session_meta
+        import xcomposite
+        pid = session_meta.chrome_cmdline(CDP_BASE).get("pid")
+        rec["browser_pid"] = pid
+        wins = xcomposite.windows_of_pid(pid) if pid else []
+        rec["windows"] = wins[:3]
+        if not wins:
+            rec["why"] = "no viewable window with the browser's _NET_WM_PID" if pid else "no browser pid"
+            return rec
+        img, grec = xcomposite.grab(wins[0]["frame"])
+        area = np.asarray(img.convert("L"), float)
+        pr = json.loads(page.eval(_PLAYER_RECT_JS) or "{}")
+        dpr = float(pr.get("dpr") or 1)
+        shot = page.call("Page.captureScreenshot", {"format": "png", "fromSurface": True, "captureBeyondViewport": False})
+        cdp = np.asarray(Image.open(io.BytesIO(base64.b64decode(shot.get("data") or ""))).convert("L"), float)
+        M = SHOT_CALIB_MARGIN_PX
+        tpl = cdp[M:cdp.shape[0] - M, M:cdp.shape[1] - M]
+        mask = np.ones(tpl.shape, bool)
+        p = (pr.get("player") or {}).get("rect")
+        if p:
+            x0, y0 = int(p[0] * dpr) - M, int(p[1] * dpr) - M
+            mask[max(0, y0):max(0, y0 + int(p[3] * dpr)), max(0, x0):max(0, x0 + int(p[2] * dpr))] = False
+        rec.update(compared_share=round(float(mask.mean()), 3), grab=grec, cdp_px=[cdp.shape[1], cdp.shape[0]])
+        if area.shape[0] < tpl.shape[0] or area.shape[1] < tpl.shape[1]:
+            rec["why"] = f"frame {list(area.shape)} smaller than the viewport template {list(tpl.shape)}"
+            return rec
+        y, x, res, gap = match_offset(tpl, area, mask)
+        rec.update(frame=wins[0]["frame"], viewport_in_frame=[int(x) - M, int(y) - M], viewport_px=[cdp.shape[1], cdp.shape[0]],
+                   residual=res, gap=gap, accepted=calibration_verdict(res, gap))
+    except Exception as exc:
+        rec["why"] = repr(exc)[:200]
+    rec["elapsed_s"] = round(time.time() - t0, 3)
+    return rec
+
+
+def _composite_shot(origin: dict, player: dict | None, page: "CDPPage", prev: dict) -> tuple:
+    """(jpeg bytes | None, capture_px, region in the frame, crop, record) of one composite grab: the player rect (else
+    the viewport) cropped from the window's own pixmap; the staleness record against the previous grab (prev, updated)."""
+    import io
+    import numpy as np
+    from PIL import Image, ImageStat
+    import xcomposite
+    img, _ = xcomposite.grab(origin["frame"])
+    vx, vy = origin["viewport_in_frame"]
+    vw, vh = origin["viewport_px"]
+    region, crop = (vx, vy, vw, vh), "viewport"
+    pr = _player_on_screen(region, player) if player else None
+    if pr:
+        region, crop = pr, "player"
+    x, y, w, h = region
+    im = img.crop((x, y, x + w, y + h))
+    try:
+        ct = page.eval(_PLAYHEAD_JS)
+        ct = float(ct) if ct is not None else None
+    except Exception:
+        ct = None
+    thumb = np.asarray(im.convert("L").resize((64, 36)), float)
+    diff = None if prev.get("thumb") is None or prev["thumb"].shape != thumb.shape else float(np.abs(thumb - prev["thumb"]).mean())
+    step = None if ct is None or prev.get("ct") is None else ct - prev["ct"]
+    rec = {"frame": origin["frame"], "diff_prev": None if diff is None else round(diff, 3),
+           "ct_step_s": None if step is None else round(step, 3),
+           "stale": bool(diff is not None and step is not None and step > COMPOSITE_STALE_CT_S and diff < COMPOSITE_STALE_DIFF)}
+    prev.update(thumb=thumb, ct=ct)
+    if max(ImageStat.Stat(im.convert("L").resize((64, 36))).stddev) < 1.0:
+        rec["blank"] = True
+        return None, [w, h], region, crop, rec
+    if im.width > SHOT_WIDTH_PX:
+        im = im.resize((SHOT_WIDTH_PX, round(im.height * SHOT_WIDTH_PX / im.width)), Image.BILINEAR)
+    out = io.BytesIO()
+    im.save(out, format="JPEG", quality=SHOT_JPEG_QUALITY)
+    return out.getvalue(), [w, h], region, crop, rec
+
+
 def calibrate_shot_origin(page: "CDPPage") -> dict:
     """The X11 viewport origin's correction to the model (device px); never raises. The model is the window metrics,
     or the screen when the page is fullscreen and its viewport covers the screen; there the match must say [0, 0]
@@ -2157,6 +2254,7 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
     index = shots_dir / "index.jsonl"
     last_cadence, last_req = time.time(), None
     off = (origin or {}).get("offset") if (origin or {}).get("accepted") else None
+    comp_prev: dict = {}                           # t53 composite layout: the previous grab, for the staleness record
     while not stop.wait(timeout=1.0):
         try:
             st = page.eval("JSON.stringify([document.documentElement.dataset.lvqoeTick || null, "
@@ -2184,6 +2282,25 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
             player, viewport = pr_.get("player"), {"inner": pr_.get("viewport"), "dpr": pr_.get("dpr")}
             data, capture, capture_px, shot_px, region, crop = None, None, None, None, None, "viewport"
             t_js = t_grab = None
+            comp = None
+            if SHOT_SOURCE == "composite":            # t53 trio layout "composite": the window's own pixmap
+                comp = {"uncalibrated": True}
+                if (origin or {}).get("accepted"):
+                    try:
+                        data, capture_px, region, crop, comp = _composite_shot(origin, player, page, comp_prev)
+                        t_js = t_grab = time.time()
+                        if data:
+                            capture = "composite"
+                            from PIL import Image
+                            import io
+                            shot_px = list(Image.open(io.BytesIO(data)).size)
+                    except Exception as exc:
+                        comp = {"error": repr(exc)[:160]}
+                        data = None
+                if data is None:                       # the CDP fallback below takes the viewport
+                    region, crop, capture_px = None, "viewport", None
+                else:
+                    comp["region_in"] = "frame"        # screen_region is the crop's place in the window's frame
             if SHOT_SOURCE == "x11":
                 fs = _fullscreen_on_screen(pr_) if (origin or {}).get("fullscreen_screen") else None   # t37
                 try:
@@ -2235,7 +2352,8 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
                                      # 1 s before ts; these say which step that is)
                                      "t_decide": t_decide, "js_s": None if t_js is None else round(t_js - t_decide, 4),
                                      "grab_s": None if t_grab is None else round(t_grab - (t_js or t_decide), 4),
-                                     "encode_save_s": round(ts - (t_grab or t_decide), 4)}) + "\n")
+                                     "encode_save_s": round(ts - (t_grab or t_decide), 4),
+                                     **({"composite": comp} if comp is not None else {})}) + "\n")
         except Exception as exc:  # a missed shot must never stop collection
             print(f"[browser] screenshot failed: {exc}", flush=True)
 
@@ -2505,6 +2623,13 @@ class BrowserSession:
                 self.geometry["shot"] = geometry_scales(self.geometry)
         except Exception:
             self.geometry = None
+        if self._session_dir and SHOT_SOURCE == "composite":  # t53 trio layout "composite": the window's own pixmap
+            self.shot_origin = calibrate_composite(self._page)
+            if self.geometry is not None:
+                if not isinstance(self.geometry.get("shot"), dict):
+                    self.geometry["shot"] = {}
+                self.geometry["shot"]["origin"] = self.shot_origin
+            print(f"[browser] Shot origin (composite): {self.shot_origin}", flush=True)
         if self._session_dir and SHOT_SOURCE == "x11":        # t37: before the shot loop and the schedule
             self.shot_origin = calibrate_shot_origin(self._page)
             if self.geometry is not None:
