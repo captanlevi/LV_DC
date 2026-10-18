@@ -41,7 +41,10 @@ PAGE_HTML = ("<title>fbprobe-{port}</title><body style='margin:0;background:#fff
              "var c=document.getElementById('c').getContext('2d');for(var y=0;y<1200;y+=40)for(var x=0;x<1920;x+=40)"
              "{{c.fillStyle=((x*7+y*13+{port})%97<48)?'#111':'#eee';c.fillRect(x,y,40,40);}}"
              "c.font='120px monospace';c.fillStyle='#c00';c.fillText('{port}',200,300);"
-             "window.__f=0;(function t(){{window.__f++;requestAnimationFrame(t)}})();</script>")
+             "window.__f=0;(function t(){{window.__f++;c.fillStyle='#fff';c.fillRect(1300,40,500,160);"
+             "c.fillStyle='#000';c.font='140px monospace';c.fillText(String(window.__f%100000),1310,180);"
+             "requestAnimationFrame(t)}})();</script>")
+LIVE_BOX = (1300, 40, 500, 160)         # CSS px of the per-frame counter (dpr 1): a live grab changes there
 
 
 def page_url(port: int) -> str:
@@ -149,9 +152,12 @@ def parse_xwd(data: bytes):
     hdr = struct.unpack(">25I", data[:100])
     hsize, w, h, byte_order, bpp, bpl, ncolors = hdr[0], hdr[4], hdr[5], hdr[7], hdr[11], hdr[12], hdr[19]
     off = hsize + ncolors * 12
-    if bpp != 32:
-        raise ValueError(f"xwd bits per pixel {bpp} (32 expected)")
-    raw = "BGRX" if byte_order == 0 else "XRGB"
+    if bpp == 32:
+        raw = "BGRX" if byte_order == 0 else "XRGB"
+    elif bpp == 24:                                   # a 24-bit visual (shagun: the occluded window, 06:57)
+        raw = "BGR" if byte_order == 0 else "RGB"
+    else:
+        raise ValueError(f"xwd bits per pixel {bpp} (24 / 32 supported)")
     im = Image.frombuffer("RGB", (w, h), data[off:off + bpl * h], "raw", raw, bpl, 1)
     return np.asarray(im.convert("L"), float)
 
@@ -161,6 +167,22 @@ def window_grab(wid: str):
     if r.returncode != 0:
         raise RuntimeError(f"xwd rc {r.returncode}: {r.stderr.decode(errors='ignore')[:200]}")
     return parse_xwd(r.stdout)
+
+
+def live(wid: str, x_off: int, y_off: int) -> dict:
+    """Two grabs of the window 1 s apart: does the per-frame counter box change (the grab is the window's current
+    content, not a stale or obscured copy)? x_off / y_off: the viewport's origin inside the grabbed window."""
+    import numpy as np
+    a = window_grab(wid)
+    time.sleep(1.0)
+    b = window_grab(wid)
+    x, y, w, h = LIVE_BOX
+    ra = a[y_off + y:y_off + y + h, x_off + x:x_off + x + w]
+    rb = b[y_off + y:y_off + y + h, x_off + x:x_off + x + w]
+    if ra.size == 0 or ra.shape != rb.shape:
+        return {"error": "counter box outside the grab"}
+    d = float(np.abs(ra - rb).mean())
+    return {"counter_box_mean_abs_diff": round(d, 2), "live": d > 2.0}
 
 
 def main() -> int:
@@ -178,9 +200,20 @@ def main() -> int:
         # A: the enlarged framebuffer, one Chrome off the monitor
         rc, _, err = sh(["xrandr", "--fb", f"{3 * W}x{H}"])
         out["A"] = {"xrandr_fb": {"rc": rc, "err": err, "screen_after": screen_size()}}
-        procs.append(launch(a.chrome, PORTS[0], W, W, H))
+        aw, ah = int(W * 5 / 6), int(H * 5 / 6)            # under mutter's auto-maximize size (06:57: 1920x1080 was maximized)
+        procs.append(launch(a.chrome, PORTS[0], W, aw, ah))
         t0, p0 = page_of(PORTS[0])
         time.sleep(3)
+        B.CDP_BASE = f"http://localhost:{PORTS[0]}"
+        try:                                              # the launch position aside, an explicit move off the monitor
+            wid0 = B._browser_call("Browser.getWindowForTarget", {"targetId": t0["id"]}).get("windowId")
+            B._browser_call("Browser.setWindowBounds", {"windowId": wid0, "bounds": {"windowState": "normal"}})
+            B._browser_call("Browser.setWindowBounds", {"windowId": wid0, "bounds": {"left": W + 50, "top": 50,
+                                                                                     "width": aw, "height": ah}})
+            time.sleep(2)
+            out["A"]["after_move"] = B._browser_call("Browser.getWindowBounds", {"windowId": wid0}).get("bounds")
+        except Exception as e:
+            out["A"]["after_move"] = {"error": repr(e)}
         out["A"]["state"] = st = state(PORTS[0], t0, p0)
         out["A"]["x_window"] = xw = x_window(f"fbprobe-{PORTS[0]}")
         win = st["window"]
@@ -190,7 +223,9 @@ def main() -> int:
                                                                          int(win.get("iw") or W) + 128, int(win.get("ih") or H) + 128), "A_root")
         if xw and out["tools"]["xwd"]:
             try:
-                out["A"]["window_grab_vs_cdp"] = match(cdp_capture(p0), window_grab(xw["id"]), "A_window")
+                m = out["A"]["window_grab_vs_cdp"] = match(cdp_capture(p0), window_grab(xw["id"]), "A_window")
+                if m.get("found_at"):
+                    out["A"]["window_live"] = live(xw["id"], m["found_at"][0] - 64, m["found_at"][1] - 64)
             except Exception as e:
                 out["A"]["window_grab_vs_cdp"] = {"error": repr(e)}
         # B: a second Chrome over the first at the monitor's origin; each grabbed by its window id
@@ -206,7 +241,10 @@ def main() -> int:
             out["B"][f"{name}_x_window"] = xw
             if xw and out["tools"]["xwd"]:
                 try:
-                    out["B"][f"{name}_window_grab_vs_cdp"] = match(cdp_capture(pg), window_grab(xw["id"]), f"B_{name}_window")
+                    m = out["B"][f"{name}_window_grab_vs_cdp"] = match(cdp_capture(pg), window_grab(xw["id"]),
+                                                                        f"B_{name}_window")
+                    if m.get("found_at"):
+                        out["B"][f"{name}_window_live"] = live(xw["id"], m["found_at"][0] - 64, m["found_at"][1] - 64)
                 except Exception as e:
                     out["B"][f"{name}_window_grab_vs_cdp"] = {"error": repr(e)}
         out["B"]["root_grab_vs_under_cdp"] = match(cdp_capture(p0), root_grab(0, 0, W, H), "B_root")
@@ -222,8 +260,10 @@ def main() -> int:
             rc, _, err = sh(["xrandr", "--fb", f"{orig[0]}x{orig[1]}"])
             out["restored"] = {"rc": rc, "err": err, "screen": screen_size()}
     a_ok = bool(out.get("A", {}).get("placed_off_monitor")) and (out.get("A", {}).get("root_grab_vs_cdp") or {}).get("accepted") \
+        and (out.get("A", {}).get("window_live") or {}).get("live") \
         and (out.get("A", {}).get("state") or {}).get("raf_fps", 0) > 20
-    b_ok = all((out.get("B", {}).get(f"{n}_window_grab_vs_cdp") or {}).get("accepted") for n in ("under", "over")) \
+    b_ok = all((out.get("B", {}).get(f"{n}_window_grab_vs_cdp") or {}).get("accepted")
+               and (out.get("B", {}).get(f"{n}_window_live") or {}).get("live") for n in ("under", "over")) \
         and (out.get("B", {}).get("under") or {}).get("raf_fps", 0) > 20
     out["verdict"] = {"A_enlarged_framebuffer": bool(a_ok), "B_overlap_window_grab": bool(b_ok)}
     print(json.dumps(out, indent=1, default=str))
