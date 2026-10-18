@@ -45,8 +45,8 @@ def main() -> int:
     nopage = {"conn": [{"request_url": "https://pull/stream-1_hd.flv?x=1"}]}           # ti_1: no room page captured
     r = T.regime(nopage)
     assert r["codec"] == "h264" and r["codec_inferred_from_suffix"] == ["hd"], r
-    assert [T.suffix_codec(x) for x in ("hd", "ld", "hd5", "sld520", "uhd560", "ao", "")] == \
-        ["h264", "h264", "hevc", "hevc", "hevc", "unknown", "unknown"]
+    assert [T.suffix_codec(x) for x in ("hd", "ld", "hd5", "sld520", "uhd560", "ao", "", "hd5g2t52", "sld520g2t52", "hdg2")] == \
+        ["h264", "h264", "hevc", "hevc", "hevc", "unknown", "unknown", "hevc", "hevc", "unknown"]
     assert T.regime({})["codec"] == "unknown"
     assert T.tt_stream_regime("/nonexistent")["error"] == "no http_v2.json"
     print("test_tt_stream: ok")

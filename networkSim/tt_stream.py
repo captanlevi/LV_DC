@@ -53,10 +53,11 @@ def renditions(text: str) -> dict[str, dict]:
 
 def suffix_codec(suffix: str) -> str:
     """The suffix convention seen in the room data (chaos and the old sessions): H.264 renditions are plain (hd, sd, ld,
-    or4, uhd), HEVC ones carry a 5 (hd5, sd5, ld5, sld520, hd560, uhd560); anything else unknown."""
+    or4, uhd), HEVC ones carry a 5 (hd5, sd5, ld5, sld520, hd560, uhd560), on chaos from ti_38 also with a g<n>t<n> tail
+    (hd5g2t52, sld520g2t52); anything else unknown."""
     if re.fullmatch(r"(uhd|hd|sd|ld|or4|origin)", suffix):
         return "h264"
-    if re.fullmatch(r"[a-z]+5\d*", suffix):
+    if re.fullmatch(r"[a-z]+5\d*(g\d+t\d+)?", suffix):
         return "hevc"
     return "unknown"
 
