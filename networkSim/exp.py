@@ -617,12 +617,16 @@ if __name__ == "__main__":
     print(f"Session directory: {session_dir}")
     template = None if args.empty_profile else (args.profile_template or PROFILE_TEMPLATES / platform)
     chrome_profile, profile_template = fresh_chrome_profile(session_dir, template)
+    from profile_clone import template_note_of
+    template_note = template_note_of(template)
     configure_chrome_download_dir(session_dir, chrome_profile)
     session_meta.start(session_dir, platform, transition, episode_s=60, argv=sys.argv, chrome_profile=chrome_profile,
                        matrix_id=matrix_id, low_state_cap=low_cap, initial_state_rule=init_rule,
                        forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
                        channel_type=args.channel_type, channel_handle=args.channel_handle,
                        profile_template=profile_template)
+    if template_note:   # the template's rebuild note (e.g. tt's HEVC template): the regime boundary in the session record
+        session_meta.write(session_dir, template_note=template_note)
     if os.environ.get("LVDC_PREFLIGHT_JSON"):   # orchestrate's per-session preflight (preflight.py)
         try:
             session_meta.write(session_dir, preflight=json.loads(Path(os.environ["LVDC_PREFLIGHT_JSON"]).read_text()))
@@ -721,7 +725,8 @@ if __name__ == "__main__":
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
                               lowest_rung=browser.lowest_rung,
-                              decode_path={**decode_path.spec(platform), "gpu": browser.decode_gpu, "page": browser.decode_page},
+                              decode_path={**decode_path.spec(platform), "gpu": browser.decode_gpu, "page": browser.decode_page,
+                                           **decode_path.hevc_decision(browser.decode_gpu, browser.decode_page)},
                               tw_pick=browser.tw_pick, room_play_clicks=browser.room_play_clicks,
                               room_discontinuities=browser.room_discontinuities)
             if platform == "youtube" and not args.channel_handle and browser.list_url:

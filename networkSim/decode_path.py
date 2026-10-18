@@ -55,6 +55,21 @@ def gpu_summary(info: dict | None) -> dict:
             "gl_renderer": ((gpu.get("auxAttributes") or {}).get("glRenderer"))}
 
 
+def hevc_decision(gpu: dict | None, page: dict | None, played_codec: str | None = None) -> dict:
+    """HEVC decode yes / no and which source answered (supervisor 2026-10-18: on chaos Chrome 155 / Linux, CDP
+    SystemInfo.getInfo listed no decode profiles at all while HEVC played): Chrome's decode profiles when it lists any;
+    else the page's MSE / WebCodecs hvc1 probe; else the played codec (tt_stream, at check time)."""
+    g, pg = gpu or {}, page or {}
+    if g.get("decode_profiles"):
+        return {"hevc": bool(g.get("hevc")), "source": "systeminfo_profiles"}
+    probes = [pg.get(k) for k in ("mse_hvc1", "webcodecs_hvc1") if pg.get(k) is not None]
+    if probes:
+        return {"hevc": any(probes), "source": "page_probe", "probes": {k: pg.get(k) for k in ("mse_hvc1", "webcodecs_hvc1")}}
+    if played_codec in ("hevc", "h264"):
+        return {"hevc": played_codec == "hevc", "source": "played_codec"}
+    return {"hevc": None, "source": "none"}
+
+
 # what TikTok's own probe sees (WebCodecs) and MSE, from the page (no network traffic)
 HEVC_PROBE_JS = """(async () => { try {
   const mse = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L120.90"');

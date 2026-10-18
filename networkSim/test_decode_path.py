@@ -42,6 +42,19 @@ def main():
     assert D.gpu_summary(info) == {"video_decode": "enabled", "decode_profiles": ["h264 main", "hevc main"], "hevc": True,
                                    "gl_renderer": "Mesa Intel"}
     assert D.gpu_summary(None) == {"error": "no SystemInfo"}
+    # chaos 2026-10-18: SystemInfo listed no profiles while HEVC played -> the page probe answers, then the played codec
+    empty = D.gpu_summary({"gpu": {"featureStatus": {"video_decode": "enabled"}, "videoDecoding": []}})
+    assert D.hevc_decision(empty, {"mse_hvc1": True, "webcodecs_hvc1": True}) == \
+        {"hevc": True, "source": "page_probe", "probes": {"mse_hvc1": True, "webcodecs_hvc1": True}}
+    assert D.hevc_decision(D.gpu_summary(info), {"mse_hvc1": False}) == {"hevc": True, "source": "systeminfo_profiles"}
+    assert D.hevc_decision(empty, None, "hevc") == {"hevc": True, "source": "played_codec"}
+    assert D.hevc_decision(empty, {"error": "x"}, None) == {"hevc": None, "source": "none"}
+    import tempfile
+    from profile_clone import template_note_of
+    with tempfile.TemporaryDirectory() as d:
+        assert template_note_of(Path(d)) is None
+        (Path(d) / "TEMPLATE_NOTE.txt").write_text("rebuilt 2026-10-18 option b (HEVC)")
+        assert template_note_of(Path(d)) == "rebuilt 2026-10-18 option b (HEVC)" and template_note_of(None) is None
     print("test_decode_path: ok")
     return 0
 

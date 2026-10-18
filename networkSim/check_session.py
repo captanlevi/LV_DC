@@ -897,6 +897,9 @@ def main() -> int:
                               recovered=bool(lab.get("recovered_dead") or lab.get("recovered_frozen")))
     slow_start = E.slow_start_shaped(ents)
     sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
+    import decode_path as DP
+    _dp = meta.get("decode_path") or {}
+    dp_hevc = DP.hevc_decision(_dp.get("gpu"), _dp.get("page"), (sreg.get("regime") or {}).get("played_codec")) if _dp else {}
     out = {"session": str(sd), "platform": platform, "verdict": v, "session_class": s_class, "entries": ents,
            "slow_start_shaped": slow_start,
            "reasons": why, "thresholds": CHECKS,
@@ -904,7 +907,8 @@ def main() -> int:
            "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats, "motion": motion_s,
            "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap"),
            "stream_regime": sreg["regime"], "suspicious": sreg["suspicious"],
-           "censored": meta.get("censored"), "lowest_rung": meta.get("lowest_rung"), "decode_path": meta.get("decode_path")}
+           "censored": meta.get("censored"), "lowest_rung": meta.get("lowest_rung"), "decode_path": meta.get("decode_path"),
+           "decode_hevc": dp_hevc, "template_note": meta.get("template_note")}
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class})", ""] + [f"- {r}" for r in why] + \
         [f"- SUSPICIOUS (reported; verdict unchanged): {x}" for x in sreg["suspicious"]] + ["",
@@ -915,7 +919,7 @@ def main() -> int:
           f"| longest dead-player run after playback (readyState 0 / no media), s / T | {lab.get('dead_player_max_s')} / {lab.get('dead_player_T_s')} |",
           f"| recovered frozen run (Addendum Q am. 6: the run holding an outcome-continue stuck-player re-entry; covariate) s / window / post-recovery s | {(lab.get('recovered_frozen') or {}).get('recovered_frozen_s')} / {(lab.get('recovered_frozen') or {}).get('window')} / {(lab.get('recovered_frozen') or {}).get('post_recovery_s')} |",
           f"| censored (am. 6 stuck player: reason / time / shaper / rung) | {(meta.get('censored') or {}).get('reason')} / {(meta.get('censored') or {}).get('t')} / {(meta.get('censored') or {}).get('shaper')} / {(meta.get('censored') or {}).get('rung')} |",
-          f"| decode path (decode_path.py: flag set / Chrome video_decode / HEVC profiles / page MSE + WebCodecs hvc1) | {(meta.get('decode_path') or {}).get('name')} / {((meta.get('decode_path') or {}).get('gpu') or {}).get('video_decode')} / {((meta.get('decode_path') or {}).get('gpu') or {}).get('hevc')} / {(meta.get('decode_path') or {}).get('page')} |",
+          f"| decode path (decode_path.py: flag set / Chrome video_decode / HEVC (source) / page MSE + WebCodecs hvc1 / template note) | {(meta.get('decode_path') or {}).get('name')} / {((meta.get('decode_path') or {}).get('gpu') or {}).get('video_decode')} / {dp_hevc.get('hevc')} ({dp_hevc.get('source')}) / {(meta.get('decode_path') or {}).get('page')} / {(meta.get('template_note') or '')[:80]!r} |",
           f"| lowest rung (stuck-player rule: kbit / source) | {(meta.get('lowest_rung') or {}).get('kbit')} / {(meta.get('lowest_rung') or {}).get('source')} |",
           f"| recovered dead run (levi (a): the run holding an outcome-continue re-entry, not the verdict / class; covariate) s / window / class rule | {(lab.get('recovered_dead') or {}).get('recovered_dead_s')} / {(lab.get('recovered_dead') or {}).get('window')} / {E.RECOVERED_DEAD_CLASS} |",
           f"| duration (min) | {dur / 60:.1f} |" if dur else "| duration | — |",

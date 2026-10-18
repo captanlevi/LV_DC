@@ -20,3 +20,16 @@ def remove_profile_clone(clones_root: Path, prof: Path) -> bool:
         return False
     shutil.rmtree(p, ignore_errors=True)
     return not p.exists()
+
+
+TEMPLATE_NOTE = "TEMPLATE_NOTE.txt"
+
+
+def template_note_of(template: Path | None) -> str | None:
+    """The template's TEMPLATE_NOTE.txt (the operator's rebuild record, e.g. tt's HEVC template, 2026-10-18; read into
+    meta.json template_note so the regime boundary is in the session record; never anything else from the profile,
+    which holds login cookies), at most 4 KB."""
+    try:
+        return (Path(template) / TEMPLATE_NOTE).read_text(errors="replace")[:4096] if template else None
+    except OSError:
+        return None
