@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """flow_overlap.py: the trio's ownership QA (t53; supervisor v3 + design §3, L-A3, L-C6), read from the pcaps only.
 
-Per trio run, over its sessions' merged.pcap and the unmarked remainder's (data/_trio_default/<run>/merged.pcap):
+Per trio run, over its sessions' merged.pcap and the unmarked remainder's (data/_trio/_default/<run>/merged.pcap):
   - 5-tuple uniqueness: a flow (protocol + both endpoints) seen in two sessions' pcaps while both saw it, or in a
     session's pcap and the default capture at the same time, is a marking leak;
   - QUIC connection-ID uniqueness: a long- or short-header CID seen in two pcaps (a migrated QUIC connection keeps its
@@ -170,7 +170,7 @@ def _session_dirs_of_run(data: Path, run: str) -> list[Path]:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--run", default=None, help="a trio run id (meta.json concurrency.trio_run)")
-    ap.add_argument("--data", type=Path, default=HERE.parent / "data")
+    ap.add_argument("--data", type=Path, default=HERE.parent / "data" / "_trio", help="the trio root (data/_trio)")
     ap.add_argument("--sessions", nargs="*", type=Path, default=[])
     ap.add_argument("--default", type=Path, default=None, help="the run's default-capture dir (merged.pcap)")
     ap.add_argument("--tshark", default=shutil.which("tshark") or "tshark")
@@ -180,7 +180,7 @@ def main(argv=None) -> int:
     dflt = a.default
     if a.run:
         dirs = dirs or _session_dirs_of_run(a.data, a.run)
-        dflt = dflt or a.data / "_trio_default" / a.run
+        dflt = dflt or a.data / "_default" / a.run
     if not dirs:
         print("no sessions", file=sys.stderr)
         return 2

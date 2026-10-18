@@ -322,8 +322,10 @@ def deficits(snap: dict, states: list[str] = ()) -> list[dict]:
     return sorted(out, key=lambda d: (-d["deficit"], d["order"]))
 
 
-def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None) -> dict:
-    """The rule (module docstring) on a snapshot. matrices: the platform's {id: (transitions, low cap, init rule)}."""
+def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, excluded_geometries: tuple = ()) -> dict:
+    """The rule (module docstring) on a snapshot. matrices: the platform's {id: (transitions, low cap, init rule)}.
+    excluded_geometries (t53 trio v1: ("fullscreen",)): a class whose only geometry (GEOMETRY_FOR_CLASS) is of an
+    excluded mode is unreachable, recorded in unreachable_targets and geometry_excluded."""
     platform = snap["platform"]
     ids = sorted(allowed or matrices)
     states = sorted({s for m in ids for s in matrices[m][0]}, key=int) if platform == "tiktok" else []
@@ -331,9 +333,14 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None) ->
     bands = band_map(platform, matrices, ids)
     # am. 15 (3): a tier class no allowed matrix can reach is not drawn; the next deficit is the target
     unreachable = [d["key"] for d in defs if d["kind"] == "class" and d["key"] in bands and not bands[d["key"]]["qualifies"]]
+    no_geom = [d["key"] for d in defs if d["kind"] == "class" and d["key"] not in unreachable
+               and (GEOMETRY_FOR_CLASS.get((platform, d["key"])) or "").split(":")[0] in excluded_geometries]
+    unreachable += no_geom
     live = [d for d in defs if d["key"] not in unreachable]
     rec = {"platform": platform, "rule": RULE_VERSION, "steering_rule": STEERING_RULE, "allowed": ids, "deficits": defs,
            "snapshot": snap, "bands": bands, "unreachable_targets": unreachable, "default_rotation": False, "geometry_forced": None}
+    if excluded_geometries:
+        rec["geometry_excluded"] = {"modes": list(excluded_geometries), "unreachable_by_geometry": no_geom}
     pm = snap["per_matrix"]
     if not live:      # am. 15 (2): rotate, the least-collected allowed matrix first, ties to the lowest id
         n = {m: (pm.get(m) or {}).get("sessions", 0) for m in ids}
@@ -363,9 +370,9 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None) ->
     return {**rec, "matrix": min(m for m in ids if yields[m] == top), "target": tgt, "yields": yields, "why": why}
 
 
-def choose(data_dir: Path, platform: str, allowed: list[str] | None = None) -> dict:
+def choose(data_dir: Path, platform: str, allowed: list[str] | None = None, excluded_geometries: tuple = ()) -> dict:
     """orchestrate, before each session: the snapshot and the rule's choice for `platform`."""
-    rec = pick_matrix(snapshot(data_dir, platform), PLATFORM_MATRICES[platform], allowed)
+    rec = pick_matrix(snapshot(data_dir, platform), PLATFORM_MATRICES[platform], allowed, excluded_geometries)
     return {**rec, "taken_at": dt.datetime.now().isoformat(timespec="seconds")}
 
 

@@ -60,9 +60,10 @@ TRIO: dict = {}          # the trio session's meta.json concurrency record, buil
 trio_slots = None        # the module, imported only with --slot
 
 
-def make_session_dir(platform: str) -> Path:
-    # a name is never reused, also not a removed or _failed session's (session_names: a monotonic persisted counter)
-    return session_names.next_session_dir(DATA_DIR, platform, PLATFORM_ABBREV[platform])
+def make_session_dir(platform: str, root: Path | None = None) -> Path:
+    # a name is never reused, also not a removed or _failed session's (session_names: a monotonic persisted counter);
+    # root: a trio session's own data root (data/_trio), named from the same counter
+    return session_names.next_session_dir(DATA_DIR, platform, PLATFORM_ABBREV[platform], root=root)
 
 
 def run_(cmd):
@@ -664,7 +665,7 @@ if __name__ == "__main__":
         session_dir = Path(__file__).parent.parent / "current_data"
         session_dir.mkdir(parents=True, exist_ok=True)
     else:
-        session_dir = make_session_dir(platform)
+        session_dir = make_session_dir(platform, None if SLOT is None else DATA_DIR / trio_slots.TRIO_DIR)
     print(f"Session directory: {session_dir}")
     template = None if args.empty_profile else (args.profile_template or PROFILE_TEMPLATES / platform)
     chrome_profile, profile_template = fresh_chrome_profile(session_dir, template)
@@ -682,7 +683,7 @@ if __name__ == "__main__":
         staging = trio_slots.staging_dir(session_dir)
         staging.mkdir(parents=True, exist_ok=True)
         SLOT_VARS[:] = trio_slots.make_vars(SLOT, staging)
-        slots_log = DATA_DIR / trio_slots.SLOTS_LOG
+        slots_log = DATA_DIR / trio_slots.TRIO_DIR / trio_slots.SLOTS_LOG
         import browser as _browser_mod
         TRIO.update(trio_slots.concurrency_record(
             SLOT, staging=str(staging), link_capacity_kbit=args.link_capacity_kbit, shot_source=_browser_mod.SHOT_SOURCE,
@@ -833,7 +834,7 @@ if __name__ == "__main__":
             try:
                 TRIO["tc"] = tc_sampler.stop()
                 TRIO["socket_owner_end"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
-                TRIO["siblings"] = trio_slots.siblings(DATA_DIR / trio_slots.SLOTS_LOG, session_dir.name,
+                TRIO["siblings"] = trio_slots.siblings(slots_log, session_dir.name,
                                                        json.loads((session_dir / "meta.json").read_text())["started_at"],
                                                        None)
             except Exception as e:
@@ -893,8 +894,8 @@ if __name__ == "__main__":
         from profile_clone import remove_profile_clone
         print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
         if SLOT is not None:
-            trio_slots.slots_log_append(DATA_DIR / trio_slots.SLOTS_LOG, {"event": "end", "slot": SLOT.tag,
-                                                                          "session": session_dir.name, "t": time.time()})
+            trio_slots.slots_log_append(slots_log, {"event": "end", "slot": SLOT.tag, "session": session_dir.name,
+                                                    "t": time.time()})
 
     if abort_reason == "login_wall":
         # orchestrate.py stops the platform on this code: every further logged-out session would hit the same wall

@@ -141,6 +141,22 @@ def test_tc_sampler():
         assert s2.summary()["samples"] == 0
 
 
+def test_trio_root_names_and_geometry():
+    import geometry
+    import session_names
+    with tempfile.TemporaryDirectory() as d:
+        data = Path(d)
+        a = session_names.next_session_dir(data, "youtube", "yt")
+        b = session_names.next_session_dir(data, "youtube", "yt", root=data / "_trio")
+        c = session_names.next_session_dir(data, "youtube", "yt")
+        assert (a, b, c) == (data / "youtube/yt_1", data / "_trio/youtube/yt_2", data / "youtube/yt_3")
+        (data / "_trio/_failed/youtube/yt_9").mkdir(parents=True)                       # a trio name is never reused
+        assert session_names.next_session_dir(data, "youtube", "yt", root=data / "_trio").name == "yt_10"
+        assert all(not g.startswith("fullscreen") for _ in range(6)
+                   for g in [geometry.next_geometry(data, "youtube", ("fullscreen",))])
+        assert "fullscreen:1920x1080" in geometry.GEOMETRY_CHOICES["youtube"]          # single mode's rotation unchanged
+
+
 def test_siblings_and_floor():
     with tempfile.TemporaryDirectory() as d:
         log = Path(d) / "trio_slots.jsonl"
@@ -221,10 +237,10 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry")}
     saved_pf, saved_nft, saved_stage = O.preflight.run, T.nft_handle_of, T.STAGING
     O._RUNS_DIR = tmp
-    O._pick = lambda p, nl, now, rg: (None, None, None)
-    O.session_matrix = lambda p, f=None: calls.append(("matrix", p, f)) or "A"
-    O.accepted_sessions = lambda p: 0
-    O.report_flags = lambda p, t: []
+    O._pick = lambda p, nl, now, rg, ex=(): calls.append(("pick", p, ex)) and None or (None, None, None)
+    O.session_matrix = lambda p, f=None, ex=(): calls.append(("matrix", p, f, ex)) or "A"
+    O.accepted_sessions = lambda p, root=None: calls.append(("accepted", p, root)) and 0 or 0
+    O.report_flags = lambda p, t, root=None: []
     O._summary = lambda: None
     O.preclean = lambda: calls.append(("preclean",))
     O.most_needed_state = lambda *a, **k: None
@@ -238,7 +254,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     def sleep(_):
         n["sleeps"] += 1
         if drain_after is not None and n["sleeps"] == drain_after:
-            (tmp / O.TRIO_DRAIN_FILE).write_text("")
+            (tmp / T.TRIO_DIR / O.TRIO_DRAIN_FILE).write_text("")
         assert n["sleeps"] < 200, "run_trio did not end"
     try:
         rc = O.run_trio(targets, "A", iface=IF, capacity_kbit=104100.0, max_per_slot=max_per_slot, stagger_s=0,
@@ -265,7 +281,8 @@ def test_run_trio():
         kinds = [c[0] for c in calls]
         up = next(i for i, c in enumerate(calls) if c[0] == "apply" and c[1].startswith("modprobe"))
         assert kinds[0] == "preclean" and up < kinds.index("matrix")          # shared tree before any session
-        assert calls[-1][0] == "apply" and calls[-1][1].startswith("tc qdisc del") and calls[-1][2] is False
+        last_apply = [c for c in calls if c[0] == "apply"][-1]
+        assert last_apply[1].startswith("tc qdisc del") and last_apply[2] is False      # the teardown, last
         assert [c for c in calls if c[0] == "make"] == [("make", "start-capture"), ("make", "stop-capture"),
                                                         ("make", "merge-capture")]
         for cmd, env, log in spawned:
@@ -274,8 +291,12 @@ def test_run_trio():
             assert cmd[cmd.index("--link-capacity-kbit") + 1] == "104100.0"
             assert env["LVQOE_SHOT_SOURCE"] == "cdp" and env["LVDC_PREFLIGHT_JSON"].endswith(f"preflight_last_{tag}.json")
             assert env["LVDC_TRIO_RUN"] and log.name == f"{tag}_1.log"
-        assert [c[2] for c in calls if c[0] == "matrix"] == [f"_summaries/coverage_last_{t}.json" for t in ("yt", "tw", "tt")]
-        ev = [json.loads(x) for x in (tmp / T.SLOTS_LOG).read_text().splitlines()]
+        assert [c[2] for c in calls if c[0] == "matrix"] == [f"_trio/_summaries/coverage_last_{t}.json" for t in ("yt", "tw", "tt")]
+        assert all(c[3] == ("fullscreen",) for c in calls if c[0] == "matrix")          # trio v1: no fullscreen
+        assert all(c[2] == ("fullscreen",) for c in calls if c[0] == "pick")
+        assert {c[2] for c in calls if c[0] == "accepted"} == {tmp / "_trio"}            # trio counts its own root only
+        assert "/_trio/_summaries/trio_logs/" in str(spawned[0][2])
+        ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
         assert ev[0]["event"] == "trio_up" and ev[-1]["event"] == "trio_down" and ev[-1]["end_rc"] == 0
         assert sorted(e["slot"] for e in ev if e["event"] == "exit") == ["tt", "tw", "yt"]
 
@@ -283,12 +304,14 @@ def test_run_trio():
         spawned.clear()
         rc, _ = _trio(tmp, {"twitch": 5}, spawn, max_per_slot=None, drain_after=6)
         assert rc == 0 and len(spawned) >= 2 and all("--slot" in c for c, _, _ in spawned)
-        assert not (tmp / O.TRIO_DRAIN_FILE).exists() and list((tmp / "_summaries").glob("trio_drain.done_*"))
+        assert not (tmp / T.TRIO_DIR / O.TRIO_DRAIN_FILE).exists()
+        assert list((tmp / T.TRIO_DIR / "_summaries").glob("trio_drain.done_*"))
 
         # preflight failure: nothing starts, the trio ends with EXIT_PREFLIGHT, the tree still comes down
         spawned.clear()
         rc, calls = _trio(tmp, {"youtube": 5}, spawn, pf_ok=False)
-        assert rc == O.EXIT_PREFLIGHT and not spawned and calls[-1][1].startswith("tc qdisc del")
+        assert rc == O.EXIT_PREFLIGHT and not spawned
+        assert [c for c in calls if c[0] == "apply"][-1][1].startswith("tc qdisc del")
 
         # a spawn failure in one slot drains: the running sibling finishes before the teardown
         order = []
@@ -301,7 +324,7 @@ def test_run_trio():
             return p
         rc, calls = _trio(tmp, {"youtube": 5, "twitch": 5}, spawn2)
         assert rc == 1 and order == ["yt started"]
-        ev = [json.loads(x) for x in (tmp / T.SLOTS_LOG).read_text().splitlines()]
+        ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
         last_run = ev[max(i for i, e in enumerate(ev) if e["event"] == "trio_up"):]
         assert [e["event"] for e in last_run] == ["trio_up", "exit", "trio_down"]
 

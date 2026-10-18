@@ -213,11 +213,11 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
         balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
 
 
-def accepted_sessions(platform: str) -> int:
+def accepted_sessions(platform: str, runs_dir: Path | None = None) -> int:
     """PASS sessions on disk (data/<platform>/*/check.json); a FAIL is archived to data/_failed and not counted. The
-    batch recounts these at every start, so a restart resumes where it stopped."""
+    batch recounts these at every start, so a restart resumes where it stopped. runs_dir: the trio's own root."""
     n = 0
-    for c in (_RUNS_DIR / platform).glob("*/check.json"):
+    for c in ((runs_dir or _RUNS_DIR) / platform).glob("*/check.json"):
         try:
             n += json.loads(c.read_text()).get("verdict") == "PASS"
         except Exception:
@@ -248,13 +248,14 @@ def coupled_geometry(p: str, geom: str | None) -> str | None:
     return (LAST_COVERAGE.get(p) or {}).get("geometry_forced") or geom
 
 
-def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE) -> str | None:
+def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, excluded_geometries: tuple = ()) -> str | None:
     """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
     LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such."""
     rec = {"platform": p, "rule": "fixed", "matrix": MATRIX_IDS.get(p)}
     if MATRIX_RULE == "coverage" and p in coverage_report.CLASSES:
         try:
-            rec = coverage_report.choose(_RUNS_DIR, p, COVERAGE_ALLOWED.get(p))
+            rec = (coverage_report.choose(_RUNS_DIR, p, COVERAGE_ALLOWED.get(p), excluded_geometries) if excluded_geometries
+                   else coverage_report.choose(_RUNS_DIR, p, COVERAGE_ALLOWED.get(p)))
             print(f"  coverage : matrix {rec['matrix']} (target {(rec['target'] or {}).get('key')}, {rec['why']})")
         except Exception as e:
             rec["rule_error"] = repr(e)
@@ -270,11 +271,12 @@ def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE) -> 
 FLAGS_FILE = "_summaries/flags.jsonl"
 
 
-def report_flags(p: str, since: float) -> list[dict]:
+def report_flags(p: str, since: float, runs_dir: Path | None = None) -> list[dict]:
     """After a session (supervisor 2026-10-18: a collection fault is caught on the first session): every check.json of
     `p` written since `since` (accepted or _failed) with stream-regime flags gets a FLAG line and a flags.jsonl row;
     `new` lists the flags this platform had not raised before."""
-    path = _RUNS_DIR / FLAGS_FILE
+    root = runs_dir or _RUNS_DIR
+    path = root / FLAGS_FILE
     seen: set = set()
     if path.exists():
         for line in path.read_text().splitlines():
@@ -286,7 +288,7 @@ def report_flags(p: str, since: float) -> list[dict]:
                 seen.update(r.get("flags") or [])
     rows = []
     found = []
-    for c in list((_RUNS_DIR / p).glob("*/check.json")) + list((_RUNS_DIR / "_failed" / p).glob("*/check.json")):
+    for c in list((root / p).glob("*/check.json")) + list((root / "_failed" / p).glob("*/check.json")):
         try:
             if c.stat().st_mtime >= since:
                 found.append((c.stat().st_mtime, str(c), c, json.loads(c.read_text())))
@@ -317,7 +319,7 @@ def _summary() -> None:
         print(f"  (daily summary failed: {e!r})")
 
 
-def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool) -> tuple:
+def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool, exclude_modes: tuple = ()) -> tuple:
     """The session's channel (yt), category (twitch) and geometry draw, and the skip records they leave (run_batch and,
     per slot, run_trio)."""
     skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
@@ -346,12 +348,13 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool)
         with open(_RUNS_DIR / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
             fh.write(json.dumps(esports_skip) + "\n")
         print(f"  esports unavailable (none of {esports_skip['checked']} live): drawing {category['name']}")
-    geom = geometry.next_geometry(_RUNS_DIR, p) if rotate_geometry else None
+    geom = (geometry.next_geometry(_RUNS_DIR, p, exclude_modes) if exclude_modes else geometry.next_geometry(_RUNS_DIR, p)) \
+        if rotate_geometry else None
     return channel, category, geom
 
 
 def _account(p: str, rc: int, before: int, channel: dict | None, category: dict | None, now: float,
-             paused: dict, fails: dict, frozen: dict, not_live: dict) -> None:
+             paused: dict, fails: dict, frozen: dict, not_live: dict, runs_dir: Path | None = None) -> None:
     """A finished session's exit code into the batch state: login-wall pause, not-a-failure aborts, the not-live skip,
     the consecutive-failure pause (run_batch and, per slot, run_trio)."""
     if rc == EXIT_LOGIN_WALL:
@@ -368,7 +371,7 @@ def _account(p: str, rc: int, before: int, channel: dict | None, category: dict 
         not_live[category.get("channel") or category["name"]] = now
     if rc not in NOT_A_FAILURE:
         frozen[p] = 0
-        fails[p] = 0 if accepted_sessions(p) > before else fails[p] + 1
+        fails[p] = 0 if (accepted_sessions(p, runs_dir) if runs_dir else accepted_sessions(p)) > before else fails[p] + 1
     if fails[p] >= MAX_CONSECUTIVE_FAIL and p not in paused:
         paused[p] = f"{fails[p]} consecutive sessions without a PASS"
     if p in paused:
@@ -452,7 +455,8 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
 
 TRIO_STAGGER_S = 30.0     # at least this long between two slot starts (Chrome launches and profile clones not at once)
 TRIO_POLL_S = 2.0
-TRIO_DRAIN_FILE = "_summaries/trio_drain"   # touch it (data dir) to drain: no refill, every slot ends; archived when used
+# under the trio root (data/_trio, trio_slots.TRIO_DIR)
+TRIO_DRAIN_FILE = "_summaries/trio_drain"   # touch it to drain: no refill, every slot ends; archived when used
 TRIO_LOGS = "_summaries/trio_logs"          # each trio session's exp.py output (three would interleave on stdout)
 
 
@@ -476,7 +480,7 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
                  rotate_geometry: bool, yt_matrix: str, capacity_kbit: float | None, run_id: str, summaries: Path,
                  spawn) -> bool:
     """Start the next session in p's slot (run_trio); False when its preflight failed (the trio drains)."""
-    s = T.SLOTS[p]
+    s, troot = T.SLOTS[p], _RUNS_DIR / T.TRIO_DIR
     free_gb = shutil.disk_usage(_RUNS_DIR).free / 1e9
     if free_gb < MIN_FREE_GB:
         print(f"\n  Data volume {free_gb:.0f} GB free < {MIN_FREE_GB} GB: draining the trio.")
@@ -489,10 +493,14 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
         print(f"\n  PREFLIGHT FAILED for the {p} slot ({', '.join(pf['problems'])}): draining the trio. "
               f"{json.dumps({k: pf['checks'][k] for k in pf['problems']})}")
         return False
-    before, now = accepted_sessions(p), time.time()
-    channel, category, geom = _pick(p, not_live, now, rotate_geometry)
-    mid = session_matrix(p, f"_summaries/coverage_last_{s.tag}.json")      # sets LVDC_COVERAGE_JSON to this file
+    before, now = accepted_sessions(p, troot), time.time()
+    # the pick and the coverage rule read single mode's data (steering only; trio's own counts are its root's); trio v1
+    # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
+    channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES)
+    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES)
     forced = coupled_geometry(p, geom) if rotate_geometry else geom
+    if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES:
+        forced = geom
     if forced != geom:
         print(f"  geometry {forced} (coupled to the coverage target; rotation drew {geom})")
         geom = forced
@@ -503,7 +511,7 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     # trio v1 shots: CDP (three windows on one screen; X11 crops need the enlarged framebuffer, design §4)
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVQOE_SHOT_SOURCE": "cdp", "LVDC_PREFLIGHT_JSON": str(pf_path)}
     started[p] += 1
-    log = _RUNS_DIR / TRIO_LOGS / run_id / f"{s.tag}_{started[p]}.log"
+    log = troot / TRIO_LOGS / run_id / f"{s.tag}_{started[p]}.log"
     print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {p} slot ({s.tag}) session {started[p]}: "
           f"{before}/{targets[p]} accepted"
           + (f"; channel {channel['handle']}" if channel else "")
@@ -519,7 +527,9 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
              stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S,
              spawn=_spawn, apply=None, make=_make, sleep=time.sleep) -> int:
     """One slot per platform (trio_slots.SLOTS), each refilled when its session ends (A1), until every platform has its
-    target of PASS sessions, or `max_per_slot` sessions started per slot (the pilot: 1). Per slot exactly as run_batch
+    target of PASS trio sessions (counted in the trio's own data root, data/_trio/<platform>: single mode never sees
+    them), or `max_per_slot` sessions started per slot (the pilot: 1). Trio v1 draws no fullscreen geometry, and a
+    coverage class that needs one is unreachable (recorded). Per slot exactly as run_batch
     per session: the pick (_pick), the per-session preflight (rootfs floor raised by A2), the coverage matrix and its
     coupled geometry, the accounting (_account), the flag report; each slot's coverage / preflight record is its own
     file. Started in a pause (no session running): single mode's preclean once, then the shared tree, the unmarked
@@ -531,9 +541,10 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     import trio_slots as T
     apply = apply or T.apply
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    summaries = _RUNS_DIR / "_summaries"
+    troot = _RUNS_DIR / T.TRIO_DIR                          # trio sessions' own data root (never pooled silently)
+    summaries = troot / "_summaries"
     summaries.mkdir(parents=True, exist_ok=True)
-    slots_log, drain_path = _RUNS_DIR / T.SLOTS_LOG, _RUNS_DIR / TRIO_DRAIN_FILE
+    slots_log, drain_path = troot / T.SLOTS_LOG, troot / TRIO_DRAIN_FILE
     paused: dict[str, str] = {}
     fails = {p: 0 for p in targets}
     frozen = {p: 0 for p in targets}
@@ -564,7 +575,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     apply(T.shared_up_cmds(iface))
     dstage = T.STAGING / f"default_{run_id}"
     dstage.mkdir(parents=True, exist_ok=True)
-    ddir = _RUNS_DIR / T.DEFAULT_CAPTURE / run_id
+    ddir = troot / T.DEFAULT_CAPTURE / run_id
     make(["start-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
     T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
                                    "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot})
@@ -579,18 +590,19 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                 T.slots_log_append(slots_log, {"event": "exit", "slot": T.SLOTS[p].tag, "rc": rc, "t": time.time()})
                 print(f"[{dt.datetime.now():%H:%M}] TRIO {p}: exp.py rc {rc} (log {r['log']})")
                 try:
-                    report_flags(p, r["t"])
+                    report_flags(p, r["t"], troot)
                 except Exception as e:
                     print(f"  (flag report failed: {e!r})")
                 if rc == EXIT_STOPPED:
                     print(f"  {p}: session stopped (SIGINT / SIGTERM): draining the trio")
                     end_rc = end_rc or EXIT_STOPPED
                 else:
-                    _account(p, rc, r["before"], r["channel"], r["category"], r["now"], paused, fails, frozen, not_live)
+                    _account(p, rc, r["before"], r["channel"], r["category"], r["now"], paused, fails, frozen, not_live,
+                             troot)
                 _summary()
             draining = bool(stop_signal) or end_rc != 0 or drain_path.exists()
             todo = [p for p in BATCH_ORDER if p in targets and p in T.SLOTS and p not in paused
-                    and (max_per_slot is None or started[p] < max_per_slot) and accepted_sessions(p) < targets[p]]
+                    and (max_per_slot is None or started[p] < max_per_slot) and accepted_sessions(p, troot) < targets[p]]
             if not running and (draining or not todo):
                 break
             for p in ([] if draining else todo):
@@ -629,7 +641,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     end_rc = end_rc or (EXIT_STOPPED if stop_signal else 0)
     print(f"\nTRIO {run_id} finished (rc {end_rc})." + (f" Paused: {paused}" if paused else ""))
     for p in targets:
-        print(f"  {p}: {accepted_sessions(p)}/{targets[p]} accepted, {started[p]} started")
+        print(f"  {p}: {accepted_sessions(p, troot)}/{targets[p]} trio sessions accepted, {started[p]} started")
     _summary()
     return end_rc
 

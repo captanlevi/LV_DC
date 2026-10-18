@@ -95,8 +95,9 @@ def collected_counts(data_dir: Path, platform: str) -> dict[str, int]:
     return counts
 
 
-def next_geometry(data_dir: Path, platform: str) -> str | None:
-    choices = GEOMETRY_CHOICES.get(platform)
+def next_geometry(data_dir: Path, platform: str, exclude_modes: tuple = ()) -> str | None:
+    """exclude_modes (t53 trio v1: ("fullscreen",)): rotation entries of those modes are not drawn."""
+    choices = [g for g in GEOMETRY_CHOICES.get(platform) or [] if g.split(":")[0] not in exclude_modes]
     if not choices:
         return None
     counts = collected_counts(data_dir, platform)

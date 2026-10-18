@@ -112,6 +112,12 @@ def main():
         # Q am. 15 (3): only "current" puts >= 2/21 of its mass in Q_1080p's band (9-10); the target couples fullscreen
         assert r["matrix"] == "current" and r["why"].startswith("explore"), r
         assert r["bands"]["Q_1080p"]["qualifies"] == ["current"] and r["geometry_forced"] == "fullscreen:1920x1080", r
+        assert "geometry_excluded" not in r                                          # single mode: no new key
+        # t53 trio v1 (supervisor 2026-10-19): no fullscreen -> Q_1080p unreachable, recorded; the next deficit drives
+        rt = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"], excluded_geometries=("fullscreen",))
+        assert "Q_1080p" in rt["unreachable_targets"] and rt["geometry_forced"] is None, rt
+        assert rt["geometry_excluded"] == {"modes": ["fullscreen"], "unreachable_by_geometry": ["Q_1080p"]}, rt
+        assert (rt["target"] or {}).get("key") != "Q_1080p"
         for i in range(2):
             session(d, "youtube", f"b{i}", [("Q_1080p", 60)] + allc[:-1], matrix="B")
             session(d, "youtube", f"c{i}", [("Q_1080p", 200)] + allc[:-1], matrix="current")

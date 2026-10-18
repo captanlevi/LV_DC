@@ -37,8 +37,13 @@ CURRENT_DATA = Path(__file__).resolve().parent.parent / "current_data"
 # A2 (supervisor): during a trio session its pcaps are written on the root filesystem (SSD), not the data volume (USB
 # exFAT, three writers); merge-capture writes merged.pcap into the session dir at the session's own end
 STAGING = CURRENT_DATA / "trio_staging"
-SLOTS_LOG = "_summaries/trio_slots.jsonl"            # under the data dir
-DEFAULT_CAPTURE = "_trio_default"                   # under the data dir: the unmarked remainder, one per trio run
+# supervisor 2026-10-19: trio sessions have their own data root, data/_trio/<platform>/ (single mode's accepted counts,
+# coverage snapshot, checkpoint list and verify loop never see them: am. 13's "never pooled silently", mechanically)
+TRIO_DIR = "_trio"                                  # under the data dir
+SLOTS_LOG = "_summaries/trio_slots.jsonl"           # under the trio root
+DEFAULT_CAPTURE = "_default"                        # under the trio root: the unmarked remainder, one per trio run
+# trio v1 (supervisor 2026-10-19): no fullscreen geometry (one screen, three windows); yt Q_1080p is then unreachable
+EXCLUDED_GEOMETRIES = ("fullscreen",)
 TC_SAMPLE_S = 1.0
 IW_EVERY = 5                                        # `iw link` every IW_EVERY tc samples
 FLAGGED_SHARE_QA = 0.05                             # L-A2: > 5 % flagged seconds is a QA flag
@@ -432,7 +437,7 @@ def concurrency_record(s: Slot | None, **extra) -> dict:
 
 
 def slots_log_append(path: Path, rec: dict) -> None:
-    """The orchestrator's slot timeline (data/_summaries/trio_slots.jsonl): every session's start / end per slot, from
+    """The orchestrator's slot timeline (data/_trio/_summaries/trio_slots.jsonl): every session's start / end per slot, from
     which each session's siblings and their overlap are read."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as fh:
