@@ -556,6 +556,12 @@ if __name__ == "__main__":
              "geometry.py); default: the platform's pinned player size. Recorded in meta.json.",
     )
     parser.add_argument(
+        "--entry-quality",
+        action="store_true",
+        help="Q am. 1 / am. 10 (yt / twitch, default off): at the unshaped entry pick one tier from the player's menu "
+             "by the coverage snapshot's rule, restore Auto and verify it from state (entry_quality.py); meta.json entry_quality.",
+    )
+    parser.add_argument(
         "--dpms-off",
         action="store_true",
         help="After the browser start (geometry pin, which wakes the monitor), run `xset dpms force off` (chaos "
@@ -668,8 +674,16 @@ if __name__ == "__main__":
                                    tw_category_url=first_url, tw_channel=args.tw_channel,
                                    tw_category_previous=tw_categories.last_category(session_dir.parent.parent, skip=session_dir),
                                    tw_category_counts=tw_categories.collected_counts(session_dir.parent.parent))
+            eq_cfg = None
+            if args.entry_quality:   # the snapshot the matrix came from (orchestrate's coverage record), else none
+                try:
+                    eq_cfg = {"snapshot": json.loads(Path(os.environ["LVDC_COVERAGE_JSON"]).read_text()).get("snapshot")
+                              if os.environ.get("LVDC_COVERAGE_JSON") else None}
+                except Exception as e:
+                    eq_cfg = {"snapshot": None, "error": repr(e)}
             browser = BrowserSession(platform, session_dir=session_dir, first_url=first_url, geometry=args.geometry,
-                                     room_rotation_s=args.tt_room_rotation if platform == "tiktok" else None)
+                                     room_rotation_s=args.tt_room_rotation if platform == "tiktok" else None,
+                                     entry_quality=eq_cfg)
             browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)
             browser.start()
             if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
@@ -728,7 +742,8 @@ if __name__ == "__main__":
                               decode_path={**decode_path.spec(platform), "gpu": browser.decode_gpu, "page": browser.decode_page,
                                            **decode_path.hevc_decision(browser.decode_gpu, browser.decode_page)},
                               tw_pick=browser.tw_pick, room_play_clicks=browser.room_play_clicks,
-                              room_discontinuities=browser.room_discontinuities)
+                              room_discontinuities=browser.room_discontinuities,
+                              entry_quality=browser.entry_quality)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)

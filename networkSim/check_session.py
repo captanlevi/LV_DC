@@ -780,6 +780,23 @@ def meta_check(sd: Path) -> tuple[dict, list[str]]:
     return m, missing
 
 
+def entry_quality_summary(meta: dict) -> dict | None:
+    """Q am. 10: the entry pick's outcome and every re-entry's re-check; qa_fail names a restore not verified from state."""
+    eq = meta.get("entry_quality")
+    re_ = [(r.get("setup") or {}).get("entry_quality") for r in meta.get("frozen_reentries") or []]
+    re_ = [r for r in re_ if r]
+    if not eq and not re_:
+        return None
+    eq = eq or {}
+    entry_bad = eq.get("auto_restored") is False or (eq.get("t_auto") and eq.get("auto_restored") is not True)
+    fails = (["entry"] if entry_bad else []) + \
+            [f"reentry {i}" for i, r in enumerate(re_) if r.get("auto_restored") is not True]
+    return {"selected": eq.get("selected"), "menu_available": eq.get("menu_available"),
+            "auto_restored": eq.get("auto_restored"), "reason": eq.get("reason"), "t_auto": eq.get("t_auto"),
+            "t_settle_s": eq.get("t_settle_s"), "reentries": [r.get("auto_restored") for r in re_],
+            "qa_fail": ", ".join(fails) or None}
+
+
 def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: float,
             abort_reason: str | None = None) -> tuple[str, list[str]]:
     why = []
@@ -887,6 +904,9 @@ def main() -> int:
     except Exception as e:
         motion_s = {"status": "error", "why": repr(e)}
     v, why = verdict(lab, net, shots, meta_missing, a.max_background_share, meta.get("abort_reason"))
+    eq = entry_quality_summary(meta)
+    if eq and eq["qa_fail"]:      # Q am. 10: a restore not verified from state is QA-flagged
+        v, why = "FAIL", why + [f"entry_quality: Auto not restored ({eq['qa_fail']})"]
     # levi 2026-10-17: entries (from meta.json, else computed here for older sessions) and one session class by the
     # fixed precedence; only `normal` counts toward quotas
     ents = meta.get("entries")
@@ -909,7 +929,7 @@ def main() -> int:
            "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap"),
            "stream_regime": sreg["regime"], "suspicious": sreg["suspicious"],
            "censored": meta.get("censored"), "lowest_rung": meta.get("lowest_rung"), "decode_path": meta.get("decode_path"),
-           "decode_hevc": dp_hevc, "template_note": meta.get("template_note")}
+           "decode_hevc": dp_hevc, "template_note": meta.get("template_note"), "entry_quality": eq}
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class})", ""] + [f"- {r}" for r in why] + \
         [f"- SUSPICIOUS (reported; verdict unchanged): {x}" for x in sreg["suspicious"]] + ["",
