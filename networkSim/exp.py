@@ -690,7 +690,8 @@ if __name__ == "__main__":
             trio_run=os.environ.get("LVDC_TRIO_RUN"), slots_log=str(slots_log)))
         session_meta.write(session_dir, concurrency=TRIO)
         trio_slots.slots_log_append(slots_log, {"event": "start", "slot": SLOT.tag, "session": session_dir.name,
-                                                "platform": platform, "t": time.time(), "pid": os.getpid()})
+                                                "platform": platform, "t": time.time(), "pid": os.getpid(),
+                                                "run": os.environ.get("LVDC_TRIO_RUN")})
     if template_note:   # the template's rebuild note (e.g. tt's HEVC template): the regime boundary in the session record
         session_meta.write(session_dir, template_note=template_note)
     if os.environ.get("LVDC_PREFLIGHT_JSON"):   # orchestrate's per-session preflight (preflight.py)
@@ -718,6 +719,7 @@ if __name__ == "__main__":
         raise ValueError("Cannot initialize the network for collection")
     tc_sampler = (trio_slots.TcSampler(session_dir, SLOT, capacity_kbit=args.link_capacity_kbit).start()
                   if SLOT is not None else None)
+    dns_cap = trio_slots.dns_capture_start(staging) if SLOT is not None else None   # the default class's DNS (v3 §8)
 
     if is_capture and initialize_pcap(session_dir) == False:
         raise ValueError("Cannot initialize pcap capture")
@@ -850,8 +852,15 @@ if __name__ == "__main__":
         if SLOT is not None:   # tcpdump's kernel drop counters; its stderr files join the session dir (staging emptied)
             try:
                 import shutil as _shutil
+                trio_slots.dns_capture_stop(dns_cap)
                 TRIO["capture_drops"] = trio_slots.capture_drops_of(staging)
-                for _f in staging.glob("tcpdump_*.err"):
+                answers, TRIO["dns_answers"] = trio_slots.dns_answers_for(
+                    session_dir / "merged.pcap", [staging / "dns_default.pcap"] + trio_slots.run_dns_pcaps(
+                        slots_log, DATA_DIR / trio_slots.TRIO_DIR, os.environ.get("LVDC_TRIO_RUN"), session_dir.name),
+                    _shutil.which("tshark") or "tshark")
+                if answers:        # as LVQoE writes it (save_dns_answers); none -> LVQoE scans the pcap, also none
+                    (session_dir / "dns_answers.json").write_text(json.dumps(answers, indent=2, sort_keys=True))
+                for _f in list(staging.glob("tcpdump_*.err")) + list(staging.glob("dns_default.*")):
                     _shutil.move(str(_f), str(session_dir / _f.name))
                 TRIO["staging_left"] = sorted(x.name for x in staging.iterdir())
                 if not TRIO["staging_left"]:

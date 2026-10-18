@@ -485,6 +485,127 @@ def siblings(path: Path, session: str, t0: float, t1: float | None) -> list[dict
     return out
 
 
+# ------------------------------------------------------------------------------------------------ DNS per session
+# design v3 §8 / L-C6: the system resolver's upstream DNS is unmarked (it is systemd-resolved's, not the session's), so
+# it lands in the default class, not in the session's pcap. Each slot captures the default class's DNS during its
+# session (dns_default.pcap) and writes dns_answers.json in LVQoE's form (watcher/lv/dns_answers: the same tshark query,
+# {address: [names]}, first seen first): its own pcap's answers, then the default capture's for addresses its own pcap
+# contacted. LVQoE's ingest reads the file instead of scanning the pcap (load_or_build_dns_answers). The resolver
+# caches: a name resolved by an earlier session of the run (same CDN node) is not asked again, so the earlier sessions'
+# DNS captures of the same run are read too, and run_trio flushes the resolver's cache at trio start (levi: a contacted
+# media address with no name in dns_answers.json is a gate-2 FAIL).
+DNS_FILTER = "port 53"
+DNS_TSHARK_FILTER = "dns.qry.type == 1 or dns.qry.type == 28"      # LVQoE scan_pcap_for_dns_answers
+
+
+def dns_capture_start(staging: Path) -> subprocess.Popen:
+    cmd = (f'exec tcpdump -i lvi_def -U -w - "{DNS_FILTER}" > "{staging / "dns_default.pcap"}" '
+           f'2> "{staging / "dns_default.err"}"')
+    return subprocess.Popen(["sudo", "-n", "sh", "-c", cmd])
+
+
+def dns_capture_stop(p: subprocess.Popen | None) -> None:
+    if p is None:
+        return
+    subprocess.run(["sudo", "-n", "kill", "-INT", str(p.pid)], capture_output=True)
+    try:
+        p.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        subprocess.run(["sudo", "-n", "kill", "-KILL", str(p.pid)], capture_output=True)
+
+
+def parse_dns(text: str) -> dict[str, list[str]]:
+    """LVQoE watcher/lv/dns_answers.parse_tshark_dns_output: lines `name<TAB>a,a<TAB>aaaa` -> {ip: [names]}."""
+    out: dict[str, list[str]] = {}
+    for line in (text or "").splitlines():
+        parts = line.rstrip("\n").split("\t")
+        if not parts or not parts[0]:
+            continue
+        host = parts[0].strip()
+        for field in parts[1:]:
+            for ip in field.split(","):
+                ip = ip.strip()
+                if ip:
+                    arr = out.setdefault(ip, [])
+                    if host not in arr:
+                        arr.append(host)
+    return out
+
+
+def tshark_dns(pcap: Path, tshark: str = "tshark") -> str:
+    try:
+        r = subprocess.run([tshark, "-r", str(pcap), "-n", "-Y", DNS_TSHARK_FILTER, "-T", "fields", "-e", "dns.qry.name",
+                            "-e", "dns.a", "-e", "dns.aaaa"], capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
+_TUPLE4 = re.compile(r" IP (\d+\.\d+\.\d+\.\d+)\.\d+ > (\d+\.\d+\.\d+\.\d+)\.\d+:")
+
+
+def contacted_addresses(text: str) -> set:
+    """Every IPv4 address on a TCP / UDP packet in `tcpdump -nn -q -r` output (both ends)."""
+    return {ip for m in _TUPLE4.finditer(text or "") for ip in m.groups()}
+
+
+def run_dns_pcaps(slots_log: Path, troot: Path, run: str | None, session: str) -> list[Path]:
+    """The DNS captures of the sessions of trio run `run` that ended before now (their session dirs, accepted or
+    _failed), from the slots log."""
+    out = []
+    try:
+        lines = slots_log.read_text().splitlines()
+    except OSError:
+        return out
+    started, ended = {}, set()
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("event") == "start" and r.get("run") == run and r.get("session") != session:
+            started[r["session"]] = r.get("platform")
+        elif r.get("event") == "end":
+            ended.add(r.get("session"))
+    for s, plat in started.items():
+        if s in ended and plat:
+            for d in (troot / plat / s, troot / "_failed" / plat / s):
+                if (d / "dns_default.pcap").exists():
+                    out.append(d / "dns_default.pcap")
+                    break
+    return sorted(out)
+
+
+def dns_answers_for(own_pcap: Path, default_dns_pcaps, tshark: str = "tshark") -> tuple[dict, dict]:
+    """default_dns_pcaps: the session's own default-class DNS capture first, then the run's earlier ones."""
+    if isinstance(default_dns_pcaps, (str, Path)) or default_dns_pcaps is None:
+        default_dns_pcaps = [default_dns_pcaps] if default_dns_pcaps else []
+    own = parse_dns(tshark_dns(own_pcap, tshark))
+    dflt: dict = {}
+    for pc in default_dns_pcaps:
+        if pc and Path(pc).exists():
+            for ip, names in parse_dns(tshark_dns(Path(pc), tshark)).items():
+                arr = dflt.setdefault(ip, [])
+                arr += [n for n in names if n not in arr]
+    addrs: set = set()
+    if dflt:
+        try:
+            addrs = contacted_addresses(subprocess.run(["tcpdump", "-nn", "-q", "-r", str(own_pcap)], capture_output=True,
+                                                       text=True, timeout=600).stdout)
+        except (OSError, subprocess.SubprocessError):
+            addrs = set()
+    out = {ip: list(v) for ip, v in own.items()}
+    kept = 0
+    for ip, names in dflt.items():
+        if ip in addrs:
+            kept += 1
+            arr = out.setdefault(ip, [])
+            arr += [n for n in names if n not in arr]
+    return out, {"own_pcap_addresses": len(own), "default_addresses": len(dflt), "default_kept": kept,
+                 "contacted_addresses": len(addrs), "addresses": len(out),
+                 "default_pcaps": [str(p) for p in default_dns_pcaps]}
+
+
 def conntrack_timeouts(proc: Path = Path("/proc/sys/net/netfilter")) -> dict:
     """The conntrack timeouts in force (a QUIC flow idle past the UDP stream timeout loses its ct mark, and its next
     downstream packets reach the unmarked default class until an egress packet re-marks it)."""

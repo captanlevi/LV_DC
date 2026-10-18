@@ -573,13 +573,15 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
         apply(T.slot_down_cmds(s, iface, T.nft_handle_of(s)), check=False)
     apply(T.shared_down_cmds(iface), check=False)
     apply(T.shared_up_cmds(iface))
+    # every name the run's sessions use is then asked upstream within the run, so it reaches a DNS capture (v3 §8)
+    flush = apply(["resolvectl flush-caches"], check=False)
     dstage = T.STAGING / f"default_{run_id}"
     dstage.mkdir(parents=True, exist_ok=True)
     ddir = troot / T.DEFAULT_CAPTURE / run_id
     make(["start-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
     T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
                                    "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
-                                   "conntrack_timeouts": T.conntrack_timeouts()})
+                                   "conntrack_timeouts": T.conntrack_timeouts(), "resolver_cache_flushed": flush[0]})
     print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {run_id} up: {targets}, max per slot {max_per_slot}")
     try:
         while True:

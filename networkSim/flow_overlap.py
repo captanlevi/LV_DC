@@ -14,7 +14,8 @@ Per trio run, over its sessions' merged.pcap and the unmarked remainder's (data/
   - QUIC under the mark (rushi, supervisor 2026-10-19): per session the QUIC (UDP 443) share of its bytes and flows,
     and any UDP packet in the default capture, during the session, to or from an address its media flows used (a QUIC
     flow whose conntrack entry expired arrives unmarked: the conntrack-timeout case); the box's conntrack UDP timeouts.
-Output: JSON on stdout (or --out). Exit 0 = no leak, 1 = a leak, 2 = input missing.
+  - dns_answers.json (levi, gate 2 item 14): every media address the session contacted has a name in it.
+Output: JSON on stdout (or --out). Exit 0 = no leak and no DNS fail, 1 = a leak or a DNS fail, 2 = input missing.
 
     python3 flow_overlap.py --run <trio run id> [--data DATA_DIR] [--out report.json]
     python3 flow_overlap.py --sessions DIR [DIR ...] --default DEFAULT_DIR
@@ -189,13 +190,21 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
                                                        "quic_packets": sum(1 for _, k, _ in hit if _is_quic(k)),
                                                        "flows": sorted({str(list(k)) for _, k, _ in hit})[:5],
                                                        "media_addresses": len(ips)}
+        dfile = x.get("dns_answers_file")
+        if dfile is not None:      # levi (gate 2 item 14): a contacted media address with no name in dns_answers.json
+            named = set(json.loads(Path(dfile).read_text())) if Path(dfile).exists() else set()
+            unnamed = sorted(media_addresses(s, plat) - named)
+            rec["dns_answers_json"] = {"present": Path(dfile).exists(), "addresses": len(named),
+                                       "media_addresses": len(media_addresses(s, plat)), "media_unnamed": unnamed}
         per[n] = rec
     leak = (any(p["shared_flows"] or p["shared_quic_cids"] for p in pairs)
             or any(r["sibling_family_snis"] or r.get("flows_also_in_default") or r.get("quic_cids_also_in_default")
                    or r.get("default_media_snis_in_window") or (r.get("default_udp_from_media_addresses") or {}).get("packets")
                    for r in per.values()))
+    dns_fail = [n for n, r in per.items() if (r.get("dns_answers_json") or {}).get("media_unnamed")
+                or (r.get("dns_answers_json") or {}).get("present") is False]
     return {"pairs": pairs, "sessions": per, "default_capture": default is not None,
-            "default_flows": len(default["flows"]) if default else None, "leak": leak}
+            "default_flows": len(default["flows"]) if default else None, "leak": leak, "dns_fail": dns_fail}
 
 
 def _session_dirs_of_run(data: Path, run: str) -> list[Path]:
@@ -235,7 +244,8 @@ def main(argv=None) -> int:
             return 2
         sessions[f"{d.parent.name}/{d.name}"] = {"platform": meta.get("platform"),
                                                  "window": [meta.get("started_at") or 0, meta.get("ended_at") or 1e12],
-                                                 "s": summarise(tshark_rows(pcap, a.tshark))}
+                                                 "s": summarise(tshark_rows(pcap, a.tshark)),
+                                                 "dns_answers_file": str(d / "dns_answers.json")}
     default = (summarise(tshark_rows(dflt / "merged.pcap", a.tshark), keep_udp=True)
                if dflt and (dflt / "merged.pcap").exists() else None)
     rep = {"run": a.run, "session_dirs": [str(d) for d in dirs], "default_dir": str(dflt) if dflt else None,
@@ -244,7 +254,7 @@ def main(argv=None) -> int:
     if a.out:
         a.out.write_text(text)
     print(text)
-    return 1 if rep["leak"] else 0
+    return 1 if rep["leak"] or rep["dns_fail"] else 0
 
 
 if __name__ == "__main__":

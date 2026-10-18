@@ -232,6 +232,58 @@ def test_flow_overlap():
                                                  "nf_conntrack_tcp_timeout_established": None}
 
 
+def test_dns_answers():
+    txt = "rr1---sn-x.googlevideo.com\t142.250.1.1,142.250.1.2\t\nwww.youtube.com\t142.250.1.1\t\n\t\t\nnoans.com\t\t\n"
+    assert T.parse_dns(txt) == {"142.250.1.1": ["rr1---sn-x.googlevideo.com", "www.youtube.com"],
+                                "142.250.1.2": ["rr1---sn-x.googlevideo.com"]}
+    td = ("12:00:00.000000 IP 10.0.0.2.50001 > 142.250.1.1.443: UDP, length 1300\n"
+          "12:00:00.1 IP 151.101.1.1.443 > 10.0.0.2.50100: tcp 900\n12:00:01 IP 10.0.0.2 > 8.8.8.8: ICMP echo request\n")
+    assert T.contacted_addresses(td) == {"10.0.0.2", "142.250.1.1", "151.101.1.1"}
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        own, dd, early = d / "merged.pcap", d / "dns_default.pcap", d / "early.pcap"
+        for f in (own, dd, early):
+            f.write_bytes(b"")
+        fake = {str(own): "", str(dd): "video-weaver.x.ttvnw.net\t151.101.1.1\t\nother.com\t9.9.9.9\t\n",
+                str(early): "rr1---sn-x.googlevideo.com\t142.250.1.1\t\n"}
+        saved = T.tshark_dns, T.subprocess.run
+        T.tshark_dns = lambda pc, ts="tshark": fake[str(pc)]
+        T.subprocess.run = lambda *a, **k: type("R", (), {"stdout": td, "returncode": 0})()
+        try:
+            ans, rec = T.dns_answers_for(own, [dd, early])
+        finally:
+            T.tshark_dns, T.subprocess.run = saved
+        # only addresses the session's own pcap contacted; an earlier session's answer names a cached address
+        assert ans == {"151.101.1.1": ["video-weaver.x.ttvnw.net"], "142.250.1.1": ["rr1---sn-x.googlevideo.com"]}, ans
+        assert rec["default_kept"] == 2 and rec["default_addresses"] == 3
+        troot = d / "_trio"
+        (troot / "youtube" / "yt_4").mkdir(parents=True)
+        (troot / "youtube" / "yt_4" / "dns_default.pcap").write_bytes(b"")
+        (troot / "_failed" / "twitch" / "tw_5").mkdir(parents=True)
+        (troot / "_failed" / "twitch" / "tw_5" / "dns_default.pcap").write_bytes(b"")
+        log = troot / "_summaries" / "trio_slots.jsonl"
+        for r in ({"event": "start", "session": "yt_4", "platform": "youtube", "run": "R", "t": 1},
+                  {"event": "start", "session": "tw_5", "platform": "twitch", "run": "R", "t": 2},
+                  {"event": "start", "session": "ti_6", "platform": "tiktok", "run": "R", "t": 3},
+                  {"event": "start", "session": "yt_1", "platform": "youtube", "run": "OLD", "t": 0},
+                  {"event": "end", "session": "yt_4", "t": 5}, {"event": "end", "session": "tw_5", "t": 6}):
+            T.slots_log_append(log, r)
+        got = T.run_dns_pcaps(log, troot, "R", "yt_7")
+        assert got == sorted([troot / "_failed/twitch/tw_5/dns_default.pcap", troot / "youtube/yt_4/dns_default.pcap"])
+        # flow_overlap reads dns_answers.json: a contacted media address with no name is a DNS fail
+        me = "10.0.0.2"
+        s = F.summarise([_pkt(100.0, me, "142.250.1.1", "udp", 50001, 443, 1300, "aabbccddeeff0011",
+                              "rr1---sn-x.googlevideo.com")])
+        (d / "dns_answers.json").write_text(json.dumps({"142.250.1.1": ["rr1---sn-x.googlevideo.com"]}))
+        rep = F.report({"youtube/yt_7": {"platform": "youtube", "window": [0, 1e12], "s": s,
+                                         "dns_answers_file": str(d / "dns_answers.json")}}, None)
+        assert rep["dns_fail"] == [] and rep["sessions"]["youtube/yt_7"]["dns_answers_json"]["media_unnamed"] == []
+        (d / "dns_answers.json").write_text(json.dumps({}))
+        rep = F.report({"youtube/yt_7": {"platform": "youtube", "window": [0, 1e12], "s": s,
+                                         "dns_answers_file": str(d / "dns_answers.json")}}, None)
+        assert rep["dns_fail"] == ["youtube/yt_7"]
+
+
 class FakeProc:
     def __init__(self, polls: int, rc: int, log: list):
         self.left, self.rc, self.log, self.signals = polls, rc, log, []
