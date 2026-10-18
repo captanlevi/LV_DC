@@ -68,7 +68,7 @@ def test_am15_bands():
     b = C.class_band("youtube", "Q_1080p")
     assert (b["band"], b["need_kbit"], b["margin"], b["codec"]) == (["9", "10"], 4256.0, 1.4, "vp9"), b
     assert C.class_band("twitch", "Q_720p")["band"] == ["9", "10"] and C.class_band("twitch", "Q_1080p")["band"] == []
-    assert C.class_band("tiktok", "Q_1080p")["band"] == ["9", "10"]
+    assert C.class_band("tiktok", "Q_1080p")["band"] == ["9", "10"] and C.class_band("tiktok", "Q_720p")["regime"] == "hevc"
     m = C.band_map("youtube", PLATFORM_MATRICES["youtube"], ["A", "B", "current"])
     assert m["Q_1080p"]["qualifies"] == ["current"] and m["Q_720p"]["qualifies"] == ["A", "current"], m
     assert abs(m["Q_1080p"]["min_mass"] - 2 / 21) < 1e-3

@@ -86,7 +86,7 @@ def current() -> dict:
                      "STEERING_RULE": CR.STEERING_RULE, "SESSION_EPISODES": CR.SESSION_EPISODES,
                      "STATE_RATE": CR.STATE_RATE, "RUNG_MARGIN": CR.RUNG_MARGIN,
                      "RUNGS": {p: {c: list(v) for c, v in r.items()} for p, r in CR.RUNGS.items()},
-                     "YT_RUNG_CODEC": CR.YT_RUNG_CODEC,
+                     "YT_RUNG_CODEC": CR.YT_RUNG_CODEC, "TT_RUNG_REGIME": CR.TT_RUNG_REGIME,
                      "GEOMETRY_FOR_CLASS": {f"{p}/{c}": g for (p, c), g in CR.GEOMETRY_FOR_CLASS.items()}},
         "decode_path": {"PLATFORM_DECODE": DP.PLATFORM_DECODE, "DEFAULT": DP.DEFAULT},
         "geometry": {"GEOMETRY_CHOICES": GEO.GEOMETRY_CHOICES},

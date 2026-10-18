@@ -92,6 +92,7 @@ RUNGS = {
                "Q_720p": (1800.0, "declared_average", _TT_SRC), "Q_1080p": (3000.0, "declared_average", _TT_SRC)},
 }
 YT_RUNG_CODEC = "vp9"                           # am. 15 (3): yt's rung is the played codec's (vp9 on chaos)
+TT_RUNG_REGIME = "hevc"                         # tt's rungs are the HEVC ladder's (levi: the regime the rung assumes)
 GEOMETRY_FOR_CLASS = {("youtube", "Q_1080p"): "fullscreen:1920x1080"}   # am. 15 (3) / am. 2: the only yt geometry for it
 SUMMARY_FILE = "_summaries/coverage_last.json"
 
@@ -287,7 +288,8 @@ def class_band(platform: str, cls: str) -> dict | None:
     need = RUNG_MARGIN[kind] * kbit
     return {"band": sorted((s for s in SCENARIOS if state_rate(s) >= need), key=int), "rung_kbit": kbit, "kind": kind,
             "margin": RUNG_MARGIN[kind], "need_kbit": round(need, 1), "state_rate": STATE_RATE, "source": src,
-            **({"codec": YT_RUNG_CODEC} if platform == "youtube" else {})}
+            **({"codec": YT_RUNG_CODEC} if platform == "youtube" else {}),
+            **({"regime": TT_RUNG_REGIME} if platform == "tiktok" else {})}
 
 
 def band_map(platform: str, matrices: dict, ids: list[str]) -> dict:

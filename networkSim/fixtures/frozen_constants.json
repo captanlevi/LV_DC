@@ -134,6 +134,7 @@
   "STATE_RATE": "midpoint",
   "STEERING_RULE": "Q am. 15 (2026-10-19; (3) revised at LVQoE 9dfbb62)",
   "TT_ENTRY_FLOOR": 5,
+  "TT_RUNG_REGIME": "hevc",
   "YT_RUNG_CODEC": "vp9"
  },
  "decode_path": {
