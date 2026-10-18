@@ -44,6 +44,29 @@ def chrome_version(cdp_base: str | None = None) -> dict:
         return {"browser": None, "error": repr(e)}
 
 
+def chrome_cmdline(cdp_base: str | None = None) -> dict:
+    """The launched browser process's command line (t53, levi: the anti-throttling flags are in both modes; recorded so
+    each session shows them): the /proc process with --remote-debugging-port=<the CDP port> and no --type= (not a
+    renderer / GPU child). Linux only; never raises."""
+    import re
+    port = re.search(r":(\d+)", cdp_base or CDP_BASE)
+    want = f"--remote-debugging-port={port.group(1) if port else 9222}"
+    try:
+        for p in Path("/proc").iterdir():
+            if not p.name.isdigit():
+                continue
+            try:
+                argv = (p / "cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            args = [a.decode(errors="replace") for a in argv if a]
+            if want in args and not any(a.startswith("--type=") for a in args):
+                return {"pid": int(p.name), "argv": args}
+        return {"pid": None, "argv": None, "error": f"no browser process with {want}"}
+    except Exception as e:
+        return {"pid": None, "argv": None, "error": repr(e)}
+
+
 def extension_version() -> str | None:
     try:
         return json.loads((REPO / "labeling" / "manifest.json").read_text()).get("version")
@@ -165,4 +188,5 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
 def finish(session_dir: Path, channel_url: str | None, **extra) -> dict:
     """extra: e.g. chat_action, geometry (window / viewport / player size at start), window_size_flag."""
     return write(session_dir, ended_at=time.time(), channel_url=channel_url, chrome=chrome_version(),
-                 ntp_offset_end=ntp_offset(), data_volume_end=data_volume(session_dir), **extra)
+                 chrome_cmdline=chrome_cmdline(), ntp_offset_end=ntp_offset(), data_volume_end=data_volume(session_dir),
+                 **extra)

@@ -198,6 +198,10 @@ function buildEvent(type) {
     paused: video ? video.paused : null,
     playhead_still_s: null,
     ready_state: video ? video.readyState : null,   // raw QA (player_dead: 0 = no media at all)
+    // t53 (am. 13, gate-2 item 4a, levi): additive columns, every mode. The page's visibility at the tick (an
+    // overlapping-window layout must never hide an occluded window) and the rendered-frame counter (fps per tier).
+    visibility: document.visibilityState ?? null,
+    total_frames: video?.getVideoPlaybackQuality?.().totalVideoFrames ?? null,
   };
 }
 
