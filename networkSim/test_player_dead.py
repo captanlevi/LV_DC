@@ -120,7 +120,8 @@ def test_precedence():
     assert C("youtube", "FAIL", None, ok, None, None, 10, 180) == "qa_fail"
     assert C("youtube", "PASS", None, ok, None, None, 10, 180) == "normal"
     assert list(E.CLASS_PRECEDENCE) == ["not_live", "login_wall", "interrupted", "startup_failure", "room_ended",
-                                        "player_dead", "player_frozen", "qa_fail", "normal"]
+                                        "player_dead", "player_dead_recovered", "player_frozen", "qa_fail", "normal"]
+    assert E.RECOVERED_DEAD_CLASS == "normal"          # levi (a); player_dead_recovered is read only under option (b)
 
 
 def test_rates_and_reentry():
@@ -315,6 +316,49 @@ class _Patch:
             setattr(obj, name, value)
 
 
+def test_ti37_recovered_reads_normal():
+    """levi 2026-10-18 ruling (a), chaos ti_37 (fixture: labels from the start to 150 s after the re-entry, net_labels,
+    the re-entry record): the one long dead run holds the outcome-continue re-entry's t_nav, so it is reported as
+    recovered_dead_s and is not the player_dead verdict / class; a second long dead run, recovered or not, is."""
+    import check_session as CS
+    fx = json.loads((FX / "tt_ti37_recovered_2026-10-18.json").read_text())
+    rows = [dict(zip(fx["columns"], r)) for r in fx["rows"]]
+    re_ = fx["player_dead_reentries"]
+    T = CS.PLAYER_DEAD_MAX_S["tiktok"]
+    d = E.dead_player(rows, re_)
+    assert d["recovered_runs"] == 1 and 69 <= d["recovered"]["recovered_dead_s"] <= 70, d
+    assert d["max_all_s"] >= T > d["max_s"], d                      # before the ruling: player_dead by construction
+    lab = CS.label_checks(rows, "tiktok", re_)
+    assert lab["dead_player_max_s"] < T and lab["recovered_dead"]["window"][0] < re_[0]["t_nav"] < lab["recovered_dead"]["window"][1]
+    ents = E.compute_entries(rows, {"platform": "tiktok", "room_rotation": fx["room_rotation"],
+                                    "channel_url": "https://www.tiktok.com/@room/live"}, fx["net_labels"])
+    assert [(e["kind"], e.get("reason"), e["shaper_at_entry"]["state"]) for e in ents] == \
+        [("stream", None, "unshaped"), ("room_reentry", "player_dead", "3")], ents   # (3): a shaped entry, counted
+    assert E.startup_rates(ents)["room_reentry:3"] == {"entries": 1, "failed": 0, "rate": 0.0}
+    cls = lambda dd, v="PASS": E.session_class("tiktok", v, None, ents, dd["max_s"], T, 0, 900, recovered=bool(dd["recovered"]))
+    assert cls(d) == "normal"
+    # a second long dead run 300 s later, not recovered -> player_dead (one recovery per session)
+    t_shift = 300_000
+    run = [r for r in rows if r["type"] == "res_meta" and d["recovered"]["window"][0] <= float(r["ts"]) / 1000 <= d["recovered"]["window"][1]]
+    tail = [dict(r, ts=str(float(r["ts"]) + t_shift)) for r in run] + [dict(run[-1], ts=str(float(run[-1]["ts"]) + t_shift + 1000), ready_state="4")]
+    d2 = E.dead_player(rows + tail, re_)
+    assert d2["max_s"] >= T and cls(d2) == "player_dead", d2
+    # a second continue re-entry inside that run too: two recovered runs -> nothing excluded -> player_dead
+    re2 = re_ + [dict(re_[0], t_nav=re_[0]["t_nav"] + t_shift / 1000)]
+    d3 = E.dead_player(rows + tail, re2)
+    assert d3["recovered_runs"] == 2 and d3["recovered"] is None and cls(d3) == "player_dead", d3
+    # no continue outcome (the re-entry died too) -> player_dead as before
+    d4 = E.dead_player(rows, [dict(re_[0], outcome="player_dead")])
+    assert d4["recovered"] is None and cls(d4) == "player_dead"
+    # option (b): the constant flips the class, kept and not counted
+    old = E.RECOVERED_DEAD_CLASS
+    try:
+        E.RECOVERED_DEAD_CLASS = "player_dead_recovered"
+        assert cls(d) == "player_dead_recovered" and cls(d2) == "player_dead"
+    finally:
+        E.RECOVERED_DEAD_CLASS = old
+
+
 def main() -> int:
     test_ti20_replay()
     test_recovery_is_a_discontinuity()
@@ -331,6 +375,7 @@ def main() -> int:
         finally:
             mp.close()
     test_a_player_dead_reentry_is_an_entry()
+    test_ti37_recovered_reads_normal()
     print("test_player_dead: ok")
     return 0
 

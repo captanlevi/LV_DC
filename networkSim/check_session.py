@@ -273,7 +273,7 @@ def shot_effects(rows: list[dict], sd: Path, near_s: float = 1.0) -> dict | None
             "client_size_off_mode_elsewhere": sum(1 for s_, n in zip(sizes, near) if not n and s_ != mode)}
 
 
-def label_checks(rows: list[dict], platform: str) -> dict:
+def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
         return {"n_res_meta": len(meta)}
@@ -309,6 +309,7 @@ def label_checks(rows: list[dict], platform: str) -> dict:
     tier_changes = [ts[j] for i, j in zip(play_idx, play_idx[1:]) if j == i + 1 and h[i] != h[j]]
     near = sum(1 for t in tier_changes if any(abs(t - s) <= SWAP_BOUNDARY_S for s in sw_t))
     per_signal = collections.Counter(s for r in meta for s in (r.get("ad_signals") or "").split("|") if s)
+    dp = E.dead_player(rows, reentries)   # levi 2026-10-18: a run recovered by the re-entry is reported, not the verdict
     out = {
         "n_res_meta": len(meta), "duration_s": dur,
         "tick_presence": present / seconds,
@@ -324,7 +325,8 @@ def label_checks(rows: list[dict], platform: str) -> dict:
         "frozen_playhead_max_s": frozen_playhead_run(rows),
         "paused_while_playing_share": paused_while_playing_share(rows),
         "frozen_playhead_T_s": FROZEN_PLAYHEAD_MAX_S.get(platform),
-        "dead_player_max_s": E.dead_player_run(rows),
+        "dead_player_max_s": dp["max_s"], "dead_player_max_all_s": dp["max_all_s"],
+        "recovered_dead": dp["recovered"], "recovered_dead_runs": dp["recovered_runs"],
         "dead_player_T_s": PLAYER_DEAD_MAX_S.get(platform),
         "stall_advancing_share": stall_advancing_share(rows),
         "tier_mix_quality_time": {str(k): v / nq for k, v in sorted(mix.items())},
@@ -781,7 +783,7 @@ def main() -> int:
     meta, meta_missing = meta_check(sd)
     platform = meta.get("platform") or sd.parent.name
     label_rows = read_labels(sd)
-    lab = label_checks(label_rows, platform)
+    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"))
     lab["shot_effects"] = shot_effects(label_rows, sd)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
@@ -828,7 +830,8 @@ def main() -> int:
     if ents is None:
         ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_max_s"),
-                              lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"))
+                              lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"),
+                              recovered=bool(lab.get("recovered_dead")))
     slow_start = E.slow_start_shaped(ents)
     sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
     out = {"session": str(sd), "platform": platform, "verdict": v, "session_class": s_class, "entries": ents,
@@ -846,6 +849,7 @@ def main() -> int:
           f"| slow start under shaping (stream not sustained in 60 s, first shaped state <= {E.SLOW_START_MAX_STATE}; covariate, class stays) | {slow_start} |",
           f"| entries: kind / state at entry / first shaped state / sustained >= 5 s within 60 s | {[(x.get('kind'), (x.get('shaper_at_entry') or {}).get('state'), (x.get('first_shaped_after') or {}).get('state'), x.get('sustained_60s')) for x in ents]} |",
           f"| longest dead-player run after playback (readyState 0 / no media), s / T | {lab.get('dead_player_max_s')} / {lab.get('dead_player_T_s')} |",
+          f"| recovered dead run (levi (a): the run holding an outcome-continue re-entry, not the verdict / class; covariate) s / window / class rule | {(lab.get('recovered_dead') or {}).get('recovered_dead_s')} / {(lab.get('recovered_dead') or {}).get('window')} / {E.RECOVERED_DEAD_CLASS} |",
           f"| duration (min) | {dur / 60:.1f} |" if dur else "| duration | — |",
           f"| res_meta tick presence (share of seconds) | {lab.get('tick_presence')} |",
           f"| current_time advancing (playing, non-ad) | {lab.get('advancing_share_while_playing')} |",

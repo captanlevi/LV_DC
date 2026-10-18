@@ -15,7 +15,14 @@ SUSTAIN_RUN_S = 5.0
 SLOW_START_MAX_STATE = 2
 NOT_LIVE_MARK = "Failed to navigate to a live"     # browser.py's start failure (yt / twitch: no live stream to enter)
 CLASS_PRECEDENCE = ("not_live", "login_wall", "interrupted", "startup_failure", "room_ended", "player_dead",
-                    "player_frozen", "qa_fail", "normal")
+                    "player_dead_recovered", "player_frozen", "qa_fail", "normal")
+# levi 2026-10-18 ruling (a) on the tt player_dead re-entry (peter's ti_37-39 read): the dead run that contains an
+# outcome-continue re-entry's t_nav is not the player_dead verdict / class; it is reported as recovered_dead_s with its
+# window (a covariate, labels unchanged). With no other FAIL the session reads this class: "normal" = (a), counts toward
+# quotas; "player_dead_recovered" = option (b), kept and not counted. One recovery per session: a second recovered run
+# excludes nothing (player_dead).
+RECOVERED_DEAD_CLASS = "normal"
+RECOVERY_SLACK_S = 2.0      # t_nav may fall this far outside the run's first / last dead tick (tick spacing ~1 s)
 
 
 def _f(x):
@@ -124,11 +131,11 @@ def compute_entries(rows: list[dict], meta: dict, net_labels: list[dict]) -> lis
     return out
 
 
-def dead_player_run(rows: list[dict]) -> float:
-    """Longest run (s) of res_meta ticks with no media at all, after playback had been sustained once: readyState 0
-    (ready_state column, from the 2026-10-17 extension) or, on older ticks, a 0x0 video at playhead 0."""
+def dead_runs(rows: list[dict]) -> list[tuple[float, float]]:
+    """Runs (first, last dead tick, s) of res_meta ticks with no media at all, after playback had been sustained once:
+    readyState 0 (ready_state column, from the 2026-10-17 extension) or, on older ticks, a 0x0 video at playhead 0."""
     played_at = sustained_at(rows, 0.0, window_s=float("inf"))
-    longest, t0 = 0.0, None
+    runs, t0, last = [], None, None
     for r, _ in tick_states(rows):
         ts = _f(r.get("ts"))
         if ts is None:
@@ -140,15 +147,42 @@ def dead_player_run(rows: list[dict]) -> float:
         else:
             dead = _f(r.get("video_w")) in (0.0, None) and _f(r.get("current_time")) in (0.0, None)
         if not dead or played_at is None or ts < played_at:
+            if t0 is not None:
+                runs.append((t0, last))
             t0 = None
             continue
         t0 = ts if t0 is None else t0
-        longest = max(longest, ts - t0)
-    return longest
+        last = ts
+    if t0 is not None:
+        runs.append((t0, last))
+    return runs
+
+
+def dead_player_run(rows: list[dict]) -> float:
+    """Longest dead run (s), recovered or not."""
+    return max((b - a for a, b in dead_runs(rows)), default=0.0)
+
+
+def dead_player(rows: list[dict], reentries: list[dict] | None) -> dict:
+    """The player_dead measure with levi's recovery rule (RECOVERED_DEAD_CLASS): {max_s (longest run not recovered),
+    max_all_s, recovered (recovered_dead_s, window, t_nav, t_playing, dead_window) or None, recovered_runs}."""
+    runs = dead_runs(rows)
+    cont = [r for r in reentries or [] if r.get("outcome") == "continue" and r.get("t_nav")]
+    rec = [(run, r) for run in runs for r in cont
+           if run[0] - RECOVERY_SLACK_S <= r["t_nav"] <= run[1] + RECOVERY_SLACK_S]
+    keep = runs if len(rec) != 1 else [x for x in runs if x != rec[0][0]]
+    out = {"max_s": max((b - a for a, b in keep), default=0.0), "max_all_s": max((b - a for a, b in runs), default=0.0),
+           "recovered": None, "recovered_runs": len(rec)}
+    if len(rec) == 1:
+        (a, b), r = rec[0]
+        out["recovered"] = {"recovered_dead_s": round(b - a, 1), "window": [a, b], "t_nav": r["t_nav"],
+                            "t_playing": r.get("t_playing"), "dead_window": r.get("dead_window")}
+    return out
 
 
 def session_class(platform: str, verdict: str, abort_reason: str | None, entries: list[dict],
-                  dead_run_s: float | None, dead_t: float | None, frozen_s: float | None, frozen_t: float | None) -> str:
+                  dead_run_s: float | None, dead_t: float | None, frozen_s: float | None, frozen_t: float | None,
+                  recovered: bool = False) -> str:
     """levi's precedence: not_live > login_wall > interrupted > startup_failure > room_ended > player_dead >
     player_frozen > qa_fail > normal. A start failure is not_live on yt / twitch (no live stream to enter) and a
     startup_failure on tt (live rooms were found but none played)."""
@@ -167,6 +201,8 @@ def session_class(platform: str, verdict: str, abort_reason: str | None, entries
         return "room_ended"
     if ab == "player_dead" or (dead_t is not None and dead_run_s is not None and dead_run_s >= dead_t):
         return "player_dead"
+    if recovered and RECOVERED_DEAD_CLASS != "normal":
+        return RECOVERED_DEAD_CLASS
     if ab == "player_frozen" or (frozen_t is not None and frozen_s is not None and frozen_s > frozen_t):
         return "player_frozen"
     if verdict != "PASS":
