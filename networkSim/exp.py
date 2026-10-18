@@ -32,6 +32,7 @@ from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANS
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession
 import session_meta
+import session_names
 import compute_load
 import coverage_report
 import tw_categories
@@ -52,16 +53,8 @@ SYSTEM_TICK : float = 0.1
 
 
 def make_session_dir(platform: str) -> Path:
-    abbrev = PLATFORM_ABBREV[platform]
-    platform_dir = DATA_DIR / platform
-    platform_dir.mkdir(parents=True, exist_ok=True)
-    n = 1
-    # a name is never reused, also not one whose session was archived to data/_failed (provenance stays unique)
-    while (platform_dir / f"{abbrev}_{n}").exists() or (DATA_DIR / "_failed" / platform / f"{abbrev}_{n}").exists():
-        n += 1
-    session_dir = platform_dir / f"{abbrev}_{n}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    return session_dir
+    # a name is never reused, also not a removed or _failed session's (session_names: a monotonic persisted counter)
+    return session_names.next_session_dir(DATA_DIR, platform, PLATFORM_ABBREV[platform])
 
 
 def run_(cmd):
