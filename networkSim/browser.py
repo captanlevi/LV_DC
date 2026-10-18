@@ -1866,6 +1866,107 @@ def _player_on_screen(viewport: tuple[int, int, int, int], player: dict | None) 
         return None
 
 
+# X11 shot origin calibration (supervisor t37, 2026-10-18; yt_43 / tw_35 / tw_36: the window-metric model put the
+# region about 20 device px below the viewport, so every window-geometry shot lost the player's top rows and gained a
+# band of page or wallpaper at the bottom). Once per session, after the geometry is set and before the shot loop and
+# the schedule start: one CDP capture of the viewport (no clip, no scale: no device-metric emulation) is matched against
+# an X11 grab of the model's viewport +- SHOT_CALIB_MARGIN_PX, over the page outside the <video> rect (the picture moves
+# between the two captures); coarse on 1 / SHOT_CALIB_SCALE grey images, refined at full size. Accepted when the mean
+# |X11 - CDP| at the best offset is <= SHOT_CALIB_MAX_RESIDUAL and the best coarse offset beats every other coarse
+# offset more than one coarse step away by >= SHOT_CALIB_MIN_GAP; the offset then moves every X11 region (DOM / CDP
+# rects untouched). Otherwise the current model stands, flagged shot_origin_uncalibrated (meta and every index row).
+SHOT_CALIB_MARGIN_PX = 64
+SHOT_CALIB_SCALE = 4
+SHOT_CALIB_MAX_RESIDUAL = 8.0
+SHOT_CALIB_MIN_GAP = 4.0
+
+
+def match_offset(tpl, area, mask=None, scale: int = SHOT_CALIB_SCALE) -> tuple[int, int, float, float | None]:
+    """(y, x, residual, gap): the template's top-left in `area` at the least mean |area - tpl| over `mask` (True =
+    compared; all when absent or too small), coarse on block means of `scale`, refined at full size +- scale. Grey
+    float arrays; area at least the template's size."""
+    import numpy as np
+    tpl, area = np.asarray(tpl, float), np.asarray(area, float)
+    h, w = tpl.shape
+    if mask is None or mask.sum() < 256:
+        mask = np.ones(tpl.shape, bool)
+
+    def ds(a):
+        hh, ww = a.shape[0] // scale * scale, a.shape[1] // scale * scale
+        return a[:hh, :ww].reshape(hh // scale, scale, ww // scale, scale).mean(axis=(1, 3))
+    t, A, m = ds(tpl), ds(area), ds(mask.astype(float)) > 0.5
+    if m.sum() < 16:
+        m = np.ones(t.shape, bool)
+    ny, nx = A.shape[0] - t.shape[0] + 1, A.shape[1] - t.shape[1] + 1
+    cost = np.full((max(ny, 1), max(nx, 1)), np.inf)
+    for y in range(ny):
+        for x in range(nx):
+            cost[y, x] = np.abs(A[y:y + t.shape[0], x:x + t.shape[1]] - t)[m].mean()
+    by, bx = np.unravel_index(int(np.argmin(cost)), cost.shape)
+    far = cost.copy()
+    far[max(0, by - 1):by + 2, max(0, bx - 1):bx + 2] = np.inf
+    gap = float(far.min() - cost[by, bx]) if np.isfinite(far.min()) else None
+    best = None
+    for y in range(max(0, by * scale - scale), min(area.shape[0] - h, by * scale + scale) + 1):
+        for x in range(max(0, bx * scale - scale), min(area.shape[1] - w, bx * scale + scale) + 1):
+            c = float(np.abs(area[y:y + h, x:x + w] - tpl)[mask].mean())
+            if best is None or c < best[0]:
+                best = (c, y, x)
+    return best[1], best[2], round(best[0], 3), (None if gap is None else round(gap, 3))
+
+
+def calibration_verdict(residual: float | None, gap: float | None) -> bool:
+    return residual is not None and residual <= SHOT_CALIB_MAX_RESIDUAL and gap is not None and gap >= SHOT_CALIB_MIN_GAP
+
+
+def calibrate_shot_origin(page: "CDPPage") -> dict:
+    """The X11 viewport origin's correction to the window-metric model (device px); never raises. In fullscreen the
+    region is the screen and needs none."""
+    t0 = time.time()
+    rec: dict = {"method": "cdp_vs_x11_match", "at": t0, "offset": None, "residual": None, "gap": None,
+                 "accepted": False, "thresholds": {"max_residual": SHOT_CALIB_MAX_RESIDUAL, "min_gap": SHOT_CALIB_MIN_GAP,
+                                                   "margin_px": SHOT_CALIB_MARGIN_PX, "scale": SHOT_CALIB_SCALE}}
+    try:
+        import base64
+        import io
+        import numpy as np
+        from PIL import Image, ImageGrab
+        pr = json.loads(page.eval(_PLAYER_RECT_JS) or "{}")
+        if pr.get("fullscreen"):
+            rec.update(method="fullscreen (the screen is the viewport)", offset=[0, 0], accepted=True)
+            return rec
+        model = _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
+        if SHOT_SOURCE != "x11" or not model:
+            rec["why"] = "no x11 source or no window metrics"
+            return rec
+        M = SHOT_CALIB_MARGIN_PX
+        vx, vy, vw, vh = model
+        ax, ay = max(0, vx - M), max(0, vy - M)
+        area = ImageGrab.grab(bbox=(ax, ay, vx + vw + M, vy + vh + M), xdisplay=os.environ.get("DISPLAY") or ":0")
+        shot = page.call("Page.captureScreenshot", {"format": "png", "fromSurface": True, "captureBeyondViewport": False})
+        rec["capture_s"] = round(time.time() - t0, 3)
+        cdp = np.asarray(Image.open(io.BytesIO(base64.b64decode(shot.get("data") or ""))).convert("L"), float)
+        a = np.asarray(area.convert("L"), float)
+        # the template: the viewport less M on every side (so every offset within +-M keeps it on the grab)
+        tpl = cdp[M:cdp.shape[0] - M, M:cdp.shape[1] - M]
+        mask = np.ones(tpl.shape, bool)
+        p = (pr.get("player") or {}).get("rect")
+        dpr = float(pr.get("dpr") or 1)
+        if p:                                         # the picture changes between the captures: compare the page
+            x0, y0 = int(p[0] * dpr) - M, int(p[1] * dpr) - M
+            mask[max(0, y0):max(0, y0 + int(p[3] * dpr)), max(0, x0):max(0, x0 + int(p[2] * dpr))] = False
+        rec["compared_share"] = round(float(mask.mean()), 3)
+        y, x, res, gap = match_offset(tpl, a, mask)
+        # the template's model position on the grab is (vy + M - ay, vx + M - ax)
+        dx, dy = int(x - (vx + M - ax)), int(y - (vy + M - ay))
+        rec.update(offset=[dx, dy], residual=res, gap=gap, accepted=calibration_verdict(res, gap),
+                   model_viewport=list(model), cdp_px=[cdp.shape[1], cdp.shape[0]])
+    except Exception as exc:
+        rec["why"] = repr(exc)[:200]
+    rec["elapsed_s"] = round(time.time() - t0, 3)
+    return rec
+
+
 def _fullscreen_on_screen(pr: dict | None) -> tuple[int, int, int, int] | None:
     """In fullscreen the player is the screen: the whole screen in device px (no window metrics needed)."""
     try:
@@ -1929,7 +2030,7 @@ _PLAYER_RECT_JS = """
 """
 
 
-def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> None:
+def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, origin: dict | None = None) -> None:
     """A small JPEG of the tab every SHOT_INTERVAL_S ('cadence'), plus one at every tier change and every ad start
     (t37: content.js raises <html data-lvqoe-shot-req="<n>|<reason>|<event_id>">, polled each second). Each shot is
     stamped with the extension's latest tick (<html data-lvqoe-tick>) and its reason, for the human label-vs-screen
@@ -1939,6 +2040,7 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
     shots_dir.mkdir(parents=True, exist_ok=True)
     index = shots_dir / "index.jsonl"
     last_cadence, last_req = time.time(), None
+    off = (origin or {}).get("offset") if (origin or {}).get("accepted") else None
     while not stop.wait(timeout=1.0):
         try:
             st = page.eval("JSON.stringify([document.documentElement.dataset.lvqoeTick || null, "
@@ -1972,6 +2074,8 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
                     region = fs or _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
                 except Exception:
                     region = None
+                if region and not fs and off:          # the calibrated origin (t37): X11 regions only
+                    region = (region[0] + off[0], region[1] + off[1], region[2], region[3])
                 t_js = time.time()
                 # the player rectangle only (supervisor 2026-10-17: the smallest XGetImage), else the viewport
                 pr = _player_on_screen(region, player) if region and not fs else None
@@ -2008,6 +2112,9 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event) -> N
                                      "viewport": viewport,
                                      "capture_px": capture_px, "shot_px": shot_px, "capture": capture,
                                      "screen_region": region, "crop": crop, "fullscreen": bool((pr_ or {}).get("fullscreen")),
+                                     "origin_offset": off if capture == "x11" and not (pr_ or {}).get("fullscreen") else None,
+                                     "shot_origin_uncalibrated": capture == "x11" and not (pr_ or {}).get("fullscreen")
+                                                                 and off is None,
                                      # per-step timing (tw_10: the near-shot dropped frames sit on the tick about
                                      # 1 s before ts; these say which step that is)
                                      "t_decide": t_decide, "js_s": None if t_js is None else round(t_js - t_decide, 4),
@@ -2078,6 +2185,7 @@ class BrowserSession:
         self._master: MasterListener | None = None   # twitch: the master playlist listener
         self.t2_skipped: list[dict] = []            # stuck rule: T2_S frozen with only the fallback rung (no T2)
         self.player_ladder: dict | None = None      # twitch: the quality menu's options when the master was not read
+        self.shot_origin: dict | None = None        # the X11 shot origin calibration (t37; calibrate_shot_origin)
         self.rung_probes: list[dict] = []           # twitch: each menu read (open / close times): shots near it are flagged
         self._media: MediaListener | None = None     # tt: the media-internals recorder (media_events.jsonl)
         self._rung_probe_at = 0.0
@@ -2280,6 +2388,13 @@ class BrowserSession:
                 self.geometry["shot"] = geometry_scales(self.geometry)
         except Exception:
             self.geometry = None
+        if self._session_dir and SHOT_SOURCE == "x11":        # t37: before the shot loop and the schedule
+            self.shot_origin = calibrate_shot_origin(self._page)
+            if self.geometry is not None:
+                if not isinstance(self.geometry.get("shot"), dict):
+                    self.geometry["shot"] = {}
+                self.geometry["shot"]["origin"] = self.shot_origin
+            print(f"[browser] Shot origin: {self.shot_origin}", flush=True)
         print(f"[browser] Geometry: {self.geometry}", flush=True)
 
         # Start ad-skip background thread (actions logged to ad_actions.jsonl)
@@ -2309,7 +2424,7 @@ class BrowserSession:
         if self._session_dir:
             self._shooter = threading.Thread(
                 target=_screenshot_loop,
-                args=(self._page, self._session_dir / "shots", self._stop),
+                args=(self._page, self._session_dir / "shots", self._stop, self.shot_origin),
                 daemon=True,
                 name="screenshots",
             )

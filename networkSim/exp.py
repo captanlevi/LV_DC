@@ -743,6 +743,8 @@ if __name__ == "__main__":
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
                               t2_skipped=browser.t2_skipped, player_ladder=browser.player_ladder,
+                              shot_origin_uncalibrated=(None if browser.shot_origin is None
+                                                        else not browser.shot_origin.get("accepted")),
                               rung_probes=browser.rung_probes,
                               lowest_rung=browser.lowest_rung,
                               decode_path={**decode_path.spec(platform), "gpu": browser.decode_gpu, "page": browser.decode_page,

@@ -716,6 +716,12 @@
   ],
   "STALL_ADVANCING_SHARE_MAX": 0.5
  },
+ "shot_origin": {
+  "SHOT_CALIB_MARGIN_PX": 64,
+  "SHOT_CALIB_MAX_RESIDUAL": 8.0,
+  "SHOT_CALIB_MIN_GAP": 4.0,
+  "SHOT_CALIB_SCALE": 4
+ },
  "stuck": {
   "FALLBACK_RUNG_KBIT": {
    "tiktok": 1800.0,
