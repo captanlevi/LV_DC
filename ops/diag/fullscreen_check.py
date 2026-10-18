@@ -82,7 +82,7 @@ def check(a, launch: dict) -> int:
             break
     out = {"launch": launch, "playing_t": st.get("t")}
     out["fullscreen"] = B.yt_fullscreen(page, target_id=t["id"])
-    out["origin"] = B.calibrate_shot_origin(page)
+    out["origin"] = B.calibrate_shot_origin(page, t["id"])
     try:                                                 # the window's state at the end (CDP; X11 fullscreen = this)
         wid = B._browser_call("Browser.getWindowForTarget", {"targetId": t["id"]}).get("windowId")
         out["window_at_end"] = B._browser_call("Browser.getWindowBounds", {"windowId": wid}).get("bounds")

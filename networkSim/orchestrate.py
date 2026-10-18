@@ -392,8 +392,11 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             print(f"  geometry {forced} (coupled to the coverage target; rotation drew {geom})")
             geom = forced
         t_session = time.time()
+        fi = (LAST_COVERAGE.get(p) or {}).get("initial_state_forced") if MATRIX_RULE == "coverage" else None
+        if fi:                                                # Q am. 15 (5): the class target starts in its band
+            print(f"  initial state {fi['state']} (coupled to the coverage target {fi['class']}: band {fi['band']})")
         try:
-            rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
+            rc = _run_collection(p, initial_state=fi["state"] if fi else most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
                                  episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel,
                                  geom=geom, tw_category=category, matrix=mid)
         except Exception as e:

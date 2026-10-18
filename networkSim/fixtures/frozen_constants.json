@@ -31,6 +31,9 @@
   "GEOMETRY_FOR_CLASS": {
    "youtube/Q_1080p": "fullscreen:1920x1080"
   },
+  "INITIAL_STATE_RULE": "Q am. 15 (5): a tier-class target starts in its band, drawn from the matrix's stationary distribution restricted to the band",
+  "LOW_YIELD_MIN_PER_SESSION": 0.5,
+  "LOW_YIELD_MIN_SESSIONS": 5,
   "MATRIX_IDS": {
    "tiktok": "TT-M",
    "twitch": "TW-M",

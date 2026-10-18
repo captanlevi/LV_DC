@@ -2011,11 +2011,28 @@ def calibration_verdict(residual: float | None, gap: float | None) -> bool:
     return residual is not None and residual <= SHOT_CALIB_MAX_RESIDUAL and gap is not None and gap >= SHOT_CALIB_MIN_GAP
 
 
-def calibrate_shot_origin(page: "CDPPage") -> dict:
+def _window_state(target_id: str | None) -> str | None:
+    """The Chrome window's state over CDP (Browser.getWindowBounds windowState); None when it cannot be read."""
+    try:
+        wid = _browser_call("Browser.getWindowForTarget", {"targetId": target_id} if target_id else {}).get("windowId")
+        if wid is None:
+            return None
+        return (_browser_call("Browser.getWindowBounds", {"windowId": wid}).get("bounds") or {}).get("windowState")
+    except Exception:
+        return None
+
+
+def calibrate_shot_origin(page: "CDPPage", target_id: str | None = None) -> dict:
     """The X11 viewport origin's correction to the model (device px); never raises. The model is the window metrics,
     or the screen when the page is fullscreen and its viewport covers the screen; there the match must say [0, 0]
     for the screen to be taken as the viewport (fullscreen_screen; t37 hot-fix: yt_44's fullscreen stayed in a
-    windowed Chrome and the shots assumed the screen)."""
+    windowed Chrome and the shots assumed the screen).
+    fullscreen_geometry (t37, yt_47, supervisor): where the player is the screen there is no page outside the picture
+    to match (compared_share 0), so the match runs on moving video and fails by construction. There the origin is
+    [0, 0] by geometry when every check holds: the window's CDP state is fullscreen, the page is fullscreen with its
+    viewport covering the screen, the <video> rect covers the screen (player_is_screen) and the X screen is the CDP
+    screen's size in device px (the whole X root grabbed). The match is still run and reported (template_match), not
+    required. When a check fails, the match decides as before (geometry records which)."""
     t0 = time.time()
     rec: dict = {"method": "cdp_vs_x11_match", "at": t0, "offset": None, "residual": None, "gap": None,
                  "accepted": False, "thresholds": {"max_residual": SHOT_CALIB_MAX_RESIDUAL, "min_gap": SHOT_CALIB_MIN_GAP,
@@ -2030,9 +2047,18 @@ def calibrate_shot_origin(page: "CDPPage") -> dict:
         sc = pr.get("screen") or [0, 0]
         sw, sh = round(sc[0] * dpr), round(sc[1] * dpr)
         fs_claim = bool(pr.get("fullscreen")) and covers_screen(pr.get("viewport"), sc)
+        root = None
         if fs_claim:
             rec["method"] = "cdp_vs_x11_match (fullscreen: the screen as the model)"
             model = (0, 0, sw, sh)
+            if SHOT_SOURCE == "x11":
+                root = ImageGrab.grab(xdisplay=os.environ.get("DISPLAY") or ":0")   # the whole X screen
+            pl = (pr.get("player") or {}).get("rect")
+            geo = {"window_state": _window_state(target_id), "player_rect": pl, "screen": sc, "dpr": dpr,
+                   "x_root_px": list(root.size) if root is not None else None,
+                   "player_is_screen": player_is_screen({"player_rect": pl, "screen": sc})}
+            geo["ok"] = bool(geo["window_state"] == "fullscreen" and geo["player_is_screen"] and geo["x_root_px"] == [sw, sh])
+            rec["geometry"] = geo
         else:
             model = _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
         if SHOT_SOURCE != "x11" or not model:
@@ -2044,7 +2070,8 @@ def calibrate_shot_origin(page: "CDPPage") -> dict:
         bx, by = vx + vw + M, vy + vh + M
         if sw and sh:                                  # never grab beyond the screen
             bx, by = min(bx, sw), min(by, sh)
-        area = ImageGrab.grab(bbox=(ax, ay, bx, by), xdisplay=os.environ.get("DISPLAY") or ":0")
+        area = (root.crop((ax, ay, bx, by)) if root is not None
+                else ImageGrab.grab(bbox=(ax, ay, bx, by), xdisplay=os.environ.get("DISPLAY") or ":0"))
         shot = page.call("Page.captureScreenshot", {"format": "png", "fromSurface": True, "captureBeyondViewport": False})
         rec["capture_s"] = round(time.time() - t0, 3)
         cdp = np.asarray(Image.open(io.BytesIO(base64.b64decode(shot.get("data") or ""))).convert("L"), float)
@@ -2063,6 +2090,10 @@ def calibrate_shot_origin(page: "CDPPage") -> dict:
         rec.update(offset=[dx, dy], residual=res, gap=gap, accepted=calibration_verdict(res, gap),
                    model_viewport=list(model), cdp_px=[cdp.shape[1], cdp.shape[0]],
                    fullscreen_screen=fs_claim and calibration_verdict(res, gap) and [dx, dy] == [0, 0])
+        if fs_claim and rec["geometry"]["ok"]:       # yt_47: the screen by geometry; the match reported, not required
+            rec["template_match"] = {k: rec[k] for k in ("offset", "residual", "gap", "accepted", "compared_share")}
+            rec.update(method="fullscreen_geometry", offset=[0, 0], residual=None, gap=None, accepted=True,
+                       fullscreen_screen=True)
     except Exception as exc:
         rec["why"] = repr(exc)[:200]
     rec["elapsed_s"] = round(time.time() - t0, 3)
@@ -2493,7 +2524,12 @@ class BrowserSession:
         except Exception:
             self.geometry = None
         if self._session_dir and SHOT_SOURCE == "x11":        # t37: before the shot loop and the schedule
-            self.shot_origin = calibrate_shot_origin(self._page)
+            tid = None
+            try:
+                tid = next((t.get("id") for t in _targets() if t.get("webSocketDebuggerUrl") == self._ws_url), None)
+            except Exception:
+                pass
+            self.shot_origin = calibrate_shot_origin(self._page, tid)
             if self.geometry is not None:
                 if not isinstance(self.geometry.get("shot"), dict):
                     self.geometry["shot"] = {}

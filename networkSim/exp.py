@@ -643,7 +643,7 @@ if __name__ == "__main__":
     if os.environ.get("LVDC_COVERAGE_JSON"):   # orchestrate's coverage-steered matrix (prereg Addendum Q)
         try:
             session_meta.write(session_dir, coverage=coverage_report.meta_record(
-                json.loads(Path(os.environ["LVDC_COVERAGE_JSON"]).read_text()), platform, matrix_id))
+                json.loads(Path(os.environ["LVDC_COVERAGE_JSON"]).read_text()), platform, matrix_id, args.initial_state))
         except Exception as e:
             session_meta.write(session_dir, coverage={"error": repr(e)})
     if platform == "youtube":   # Addendum P: every list change is recorded in the session's channel record

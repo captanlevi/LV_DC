@@ -74,8 +74,55 @@ def test_am15_bands():
     assert abs(m["Q_1080p"]["min_mass"] - 2 / 21) < 1e-3
 
 
+def test_am15_initial_state_and_low_yield():
+    """Q am. 15 (5): a tier-class target's initial state comes from the matrix's stationary distribution restricted to
+    the class's band, recorded and marked applied only when the session started there; any other target keeps the
+    matrix's start rule. (6): low_yield lists a class whose best qualifying matrix over >= 5 sessions yields < 0.5 min."""
+    import random
+    import orchestrate as O
+    mats = PLATFORM_MATRICES["youtube"]
+    bands = C.band_map("youtube", mats, sorted(mats))
+    rec = {"platform": "youtube", "matrix": "current", "target": {"kind": "class", "key": "Q_1080p"}, "bands": bands}
+    rng = random.Random(0)
+    draws = [C.initial_state_forced(rec, mats, rng) for _ in range(400)]
+    pi = C.stationary_distribution(mats["current"][0])
+    want = pi["10"] / (pi["9"] + pi["10"])
+    assert {d["state"] for d in draws} == {"9", "10"} and all(d["band"] == ["9", "10"] for d in draws)
+    assert abs(sum(d["state"] == "10" for d in draws) / 400 - want) < 0.08, want
+    d = draws[0]
+    assert (d["class"], d["matrix"], d["rule"]) == ("Q_1080p", "current", C.INITIAL_STATE_RULE)
+    assert abs(d["distribution"]["10"] - want) < 1e-5 and abs(d["band_mass"] - (pi["9"] + pi["10"])) < 1e-4
+    for tgt in ({"kind": "class", "key": "STALL"}, {"kind": "entry_state", "key": "3"}, None):
+        assert C.initial_state_forced({**rec, "target": tgt}, mats, rng) is None, tgt
+    fr = {**rec, "initial_state_forced": d}
+    assert C.meta_record(fr, "youtube", "current", d["state"])["initial_state_forced"]["applied"] is True
+    assert C.meta_record(fr, "youtube", "current", None)["initial_state_forced"]["applied"] is False
+    assert C.meta_record(fr, "youtube", "A", d["state"])["initial_state_forced"]["applied"] is False
+    assert C.meta_record({**rec, "initial_state_forced": None}, "youtube", "current")["initial_state_forced"] is None
+    # orchestrate passes the forced state as --initial-state (not the balance rule's)
+    seen = {}
+    O.subprocess.run = lambda cmd: seen.setdefault("cmd", cmd) and type("R", (), {"returncode": 0})()
+    O._run_collection("youtube", d["state"], 21, auto=True, matrix="current")
+    assert seen["cmd"][seen["cmd"].index("--initial-state") + 1] == d["state"]
+    src = (Path(__file__).resolve().parent / "orchestrate.py").read_text()
+    assert 'initial_state=fi["state"] if fi else most_needed_state(' in src
+
+    def snap(n, minutes):
+        cm = {c: 0.0 for c in C.CLASSES["youtube"]}
+        return {"platform": "youtube", "per_matrix": {"current": {"sessions": n, "tier_sessions": n,
+                                                                  "class_minutes_mean": {**cm, "Q_1080p": minutes}}}}
+    ly = C.low_yield(snap(5, 0.33), mats)
+    assert [x["class"] for x in ly if x["class"] == "Q_1080p"] == ["Q_1080p"], ly
+    x = next(x for x in ly if x["class"] == "Q_1080p")
+    assert (x["best_matrix"], x["minutes_per_session"], x["sessions"]) == ("current", 0.33, 5), x
+    assert not any(x["class"] == "Q_1080p" for x in C.low_yield(snap(4, 0.33), mats))     # under 5 sessions: not yet
+    assert not any(x["class"] == "Q_1080p" for x in C.low_yield(snap(5, 0.5), mats))
+    assert x["unmeasured"] == {}
+
+
 def main():
     test_am15_bands()
+    test_am15_initial_state_and_low_yield()
     # class rule = LVQoE quality_to_video_state on min(w, h)
     assert [C.quality_class(*r) for r in ((256, 144), (300, 200), (426, 240), (480, 300), (640, 360), (720, 420),
                                           (854, 480), (1080, 600), (1280, 720), (1600, 900), (1920, 1080), (1080, 1920), (0, 0))] == \
@@ -218,6 +265,7 @@ def main():
         out = C.write(d, "2026-10-18")
         md = out.read_text()
         assert "| Q_720p | 1 |" in md and "codec sessions {'h264': 5, 'hevc': 1}" in md, md
+        assert "low_yield (best qualifying matrix < 0.5 min / session over >= 5 sessions): " in md, md
         assert json.loads((d / "_summaries" / "coverage_2026-10-18.json").read_text())["platforms"]["tiktok"]["sessions"]
 
     # TW-L (Addendum Q amendment 3): the amendment's table, cap 2, stationary start in states 1-5, in the allowed set

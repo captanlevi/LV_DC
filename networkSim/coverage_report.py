@@ -38,6 +38,12 @@ A class no allowed matrix qualifies for is skipped (the next deficit is the targ
 coverage.unreachable_targets. yt Q_1080p couples to the fullscreen geometry (coverage.geometry_forced). The band map
 (band, rung, margin, masses, qualifying matrices) is recorded per session (coverage.bands). STALL steers by onsets
 (am. 5 / am. 15 (1)) and has no band.
+Q am. 15 (5): when the target is a tier class, the session's initial state is drawn from the chosen matrix's stationary
+distribution restricted to the class's band (coverage.initial_state_forced: the state, the restricted distribution, the
+rule; orchestrate passes it as --initial-state); every other session keeps its matrix's start rule. Q am. 15 (6)'s
+low_yield: a tier class whose best qualifying matrix, among those with >= LOW_YIELD_MIN_SESSIONS accepted sessions,
+yields < LOW_YIELD_MIN_PER_SESSION minutes per session is listed in the coverage report (low_yield), with the qualifying
+matrices not yet at that many sessions.
 orchestrate writes the record (snapshot, deficits, yields, choice, rule) to data/_summaries/coverage_last.json and
 LVDC_COVERAGE_JSON; exp.py puts it in meta.json coverage, marked applied iff its platform and matrix are the session's.
 
@@ -50,6 +56,7 @@ import collections
 import csv
 import datetime as dt
 import json
+import random
 from pathlib import Path
 
 import numpy as np
@@ -95,6 +102,9 @@ YT_RUNG_CODEC = "vp9"                           # am. 15 (3): yt's rung is the p
 TT_RUNG_REGIME = "hevc"                         # tt's rungs are the HEVC ladder's (levi: the regime the rung assumes)
 GEOMETRY_FOR_CLASS = {("youtube", "Q_1080p"): "fullscreen:1920x1080"}   # am. 15 (3) / am. 2: the only yt geometry for it
 SUMMARY_FILE = "_summaries/coverage_last.json"
+INITIAL_STATE_RULE = ("Q am. 15 (5): a tier-class target starts in its band, drawn from the matrix's stationary "
+                      "distribution restricted to the band")
+LOW_YIELD_MIN_PER_SESSION, LOW_YIELD_MIN_SESSIONS = 0.5, 5   # Q am. 15 (6): minutes per session, over >= 5 sessions
 
 
 def quality_class(w: float, h: float) -> str | None:
@@ -363,17 +373,62 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None) ->
     return {**rec, "matrix": min(m for m in ids if yields[m] == top), "target": tgt, "yields": yields, "why": why}
 
 
+def initial_state_forced(rec: dict, matrices: dict, rng=random) -> dict | None:
+    """Q am. 15 (5): a tier-class target's initial state, drawn from the chosen matrix's stationary distribution
+    restricted to the class's band; None for any other target (STALL, an entry state, none). The band's mass is > 0 for
+    every qualifying matrix (it qualifies on that mass)."""
+    tgt = rec.get("target") or {}
+    b = (rec.get("bands") or {}).get(tgt.get("key")) if tgt.get("kind") == "class" else None
+    if not b or rec.get("matrix") not in matrices:
+        return None
+    pi = stationary_distribution(matrices[rec["matrix"]][0])
+    w = {s: pi[s] for s in sorted(b["band"], key=int) if pi.get(s, 0.0) > 0}
+    if not w:
+        return None
+    tot = sum(w.values())
+    state = rng.choices(list(w), weights=list(w.values()), k=1)[0]
+    return {"state": state, "class": tgt["key"], "matrix": rec["matrix"], "band": b["band"],
+            "distribution": {s: round(p / tot, 6) for s, p in w.items()}, "band_mass": round(tot, 4),
+            "rule": INITIAL_STATE_RULE}
+
+
 def choose(data_dir: Path, platform: str, allowed: list[str] | None = None) -> dict:
-    """orchestrate, before each session: the snapshot and the rule's choice for `platform`."""
+    """orchestrate, before each session: the snapshot, the rule's choice for `platform` and, for a tier-class target,
+    the forced initial state (Q am. 15 (5))."""
     rec = pick_matrix(snapshot(data_dir, platform), PLATFORM_MATRICES[platform], allowed)
-    return {**rec, "taken_at": dt.datetime.now().isoformat(timespec="seconds")}
+    return {**rec, "initial_state_forced": initial_state_forced(rec, PLATFORM_MATRICES[platform]),
+            "taken_at": dt.datetime.now().isoformat(timespec="seconds")}
 
 
-def meta_record(rec: dict | None, platform: str, matrix_id: str | None) -> dict | None:
-    """exp.py: the coverage record for meta.json, marked applied iff it is for this platform and this matrix."""
+def low_yield(snap: dict, matrices: dict) -> list[dict]:
+    """Q am. 15 (6): per tier class, its qualifying matrices (band_map over every defined matrix); among those with
+    >= LOW_YIELD_MIN_SESSIONS tier sessions the best mean minutes per session; listed when it is below
+    LOW_YIELD_MIN_PER_SESSION (a gap like yt_47's, visible). Qualifying matrices still below that many sessions are
+    reported beside it (their yield is not yet measured)."""
+    pm, out = snap["per_matrix"], []
+    for cls, b in band_map(snap["platform"], matrices, sorted(matrices)).items():
+        n = {m: (pm.get(m) or {}).get("tier_sessions", 0) for m in b["qualifies"]}
+        measured = {m: (pm[m]["class_minutes_mean"].get(cls) or 0.0) for m in b["qualifies"] if n[m] >= LOW_YIELD_MIN_SESSIONS}
+        if not measured:
+            continue
+        best = min(measured, key=lambda m: (-measured[m], m))
+        if measured[best] < LOW_YIELD_MIN_PER_SESSION:
+            out.append({"class": cls, "best_matrix": best, "minutes_per_session": measured[best], "sessions": n[best],
+                        "yields": measured, "unmeasured": {m: n[m] for m in b["qualifies"] if m not in measured}})
+    return out
+
+
+def meta_record(rec: dict | None, platform: str, matrix_id: str | None, initial_state: str | None = None) -> dict | None:
+    """exp.py: the coverage record for meta.json, marked applied iff it is for this platform and this matrix; its forced
+    initial state (am. 15 (5)) applied iff the record is and the session started there (exp.py's --initial-state)."""
     if not rec:
         return None
-    return {**rec, "applied": rec.get("platform") == platform and rec.get("matrix") == matrix_id}
+    applied = rec.get("platform") == platform and rec.get("matrix") == matrix_id
+    out = {**rec, "applied": applied}
+    if rec.get("initial_state_forced"):
+        out["initial_state_forced"] = {**rec["initial_state_forced"],
+                                       "applied": applied and rec["initial_state_forced"].get("state") == initial_state}
+    return out
 
 
 def coverage_flags(snap: dict) -> list[str]:
@@ -427,6 +482,7 @@ def report(data_dir: Path, platforms=("youtube", "twitch", "tiktok")) -> dict:
         lat = [r["twitch_latency"]["latency_s"]["median"] for r in rows if (r.get("twitch_latency") or {}).get("latency_s")]
         out["platforms"][p] = {"snapshot": snap,
                                "deficits": deficits(snap, sorted(snap.get("tt_entries_by_state", {}), key=int)),
+                               "low_yield": low_yield(snap, PLATFORM_MATRICES[p]),
                                "flags": coverage_flags(snap) + regime_flags(data_dir, p),
                                "buffer_median_s_over_sessions": _q(med), "twitch_latency_median_s_over_sessions": _q(lat),
                                "sessions": rows}
@@ -450,7 +506,11 @@ def markdown(rep: dict) -> list[str]:
                   f"interrupted)" if p == "tiktok" else ""), "",
                "| class | sessions meeting the floor | criterion | minutes |", "|---|---|---|---|"]
         md += [f"| {c} | {x['sessions_ge_min']} | {x['criterion']} | {x['minutes']} |" for c, x in s["classes"].items()]
-        md += ["", "deficits: " + (", ".join(f"{d['key']} {d['deficit']}" for d in v["deficits"]) or "none"), ""]
+        md += ["", "deficits: " + (", ".join(f"{d['key']} {d['deficit']}" for d in v["deficits"]) or "none"),
+               f"low_yield (best qualifying matrix < {LOW_YIELD_MIN_PER_SESSION} min / session over >= "
+               f"{LOW_YIELD_MIN_SESSIONS} sessions): "
+               + (", ".join(f"{x['class']} ({x['best_matrix']}: {x['minutes_per_session']} over {x['sessions']})"
+                            for x in v.get("low_yield", [])) or "none"), ""]
     return md
 
 
