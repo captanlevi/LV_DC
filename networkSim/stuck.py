@@ -4,8 +4,9 @@ media and never fed the element again, frozen for 10+ min with the shaper back a
 
 - The frozen measure is content.js's lvqoeFrozenS (= check_session.frozen_runs): the backstop watchdog and this rule
   read the same run, so they cannot disagree.
-- T2 clock = now - max(the frozen run's start, the start of the current stretch of shaper labels above the platform's
-  lowest-rung bitrate). Below the rung (or the rung unknown) there is no T2: a starved player is not a stuck one.
+- T2 clock = now - max(the frozen run's start, the start of the current stretch of shaper labels at >= RUNG_MARGIN x
+  the platform's lowest-rung bitrate, am. 7). Below that (or the rung unknown) there is no T2: a starved player is not
+  a stuck one.
 - First T2 >= T2_S: one re-entry of the same channel / room (recorded as an entry with recovered_frozen_s and its
   window); playback must resume within REENTRY_CONFIRM_S. A second T2, or no resume: player_frozen, censored (time and
   shaper state); the session ends. At most RECOVERIES_PER_SESSION recovery of either kind (tt's player_dead re-entry
@@ -22,6 +23,9 @@ import json
 import re
 
 T2_S = 90.0
+# Addendum Q am. 7 (levi 2026-10-18): the T2 clock runs only while the shaper is >= this x the lowest rung (protocol
+# overhead ~6 %, VBR peaks, tt's audio missing from its rung); yt's state-1 startup stalls stay out of T2
+RUNG_MARGIN = 1.5
 REENTRY_CONFIRM_S = 60.0
 RECOVERIES_PER_SESSION = 1
 # a fallback only (source "fallback"): twitch's transcode ladder's 160p30 (BANDWIDTH 230000 in chaos's master
@@ -44,17 +48,18 @@ def _ts(n) -> float | None:
         return None
 
 
-def above_since(net_labels: list, rung_kbit: float | None, now: float) -> float | None:
-    """Start (s) of the current stretch of shaper labels with rate > rung_kbit, or None when the label in force at `now`
-    is at or below it, there is none, or the rung is unknown."""
+def above_since(net_labels: list, rung_kbit: float | None, now: float, margin: float = RUNG_MARGIN) -> float | None:
+    """Start (s) of the current stretch of shaper labels with rate >= margin x rung_kbit, or None when the label in
+    force at `now` is below it, there is none, or the rung is unknown."""
     if not rung_kbit:
         return None
+    floor = margin * rung_kbit
     labs = sorted([n for n in net_labels or [] if _ts(n) is not None and _ts(n) <= now], key=_ts)
-    if not labs or (_rate(labs[-1]) or 0) <= rung_kbit:
+    if not labs or (_rate(labs[-1]) or 0) < floor:
         return None
     t = _ts(labs[-1])
     for n in reversed(labs):
-        if (_rate(n) or 0) <= rung_kbit:
+        if (_rate(n) or 0) < floor:
             break
         t = _ts(n)
     return t
