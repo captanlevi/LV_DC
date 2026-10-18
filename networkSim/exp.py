@@ -742,6 +742,7 @@ if __name__ == "__main__":
                               tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
+                              t2_skipped=browser.t2_skipped, player_ladder=browser.player_ladder,
                               lowest_rung=browser.lowest_rung,
                               decode_path={**decode_path.spec(platform), "gpu": browser.decode_gpu, "page": browser.decode_page,
                                            **decode_path.hevc_decision(browser.decode_gpu, browser.decode_page)},

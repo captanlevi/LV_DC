@@ -1584,12 +1584,20 @@ _VIDEO_ERRORS_JS = """(() => [...document.querySelectorAll('video')].map(v => ({
 
 class MasterListener:
     """twitch: the channel's HLS master playlist, read by a second CDP client on the page (Network domain; the body via
-    Network.getResponseBody, no request of ours). Its lowest BANDWIDTH is the stuck-player rule's rung (stuck.py)."""
+    Network.getResponseBody, no request of ours). Its lowest BANDWIDTH is the stuck-player rule's rung (stuck.py).
+    twitch's player fetches the master from its Web Worker, which the page target's Network domain never sees (shagun
+    2026-10-18: no master captured on 6 of 6 sessions, tw_29-34): the listener auto-attaches to the page's workers
+    (Target.setAutoAttach, flatten) and enables Network in each, reading bodies in that worker's session."""
+
+    WORKER_TYPES = ("worker", "shared_worker", "service_worker")
 
     def __init__(self, ws_url: str):
         self.ws_url, self.latest, self.error = ws_url, None, None
+        self.workers: list[str] = []
         self._stop = threading.Event()
         self._t: threading.Thread | None = None
+        self._wanted: dict = {}
+        self._pending: dict = {}
 
     def start(self) -> "MasterListener":
         self._t = threading.Thread(target=self._run, daemon=True, name="master-listener")
@@ -1599,9 +1607,29 @@ class MasterListener:
     def stop(self) -> None:
         self._stop.set()
 
-    def _run(self) -> None:
+    def handle(self, msg: dict, send) -> None:
+        """One CDP message; send(method, params, session_id) -> the command id."""
         import base64
         from urllib.parse import urlsplit
+        m, prm, sid = msg.get("method"), msg.get("params") or {}, msg.get("sessionId")
+        if m == "Target.attachedToTarget" and (prm.get("targetInfo") or {}).get("type") in self.WORKER_TYPES:
+            self.workers.append((prm.get("targetInfo") or {}).get("type"))
+            send("Network.enable", {"maxTotalBufferSize": 4_000_000, "maxResourceBufferSize": 500_000}, prm.get("sessionId"))
+        elif m == "Network.responseReceived" and _USHER_RE.search((prm.get("response") or {}).get("url", "")):
+            self._wanted[(sid, prm.get("requestId"))] = prm["response"]["url"]
+        elif m == "Network.loadingFinished" and (sid, prm.get("requestId")) in self._wanted:
+            url = self._wanted.pop((sid, prm["requestId"]))
+            self._pending[send("Network.getResponseBody", {"requestId": prm["requestId"]}, sid)] = (sid, url)
+        elif msg.get("id") in self._pending:
+            (req_sid, url), res = self._pending.pop(msg["id"]), msg.get("result") or {}
+            body = res.get("body") or ""
+            if res.get("base64Encoded"):
+                body = base64.b64decode(body).decode("utf-8", "replace")
+            kbit = stuck.rung_from_master(body)
+            if kbit:
+                self.latest = {"kbit": kbit, "t": time.time(), "path": urlsplit(url).path, "from_worker": req_sid is not None}
+
+    def _run(self) -> None:
         try:
             ws = websocket.WebSocket()
             ws.settimeout(1)
@@ -1609,33 +1637,23 @@ class MasterListener:
         except Exception as exc:
             self.error = repr(exc)
             return
-        seq, wanted, pending = 0, {}, {}
+        seq = 0
 
-        def send(method: str, params: dict) -> int:
+        def send(method: str, params: dict, session_id: str | None = None) -> int:
             nonlocal seq
             seq += 1
-            ws.send(json.dumps({"id": seq, "method": method, "params": params}))
+            ws.send(json.dumps({"id": seq, "method": method, "params": params,
+                                **({"sessionId": session_id} if session_id else {})}))
             return seq
         try:
             send("Network.enable", {"maxTotalBufferSize": 4_000_000, "maxResourceBufferSize": 500_000})
+            send("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
             while not self._stop.is_set():
                 try:
                     msg = json.loads(ws.recv())
                 except websocket.WebSocketTimeoutException:
                     continue
-                m, prm = msg.get("method"), msg.get("params") or {}
-                if m == "Network.responseReceived" and _USHER_RE.search((prm.get("response") or {}).get("url", "")):
-                    wanted[prm.get("requestId")] = prm["response"]["url"]
-                elif m == "Network.loadingFinished" and prm.get("requestId") in wanted:
-                    pending[send("Network.getResponseBody", {"requestId": prm["requestId"]})] = wanted.pop(prm["requestId"])
-                elif msg.get("id") in pending:
-                    url, res = pending.pop(msg["id"]), msg.get("result") or {}
-                    body = res.get("body") or ""
-                    if res.get("base64Encoded"):
-                        body = base64.b64decode(body).decode("utf-8", "replace")
-                    kbit = stuck.rung_from_master(body)
-                    if kbit:
-                        self.latest = {"kbit": kbit, "t": time.time(), "path": urlsplit(url).path}
+                self.handle(msg, send)
         except Exception as exc:
             self.error = repr(exc)
         finally:
@@ -1962,6 +1980,8 @@ class BrowserSession:
         self.decode_gpu: dict | None = None       # Chrome's GPU video-decode report at launch (decode_path.py; meta.json)
         self.decode_page: dict | None = None      # the page's HEVC probe (MSE / WebCodecs hvc1)
         self._master: MasterListener | None = None   # twitch: the master playlist listener
+        self.t2_skipped: list[dict] = []            # stuck rule: T2_S frozen with only the fallback rung (no T2)
+        self.player_ladder: dict | None = None      # twitch: the quality menu's options when the master was not read
         self._media: MediaListener | None = None     # tt: the media-internals recorder (media_events.jsonl)
         self._rung_probe_at = 0.0
         self._recovery_lock = threading.Lock()    # one recovery of either kind per session (am. 6)
@@ -2418,7 +2438,24 @@ class BrowserSession:
         every 30 s while only the fallback is known)."""
         kbit, src, detail = None, None, None
         if self.platform == "twitch" and self._master is not None and self._master.latest:
-            kbit, src, detail = self._master.latest["kbit"], "hls_master_lowest_bandwidth", {"path": self._master.latest["path"]}
+            kbit, src, detail = self._master.latest["kbit"], "hls_master_lowest_bandwidth", \
+                {"path": self._master.latest["path"], "from_worker": self._master.latest.get("from_worker")}
+        elif self.platform == "twitch":
+            # no master read: the player's own quality menu (read, not changed; every 30 s) decides the one exception
+            if self.lowest_rung and self.lowest_rung.get("source") == "ladder_160p_transcode":
+                return self.lowest_rung
+            if time.time() - self._rung_probe_at >= 30:
+                self._rung_probe_at = time.time()
+                try:
+                    import entry_quality as EQ
+                    opts = [i.get("label") for i in (EQ.Driver(self._page, "twitch").state().get("items") or [])]
+                    self.player_ladder = {"options": opts, "t": time.time()}
+                    if any(EQ.option_height(o) == 160 for o in opts):
+                        kbit, src, detail = stuck.TWITCH_160P_TRANSCODE_KBIT, "ladder_160p_transcode", {"options": opts}
+                except Exception as exc:
+                    detail = {"error": repr(exc)[:200]}
+            elif self.lowest_rung:
+                return self.lowest_rung
         elif self.platform in ("youtube", "tiktok"):
             if self.lowest_rung and self.lowest_rung.get("source") != "fallback":
                 return self.lowest_rung
@@ -2443,7 +2480,15 @@ class BrowserSession:
         now = time.time()
         rung = self._current_rung()
         labels = getattr(self, "net_labels", None) or []
-        t2, t2_start = stuck.t2_clock(frozen_s, now, labels, rung.get("kbit"))
+        read = stuck.t2_rung(rung)
+        if read is None:          # only the fallback: no T2 (supervisor 2026-10-18, tw_34); logged once per frozen run
+            run0 = round(now - frozen_s)
+            if frozen_s >= stuck.T2_S and not any(abs(x["frozen_since"] - run0) <= 2 for x in self.t2_skipped):
+                self.t2_skipped.append({"reason": "t2_skipped_rung_unknown", "t": now, "frozen_since": run0,
+                                        "frozen_s": round(frozen_s, 1), "rung": rung, "shaper": stuck.shaper_at(labels, now)})
+                print(f"[browser] t2_skipped_rung_unknown: frozen {frozen_s:.0f} s, rung {rung.get('source')}", flush=True)
+            return
+        t2, t2_start = stuck.t2_clock(frozen_s, now, labels, read)
         if t2 is None or t2 < stuck.T2_S:
             return
         try:

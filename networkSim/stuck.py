@@ -5,8 +5,10 @@ media and never fed the element again, frozen for 10+ min with the shaper back a
 - The frozen measure is content.js's lvqoeFrozenS (= check_session.frozen_runs): the backstop watchdog and this rule
   read the same run, so they cannot disagree.
 - T2 clock = now - max(the frozen run's start, the start of the current stretch of shaper labels at >= RUNG_MARGIN x
-  the platform's lowest-rung bitrate, am. 7). Below that (or the rung unknown) there is no T2: a starved player is not
-  a stuck one.
+  the platform's lowest-rung bitrate, am. 7). Below that, or with no rung read from the stream (only the fallback:
+  t2_rung), there is no T2: a starved player is not a stuck one, and a margin needs a read rung (supervisor 2026-10-18,
+  tw_34: censored against twitch's 230 kbit fallback at state 4 while the master had not been read). A session still
+  on the fallback at T2_S of frozen time logs t2_skipped_rung_unknown (meta.json t2_skipped).
 - First T2 >= T2_S: one re-entry of the same channel / room (recorded as an entry with recovered_frozen_s and its
   window); playback must resume within REENTRY_CONFIRM_S. A second T2, or no resume: player_frozen, censored (time and
   shaper state); the session ends. At most RECOVERIES_PER_SESSION recovery of either kind (tt's player_dead re-entry
@@ -15,7 +17,7 @@ media and never fed the element again, frozen for 10+ min with the shaper back a
 The lowest rung: tt from the room data's sdk_params vbitrate (the played codec's ladder; video only, tt's audio
 bitrate is not in the room data), twitch from the HLS master playlist's lowest BANDWIDTH (audio included), yt from the
 lowest offered video format's bitrate plus the lowest audio format's; FALLBACK_RUNG_KBIT when none was read (source
-recorded either way). The shaper's rate is compared as is (no protocol-overhead margin).
+"fallback", recorded in meta, never a T2 rung). The shaper's rate is compared as is (no protocol-overhead margin).
 """
 from __future__ import annotations
 
@@ -32,6 +34,10 @@ RECOVERIES_PER_SESSION = 1
 # playlists), yt's 144p video (~80-110 kbit) plus its lowest audio (~50 kbit), tt's H.264 single rung hd (vbitrate
 # 1800000 on chaos's rooms)
 FALLBACK_RUNG_KBIT = {"twitch": 230.0, "youtube": 130.0, "tiktok": 1800.0}
+# the one stated exception to "no T2 on the fallback" (supervisor 2026-10-18): twitch's 160p30 transcode rung, whose
+# BANDWIDTH is the same 230000 in every master chaos has read, when the player's own quality menu lists a 160p option
+# and the master is not read (source "ladder_160p_transcode")
+TWITCH_160P_TRANSCODE_KBIT = 230.0
 
 
 def _rate(n) -> float | None:
@@ -74,6 +80,13 @@ def t2_clock(frozen_s: float, now: float, net_labels: list, rung_kbit: float | N
         return None, None
     start = max(now - frozen_s, a)
     return max(0.0, now - start), start
+
+
+def t2_rung(rung: dict | None) -> float | None:
+    """The rung (kbit) the T2 margin runs on: a rung read from the stream only; the fallback never starts T2."""
+    if not rung or rung.get("source") in (None, "fallback"):
+        return None
+    return rung.get("kbit")
 
 
 def action(recoveries_used: int) -> str:

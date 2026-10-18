@@ -148,6 +148,7 @@ def _session(platform="twitch"):
     s = B.BrowserSession.__new__(B.BrowserSession)
     s.platform, s.abort_reason, s.abort_at, s.censored, s.channel_url = platform, None, None, None, "https://www.twitch.tv/chan"
     s.frozen_reentries, s.player_dead_reentries, s.lowest_rung, s._rung_probe_at = [], [], None, 0.0
+    s.t2_skipped, s.player_ladder = [], None
     s._recovery_lock, s._page = threading.Lock(), _Page()
     s._master = types.SimpleNamespace(latest={"kbit": 230.0, "t": 0, "path": "/api/v2/channel/hls/chan.m3u8"})
     import time
@@ -191,9 +192,66 @@ def test_stuck_tick():
     s4.net_labels = nl((time.time() - 500, 150, 1))
     s4._stuck_tick(400)
     assert s4.abort_reason is None
+    # only the fallback rung (the master never read: tw_34, censored at state 4 against 230 kbit): no T2 however long
+    # the freeze and however high the shaper; one t2_skipped_rung_unknown record per frozen run (supervisor 2026-10-18)
+    s5 = _session()
+    s5._master = types.SimpleNamespace(latest=None)
+    s5.net_labels = nl((time.time() - 500, 930, 4))
+    s5._reenter_frozen = types.MethodType(fake_reenter, s5)
+    calls.clear()
+    t0 = time.time()
+    for f in (60, 95, 96, 97):                                   # one growing run (its start now - frozen_s fixed)
+        s5._stuck_tick(f + (time.time() - t0))
+    assert s5.abort_reason is None and not calls and s5.lowest_rung["source"] == "fallback"
+    assert len(s5.t2_skipped) == 1 and s5.t2_skipped[0]["reason"] == "t2_skipped_rung_unknown", s5.t2_skipped
+    assert S.t2_rung({"kbit": 230.0, "source": "fallback"}) is None and S.t2_rung(None) is None
+    assert S.t2_rung({"kbit": 230.0, "source": "hls_master_lowest_bandwidth"}) == 230.0
+    # the stated exception: no master read, the player's menu lists a 160p option -> twitch's 160p30 transcode rung
+    import entry_quality as EQ
+    old_state = EQ.Driver.state
+    try:
+        EQ.Driver.state = lambda self: {"items": [{"label": "Auto"}, {"label": "1080p60\n(Source)"}, {"label": "160p30"}]}
+        s6 = _session()
+        s6._master = types.SimpleNamespace(latest=None)
+        s6._reenter_frozen = types.MethodType(fake_reenter, s6)
+        calls.clear()
+        s6._stuck_tick(95)
+        assert s6.lowest_rung["source"] == "ladder_160p_transcode" and s6.lowest_rung["kbit"] == S.TWITCH_160P_TRANSCODE_KBIT
+        assert len(calls) == 1 and not s6.t2_skipped and s6.player_ladder["options"][-1] == "160p30"
+        EQ.Driver.state = lambda self: {"items": [{"label": "Auto"}, {"label": "720p60"}, {"label": "480p"}]}
+        s7 = _session()
+        s7._master = types.SimpleNamespace(latest=None)
+        s7._stuck_tick(95)
+        assert s7.lowest_rung["source"] == "fallback" and len(s7.t2_skipped) == 1 and s7.abort_reason is None
+    finally:
+        EQ.Driver.state = old_state
+
+
+def test_master_listener_reads_the_worker():
+    """twitch fetches the master from its player worker (shagun 2026-10-18: no master on 6 of 6 sessions; laptop check:
+    captured from a worker session once auto-attached): a worker attach enables Network in that session, and the master
+    read there sets the rung."""
+    m = B.MasterListener("ws://unused")
+    sent = []
+
+    def send(method, params, session_id=None):
+        sent.append((method, session_id))
+        return len(sent)
+    m.handle({"method": "Target.attachedToTarget", "params": {"sessionId": "W1", "targetInfo": {"type": "worker"}}}, send)
+    m.handle({"method": "Target.attachedToTarget", "params": {"sessionId": "F1", "targetInfo": {"type": "iframe"}}}, send)
+    assert sent == [("Network.enable", "W1")] and m.workers == ["worker"]
+    url = "https://usher.ttvnw.net/api/v2/channel/hls/chan.m3u8?allow_source=true"
+    m.handle({"method": "Network.responseReceived", "sessionId": "W1", "params": {"requestId": "r1", "response": {"url": url}}}, send)
+    m.handle({"method": "Network.loadingFinished", "sessionId": "W1", "params": {"requestId": "r1"}}, send)
+    assert sent[-1] == ("Network.getResponseBody", "W1")
+    master = ('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080\nx\n'
+              '#EXT-X-STREAM-INF:BANDWIDTH=230000,RESOLUTION=284x160\ny\n')
+    m.handle({"id": len(sent), "result": {"body": master, "base64Encoded": False}}, send)
+    assert m.latest["kbit"] == 230.0 and m.latest["from_worker"] is True and m.latest["path"].endswith("chan.m3u8")
 
 
 def main() -> int:
+    test_master_listener_reads_the_worker()
     test_t2_cases()
     test_rungs()
     test_tw1_tw27()
