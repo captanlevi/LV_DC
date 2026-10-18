@@ -249,6 +249,49 @@ def session_matrix(p: str) -> str | None:
     return rec["matrix"]
 
 
+FLAGS_FILE = "_summaries/flags.jsonl"
+
+
+def report_flags(p: str, since: float) -> list[dict]:
+    """After a session (supervisor 2026-10-18: a collection fault is caught on the first session): every check.json of
+    `p` written since `since` (accepted or _failed) with stream-regime flags gets a FLAG line and a flags.jsonl row;
+    `new` lists the flags this platform had not raised before."""
+    path = _RUNS_DIR / FLAGS_FILE
+    seen: set = set()
+    if path.exists():
+        for line in path.read_text().splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("platform") == p:
+                seen.update(r.get("flags") or [])
+    rows = []
+    found = []
+    for c in list((_RUNS_DIR / p).glob("*/check.json")) + list((_RUNS_DIR / "_failed" / p).glob("*/check.json")):
+        try:
+            if c.stat().st_mtime >= since:
+                found.append((c.stat().st_mtime, str(c), c, json.loads(c.read_text())))
+        except Exception:
+            continue
+    for _, _, c, chk in sorted(found, key=lambda x: x[:2]):
+        sus = chk.get("suspicious") or []
+        if not sus:
+            continue
+        keys = [x.get("flag") for x in sus]
+        row = {"t": time.time(), "platform": p, "session": c.parent.name, "verdict": chk.get("verdict"),
+               "flags": keys, "new": [k for k in keys if k not in seen], "detail": sus}
+        seen.update(keys)
+        rows.append(row)
+        print(f"  FLAG {p}/{c.parent.name}: {keys}" + (f" (NEW on {p}: {row['new']})" if row["new"] else "") + f" {sus}")
+    if rows:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as fh:
+            for r in rows:
+                fh.write(json.dumps(r, default=str) + "\n")
+    return rows
+
+
 def _summary() -> None:
     try:
         print(f"  Summary → {batch_summary.write(_RUNS_DIR)}")
@@ -325,6 +368,7 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             _summary()
             sys.exit(EXIT_PREFLIGHT)
         mid = session_matrix(p)
+        t_session = time.time()
         try:
             rc = _run_collection(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
                                  episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel,
@@ -332,6 +376,10 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
         except Exception as e:
             print(f"  exp.py could not run: {e!r}")
             rc = -1
+        try:
+            report_flags(p, t_session)
+        except Exception as e:
+            print(f"  (flag report failed: {e!r})")
         if rc == EXIT_STOPPED:
             print("  Session stopped by the operator (SIGINT / SIGTERM): stopping the batch.")
             _summary()

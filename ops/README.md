@@ -32,3 +32,10 @@ defaults (override in the environment or in `ops/env.local.sh`, gitignored). Eac
 
 **Not here:** the operator's hourly health check and 6-hourly self-audit are session crons on the operator's side, not
 on the box.
+- Both read the per-session flags in `data/_summaries/flags.jsonl`. orchestrate appends a row after every session whose check
+  raised a stream-regime flag; `new` marks a flag that platform had not raised before.
+- The 6-hourly audit also runs `python3 networkSim/coverage_report.py` (supervisor 2026-10-18). It prints the coverage table and
+  the `FLAG` lines:
+  - a class with zero support after 5 accepted sessions;
+  - each regime flag with its first and latest session.
+- Report the first `FLAG`, not the twentieth.

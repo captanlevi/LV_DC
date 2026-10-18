@@ -122,6 +122,7 @@ TSHARK = shutil.which("tshark") or "tshark"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import entries as E   # noqa: E402  (session_class, entries, dead-player run; levi 2026-10-17)
+import stream_regime as SR   # noqa: E402  (ladder / codec / player-size flags; supervisor 2026-10-18)
 
 
 def _f(x):
@@ -829,14 +830,17 @@ def main() -> int:
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_max_s"),
                               lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"))
     slow_start = E.slow_start_shaped(ents)
+    sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
     out = {"session": str(sd), "platform": platform, "verdict": v, "session_class": s_class, "entries": ents,
            "slow_start_shaped": slow_start,
            "reasons": why, "thresholds": CHECKS,
            "max_background_share": a.max_background_share, "labels": lab, "traffic": net, "shots": shots,
            "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats, "motion": motion_s,
-           "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap")}
+           "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap"),
+           "stream_regime": sreg["regime"], "suspicious": sreg["suspicious"]}
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
-    md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class})", ""] + [f"- {r}" for r in why] + ["",
+    md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class})", ""] + [f"- {r}" for r in why] + \
+        [f"- SUSPICIOUS (reported; verdict unchanged): {x}" for x in sreg["suspicious"]] + ["",
           "| item | value |", "|---|---|",
           f"| session class (levi's precedence; only normal counts) | {s_class} |",
           f"| slow start under shaping (stream not sustained in 60 s, first shaped state <= {E.SLOW_START_MAX_STATE}; covariate, class stays) | {slow_start} |",
@@ -877,6 +881,7 @@ def main() -> int:
           f"| twitch pick: candidates / recent channels excluded / pick | {len((meta.get('tw_pick') or {}).get('candidates') or [])} / {len((meta.get('tw_pick') or {}).get('excluded_recent') or [])} / {(meta.get('tw_pick') or {}).get('pick')} |",
           f"| tt room choice: candidates / used in recent sessions / tries / choice | {len((meta.get('tt_room_choice') or {}).get('candidates') or [])} / {sum(1 for c in (meta.get('tt_room_choice') or {}).get('candidates') or [] if c.get('recent'))} / {[(t.get('room'), t.get('ok'), (t.get('detail') or {}).get('dead')) for t in (meta.get('tt_room_choice') or {}).get('tries') or []]} / {(meta.get('tt_room_choice') or {}).get('choice')} |",
           f"| tt room ended mid-session (reason / at) | {(meta.get('room_ended') or {}).get('reason')} / {(meta.get('room_ended') or {}).get('at')} |",
+          f"| stream regime vs expected (stream_regime.py: played codec / ladder / player px / reachable top / played top) | {(sreg['regime'] or {}).get('played_codec')} / {(sreg['regime'] or {}).get('ladder')} / {(sreg['regime'] or {}).get('player_h_device_px')} / {(sreg['regime'] or {}).get('reachable_top')} / {(sreg['regime'] or {}).get('played_top')}; flags {SR.flag_keys(sreg['suspicious'])} |",
           f"| tt stream: codec (inferred from the suffix) / requested / ladder per codec / quality button | {(meta.get('tt_stream') or {}).get('codec')} ({(meta.get('tt_stream') or {}).get('codec_inferred_from_suffix')}) / {(meta.get('tt_stream') or {}).get('requested')} / { {k: len(v) for k, v in ((meta.get('tt_stream') or {}).get('ladder') or {}).items()} } / {(meta.get('tt_stream') or {}).get('show_quality_button')} |",
           f"| tt player_dead re-entries (one allowed; outcome continue / room_ended / player_dead) | {[(r.get('outcome'), (r.get('dead_window') or {}).get('stream')) for r in meta.get('player_dead_reentries') or []]} |",
           f"| tt player_dead: dead run s / shaped downstream kbit/s / shaper kbit / share / stream (alive = the player stopped consuming a live stream) | {(meta.get('player_dead') or {}).get('dead_s')} / {((meta.get('player_dead') or {}).get('dead_window') or {}).get('shaped_rx_kbps')} / {((meta.get('player_dead') or {}).get('dead_window') or {}).get('shaper_kbit')} / {((meta.get('player_dead') or {}).get('dead_window') or {}).get('share_of_shaper')} / {((meta.get('player_dead') or {}).get('dead_window') or {}).get('stream')} |",

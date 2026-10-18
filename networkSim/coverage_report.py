@@ -53,6 +53,7 @@ CLASSES = {"youtube": ["STALL", "Q_144p", "Q_240p", "Q_360p", "Q_480p", "Q_720p"
            "tiktok": ["STALL", "Q_360p", "Q_480p", "Q_720p", "Q_1080p"]}
 DEFAULT_MATRIX = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}
 EXPLORE_MIN = 2
+FLAG_AFTER_SESSIONS = 5                         # supervisor 2026-10-18: a class with zero support after 5 sessions: FLAG
 SUMMARY_FILE = "_summaries/coverage_last.json"
 
 
@@ -264,6 +265,34 @@ def meta_record(rec: dict | None, platform: str, matrix_id: str | None) -> dict 
     return {**rec, "applied": rec.get("platform") == platform and rec.get("matrix") == matrix_id}
 
 
+def coverage_flags(snap: dict) -> list[str]:
+    """FLAG lines: a class with no session >= FLOOR_MINUTES once the platform has FLAG_AFTER_SESSIONS accepted sessions."""
+    p, n = snap["platform"], snap["n_sessions"]
+    if n < FLAG_AFTER_SESSIONS:
+        return []
+    hevc = (snap.get("tt_codec_sessions") or {}).get("hevc", 0)
+    return [f"FLAG {p}: {c} has zero support after {n} accepted sessions (none with >= {FLOOR_MINUTES} min; "
+            f"{v['minutes']} min in all)" + (f"; tt tiers count HEVC sessions only: {hevc} of {n}" if p == "tiktok" and c != "STALL" else "")
+            for c, v in snap["classes"].items() if v["sessions_ge_min"] == 0]
+
+
+def regime_flags(data_dir: Path, platform: str) -> list[str]:
+    """FLAG lines from check.json suspicious (stream_regime.py), accepted and _failed sessions: per flag, the sessions
+    raising it, the first and the latest (check.json write order)."""
+    rows = []
+    for c in list((Path(data_dir) / platform).glob("*/check.json")) + list((Path(data_dir) / "_failed" / platform).glob("*/check.json")):
+        chk = _load(c)
+        if chk:
+            rows.append((c.stat().st_mtime, c.parent.name, [x.get("flag") for x in chk.get("suspicious") or []]))
+    rows.sort()
+    by = collections.defaultdict(list)
+    for _, name, flags in rows:
+        for f in flags:
+            by[f].append(name)
+    return [f"FLAG {platform} regime: {f} on {len(v)} of {len(rows)} checked sessions (first {v[0]}, latest {v[-1]})"
+            for f, v in sorted(by.items())]
+
+
 def report(data_dir: Path, platforms=("youtube", "twitch", "tiktok")) -> dict:
     """The on-demand / daily coverage report: per platform the snapshot, the deficits and per accepted session its class
     minutes, stall share, buffer quantiles, (twitch) latency, (tt) codec."""
@@ -285,6 +314,7 @@ def report(data_dir: Path, platforms=("youtube", "twitch", "tiktok")) -> dict:
         lat = [r["twitch_latency"]["latency_s"]["median"] for r in rows if (r.get("twitch_latency") or {}).get("latency_s")]
         out["platforms"][p] = {"snapshot": snap,
                                "deficits": deficits(snap, sorted(snap.get("tt_entries_by_state", {}), key=int)),
+                               "flags": coverage_flags(snap) + regime_flags(data_dir, p),
                                "buffer_median_s_over_sessions": _q(med), "twitch_latency_median_s_over_sessions": _q(lat),
                                "sessions": rows}
     return out
@@ -294,6 +324,8 @@ def markdown(rep: dict) -> list[str]:
     f = rep["floors"]
     md = [f"## Coverage (Addendum Q, {rep['rule']}): accepted sessions with >= {f['minutes']} min of each class "
           f"(floor {f['sessions']}); pooled stall share vs band", ""]
+    flags = [x for v in rep["platforms"].values() for x in v.get("flags", [])]
+    md += [f"- {x}" for x in flags] + ([""] if flags else [])
     for p, v in rep["platforms"].items():
         s = v["snapshot"]
         md += [f"**{p}**: {s['n_sessions']} accepted; stall share {s['stall_share_pooled']} (band {s['stall_band']}); "
