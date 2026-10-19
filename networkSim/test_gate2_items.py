@@ -74,17 +74,17 @@ def test_item4a_visibility_and_fps():
     with tempfile.TemporaryDirectory() as d:                          # 20 frames per media s of a 60 delivered: < 0.9 x
         a = G.session_items(session(d, fps=20.0), _d(60.0))["item4a"]
         assert a["rendered_fps"]["Q_720p"]["ok"] is False and a["ok"] is False and a["fps60_covered"] is True, a
-        a = G.session_items(session(d, fps=26.0))["item4a"]           # no delivered fps: not read
-        assert a["rendered_fps"]["Q_720p"]["ok"] is None and a["rendered_fps"]["Q_720p"]["note"] == "no delivered fps"
-        assert a["ok"] is None
+        a = G.session_items(session(d, fps=26.0))["item4a"]           # no delivered fps: not recorded, a FAIL (levi)
+        assert a["rendered_fps"]["Q_720p"]["ok"] is False and a["rendered_fps"]["Q_720p"]["note"].startswith("no delivered fps")
+        assert a["ok"] is False
     with tempfile.TemporaryDirectory() as d:                          # 9 playing seconds: insufficient support, not read
         a = G.session_items(session(d, n=10, fps=20.0), _d(60.0))["item4a"]
         assert a["rendered_fps"]["Q_720p"]["note"] == "insufficient support" and a["ok"] is True, a
         assert a["fps60_covered"] is False
     with tempfile.TemporaryDirectory() as d:                          # a session from before the columns
-        r = G.session_items(session(d, cols=COLS[:-2]))
-        assert r["item4a"] == {"visibility": {"recorded": False, "ok": None}, "rendered_fps": {"recorded": False},
-                               "fps60_covered": None, "ok": None}, r
+        r = G.session_items(session(d, cols=COLS[:-2]))                # not recorded: a FAIL
+        assert r["item4a"] == {"visibility": {"recorded": False, "ok": False}, "rendered_fps": {"recorded": False},
+                               "fps60_covered": None, "ok": False}, r
         assert r["item8"]["playing_s_all"] == 59.0
 
 
@@ -120,7 +120,7 @@ def test_item5_byte_total_ratio():
         s = G.item5(Path(d))["per_state"]["3"]
         assert (s["bound_s"], s["ratio"], s["reading"]) == (15.0, 1.0, "PASS"), s
     with tempfile.TemporaryDirectory() as d:
-        assert G.item5(Path(d)) == {"recorded": False, "ok": None}
+        assert G.item5(Path(d)) == {"recorded": False, "ok": False}
 
 
 def test_items1_2_content_bands():
@@ -184,9 +184,19 @@ def test_concurrency_and_overlap_items():
     fo["pairs"][0]["shared_link_local_multicast"][0]["packets_in_both"] = 0
     fo["split_detail"]["twitch/tw_1"]["rows"].append({"payload_packets": 2})       # a payload-carrying split: gates
     assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is False
-    del fo["split_detail"]                                                          # no --detail: not read
+    del fo["split_detail"]                                                          # no --detail: not recorded, a FAIL
     r = G.overlap_items("twitch/tw_1", fo)["item11"]
-    assert r["ok"] is None and "--detail" in r["note"], r
+    assert r["ok"] is False and r["recorded"] is False and "--detail" in r["note"], r
+    m = G.concurrency_items({"concurrency": {"mode": "trio"}})                       # fields missing: FAIL, not "not gated"
+    assert (m["item7"]["ok"], m["item7"]["recorded"], m["item9"]["ok"], m["item9"]["recorded"]) == (False, False, False, False), m
+    fo["sessions"]["twitch/tw_1"].pop("dns_answers_json")
+    assert G.overlap_items("twitch/tw_1", dict(fo, split_detail={"twitch/tw_1": {"rows": []}}))["item14"]["ok"] is False
+    assert all(v["ok"] is False for v in G.missing_overlap_items().values())
+    with tempfile.TemporaryDirectory() as d:                          # a trio session without a flow_overlap record
+        sd = session(d)
+        (sd / "meta.json").write_text(json.dumps({"concurrency": {"mode": "trio"}}))
+        r = G.session_items(sd)
+        assert all(r[k]["ok"] is False and r[k]["recorded"] is False for k in ("item7", "item9", "item11", "item14")), r
     assert G.overlap_items("youtube/yt_9", fo) == {} and G.overlap_items("twitch/tw_1", None) == {}
 
 
@@ -197,7 +207,7 @@ def test_cli():
         G.main([str(sd), "--rendition-fps", str(Path(d) / "fps.json"), "--out", str(Path(d) / "o.json")])
         r = json.loads((Path(d) / "o.json").read_text())["sessions"][0]
         assert r["item4a"]["rendered_fps"]["Q_720p"]["delivered_fps"] == 60.0 and r["item4a"]["ok"] is False, r
-        assert r["items1_2"]["1"]["reading"] == "verify.json missing" and r["item5"] == {"recorded": False, "ok": None}
+        assert r["items1_2"]["1"]["reading"] == "verify.json missing" and r["item5"] == {"recorded": False, "ok": False}
 
 
 def main() -> int:

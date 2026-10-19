@@ -4,6 +4,8 @@ from a session's labels.csv and shots/index.jsonl, for shagun's per-session gate
 and the single-mode reference read the same way). Read-only; no media truth.
 
 Checklist as revised by levi's gate-2 call on pilot-1 (2026-10-19, from round 1):
+An item not recorded is a FAIL (ok false, recorded false; levi); ok null only where a rule says "reported" (4a
+insufficient support, 5 not shaper-bound, 1 / 2 content band only). Admission: no gated ok is false.
   1 / 2 verify / check: PASS; a non-PASS whose every reason is a content band (verify's B/s-per-tier p10..p90; the speed
      rule is a verify note already) is reported and the session handled as in single mode; any other reason gates.
   4a visibility: every res_meta tick's document.visibilityState is `visible` (labels.csv `visibility`; a session from
@@ -131,7 +133,7 @@ def item8(iv: list[dict], n_shots: int) -> dict:
 def item4a(tk: list[dict], iv: list[dict], rendition_fps: dict | None = None) -> dict:
     """Item 4a (module docstring). rendition_fps: the session's rendition_fps.py detail, {tier: {delivered_fps, ...}}."""
     if not tk or not tk[0]["has_visibility"]:
-        vis = {"recorded": False, "ok": None}
+        vis = {"recorded": False, "ok": False}                 # levi: in gate 2 an item not recorded is a FAIL
     else:
         bad = [x for x in tk if x["visibility"] != "visible"]
         vals: dict = {}
@@ -152,7 +154,7 @@ def item4a(tk: list[dict], iv: list[dict], rendition_fps: dict | None = None) ->
             if s_free < MIN_SUPPORT_S:
                 ok, note = None, "insufficient support"
             elif ref is None or per_media is None:
-                ok, note = None, "no delivered fps"
+                ok, note = False, "no delivered fps (not recorded: a FAIL)"
             else:
                 ok, note = per_media >= RENDER_FPS_MIN_SHARE * ref, None
             fps[tier] = {"fps_per_media_s_shot_free": per_media, "delivered_fps": ref,
@@ -166,11 +168,11 @@ def item4a(tk: list[dict], iv: list[dict], rendition_fps: dict | None = None) ->
                          "playback_rate_shot_free": round(m_free / s_free, 3) if s_free else None,
                          "dropped_share_shot_free": round(drop_free / tot_free, 3) if tot_free else None}
     read = [v["ok"] for v in fps.values() if v.get("note") != "insufficient support"]
-    oks = [vis["ok"]] + read
+    oks = [vis["ok"]] + read + ([] if tk and tk[0]["has_total"] else [False])
     fps60 = (None if not fps else any((v.get("delivered_fps") or 0) >= 50 and v.get("note") != "insufficient support"
                                       for v in fps.values()))
     return {"visibility": vis, "rendered_fps": fps if tk and tk[0]["has_total"] else {"recorded": False},
-            "fps60_covered": fps60, "ok": None if any(o is None for o in oks) else all(oks)}
+            "fps60_covered": fps60, "ok": False if any(o is False for o in oks) else (None if any(o is None for o in oks) else True)}
 
 
 def item5(sd: Path) -> dict:
@@ -178,7 +180,7 @@ def item5(sd: Path) -> dict:
     import bisect
     p = Path(sd) / "tc_stats.jsonl"
     if not p.exists():
-        return {"recorded": False, "ok": None}
+        return {"recorded": False, "ok": False}
     rows = [r for r in (json.loads(line) for line in p.read_text().splitlines() if line.strip()) if r.get("in")]
     nl = Path(sd) / "net_labels.txt"
     lab = (sorted((json.loads(line) for line in nl.read_text().splitlines() if line.strip()), key=lambda x: x["timestamp"])
@@ -227,9 +229,10 @@ def concurrency_items(meta: dict) -> dict:
     detached = {x.get("cmd") for x in c.get("slot_detach") or [] if x.get("rc") == 0}
     bad = [f for f in (c.get("slot_down") or {}).get("failed") or []
            if not (f.get("cmd") in detached and "not found" in str(f.get("err")))]
-    return {"item7": {"flagged_share": fs, "max": LINK_FLAG_MAX_SHARE, "ok": None if fs is None else fs <= LINK_FLAG_MAX_SHARE},
-            "item9": {"dropped_kernel_total": cd.get("dropped_kernel_total"),
-                      "ok": None if cd.get("dropped_kernel_total") is None else cd["dropped_kernel_total"] == 0},
+    dk = cd.get("dropped_kernel_total")
+    return {"item7": {"flagged_share": fs, "max": LINK_FLAG_MAX_SHARE, "recorded": fs is not None,
+                      "ok": fs is not None and fs <= LINK_FLAG_MAX_SHARE},
+            "item9": {"dropped_kernel_total": dk, "recorded": dk is not None, "ok": dk == 0},
             "teardown": {"staging_left": c.get("staging_left"), "slot_down_failures_not_benign": bad,
                          "ok": not c.get("staging_left") and not bad}}
 
@@ -248,18 +251,25 @@ def overlap_items(name: str, fo: dict | None) -> dict:
     payload = None if sd is None else sum(1 for r in sd.get("rows") or [] if r.get("payload_packets", 0) > 0)
     control = None if sd is None else sum(1 for r in sd.get("rows") or [] if not r.get("payload_packets"))
     fail11 = bool(unicast or cids or mc_both or payload)
-    ok11 = False if fail11 else (None if sd is None and rec.get("flows_also_in_default") else True)
+    unread = sd is None and bool(rec.get("flows_also_in_default"))   # not recorded: a FAIL (levi)
+    ok11 = not fail11 and not unread
     item11 = {"shared_unicast_flows": unicast, "shared_quic_cids": cids, "link_local_multicast_flows": len(mc),
               "multicast_packets_in_both": mc_both, "default_split_flows_payload": payload,
-              "default_split_flows_control_only": control, "ok": ok11,
-              **({"note": "flows also in the default class; run flow_overlap --detail"} if ok11 is None else {})}
+              "default_split_flows_control_only": control, "recorded": not unread, "ok": ok11,
+              **({"note": "flows also in the default class, not read: run flow_overlap --detail"} if unread else {})}
     fam = rec.get("sibling_family_snis") or {}
     dm, du = rec.get("default_media_snis_in_window") or [], (rec.get("default_udp_from_media_addresses") or {}).get("packets", 0)
     dj = rec.get("dns_answers_json") or {}
     return {"item11": item11, "item12": {"sibling_family_snis": fam, "ok": not fam},
             "item13": {"default_media_snis_in_window": dm, "default_udp_from_media_addresses": du, "ok": not dm and not du},
-            "item14": {"present": dj.get("present"), "media_unnamed": dj.get("media_unnamed"),
-                       "ok": None if not dj else bool(dj.get("present")) and not dj.get("media_unnamed")}}
+            "item14": {"present": dj.get("present"), "media_unnamed": dj.get("media_unnamed"), "recorded": bool(dj),
+                       "ok": bool(dj) and bool(dj.get("present")) and not dj.get("media_unnamed")}}
+
+
+def missing_overlap_items() -> dict:
+    """A trio session that flow_overlap's json does not cover: items 11-14 not recorded, a FAIL each (levi)."""
+    return {k: {"recorded": False, "ok": False, "note": "no flow_overlap record for this session"}
+            for k in ("item11", "item12", "item13", "item14")}
 
 
 FS_FALLBACK_FLAG_SHARE = 0.2    # levi (t53 (a)): a fullscreen yt session's cadence shots on the CDP fallback above this
@@ -323,7 +333,8 @@ def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dic
     return {"session": str(sd), "mode": (meta.get("concurrency") or {}).get("mode", "single"),
             "ticks": len(tk), "items1_2": items1_2(sd), "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
             "item8": item8(iv, len(spans)), **concurrency_items(meta),
-            **overlap_items(f"{sd.parent.name}/{sd.name}", flow_overlap),
+            **(overlap_items(f"{sd.parent.name}/{sd.name}", flow_overlap)
+               or (missing_overlap_items() if (meta.get("concurrency") or {}).get("mode") == "trio" else {})),
             **({"fullscreen": fs} if (fs := fullscreen_report(sd, meta)) else {})}
 
 
