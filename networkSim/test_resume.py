@@ -167,6 +167,7 @@ def test_button_js_on_the_fixture():
     """The button JS parses, and the real self-pause DOM holds the button it reads (data-a-target, the state attr)."""
     html = (HERE / "fixtures" / "tw_player_dom_self_pause_2026-10-17.html").read_text()
     assert 'data-a-target="player-play-pause-button"' in html and 'data-a-player-state="playing"' in html
+    assert "!v.paused" in B._TW_BUTTON_JS and "skipped" in B._TW_BUTTON_JS     # never Twitch's pause on a playing element
     if shutil.which("node"):
         for arg in ("true", "false"):
             r = subprocess.run([shutil.which("node"), "--check", "-"], input=B._TW_BUTTON_JS % arg, capture_output=True, text=True)
