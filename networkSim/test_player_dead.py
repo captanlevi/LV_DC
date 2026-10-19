@@ -258,6 +258,22 @@ def test_media_listener_records():
     for k in range(B.MEDIA_RECENT_N + 5):
         m.handle({"method": "Media.playerEventsAdded", "params": {"playerId": "p1", "events": [{"timestamp": k}]}}, 6.0 + k)
     assert len(m.snapshot()["recent"]) == B.MEDIA_RECENT_N
+    # decision A item 3 (every platform): summary() = meta media_decoders; each player's load kind (a MediaStream
+    # player's kLoad names a stream id: "stream"), and the players that named a video decoder with codec / resolution
+    m = B.MediaListener("ws://unused", None)
+    for pid, url in (("p1", "blob:https://www.tiktok.com/x"), ("p2", "ea0cb5a7-72bd-4095-968a-47a0db0aa483"),
+                     ("p3", "data:audio/mpeg;base64,AA")):
+        m.handle({"method": "Media.playerEventsAdded", "params": {"playerId": pid, "events": [
+            {"timestamp": 1, "value": json.dumps({"event": "kWebMediaPlayerCreated"})},
+            {"timestamp": 2, "value": json.dumps({"event": "kLoad", "url": url})}]}}, 10.0)
+    m.handle({"method": "Media.playerPropertiesChanged", "params": {"playerId": "p1", "properties": [
+        {"name": "kVideoDecoderName", "value": "VaapiVideoDecoder"}, {"name": "kIsPlatformVideoDecoder", "value": "true"},
+        {"name": "kVideoTracks", "value": json.dumps([{"codec": "h264"}])}, {"name": "kResolution", "value": "1440x1280"}]}}, 11.0)
+    s = m.summary()
+    assert s["players"] == 3 and s["loads"] == {"blob": 1, "stream": 1, "data": 1}, s
+    assert s["video_decoders"] == [{"player": "p1", "load": "blob", "t_load": 10.0, "video_decoder": "VaapiVideoDecoder",
+                                    "platform_video_decoder": "true", "codec": "h264", "resolution": "1440x1280"}], s
+    assert B._media_load_kind("not json") is None and B._media_load_kind(json.dumps({"event": "kPlay"})) is None
 
 
 def test_media_snapshot_is_capped(monkeypatch):

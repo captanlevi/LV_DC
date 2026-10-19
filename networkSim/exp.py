@@ -795,6 +795,10 @@ if __name__ == "__main__":
                 except Exception as e:
                     rec = {"rc": None, "error": repr(e)}
                 session_meta.write(session_dir, dpms_forced_off={**rec, "at": time.time()})
+            # decision A (levi 00271 item 4): the monitor's DPMS state and the display topology, read at the start (after
+            # any forced off) and at the end; both change GPU load (reverse PRIME's copy)
+            session_meta.write(session_dir, display_start={**session_meta.display_state(),
+                                                           "dpms_off_requested": bool(args.dpms_off)})
         else:
             # Manual mode (default): wait for Chrome to be reachable, then hand off.
             from browser import _wait_for_cdp
@@ -858,6 +862,8 @@ if __name__ == "__main__":
             browser.stop()
             if browser.fs_keeper is not None:           # t53 (a): fullscreen in trio, the focus keeper's record
                 meta_extra["fullscreen_keeper"] = browser.fs_keeper
+            meta_extra["media_decoders"] = browser.media_decoders       # decision A item 3 (every platform)
+            meta_extra["display_end"] = session_meta.display_state()   # decision A item 4
         else:
             # Export labels from extension storage directly
             from browser import _export_via_service_worker

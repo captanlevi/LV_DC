@@ -1678,16 +1678,34 @@ MEDIA_RECENT_N = 40
 MEDIA_SNAPSHOT_MAX_S = 2.0   # the dead-trigger snapshot's cap: it delays the re-entry (levi's audit of 1bcdc5e)
 
 
+def _media_load_kind(value) -> str | None:
+    """A Media-domain event value (JSON text) -> its kLoad's kind: the URL scheme (blob / data / https ...), or "stream"
+    for a MediaStream player (WebMediaPlayerMS logs the stream's id, a UUID, not a URL); None for other events."""
+    try:
+        ev = json.loads(value) if isinstance(value, str) else (value or {})
+    except ValueError:
+        return None
+    if not isinstance(ev, dict) or ev.get("event") != "kLoad":
+        return None
+    url = str(ev.get("url") or "")
+    return url.split(":", 1)[0] if ":" in url else ("stream" if url else None)
+
+
 class MediaListener:
-    """tt: Chrome's media-internals over CDP (the Media domain) by a second CDP client on the page, recording only
+    """Chrome's media-internals over CDP (the Media domain) by a second CDP client on the page, recording only
     (supervisor 2026-10-18, peter's ti_43 read: the player reset to readyState 0 while the FLV stream kept arriving;
     this tells a decoder error, e.g. the VA-API HEVC path, from a player-side fault on the next death). Every player's
     properties (kVideoDecoderName, kIsPlatformVideoDecoder, kResolution, ...), events, errors and its error / warning /
-    info messages go to <session>/media_events.jsonl; snapshot() is attached to the player_dead record. No Chrome flag."""
+    info messages go to <session>/media_events.jsonl; snapshot() is attached to the player_dead record. No Chrome flag.
+    Every platform since decision A (levi 00271 item 3, supervisor (b)): summary() is meta.json media_decoders, each
+    player's load kind and video decoder. tt's live stream is a MediaStream player ("stream": its kLoad names a stream
+    id, not a URL), which has no decoder in the media log: its decode happens in the page, so tt's decoders here are
+    only its blob clips' (a stated gap for the N = 3 regime)."""
 
     def __init__(self, ws_url: str, path: Path | None):
         self.ws_url, self.path, self.error = ws_url, path, None
         self.players: dict[str, dict] = {}
+        self.loads: dict[str, dict] = {}          # player -> its kLoad's kind ("blob" / "data" / "https" / "stream") and t
         self.recent: list[dict] = []
         self.written = 0
         self._lock = threading.Lock()
@@ -1720,7 +1738,33 @@ class MediaListener:
                     props[x.get("name")] = x.get("value")
             else:
                 self.recent = (self.recent + [rec])[-MEDIA_RECENT_N:]
+                if m == "Media.playerEventsAdded":
+                    for e in prm.get("events") or []:
+                        kind = _media_load_kind(e.get("value"))
+                        if kind is not None:
+                            self.loads.setdefault(str(prm.get("playerId")), {"load": kind, "t": round(now, 3)})
         return rec
+
+    def summary(self) -> dict:
+        """meta.json media_decoders: players created, their load kinds, and every player that named a video decoder."""
+        with self._lock:
+            kinds: dict[str, int] = {}
+            for v in self.loads.values():
+                kinds[v["load"]] = kinds.get(v["load"], 0) + 1
+            dec = []
+            for pid, pr in self.players.items():
+                if "kVideoDecoderName" not in pr:
+                    continue
+                try:
+                    codec = (json.loads(pr.get("kVideoTracks") or "[]") or [{}])[0].get("codec")
+                except (ValueError, TypeError, AttributeError, IndexError):
+                    codec = None
+                dec.append({"player": pid, "load": (self.loads.get(pid) or {}).get("load"),
+                            "t_load": (self.loads.get(pid) or {}).get("t"), "video_decoder": pr.get("kVideoDecoderName"),
+                            "platform_video_decoder": pr.get("kIsPlatformVideoDecoder"), "codec": codec,
+                            "resolution": pr.get("kResolution")})
+            return {"players": len(set(self.loads) | set(self.players)), "loads": kinds, "video_decoders": dec,
+                    "written": self.written, "error": self.error}
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -2538,7 +2582,8 @@ class BrowserSession:
         self.shot_origin: dict | None = None        # the X11 shot origin calibration (t37; calibrate_shot_origin)
         self.fs_keeper: dict | None = None          # t53 (a): fullscreen in trio, the keeper's start record
         self.rung_probes: list[dict] = []           # twitch: each menu read (open / close times): shots near it are flagged
-        self._media: MediaListener | None = None     # tt: the media-internals recorder (media_events.jsonl)
+        self._media: MediaListener | None = None     # the media-internals recorder (media_events.jsonl), every platform
+        self.media_decoders: dict | None = None      # its summary() at stop (meta.json media_decoders)
         self._rung_probe_at = 0.0
         self._recovery_lock = threading.Lock()    # one recovery of either kind per session (am. 6)
         self.tw_pick: dict | None = None          # twitch: directory candidates, recent channels excluded, the pick
@@ -2634,9 +2679,9 @@ class BrowserSession:
         except Exception as e:
             print(f"[browser] Could not pre-clear extension storage: {e}", flush=True)
 
-        if self.platform == "tiktok":
-            self._media = MediaListener(self._ws_url, (Path(self._session_dir) / MEDIA_EVENTS_FILE)
-                                        if self._session_dir else None).start()
+        # every platform (decision A, levi 00271 item 3): the decoder per session; tt also attaches snapshot() to player_dead
+        self._media = MediaListener(self._ws_url, (Path(self._session_dir) / MEDIA_EVENTS_FILE)
+                                    if self._session_dir else None).start()
         if self.platform == "tiktok" and not self.first_url:
             self.list_url = self._tt_choose_room()
         elif self.platform == "twitch":
@@ -3225,6 +3270,7 @@ class BrowserSession:
             self._master.stop()
         if self._media is not None:
             self._media.stop()
+            self.media_decoders = self._media.summary()
         if self._rotator:
             self._rotator.join(timeout=5)
         if self._watcher:
