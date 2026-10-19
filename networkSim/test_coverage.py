@@ -305,7 +305,11 @@ def main():
         assert all(snap["tt_entries_by_state"][s] == 10 for s in states[2:]), snap
         assert snap["tt_codec_sessions"] == {"h264": 5}
         r = C.pick_matrix(snap, BASE["tiktok"])
-        assert r["target"]["key"] == "Q_360p" and r["why"].startswith("explore"), r  # no HEVC sessions on any matrix
+        # no HEVC sessions on any matrix: the tier classes tie at the top share; the target is the seeded order's first
+        # (levi 2026-10-20), recorded
+        tie = r["target_tie"]
+        assert {"Q_360p", "Q_480p", "Q_720p", "Q_1080p"} <= set(tie["tied"]) and r["target"]["key"] == tie["tied"][0], r
+        assert r["why"].startswith("explore"), r
         session(d, "tiktok", "v0", allc, matrix="TT-M", codec="hevc")
         snap = C.snapshot(d, "tiktok")
         assert snap["classes"]["Q_720p"]["sessions_ge_min"] == 1

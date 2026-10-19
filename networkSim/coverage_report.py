@@ -127,10 +127,12 @@ MATRIX_TARGETS = {("youtube", "H"): ("Q_1080p",)}   # Q am. 15 (6): yt-H is draw
 FAMILY_FLOOR = 5
 DEFICIT_RANK = "Q am. 17: deficit share = missing / floor, classes, entry states and families alike"
 # levi 2026-10-20 (peter 00221: at an era restart every deficit is equal and the class order took the low-tier classes
-# first, lining up with the yt list order's channels): the target among the equal top shares is a seeded draw, never the
-# class order; seed DEFICIT_TIE_SEED + the platform's record attempts, recorded (coverage.target_tie)
+# first, lining up with the yt list order's channels): every group of equal shares is ordered by a seeded draw, never
+# the class order (the target is the first); seed DEFICIT_TIE_SEED + the platform's record attempts, recorded
+# (coverage.target_tie); the report's display keeps the fixed order
 DEFICIT_TIE_SEED = 0
-DEFICIT_TIE_RULE = "levi 2026-10-20: equal top deficit shares, a seeded draw (seed + the platform's record attempts)"
+DEFICIT_TIE_RULE = ("levi 2026-10-20: equal deficit shares ordered by a seeded draw (seed + the platform's record "
+                    "attempts), never the class order; the target is the first")
 
 
 def drawable(platform: str, matrix_id: str, target_key: str | None) -> bool:
@@ -432,14 +434,25 @@ def band_map(platform: str, matrices: dict, ids: list[str]) -> dict:
     return out
 
 
-def _ranked(defs: list[dict]) -> list[dict]:
-    """DEFICIT_RANK: the largest share first (ties: class order, states, families)."""
+def _tie_keys(defs: list[dict], seed: int) -> dict:
+    """One seeded key per deficit (drawn over the deficits in their fixed (kind, key) order): equal shares are ordered
+    by it, never by the class order (levi 2026-10-20)."""
+    rnd = random.Random(seed)
+    return {k: rnd.random() for k in sorted((d["kind"], str(d["key"])) for d in defs)}
+
+
+def _ranked(defs: list[dict], seed: int | None = None) -> list[dict]:
+    """DEFICIT_RANK: the largest share first; equal shares by the seeded keys when a seed is given (the steering: levi
+    2026-10-20), else by the fixed order (class order, states, families: the report's display)."""
     for d in defs:
         d["share"] = round(d["deficit"] / d["floor"], 6)
-    return sorted(defs, key=lambda d: (-d["share"], d["order"]))
+    if seed is None:
+        return sorted(defs, key=lambda d: (-d["share"], d["order"]))
+    keys = _tie_keys(defs, seed)
+    return sorted(defs, key=lambda d: (-d["share"], keys[(d["kind"], str(d["key"]))]))
 
 
-def deficits(snap: dict, states: list[str] = (), families: list[str] = ()) -> list[dict]:
+def deficits(snap: dict, states: list[str] = (), families: list[str] = (), seed: int | None = None) -> list[dict]:
     """The floors' shortfalls, ranked by share (DEFICIT_RANK). families: the schedule family ids whose FAMILY_FLOOR
     counts (accepted sessions of record per family id)."""
     out = []
@@ -459,7 +472,7 @@ def deficits(snap: dict, states: list[str] = (), families: list[str] = ()) -> li
         if n < FAMILY_FLOOR:
             out.append({"kind": "schedule", "key": m, "deficit": float(FAMILY_FLOOR - n), "floor": FAMILY_FLOOR,
                         "order": 200 + j})
-    return _ranked(out)
+    return _ranked(out, seed)
 
 
 def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, excluded_geometries: tuple = (),
@@ -470,12 +483,13 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
     platform = snap["platform"]
     ids = sorted(allowed or matrices)
     states = sorted({s for m in ids for s in matrices[m][0]}, key=int) if platform == "tiktok" else []
-    defs = deficits(snap, states, [m for m in ids if "@" in m])
+    seed = DEFICIT_TIE_SEED + int((snap.get("attempts") or {}).get("total", 0))
+    defs = deficits(snap, states, [m for m in ids if "@" in m], seed=seed)
     if reserved:   # t56: a class (am. 17: or a family) a running sibling slot already holds is that much nearer its floor
         for d in defs:
             if d["kind"] in ("class", "schedule") and reserved.get(d["key"]):
                 d["deficit"] = float(d["deficit"]) - reserved[d["key"]]
-        defs = _ranked([d for d in defs if d["deficit"] > 0])
+        defs = _ranked([d for d in defs if d["deficit"] > 0], seed)
     bands = band_map(platform, matrices, ids)
     # am. 15 (3): a tier class no allowed matrix can reach is not drawn; the next deficit is the target
     unreachable = [d["key"] for d in defs if d["kind"] == "class" and d["key"] in bands and not bands[d["key"]]["qualifies"]]
@@ -497,12 +511,10 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
         m = min(rot, key=lambda x: (n[x], x))
         return {**rec, "matrix": m, "target": None, "yields": {}, "default_rotation": True,
                 "why": "no deficit: rotation, least-collected matrix" + (" (every deficit unreachable)" if defs else "")}
-    tgt = live[0]
+    tgt = live[0]                                          # the seeded order: equal shares never by the class order
     tied = [d for d in live if d["share"] == tgt["share"]]
     if len(tied) > 1:
-        seed = DEFICIT_TIE_SEED + int((snap.get("attempts") or {}).get("total", 0))
-        tgt = random.Random(seed).choice(tied)
-        rec["target_tie"] = {"rule": DEFICIT_TIE_RULE, "tied": [d["key"] for d in tied], "seed": seed, "drawn": tgt["key"]}
+        rec["target_tie"] = {"rule": DEFICIT_TIE_RULE, "seed": seed, "tied": [d["key"] for d in tied], "drawn": tgt["key"]}
     if tgt["kind"] == "schedule":                          # am. 17: a family's floor is met by the family itself
         return {**rec, "matrix": tgt["key"], "target": tgt, "yields": {}, "why": f"schedule floor {FAMILY_FLOOR}"}
     if tgt["kind"] == "class" and tgt["key"] in bands:     # only matrices that reach the class's band

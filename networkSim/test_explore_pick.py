@@ -55,18 +55,38 @@ def test_the_c1f9181_case_moves_off_tw_l():
         snap = C.snapshot(d, "twitch", REC)
         assert snap["per_matrix"] == {} and snap["attempts"] == {
             "per_matrix": {"TW-L": 4}, "total": 4, "recent": [["TW-L", False], ["TW-L", False]]}, snap["attempts"]
+        # the tier classes met, so STALL is the one top deficit (the equal-deficit order has its own test) and the
+        # explore step alone decides
+        for c in C.CLASSES["twitch"][1:]:
+            snap["classes"][c] = {"sessions_ge_min": 5, "minutes": 50}
         r = C.pick_matrix(snap, TW)
         ex = r["explore"]
-        # levi 2026-10-20: every deficit equal (no session yet): the target is the seeded draw among them, not class order
-        tie = r["target_tie"]
-        assert tie["seed"] == C.DEFICIT_TIE_SEED + 4 and tie["tied"][0] == "STALL" and "Q_1080p" not in tie["tied"], tie
-        assert r["target"]["key"] == tie["drawn"] == random.Random(tie["seed"]).choice(tie["tied"]), r
-        assert r["why"].startswith("explore"), r
+        assert r["target"]["key"] == "STALL" and "target_tie" not in r and r["why"].startswith("explore"), r
         assert ex["young"] == ["TW-L", "TW-M", "current"] and ex["capped"] == ["TW-L"], ex
         assert ex["tied"] == ["TW-M", "current"] and ex["seed"] == C.EXPLORE_SEED + 4, ex
         assert r["matrix"] == random.Random(C.EXPLORE_SEED + 4).choice(["TW-M", "current"]) != "TW-L", r
-        assert json.dumps(C.pick_matrix(C.snapshot(d, "twitch", REC), TW), sort_keys=True, default=str) == \
+        assert json.dumps(C.pick_matrix(snap, TW), sort_keys=True, default=str) == \
             json.dumps(r, sort_keys=True, default=str)                                         # reproducible
+
+
+def test_equal_deficits_take_the_seeded_order_never_the_class_order():
+    """levi 2026-10-20 (peter 00221): every group of equal deficit shares is ordered by the seeded keys (seed + the
+    record attempts), the whole list, not only the target; the report's display keeps the fixed class order."""
+    snap = {"platform": "twitch", "classes": {c: {"sessions_ge_min": 0, "minutes": 0} for c in C.CLASSES["twitch"]},
+            "per_matrix": {}, "stall_share_pooled": None}
+    fixed = [d["key"] for d in C.deficits(snap)]
+    assert fixed == C.CLASSES["twitch"]                                                  # display: the class order
+    orders = {seed: [d["key"] for d in C.deficits(snap, seed=seed)] for seed in range(6)}
+    keys = C._tie_keys(C.deficits(snap), 3)
+    assert orders[3] == [k for _, k in sorted(keys, key=lambda kk: keys[kk])]            # the seeded keys, in full
+    assert any(o[0] != "STALL" for o in orders.values()) and len({tuple(o) for o in orders.values()}) > 1, orders
+    assert orders[3] == [d["key"] for d in C.deficits(snap, seed=3)]                     # reproducible
+    # a larger share still comes first whatever the seed; the tie only orders equals
+    snap2 = {**snap, "classes": {**snap["classes"], "Q_720p": {"sessions_ge_min": 4, "minutes": 9}}}
+    assert all(C.deficits(snap2, seed=s)[-1]["key"] == "Q_720p" for s in range(6))
+    r = C.pick_matrix({**snap, "attempts": {"per_matrix": {}, "total": 3, "recent": []}}, TW)
+    assert r["target"]["key"] == orders[3][0] and r["target_tie"]["tied"] == [
+        k for k in orders[3] if k != "Q_1080p"], r.get("target_tie")                      # Q_1080p unreachable: out
 
 
 def test_fewest_attempts_any_outcome_running_included_non_record_ignored():
