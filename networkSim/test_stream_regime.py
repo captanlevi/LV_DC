@@ -131,8 +131,19 @@ def main():
 
 
 def test_main():
-    """The script's own checks under pytest too (levi t58 T-1: the apply gate runs both runners)."""
-    assert main() in (0, None)
+    """The script's own checks under pytest too (levi t58 T-1: the apply gate runs both runners). main() patches
+    orchestrate's globals and subprocess.run for its own checks; they are restored for the tests after it."""
+    import os
+    import subprocess
+    saved = (subprocess.run, O._RUNS_DIR, O.MATRIX_RULE, dict(O.LAST_COVERAGE), dict(os.environ))
+    try:
+        assert main() in (0, None)
+    finally:
+        subprocess.run, O._RUNS_DIR, O.MATRIX_RULE = saved[:3]
+        O.LAST_COVERAGE.clear()
+        O.LAST_COVERAGE.update(saved[3])
+        os.environ.clear()
+        os.environ.update(saved[4])
 
 
 if __name__ == "__main__":
