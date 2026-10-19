@@ -63,6 +63,37 @@ def test_stop_rule():
         assert R.main(["--gate2", str(root / "g.json"), str(a)]) == 1                 # no device record: BAD, exit 1
 
 
+def test_systematic_rule():
+    """levi: the same inventory kind on the same platform in 2 consecutive counted rounds stops; so does a platform's
+    kind at >= 2 x its single-mode base rate with >= 3 events; below those, the per-session exclusion alone."""
+    def g2(*sessions):
+        return {"sessions": [_row(n, items1_2={"1": {"ok": True, "reading": "PASS"},
+                                               "2": {"ok": None, "reasons": [], "session_class": cls}})
+                             for n, cls in sessions]}
+    base = {"check": {"twitch": {"n_sessions": 40, "coarse": {"class:player_frozen": {"sessions": 2, "rate": 0.05}}}},
+            "verify": {}}
+    r1 = R.round_kinds(g2(("tw_100005", "player_frozen"), ("tw_200001", "normal")))
+    assert r1["kinds"] == {"twitch": {"check": {"class:player_frozen": ["tw_100005"]}}} and r1["n_sessions"] == {"twitch": 2}
+    assert R.systematic(r1, [], base) == []                                         # one event, first round
+    r2 = R.round_kinds(g2(("tw_100006", "player_frozen")))
+    bad = R.systematic(r2, [{"round_kinds": r1}], base)
+    assert len(bad) == 1 and "2 consecutive" in bad[0], bad
+    r3 = R.round_kinds(g2(("tw_100007", "normal")))
+    r4 = R.round_kinds(g2(("tw_100008", "player_frozen")))                          # 3 events over 5 sessions: 0.6 >= 0.1
+    bad = R.systematic(r4, [{"round_kinds": r1}, {"round_kinds": r2}, {"round_kinds": r3}], base)
+    assert any(">= 2 x" in x for x in bad) and not any("consecutive" in x for x in bad), bad
+    import hashlib
+    inv = {"base_rates": base, "base_rates_sha": hashlib.sha256(json.dumps(base, sort_keys=True).encode()).hexdigest()}
+    assert R.load_base_rates(inv, inv["base_rates_sha"][:12]) == base
+    for wrong in ("000000000000", None):
+        try:
+            R.load_base_rates(inv, wrong)
+            raise AssertionError(wrong)
+        except SystemExit:
+            pass
+
+
 if __name__ == "__main__":
     test_stop_rule()
+    test_systematic_rule()
     print("test_round_stop_checks: ok")
