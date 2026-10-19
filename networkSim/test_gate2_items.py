@@ -60,12 +60,15 @@ def _d(fps):
 
 
 def test_item4a_visibility_and_fps():
+    """Decision A (levi): 4a gates visibility only; rendered / delivered below 0.9 stamps the tier device_limited,
+    reported (ok None), never a FAIL."""
     with tempfile.TemporaryDirectory() as d:
         a = G.session_items(session(d), _d(30.0))["item4a"]
         assert a["visibility"] == {"recorded": True, "samples": 60, "not_visible": 0, "values": {"visible": 60},
                                    "first_not_visible_t": None, "ok": True}, a
         f = a["rendered_fps"]["Q_720p"]
-        assert (f["fps_per_media_s_shot_free"], f["delivered_fps"], f["ratio"], f["ok"], a["ok"]) == (30.0, 30.0, 1.0, True, True), a
+        assert (f["fps_per_media_s_shot_free"], f["delivered_fps"], f["ratio"], f["device_limited"], f["ok"], a["ok"]) \
+            == (30.0, 30.0, 1.0, False, None, True), a
         assert (f["playback_rate_shot_free"], f["dropped_share_shot_free"]) == (1.0, round(1 / 30, 3)), f
         assert a["fps60_covered"] is False
     with tempfile.TemporaryDirectory() as d:                          # one hidden tick fails 4a
@@ -73,18 +76,20 @@ def test_item4a_visibility_and_fps():
         assert a["visibility"]["not_visible"] == 1 and a["visibility"]["first_not_visible_t"] == 1007.0 and a["ok"] is False
     with tempfile.TemporaryDirectory() as d:                          # 20 frames per media s of a 60 delivered: < 0.9 x
         a = G.session_items(session(d, fps=20.0), _d(60.0))["item4a"]
-        assert a["rendered_fps"]["Q_720p"]["ok"] is False and a["ok"] is False and a["fps60_covered"] is True, a
-        a = G.session_items(session(d, fps=26.0))["item4a"]           # no delivered fps: not recorded, a FAIL (levi)
-        assert a["rendered_fps"]["Q_720p"]["ok"] is False and a["rendered_fps"]["Q_720p"]["note"].startswith("no delivered fps")
-        assert a["ok"] is False
+        f = a["rendered_fps"]["Q_720p"]
+        assert f["device_limited"] is True and f["ok"] is None and a["device_limited_tiers"] == ["Q_720p"], a
+        assert a["ok"] is True and a["fps60_covered"] is True, a                 # visibility alone gates
+        a = G.session_items(session(d, fps=26.0))["item4a"]           # no delivered fps: reported, not a FAIL
+        f = a["rendered_fps"]["Q_720p"]
+        assert f["device_limited"] is None and f["note"].startswith("no delivered fps") and a["ok"] is True, a
     with tempfile.TemporaryDirectory() as d:                          # 9 playing seconds: insufficient support, not read
         a = G.session_items(session(d, n=10, fps=20.0), _d(60.0))["item4a"]
         assert a["rendered_fps"]["Q_720p"]["note"] == "insufficient support" and a["ok"] is True, a
         assert a["fps60_covered"] is False
     with tempfile.TemporaryDirectory() as d:                          # a session from before the columns
         r = G.session_items(session(d, cols=COLS[:-2]))                # not recorded: a FAIL
-        assert r["item4a"] == {"visibility": {"recorded": False, "ok": False}, "rendered_fps": {"recorded": False},
-                               "fps60_covered": None, "ok": False}, r
+        assert r["item4a"]["visibility"] == {"recorded": False, "ok": False} and r["item4a"]["ok"] is False, r
+        assert r["item4a"]["rendered_fps"] == {"recorded": False} and r["item4a"]["fps60_covered"] is None, r
         assert r["item8"]["playing_s_all"] == 59.0
 
 
@@ -150,6 +155,36 @@ def test_items1_2_content_bands():
         (sd / "check.json").write_text(json.dumps({"verdict": "PASS", "session_class": "player_frozen", "reasons": []}))
         r = G.items1_2(sd)
         assert r["1"]["ok"] is False and r["2"]["ok"] is False, r
+
+
+def test_items1_2_inventory():
+    """Q am. 16 (levi): with brad's inventory, a non-PASS whose every coarse kind single mode produced is reported
+    (player_frozen as the class pseudo-reason; a tier list blanked), a new coarse kind gates and is named; the file is
+    refused unless its kinds hash to its sha with the expected prefix. kind / sha parity with brad's examples."""
+    assert G.reason_kind("chunk recall 0.40 vs logged responses") == "chunk recall # vs logged responses"
+    assert G.reason_kind("B/s outside old p10..p90 for ['360p', '480p']", coarse=True) == "B/s outside old p#..p# for [...]"
+    kinds = {"verify": {"coarse": {"B/s outside old p#..p# for [...]": 3}, "fine": {"B/s outside old p#..p# for ['#p']": {}}},
+             "check": {"coarse": {"class:player_frozen": 2}, "fine": {"class:player_frozen": {}}}}
+    inv = {"inventory_sha": G.inventory_sha(kinds), "kinds": kinds}
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d)
+        (Path(d) / "inv.json").write_text(json.dumps(inv))
+        loaded = G.load_inventory(Path(d) / "inv.json", inv["inventory_sha"][:12])
+        for bad in ("000000000000", None):
+            try:
+                G.load_inventory(Path(d) / "inv.json", bad)
+                raise AssertionError(bad)
+            except SystemExit:
+                pass
+        (sd / "verify.json").write_text(json.dumps({"verdict": "suspicious", "reasons": ["B/s outside old p10..p90 for ['1080p']"]}))
+        (sd / "check.json").write_text(json.dumps({"verdict": "PASS", "session_class": "player_frozen", "reasons": []}))
+        r = G.items1_2(sd, loaded)
+        assert (r["1"]["ok"], r["2"]["ok"]) == (None, None) and r["2"]["new_coarse_kinds"] == [], r
+        assert r["1"]["new_fine_kinds"] == ["B/s outside old p#..p# for ['#p']"] or r["1"]["new_fine_kinds"] == [], r
+        (sd / "verify.json").write_text(json.dumps({"verdict": "FAIL", "reasons": ["chunk recall 0.40 vs logged responses"]}))
+        (sd / "check.json").write_text(json.dumps({"verdict": "PASS", "session_class": "normal", "reasons": []}))
+        r = G.items1_2(sd, loaded)
+        assert r["1"]["ok"] is False and r["1"]["new_coarse_kinds"] == ["chunk recall # vs logged responses"] and r["2"]["ok"]
 
 
 def test_fullscreen_report():
@@ -238,7 +273,8 @@ def test_cli():
         (Path(d) / "fps.json").write_text(json.dumps({"tw_100001": {"detail": {"Q_720p": {"delivered_fps": 60.0}}}}))
         G.main([str(sd), "--rendition-fps", str(Path(d) / "fps.json"), "--out", str(Path(d) / "o.json")])
         r = json.loads((Path(d) / "o.json").read_text())["sessions"][0]
-        assert r["item4a"]["rendered_fps"]["Q_720p"]["delivered_fps"] == 60.0 and r["item4a"]["ok"] is False, r
+        q = r["item4a"]["rendered_fps"]["Q_720p"]
+        assert q["delivered_fps"] == 60.0 and q["device_limited"] is True and r["item4a"]["ok"] is True, r
         assert r["items1_2"]["1"]["reading"] == "verify.json missing" and r["item5"]["ok"] is None
 
 
@@ -247,6 +283,7 @@ def main() -> int:
     test_item4a_visibility_and_fps()
     test_item5_byte_total_ratio()
     test_items1_2_content_bands()
+    test_items1_2_inventory()
     test_fullscreen_report()
     test_concurrency_and_overlap_items()
     test_cli()

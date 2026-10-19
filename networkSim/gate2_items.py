@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -152,28 +153,31 @@ def item4a(tk: list[dict], iv: list[dict], rendition_fps: dict | None = None) ->
             tot_free, drop_free = sum(x["total"] for x in fr), sum(x["dropped"] or 0.0 for x in fr)
             per_media = round(tot_free / m_free, 2) if m_free > 0 else None
             ref = ((rendition_fps or {}).get(tier) or {}).get("delivered_fps")
+            # decision A (rushi; levi 00271): rendered / delivered is a device covariate, reported; below
+            # RENDER_FPS_MIN_SHARE the tier is stamped device_limited and keeps its label; it never gates
             if s_free < MIN_SUPPORT_S:
-                ok, note = None, "insufficient support"
+                lim, note = None, "insufficient support"
             elif ref is None or per_media is None:
-                ok, note = False, "no delivered fps (not recorded: a FAIL)"
+                lim, note = None, "no delivered fps (reported)"
             else:
-                ok, note = per_media >= RENDER_FPS_MIN_SHARE * ref, None
+                lim, note = per_media < RENDER_FPS_MIN_SHARE * ref, None
             fps[tier] = {"fps_per_media_s_shot_free": per_media, "delivered_fps": ref,
                          "ratio": round(per_media / ref, 3) if per_media is not None and ref else None,
                          "playing_s_shot_free": round(s_free, 1), "min_share": RENDER_FPS_MIN_SHARE,
-                         "min_support_s": MIN_SUPPORT_S, "ok": ok, **({"note": note} if note else {}),
+                         "min_support_s": MIN_SUPPORT_S, "device_limited": lim, "ok": None,
+                         **({"note": note} if note else {}),
                          # reported beside (pilot-1's decomposition): per wall second, the playback rate, the dropped share
                          "fps_shot_free": round(tot_free / s_free, 2) if s_free else None,
                          "fps_all": round(sum(x["total"] for x in xs) / s_all, 2) if s_all else None,
                          "playing_s_all": round(s_all, 1),
                          "playback_rate_shot_free": round(m_free / s_free, 3) if s_free else None,
                          "dropped_share_shot_free": round(drop_free / tot_free, 3) if tot_free else None}
-    read = [v["ok"] for v in fps.values() if v.get("note") != "insufficient support"]
-    oks = [vis["ok"]] + read + ([] if tk and tk[0]["has_total"] else [False])
     fps60 = (None if not fps else any((v.get("delivered_fps") or 0) >= 50 and v.get("note") != "insufficient support"
                                       for v in fps.values()))
     return {"visibility": vis, "rendered_fps": fps if tk and tk[0]["has_total"] else {"recorded": False},
-            "fps60_covered": fps60, "ok": False if any(o is False for o in oks) else (None if any(o is None for o in oks) else True)}
+            "fps_role": "reported (decision A): a tier below the min share is device_limited, never a FAIL",
+            "device_limited_tiers": sorted(k for k, v in fps.items() if v.get("device_limited")),
+            "fps60_covered": fps60, "ok": vis["ok"]}                 # decision A: visibility alone gates
 
 
 ITEM5_ROLE = ("reported, never gating (levi, round 1: 'bound' = backlog or drops, which netem's delay line and loss "
@@ -333,31 +337,77 @@ def fullscreen_report(sd: Path, meta: dict) -> dict | None:
 CONTENT_BAND_PREFIXES = ("B/s outside old p10..p90", "speed rule accuracy")   # levi: content bands, not trio signals
 
 
-def items1_2(sd: Path) -> dict:
+# Q am. 16 (levi): items 1 / 2 against single mode's frozen reason inventory, brad's rule (LVQoE
+# scripts/audit/collection_start_items.py, brad/t56-start-items 8e94855): a reason's kind is its text with every number
+# "#" (fine), the coarse kind also blanks bracketed contents; check's class outside normal / censored is the pseudo-reason
+# "class:<value>". A non-PASS whose every coarse kind single mode produced is reported, excluded as in single mode; a
+# coarse kind never seen there gates. The inventory file is refused unless its kinds hash to its inventory_sha and that
+# starts with the expected prefix (brad's canonical form). kind / inventory_sha are brad's, verbatim (test: parity).
+_KIND_NUM = re.compile(r"[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?")
+PASS_CLASSES = ("normal", "censored")
+
+
+def reason_kind(reason, coarse: bool = False) -> str:
+    s = _KIND_NUM.sub("#", str(reason)).strip()
+    if coarse:
+        s = re.sub(r"\[[^\]]*\]", "[...]", s)
+        s = re.sub(r"\{[^}]*\}", "{...}", s)
+    return s
+
+
+def inventory_sha(kinds: dict) -> str:
+    import hashlib
+    canon = {f: {"coarse": sorted(kinds[f]["coarse"]), "fine": sorted(kinds[f]["fine"])} for f in ("verify", "check")}
+    return hashlib.sha256(json.dumps(canon, sort_keys=True).encode()).hexdigest()
+
+
+def load_inventory(path: Path, expect: str) -> dict:
+    inv = json.loads(Path(path).read_text())
+    sha = inventory_sha(inv["kinds"])
+    if sha != inv.get("inventory_sha") or not expect or not sha.startswith(expect):
+        raise SystemExit(f"refused: inventory sha {sha[:12]} (file {str(inv.get('inventory_sha'))[:12]}, expected {expect})")
+    return inv
+
+
+def items1_2(sd: Path, inventory: dict | None = None) -> dict:
     """Items 1 / 2 (module docstring): verify.json and check.json, each PASS (check: class normal or censored), a
-    content-band-only non-PASS (reported, excluded as in single mode) or a gating failure."""
+    non-PASS whose reasons single mode also produced (with an inventory: every coarse kind in it; without one: content
+    bands only) reported and excluded as in single mode, or a gating failure."""
     out = {}
-    for item, name in (("1", "verify.json"), ("2", "check.json")):
+    for item, name, f in (("1", "verify.json", "verify"), ("2", "check.json", "check")):
         p = Path(sd) / name
         if not p.exists():
             out[item] = {"recorded": False, "ok": False, "reading": f"{name} missing"}
             continue
         v = json.loads(p.read_text())
         reasons = list(v.get("reasons") or [])
-        passed = v.get("verdict") == "PASS" and (item == "1" or v.get("session_class") in ("normal", "censored"))
+        passed = v.get("verdict") == "PASS" and (item == "1" or v.get("session_class") in PASS_CLASSES)
         content = [r for r in reasons if str(r).startswith(CONTENT_BAND_PREFIXES)]
+        rec = {"verdict": v.get("verdict"), "session_class": v.get("session_class"), "reasons": reasons,
+               "content_band_reasons": content}
         if passed:
             ok, reading = True, "PASS"
+        elif inventory is not None:
+            rs = reasons + ([f"class:{v.get('session_class')}"] if f == "check" and v.get("session_class") is not None
+                            and v.get("session_class") not in PASS_CLASSES else [])
+            known = set(inventory["kinds"][f]["coarse"])
+            new = sorted({reason_kind(r, coarse=True) for r in rs} - known)
+            rec.update(inventory_sha=inventory["inventory_sha"][:12], new_coarse_kinds=new,
+                       new_fine_kinds=sorted({reason_kind(r) for r in rs} - set(inventory["kinds"][f]["fine"])))
+            if rs and not new:
+                ok, reading = None, "reported, excluded as in single mode (every coarse kind in the inventory)"
+            else:
+                ok, reading = False, "gates: " + ("; ".join(new) if new else "non-PASS without a reason")
         elif reasons and len(content) == len(reasons):
             ok, reading = None, "content band only: reported, the session excluded as in single mode"
         else:
             ok, reading = False, "gates"
-        out[item] = {"verdict": v.get("verdict"), "session_class": v.get("session_class"), "reasons": reasons,
-                     "content_band_reasons": content, "ok": ok, "reading": reading}
+        out[item] = {**rec, "ok": ok, "reading": reading}
     return out
 
 
-def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dict | None = None) -> dict:
+def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dict | None = None,
+                  inventory: dict | None = None) -> dict:
     sd = Path(sd)
     tk, spans = ticks(sd), shot_spans(sd)
     iv = intervals(tk, spans)
@@ -372,7 +422,7 @@ def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dic
     return {"session": str(sd), "mode": c.get("mode", "single"),
             # levi: the operator sets the flag; printed so a forgotten flag or a flagged pilot shows in the round summary
             "record": {"flag": c.get("record"), "era": c.get("era"), "is_record": is_rec},
-            "ticks": len(tk), "items1_2": items1_2(sd), "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
+            "ticks": len(tk), "items1_2": items1_2(sd, inventory), "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
             "item8": item8(iv, len(spans)), **concurrency_items(meta),
             **(overlap_items(f"{sd.parent.name}/{sd.name}", flow_overlap)
                or (missing_overlap_items() if (meta.get("concurrency") or {}).get("mode") == "trio" else {})),
@@ -386,15 +436,20 @@ def main(argv=None) -> int:
                     help="LVQoE scripts/audit/rendition_fps.py --out json (per session: detail per tier with delivered_fps)")
     ap.add_argument("--flow-overlap", type=Path, action="append", default=[],
                     help="flow_overlap.py --out json of the run (repeatable: one per run); items 11-14")
+    ap.add_argument("--inventory", type=Path, default=None,
+                    help="items 1 / 2 (Q am. 16): brad's single-mode reason inventory json (collection_start_items.py)")
+    ap.add_argument("--inventory-sha", default=None, help="the inventory's expected sha prefix (refused otherwise)")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args(argv)
     fps = json.loads(a.rendition_fps.read_text()) if a.rendition_fps else {}
     fos = [json.loads(f.read_text()) for f in a.flow_overlap]
+    inv = load_inventory(a.inventory, a.inventory_sha) if a.inventory else None
     rows = []
     for sd in a.sessions:
         try:
             rows.append(session_items(sd, (fps.get(sd.name) or {}).get("detail"),
-                                      next((f for f in fos if f"{sd.parent.name}/{sd.name}" in (f.get("sessions") or {})), None)))
+                                      next((f for f in fos if f"{sd.parent.name}/{sd.name}" in (f.get("sessions") or {})), None),
+                                      inv))
         except Exception as e:  # noqa: BLE001 -- one session's failure is reported
             rows.append({"session": str(sd), "error": repr(e)[:300]})
         print(json.dumps(rows[-1]), flush=True)
