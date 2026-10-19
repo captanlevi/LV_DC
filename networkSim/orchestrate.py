@@ -846,7 +846,8 @@ if __name__ == "__main__":
     parser.add_argument("--trio-pin", action="append", default=[], metavar="PLATFORM:k=v,...",
                         help="--concurrent: a recorded pin of a slot's pick (levi 00261; default off), e.g. "
                              "'twitch:channel=gothamchess,state=10,geometry=window:1920x1080' (keys: category, channel "
-                             "[twitch], state, geometry); needs --trio-pin-reason; each session records meta pick_pinned.")
+                             "[twitch], state, geometry); needs --trio-pin-reason; each session records meta pick_pinned. "
+                             "It holds for every refill of that platform in the run (every session under a slot cap > 1).")
     parser.add_argument("--trio-pin-reason", default=None, help="--trio-pin: the reason recorded with each pinned pick.")
     parser.add_argument("--trio-layout", choices=sorted(TRIO_SHOT_SOURCE), default="cdp",
                         help="--concurrent: cdp = windows at the origin, CDP shots (pilot-0); fb = the X framebuffer "
