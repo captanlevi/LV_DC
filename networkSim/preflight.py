@@ -101,10 +101,23 @@ def check_rootfs(min_free_gb: float = ROOT_MIN_FREE_GB, path: str = "/") -> dict
     return {"path": path, "free_gb": free, "min_free_gb": min_free_gb, "ok": free is not None and free >= min_free_gb}
 
 
+def check_data_root(env: dict | None = None) -> dict:
+    """levi on 70973cd (a), one mechanism: LVDC_DATA_ROOT, when set, must resolve to where the repo's data/ resolves;
+    otherwise a process without the variable (cron, a manual run) would count or write on the other volume."""
+    import data_root
+    env = os.environ if env is None else env
+    v = env.get("LVDC_DATA_ROOT")
+    repo = str(data_root.REPO_DATA.resolve())
+    if not v:
+        return {"set": None, "repo_data": repo, "ok": True}
+    got = str(Path(v).resolve())
+    return {"set": v, "resolved": got, "repo_data": repo, "ok": got == repo}
+
+
 def run(data_dir: Path, min_free_gb: float, sh=_sh, root_min_free_gb: float | None = None) -> dict:
     """root_min_free_gb: the trio's raised rootfs floor (t53 A2: its pcaps are staged on the root filesystem)."""
     checks = {"ipv6": check_ipv6(sh), "shaper": check_shaper(sh), "volume": check_volume(data_dir, min_free_gb, sh),
-              "holds": check_holds(sh),
+              "holds": check_holds(sh), "data_root": check_data_root(),
               "rootfs": check_rootfs() if root_min_free_gb is None else check_rootfs(root_min_free_gb)}
     problems = [k for k, v in checks.items() if not v.get("ok")]
     return {"ok": not problems, "problems": problems, "checks": checks, "at": time.time()}

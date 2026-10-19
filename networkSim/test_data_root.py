@@ -57,9 +57,22 @@ def test_the_setting_and_its_record(tmp_path=None):
     assert rec["resolved"] == str(d.resolve()) and {"set", "source", "resolved"} <= set(rec)
 
 
+def test_preflight_refuses_a_data_root_elsewhere(tmp_path=None):
+    """levi on 70973cd (a): preflight refuses a run where LVDC_DATA_ROOT is set and resolves elsewhere than data/."""
+    import tempfile
+    import data_root
+    import preflight
+    other = Path(tmp_path or tempfile.mkdtemp())
+    assert preflight.check_data_root({})["ok"] is True                                   # not set: the repo's data/
+    assert preflight.check_data_root({"LVDC_DATA_ROOT": str(data_root.REPO_DATA)})["ok"] is True
+    bad = preflight.check_data_root({"LVDC_DATA_ROOT": str(other)})
+    assert bad["ok"] is False and bad["resolved"] == str(other.resolve()), bad
+
+
 def main() -> int:
     test_one_root_for_every_module()
     test_the_setting_and_its_record()
+    test_preflight_refuses_a_data_root_elsewhere()
     print("test_data_root: ok")
     return 0
 
