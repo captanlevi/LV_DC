@@ -9,6 +9,8 @@ error handler (Xlib's default handler exits the process) and raised as XError.
 
   windows_of_pid(pid)  the viewable client windows whose _NET_WM_PID is pid, with their top-level frames
   grab(frame)          (PIL RGB image, record) of a top-level frame's own pixmap
+  window_at(x, y)      the top-level window shown at a root point (XTranslateCoordinates: the topmost mapped child)
+  activate(client)     ask the window manager to activate and raise a window (_NET_ACTIVE_WINDOW, as a pager)
 """
 from __future__ import annotations
 
@@ -136,6 +138,56 @@ def windows_of_pid(pid: int) -> list[dict]:
                 break
         d.sync_errors()
     return sorted(out, key=lambda x: -x["size"][0] * x["size"][1])
+
+
+class _XClientMessageEvent(ctypes.Structure):
+    _fields_ = [("type", _c.c_int), ("serial", _c.c_ulong), ("send_event", _c.c_int), ("display", _c.c_void_p),
+                ("window", _c.c_ulong), ("message_type", _c.c_ulong), ("format", _c.c_int), ("l", _c.c_long * 5)]
+
+
+class _XEvent(ctypes.Union):
+    _fields_ = [("xclient", _XClientMessageEvent), ("pad", _c.c_long * 24)]
+
+
+CLIENT_MESSAGE, SUBSTRUCTURE_REDIRECT_MASK, SUBSTRUCTURE_NOTIFY_MASK = 33, 1 << 20, 1 << 19
+
+
+def window_at(x: int, y: int) -> str | None:
+    """The top-level window (a child of the root) shown at root point (x, y): XTranslateCoordinates' child, the topmost
+    mapped child containing the point; None when it names none (t53 fullscreen-in-trio: is the slot's window on top?)."""
+    with _Display() as d:
+        root = d.x11.XDefaultRootWindow(d.p)
+        dx, dy, child = ctypes.c_int(), ctypes.c_int(), ctypes.c_ulong()
+        ok = d.x11.XTranslateCoordinates(d.p, ctypes.c_ulong(root), ctypes.c_ulong(root), int(x), int(y),
+                                         ctypes.byref(dx), ctypes.byref(dy), ctypes.byref(child))
+        d.sync_errors()
+        return hex(child.value) if ok and child.value else None
+
+
+def stacking() -> list[str]:
+    """The root's viewable children, bottom to top (XQueryTree's order)."""
+    with _Display() as d:
+        root = d.x11.XDefaultRootWindow(d.p)
+        out = [hex(w) for w in d.children(root)[2] if d.attributes(w).map_state == IS_VIEWABLE]
+        d.sync_errors()
+        return out
+
+
+def activate(client: str | int) -> bool:
+    """_NET_ACTIVE_WINDOW for `client` to the root (source indication 2, a pager: honoured past focus-stealing
+    prevention) and XRaiseWindow; True when sent without an X error."""
+    w = int(client, 16) if isinstance(client, str) else int(client)
+    with _Display() as d:
+        root = d.x11.XDefaultRootWindow(d.p)
+        atom = d.x11.XInternAtom(d.p, b"_NET_ACTIVE_WINDOW", 0)
+        ev = _XEvent()
+        ev.xclient.type, ev.xclient.send_event, ev.xclient.display = CLIENT_MESSAGE, 1, d.dpy
+        ev.xclient.window, ev.xclient.message_type, ev.xclient.format = w, atom, 32
+        ev.xclient.l[0], ev.xclient.l[1], ev.xclient.l[2] = 2, 0, 0
+        d.x11.XSendEvent(d.p, ctypes.c_ulong(root), 0, SUBSTRUCTURE_REDIRECT_MASK | SUBSTRUCTURE_NOTIFY_MASK,
+                         ctypes.byref(ev))
+        d.x11.XRaiseWindow(d.p, ctypes.c_ulong(w))
+        return not d.sync_errors()
 
 
 def grab(frame: str | int):

@@ -2274,6 +2274,83 @@ _PLAYER_RECT_JS = """
 """
 
 
+# t53 fullscreen in the trio (supervisor decision (a); adopted only at a count boundary, probe v4 first): a composite-
+# layout slot whose geometry is fullscreen runs single mode's fullscreen path in its own process (x11 root grabs,
+# fullscreen_geometry origin), plus a focus keeper (mutter keeps a fullscreen window above others only while it has the
+# focus; a sibling's new window can take it) and a per-shot on-top gate (a root grab is this window's pixels only while
+# it is the top-level window at the screen's centre; otherwise the CDP fallback, recorded).
+FS_KEEPER_S = 1.0
+
+
+class FullscreenKeeper:
+    """Every FS_KEEPER_S: the top-level window at the screen's centre (xcomposite.window_at); not ours: _NET_ACTIVE_WINDOW
+    and raise (xcomposite.activate). record(): checks, how many found another window on top, the raises sent (counted
+    in full) and each raise (the event list bounded)."""
+
+    def __init__(self, client: str, frame: str, centre: tuple[int, int]):
+        self.client, self.frame, self.centre = client, frame, centre
+        self.checks = self.not_on_top = self.raises = 0
+        self.events: list[dict] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def on_top(self) -> tuple[bool, str | None]:
+        import xcomposite
+        top = xcomposite.window_at(*self.centre)
+        return top in (self.frame, self.client), top
+
+    def _run(self) -> None:
+        import xcomposite
+        while not self._stop.wait(FS_KEEPER_S):
+            try:
+                ok, top = self.on_top()
+                self.checks += 1
+                if not ok:
+                    self.not_on_top += 1
+                    sent = xcomposite.activate(self.client)
+                    self.raises += bool(sent)
+                    if len(self.events) < 200:
+                        self.events.append({"t": round(time.time(), 3), "top_was": top, "activate_sent": sent})
+            except Exception as exc:
+                if len(self.events) < 200:
+                    self.events.append({"t": round(time.time(), 3), "error": repr(exc)[:120]})
+
+    def start(self) -> "FullscreenKeeper":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def record(self) -> dict:
+        return {"client": self.client, "frame": self.frame, "centre": list(self.centre), "period_s": FS_KEEPER_S,
+                "checks": self.checks, "not_on_top": self.not_on_top, "raises": self.raises, "events": self.events}
+
+
+FS_KEEP: dict = {}              # this process's keeper (set by BrowserSession.start in the fullscreen-in-trio case)
+TRIO_FULLSCREEN_OK = os.environ.get("LVDC_TRIO_YT_FULLSCREEN") == "1"   # orchestrate --trio-yt-fullscreen (default off)
+
+
+def _start_fullscreen_keeper(page: "CDPPage") -> dict:
+    """The keeper for this session's fullscreen window (the browser pid's largest viewable window; the screen's centre
+    from the page in device px); its start record. Never raises."""
+    try:
+        import session_meta
+        import xcomposite
+        pid = session_meta.chrome_cmdline(CDP_BASE).get("pid")
+        wins = xcomposite.windows_of_pid(pid) if pid else []
+        if not wins:
+            return {"started": False, "why": "no window for the browser pid", "pid": pid}
+        pr = json.loads(page.eval(_PLAYER_RECT_JS) or "{}")
+        dpr = float(pr.get("dpr") or 1)
+        sw, sh = (pr.get("screen") or [1920, 1080])
+        k = FullscreenKeeper(wins[0]["client"], wins[0]["frame"], (round(sw * dpr / 2), round(sh * dpr / 2))).start()
+        FS_KEEP["keeper"] = k
+        return {"started": True, "pid": pid, "client": k.client, "frame": k.frame, "centre": list(k.centre)}
+    except Exception as exc:
+        return {"started": False, "why": repr(exc)[:200]}
+
+
 def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, origin: dict | None = None) -> None:
     """A small JPEG of the tab every SHOT_INTERVAL_S ('cadence'), plus one at every tier change and every ad start
     (t37: content.js raises <html data-lvqoe-shot-req="<n>|<reason>|<event_id>">, polled each second). Each shot is
@@ -2332,7 +2409,14 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
                     region, crop, capture_px = None, "viewport", None
                 else:
                     comp["region_in"] = "frame"        # screen_region is the crop's place in the window's frame
-            if SHOT_SOURCE == "x11":
+            on_top = None
+            keeper = FS_KEEP.get("keeper")
+            if SHOT_SOURCE == "x11" and keeper is not None:   # t53 fullscreen in trio: root pixels only while on top
+                try:
+                    on_top, _top = keeper.on_top()
+                except Exception:
+                    on_top = False
+            if SHOT_SOURCE == "x11" and on_top is not False:
                 fs = _fullscreen_on_screen(pr_) if (origin or {}).get("fullscreen_screen") else None   # t37
                 try:
                     region = fs or _viewport_on_screen(json.loads(page.eval(_VIEWPORT_JS) or "{}"))
@@ -2384,7 +2468,8 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
                                      "t_decide": t_decide, "js_s": None if t_js is None else round(t_js - t_decide, 4),
                                      "grab_s": None if t_grab is None else round(t_grab - (t_js or t_decide), 4),
                                      "encode_save_s": round(ts - (t_grab or t_decide), 4),
-                                     **({"composite": comp} if comp is not None else {})}) + "\n")
+                                     **({"composite": comp} if comp is not None else {}),
+                                     **({"on_top": on_top} if keeper is not None else {})}) + "\n")
         except Exception as exc:  # a missed shot must never stop collection
             print(f"[browser] screenshot failed: {exc}", flush=True)
 
@@ -2451,6 +2536,7 @@ class BrowserSession:
         self.t2_skipped: list[dict] = []            # stuck rule: T2_S frozen with only the fallback rung (no T2)
         self.player_ladder: dict | None = None      # twitch: the quality menu's options when the master was not read
         self.shot_origin: dict | None = None        # the X11 shot origin calibration (t37; calibrate_shot_origin)
+        self.fs_keeper: dict | None = None          # t53 (a): fullscreen in trio, the keeper's start record
         self.rung_probes: list[dict] = []           # twitch: each menu read (open / close times): shots near it are flagged
         self._media: MediaListener | None = None     # tt: the media-internals recorder (media_events.jsonl)
         self._rung_probe_at = 0.0
@@ -2654,6 +2740,12 @@ class BrowserSession:
                 self.geometry["shot"] = geometry_scales(self.geometry)
         except Exception:
             self.geometry = None
+        global SHOT_SOURCE
+        if (self._session_dir and SHOT_SOURCE == "composite" and TRIO_FULLSCREEN_OK
+                and str(self.geometry_target or "").startswith("fullscreen")):
+            SHOT_SOURCE = "x11"                               # t53 (a): this slot's own process, single mode's path
+            self.fs_keeper = _start_fullscreen_keeper(self._page)
+            print(f"[browser] Fullscreen in trio: x11 path, keeper {self.fs_keeper}", flush=True)
         if self._session_dir and SHOT_SOURCE == "composite":  # t53 trio layout "composite": the window's own pixmap
             self.shot_origin = calibrate_composite(self._page)
             if self.geometry is not None:
@@ -3113,6 +3205,10 @@ class BrowserSession:
               f"{FROZEN_PLAYHEAD_MAX_S.get(self.platform)} s — aborting the session", flush=True)
 
     def stop(self) -> None:
+        k = FS_KEEP.pop("keeper", None)                 # t53 (a): the keeper ends with the session, its record kept
+        if k is not None:
+            k.stop()
+            self.fs_keeper = {**(self.fs_keeper or {}), **k.record()}
         # Read QoE events from the extension service worker before closing the tab
         if self._session_dir:
             _export_via_service_worker(self._session_dir)
