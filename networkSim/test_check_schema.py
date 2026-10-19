@@ -26,7 +26,8 @@ TOP = {"session": str, "platform": str, "verdict": str, "session_class": str, "e
        "slow_start_shaped": bool, "reasons": list, "thresholds": dict, "max_background_share": (float, NONE),
        "labels": dict, "traffic": dict, "shots": dict, "ad_actions": dict, "player_pin": (dict, NONE),
        "meta_missing": list, "player_stats": (dict, NONE), "motion": (dict, NONE), "matrix": (str, NONE),
-       "low_state_cap": (int, NONE), "stream_regime": (dict, NONE), "suspicious": list, "censored": (dict, NONE),
+       "low_state_cap": (int, NONE), "schedule": (str, NONE), "low_cap_s": (int, float, NONE),   # Q am. 17
+       "stream_regime": (dict, NONE), "suspicious": list, "censored": (dict, NONE),
        "lowest_rung": (dict, NONE), "decode_path": (dict, NONE), "decode_hevc": (dict, NONE),
        "template_note": (str, NONE), "entry_quality": (dict, NONE)}
 LABELS = ["ad_span_seconds", "ad_spans_per_signal", "ad_spans_span_type_set", "ad_ticks_per_signal",
