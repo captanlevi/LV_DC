@@ -55,6 +55,7 @@ NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_end
 
 TRIO_SHOT_SOURCE = {"cdp": "cdp", "fb": "x11", "composite": "composite"}   # trio layout -> LVQOE_SHOT_SOURCE
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume has less than MIN_FREE_GB free
+EXIT_OFFLOADS = 9    # orchestrate.py's own exit code when the capture offloads cannot be switched off (t55)
 EXIT_PREFLIGHT = 8    # orchestrate.py's own exit code when the per-session preflight fails (preflight.py)
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
@@ -244,6 +245,7 @@ LAST_COVERAGE: dict[str, dict] = {}       # platform -> the latest coverage reco
 # t53 round pins (levi 00261: allowed steering if recorded; default off, trio only): platform -> {category, channel, state,
 # geometry, reason}; the slot's pick is overridden where given and the session's meta.json records pick_pinned
 TRIO_PINS: dict[str, dict] = {}
+TRIO_RECORD = False      # --trio-record: this run's sessions are of record (counted; record.ERA), steering counts only those
 
 
 def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
@@ -273,14 +275,17 @@ def coupled_geometry(p: str, geom: str | None) -> str | None:
     return (LAST_COVERAGE.get(p) or {}).get("geometry_forced") or geom
 
 
-def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, excluded_geometries: tuple = ()) -> str | None:
+def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, excluded_geometries: tuple = (),
+                   data_dir: Path | None = None, select=None) -> str | None:
     """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
-    LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such."""
+    LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such.
+    data_dir: the sessions the floors count (the trio: its own root, the sessions of record; levi 00265)."""
     rec = {"platform": p, "rule": "fixed", "matrix": MATRIX_IDS.get(p)}
+    root = data_dir or _RUNS_DIR
     if MATRIX_RULE == "coverage" and p in coverage_report.CLASSES:
         try:
-            rec = (coverage_report.choose(_RUNS_DIR, p, COVERAGE_ALLOWED.get(p), excluded_geometries) if excluded_geometries
-                   else coverage_report.choose(_RUNS_DIR, p, COVERAGE_ALLOWED.get(p)))
+            rec = (coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p), excluded_geometries, select=select)
+                   if excluded_geometries or select else coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p)))
             print(f"  coverage : matrix {rec['matrix']} (target {(rec['target'] or {}).get('key')}, {rec['why']})")
         except Exception as e:
             rec["rule_error"] = repr(e)
@@ -347,25 +352,29 @@ def _summary() -> None:
 def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool, exclude_modes: tuple = (),
           root: Path | None = None) -> tuple:
     """The session's channel (yt), category (twitch) and geometry draw, and the skip records they leave (run_batch and,
-    per slot, run_trio). root (the trio's data root): its skip records go there, and Addendum P's leave rule, single
-    mode's list upkeep, does not run (every trio write stays under data/_trio)."""
+    per slot, run_trio). root (the trio's data root): its skip records go there, the rotation counts its sessions only
+    (the sessions of record; levi 00265), and Addendum P's leave rule, single mode's list upkeep, does not run (every
+    trio write stays under data/_trio). Not-live skips (channel liveness, not a count) read both roots."""
     skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
     out = root or _RUNS_DIR
+    import record
+    select = record.is_record if root is not None else None   # the trio counts its sessions of record only (levi)
     if p == "youtube" and root is None:
         for r in yt_channels.apply_leave_rule(_RUNS_DIR, now):
             print(f"  LIST: {r['handle']} ({r['type']}, {r['role']}) leaves the yt list ({r['evidence']}; Addendum P); "
                   f"commit it in yt_channels.py")
-    yt_skips = yt_channels.not_live_skips(_RUNS_DIR, now) if p == "youtube" else {}
+    yt_skips = ({**yt_channels.not_live_skips(_RUNS_DIR, now), **(yt_channels.not_live_skips(root, now) if root else {})}
+                if p == "youtube" else {})
     for h, why in yt_skips.items():
         print(f"  skip {h}: {why}")
     channel = None
     if p == "youtube":
         # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
-        channel, pre_skips = yt_channels.pick_live_channel(_RUNS_DIR, exclude=skip | set(yt_skips))
+        channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips), select=select)
         try:                                       # the rotation's view at the pick (no immediate repeat)
             (out / "_summaries").mkdir(parents=True, exist_ok=True)
             with open(out / yt_channels.PICKS_FILE, "a") as fh:
-                fh.write(json.dumps(yt_channels.pick_record(_RUNS_DIR, channel)) + "\n")
+                fh.write(json.dumps(yt_channels.pick_record(out, channel, select)) + "\n")
         except Exception as e:
             print(f"  (pick record failed: {e!r})")
         if pre_skips:
@@ -376,13 +385,14 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
                     print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")
     # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
     # NOT_LIVE_RETRY_S, like a yt channel)
-    category, esports_skip = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else (None, None)
+    category, esports_skip = (tw_categories.next_category(out, exclude=skip, select=select) if p == "twitch"
+                              else (None, None))
     if esports_skip:      # levi: no league channel live -> the next type; the skip goes to the daily summary
         (out / "_summaries").mkdir(parents=True, exist_ok=True)
         with open(out / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
             fh.write(json.dumps(esports_skip) + "\n")
         print(f"  esports unavailable (none of {esports_skip['checked']} live): drawing {category['name']}")
-    geom = (geometry.next_geometry(_RUNS_DIR, p, exclude_modes) if exclude_modes else geometry.next_geometry(_RUNS_DIR, p)) \
+    geom = (geometry.next_geometry(out, p, exclude_modes, select) if exclude_modes else geometry.next_geometry(out, p, select=select)) \
         if rotate_geometry else None
     return channel, category, geom
 
@@ -412,11 +422,24 @@ def _account(p: str, rc: int, before: int, channel: dict | None, category: dict 
         print(f"  PAUSED {p}: {paused[p]}")
 
 
+def _offloads_or_exit(iface: str | None = None, ensure=None) -> dict:
+    """t55: the capture interface's offloads off before the first session (each session also ensures and records
+    them); refused: a loud stop, no session started."""
+    import offloads
+    rec = (ensure or offloads.ensure_off)(iface or offloads.IFACE_DEFAULT)
+    print(f"  capture offloads on {rec['iface']}: {'off' if rec['ok'] else 'NOT OFF'} {json.dumps(rec['after'])}")
+    if not rec["ok"]:
+        print(f"\n  t55: the capture offloads could not be switched off ({json.dumps(rec['calls'])}): not starting.")
+        sys.exit(EXIT_OFFLOADS)
+    return rec
+
+
 def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geometry: bool = True) -> None:
     """Collect until every platform has its target of PASS sessions. Next platform = next_platform(): the one furthest
     behind its target (accepted / target; BATCH_ORDER breaks ties), at most MAX_CONSECUTIVE_SAME_PLATFORM in a row, so
     platforms advance together over the week. Nothing here
     changes what a session collects; it only sequences exp.py runs and recovers from failures."""
+    _offloads_or_exit()
     paused: dict[str, str] = {}
     fails = {p: 0 for p in targets}
     frozen = {p: 0 for p in targets}
@@ -536,10 +559,12 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
               f"{json.dumps({k: pf['checks'][k] for k in pf['problems']})}")
         return False
     before, now = accepted_sessions(p, troot), time.time()
-    # the pick and the coverage rule read single mode's data (steering only; trio's own counts are its root's); trio v1
+    # the pick and the coverage rule count the trio's own sessions (data/_trio: the sessions of record, levi 00265); trio v1
     # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
     channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot)
-    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES)
+    import record
+    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES, data_dir=troot,
+                         select=record.is_record)
     forced = coupled_geometry(p, geom) if rotate_geometry else geom
     if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES:
         forced = geom
@@ -564,6 +589,7 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
            "LVQOE_SHOT_SOURCE": TRIO_SHOT_SOURCE.get(os.environ.get("LVDC_TRIO_LAYOUT") or "cdp", "cdp")}
     env.pop("LVDC_PICK_PINNED", None)
+    env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
     if pin:
         env["LVDC_PICK_PINNED"] = json.dumps({**pin, "initial_state": init, "geometry_used": geom,
                                               "category_used": (category or {}).get("name")})
@@ -595,7 +621,7 @@ def _xrandr(fb: str | None):
 def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = True, iface: str = "wlp0s20f3",
              capacity_kbit: float | None = None, max_per_slot: int | None = None,
              stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S, layout: str = "cdp",
-             spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None) -> int:
+             spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None, offloads=None) -> int:
     """One slot per platform (trio_slots.SLOTS), each refilled when its session ends (A1), until every platform has its
     target of PASS trio sessions (counted in the trio's own data root, data/_trio/<platform>: single mode never sees
     them), or `max_per_slot` sessions started per slot (the pilot: 1). Trio v1 draws no fullscreen geometry, and a
@@ -609,10 +635,16 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     layout: "cdp" (pilot-0: windows at the origin, CDP shots) or "fb" (design §4: the X framebuffer enlarged to three
     monitor widths for the run, restored at its end; slot k's window at k x the width; X11 shots) or "composite"
     (pilot-1: windows at the origin as cdp, each shot a crop of the window's own XComposite pixmap).
-    Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT when that ended it."""
+    t55: the capture offloads off on iface before anything starts (offloads: the ensure function, tests).
+    Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT / EXIT_OFFLOADS when that ended it."""
     import signal
     import trio_slots as T
     apply = apply or T.apply
+    try:
+        _offloads_or_exit(iface, offloads)
+    except SystemExit:
+        return EXIT_OFFLOADS
+    os.environ["LVDC_CAPTURE_IFACE"] = iface              # each slot's exp.py ensures and records them on the same one
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     if not _RUNS_DIR.is_dir():           # never create data/ on the root filesystem (a missing data link)
         print(f"\n  TRIO: the data dir {_RUNS_DIR} does not exist: not starting the trio.")
@@ -849,6 +881,9 @@ if __name__ == "__main__":
                              "[twitch], state, geometry); needs --trio-pin-reason; each session records meta pick_pinned. "
                              "It holds for every refill of that platform in the run (every session under a slot cap > 1).")
     parser.add_argument("--trio-pin-reason", default=None, help="--trio-pin: the reason recorded with each pinned pick.")
+    parser.add_argument("--trio-record", action="store_true",
+                        help="--concurrent: a counted run: its sessions are of record (meta concurrency.record, era "
+                             "record.ERA); steering counts only such sessions. Pilots and re-runs: leave it off.")
     parser.add_argument("--trio-layout", choices=sorted(TRIO_SHOT_SOURCE), default="cdp",
                         help="--concurrent: cdp = windows at the origin, CDP shots (pilot-0); fb = the X framebuffer "
                              "enlarged to three monitor widths, one window per width, X11 shots (design §4; probe v1-v3: "
@@ -883,6 +918,9 @@ if __name__ == "__main__":
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
         if unknown:
             sys.exit(f"unknown platform(s) in --batch: {unknown}")
+        if args.trio_record and not args.concurrent:
+            sys.exit("--trio-record needs --concurrent")
+        TRIO_RECORD = bool(args.trio_record)
         if args.trio_pin and (not args.concurrent or not args.trio_pin_reason):
             sys.exit("--trio-pin needs --concurrent and --trio-pin-reason")
         for spec in args.trio_pin:

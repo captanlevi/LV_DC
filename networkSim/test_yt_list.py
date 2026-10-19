@@ -128,6 +128,21 @@ def test_no_immediate_repeat_and_trio_excluded():
         assert Y.last_channel(d) == prim[0] and Y.collected_counts(d)[prim[1]] == 2   # the trio session not counted
         assert geometry.collected_counts(d, "youtube").get("window:1920x1080", 0) == 0
         assert sum(tw_categories.collected_counts(d).values()) == 0
+        # levi 00265: the trio's own root counts its sessions (the sessions of record), not single mode's
+        tr = d / "_trio"
+        assert Y.last_channel(tr) == prim[1] and Y.collected_counts(tr)[prim[1]] == 1 and Y.collected_counts(tr)[prim[0]] == 0
+        assert geometry.collected_counts(tr, "youtube").get("window:1920x1080", 0) == 1
+        assert tw_categories.collected_counts(tr).get("Just Chatting", 0) == 1
+        # levi's note: within the trio root only the sessions of record count (a counted run of the current era)
+        import record
+        assert Y.collected_counts(tr, record.is_record)[prim[1]] == 0 and Y.last_channel(tr, record.is_record) is None
+        meta(d, "_trio/youtube/yt_100002", channel_handle=prim[2], started_at=31_000.0, geometry_target="window:1920x1080",
+             concurrency={"mode": "trio", "record": True, "era": record.ERA})
+        meta(d, "_trio/twitch/tw_100002", tw_category="Chess", started_at=31_000.0,
+             concurrency={"mode": "trio", "record": True, "era": "an earlier era"})
+        assert Y.collected_counts(tr, record.is_record)[prim[2]] == 1 and Y.last_channel(tr, record.is_record) == prim[2]
+        assert geometry.collected_counts(tr, "youtube", record.is_record).get("window:1920x1080", 0) == 1
+        assert sum(tw_categories.collected_counts(tr, record.is_record).values()) == 0
         meta(d, "_failed/youtube/yt_97", channel_handle=prim[2], started_at=40_000.0,
              abort_reason="error: RuntimeError: Failed to navigate to a live youtube stream")
         assert Y.last_channel(d) == prim[0]                                           # a not-live start: no session

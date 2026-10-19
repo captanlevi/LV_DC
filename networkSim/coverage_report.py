@@ -204,11 +204,14 @@ def twitch_latency(sd: Path) -> dict | None:
     return {"modes": dict(modes), "latency_s": _q(lat, (50, 90)) if lat else None}
 
 
-def accepted_sessions(data_dir: Path, platform: str) -> list[Path]:
+def accepted_sessions(data_dir: Path, platform: str, select=None) -> list[Path]:
+    """select(meta) -> bool: only the sessions it keeps (the trio: its sessions of record, levi 00265 note)."""
     out = []
     for chk in (Path(data_dir) / platform).glob("*/check.json"):
         c = _load(chk)
         if c.get("verdict") == "PASS" and (c.get("session_class") or "normal") == "normal":
+            if select is not None and not select(_load(chk.parent / "meta.json")):
+                continue
             out.append(chk.parent)
     return sorted(out)
 
@@ -223,13 +226,16 @@ def entry_states(meta: dict) -> list[str]:
     return out
 
 
-def entry_sessions(data_dir: Path, platform: str) -> list[tuple[Path, dict]]:
-    """(session dir, check.json) of every checked session, accepted or _failed, whose class is not excluded."""
+def entry_sessions(data_dir: Path, platform: str, select=None) -> list[tuple[Path, dict]]:
+    """(session dir, check.json) of every checked session, accepted or _failed, whose class is not excluded (and that
+    select keeps, when given)."""
     out = []
     for c in sorted(list((Path(data_dir) / platform).glob("*/check.json"))
                     + list((Path(data_dir) / "_failed" / platform).glob("*/check.json"))):
         chk = _load(c)
         if chk and chk.get("session_class") not in ENTRY_EXCLUDED_CLASSES:
+            if select is not None and not select(_load(c.parent / "meta.json")):
+                continue
             out.append((c.parent, chk))
     return out
 
@@ -244,7 +250,7 @@ def targeted_class(meta: dict) -> str | None:
     return None
 
 
-def snapshot(data_dir: Path, platform: str) -> dict:
+def snapshot(data_dir: Path, platform: str, select=None) -> dict:
     classes = CLASSES[platform]
     cnt, mins = dict.fromkeys(classes, 0), dict.fromkeys(classes, 0.0)
     st_min = lab_min = 0.0
@@ -252,7 +258,7 @@ def snapshot(data_dir: Path, platform: str) -> dict:
     pm = collections.defaultdict(lambda: {"n": 0, "n_tier": 0, "min": collections.Counter(), "stall": 0.0, "lab": 0.0,
                                           "onsets": 0, "tg_n": collections.Counter(), "tg_min": collections.Counter()})
     onsets, run_s = 0, []
-    sessions = accepted_sessions(data_dir, platform)
+    sessions = accepted_sessions(data_dir, platform, select)
     for sd in sessions:
         meta = _load(sd / "meta.json")
         sc = session_classes(sd)
@@ -299,7 +305,7 @@ def snapshot(data_dir: Path, platform: str) -> dict:
                               "stall_share": round(v["stall"] / v["lab"], 4) if v["lab"] else None}
                           for k, v in sorted(pm.items())}}
     if platform == "tiktok":
-        es = entry_sessions(data_dir, platform)
+        es = entry_sessions(data_dir, platform, select)
         for sd, chk in es:
             entries.update(entry_states({"entries": (_load(sd / "meta.json").get("entries") or chk.get("entries") or [])}))
         out.update(tt_entries_by_state=dict(sorted(entries.items())), tt_entry_sessions=len(es),
@@ -426,10 +432,11 @@ def initial_state_forced(rec: dict, matrices: dict, rng=random) -> dict | None:
             "rule": INITIAL_STATE_RULE}
 
 
-def choose(data_dir: Path, platform: str, allowed: list[str] | None = None, excluded_geometries: tuple = ()) -> dict:
+def choose(data_dir: Path, platform: str, allowed: list[str] | None = None, excluded_geometries: tuple = (),
+           select=None) -> dict:
     """orchestrate, before each session: the snapshot, the rule's choice for `platform` and, for a tier-class target,
     the forced initial state (Q am. 15 (5))."""
-    rec = pick_matrix(snapshot(data_dir, platform), PLATFORM_MATRICES[platform], allowed, excluded_geometries)
+    rec = pick_matrix(snapshot(data_dir, platform, select), PLATFORM_MATRICES[platform], allowed, excluded_geometries)
     return {**rec, "initial_state_forced": initial_state_forced(rec, PLATFORM_MATRICES[platform]),
             "taken_at": dt.datetime.now().isoformat(timespec="seconds")}
 

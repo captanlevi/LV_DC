@@ -153,8 +153,23 @@ def test_am15_initial_state_and_low_yield():
         assert tg == {"Q_1080p": {"sessions": 1, "class_minutes_mean": 1.5}, "Q_720p": {"sessions": 1, "class_minutes_mean": 0.5}}, tg
 
 
+def test_select_sessions_of_record():
+    """levi (note on 6c6ecca): the trio's steering counts its sessions of record only (record.is_record)."""
+    import record
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        for name, rec, era in (("tw_100001", False, record.ERA), ("tw_100002", True, record.ERA), ("tw_100003", True, "old")):
+            sd = session(d, "twitch", name, [("Q_480p", 150)], matrix="TW-M")
+            m = json.loads((sd / "meta.json").read_text())
+            m["concurrency"] = {"mode": "trio", "record": rec, "era": era}
+            (sd / "meta.json").write_text(json.dumps(m))
+        assert [p.name for p in C.accepted_sessions(d, "twitch", record.is_record)] == ["tw_100002"]
+        assert C.snapshot(d, "twitch", record.is_record)["n_sessions"] == 1 and C.snapshot(d, "twitch")["n_sessions"] == 3
+
+
 def main():
     test_am15_bands()
+    test_select_sessions_of_record()
     test_am15_initial_state_and_low_yield()
     # class rule = LVQoE quality_to_video_state on min(w, h)
     assert [C.quality_class(*r) for r in ((256, 144), (300, 200), (426, 240), (480, 300), (640, 360), (720, 420),

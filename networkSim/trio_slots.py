@@ -547,7 +547,11 @@ def concurrency_record(s: Slot | None, **extra) -> dict:
     """meta.json concurrency (design §6, Q am. 13); single mode writes {mode: single}."""
     if s is None:
         return {"mode": "single"}
-    return {"mode": "trio", "pool": "per_session", **s.record(), **extra}
+    import os
+    import record
+    # of record (levi): a counted run (orchestrate --trio-record) under the current era; steering counts only these
+    return {"mode": "trio", "pool": "per_session", **s.record(), "record": os.environ.get("LVDC_TRIO_RECORD") == "1",
+            "era": record.ERA, **extra}
 
 
 def slots_log_append(path: Path, rec: dict) -> None:

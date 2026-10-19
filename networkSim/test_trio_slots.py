@@ -418,7 +418,7 @@ class FakeProc:
 
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
-          xrandr=None, trio_pf=None, disk_gb=1000.0):
+          xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry", "free_gb")}
@@ -429,7 +429,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     T.trio_preflight = trio_pf or (lambda *a, **k: {"ok": True, "problems": [], "checks": {}})
     O._RUNS_DIR = tmp
     O._pick = lambda p, nl, now, rg, ex=(), root=None: calls.append(("pick", p, ex, root)) and None or (None, None, None)
-    O.session_matrix = lambda p, f=None, ex=(): calls.append(("matrix", p, f, ex)) or "A"
+    O.session_matrix = lambda p, f=None, ex=(), data_dir=None, select=None: calls.append(("matrix", p, f, ex, data_dir, select)) or "A"
     O.accepted_sessions = lambda p, root=None: calls.append(("accepted", p, root)) and 0 or 0
     O.report_flags = lambda p, t, root=None: []
     O._summary = lambda: None
@@ -452,7 +452,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
                         spawn=spawn, apply=lambda cmds, check=True: calls.append(("apply", cmds[0], check)) or
                         [{"cmd": c, "rc": 0} for c in cmds],
                         make=lambda args: calls.append(("make", args[0])) or 0, sleep=sleep, layout=layout,
-                        xrandr=xrandr)
+                        xrandr=xrandr, offloads=offloads or (lambda iface: {"iface": iface, "ok": True, "after": {}, "calls": []}))
     finally:
         for k, v in saved.items():
             setattr(O, k, v)
@@ -487,6 +487,9 @@ def test_run_trio():
             assert env["LVDC_TRIO_RUN"] and log.name == f"{tag}_1.log"
         assert [c[2] for c in calls if c[0] == "matrix"] == [f"_trio/_summaries/coverage_last_{t}.json" for t in ("yt", "tw", "tt")]
         assert all(c[3] == ("fullscreen",) for c in calls if c[0] == "matrix")          # trio v1: no fullscreen
+        import record
+        assert all(c[4] == tmp / "_trio" and c[5] is record.is_record for c in calls if c[0] == "matrix")   # levi: of record
+        assert all(e["LVDC_TRIO_RECORD"] == "0" for _, e, _ in spawned)            # a pilot run: never of record
         assert all(c[2] == ("fullscreen",) and c[3] == tmp / "_trio" for c in calls if c[0] == "pick")
         assert not (tmp / "_summaries").exists()                 # no write into single mode's paths
         assert {c[2] for c in calls if c[0] == "accepted"} == {tmp / "_trio"}            # trio counts its own root only
@@ -505,6 +508,13 @@ def test_run_trio():
         assert rc == 0 and len(spawned) >= 2 and all("--slot" in c for c, _, _ in spawned)
         assert not (tmp / T.TRIO_DIR / O.TRIO_DRAIN_FILE).exists()
         assert list((tmp / T.TRIO_DIR / "_summaries").glob("trio_drain.done_*"))
+
+        # t55: the capture offloads refused: nothing starts, EXIT_OFFLOADS, before any tree command
+        spawned.clear()
+        rc, calls = _trio(tmp, {"youtube": 5}, spawn,
+                          offloads=lambda iface: {"iface": iface, "ok": False, "after": {"generic-receive-offload": {"on": True}},
+                                                  "calls": [{"feature": "gro", "rc": 1}]})
+        assert rc == O.EXIT_OFFLOADS and not spawned and not [c for c in calls if c[0] == "apply"], calls
 
         # low disk: nothing starts, the trio ends with EXIT_LOW_DISK, the tree still comes down
         spawned.clear()

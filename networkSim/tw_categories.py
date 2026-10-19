@@ -58,21 +58,25 @@ def by_name(name: str) -> dict | None:
     return next((c for c in TW_CATEGORIES if c["name"] == name), None)
 
 
-def collected_counts(data_dir: Path) -> dict[str, int]:
+def collected_counts(data_dir: Path, select=None) -> dict[str, int]:
+    """select(meta) -> bool: only the sessions it keeps (the trio: its sessions of record, levi)."""
     counts = {c["name"]: 0 for c in TW_CATEGORIES}
     for m in data_dir.rglob("meta.json"):
-        if m.parent.parent.name != "twitch" or "_failed" in m.parts or "_trio" in m.parts:   # trio: its own root
+        if m.parent.parent.name != "twitch" or "_failed" in m.parts or "_trio" in m.relative_to(data_dir).parts:   # trio: its own root
             continue
         try:
-            name = json.loads(m.read_text()).get("tw_category") or PRE_ROTATION_CATEGORY
+            meta = json.loads(m.read_text())
         except Exception:
             continue
+        if select is not None and not select(meta):
+            continue
+        name = meta.get("tw_category") or PRE_ROTATION_CATEGORY
         if name in counts:
             counts[name] += 1
     return counts
 
 
-def last_category(data_dir: Path, skip: Path | None = None) -> str | None:
+def last_category(data_dir: Path, skip: Path | None = None, select=None) -> str | None:
     """The category of the latest twitch session (data/twitch and data/_failed/twitch, by meta.json started_at)."""
     best = (None, -1.0)
     for m in list((data_dir / "twitch").glob("*/meta.json")) + list((data_dir / "_failed" / "twitch").glob("*/meta.json")):
@@ -82,21 +86,24 @@ def last_category(data_dir: Path, skip: Path | None = None) -> str | None:
             meta = json.loads(m.read_text())
         except Exception:
             continue
+        if select is not None and not select(meta):
+            continue
         t = float(meta.get("started_at") or 0)
         if t > best[1]:
             best = (meta.get("tw_category") or PRE_ROTATION_CATEGORY, t)
     return best[0]
 
 
-def next_category(data_dir: Path, exclude: set[str] | None = None, live_check=twitch_live) -> tuple[dict, dict | None]:
+def next_category(data_dir: Path, exclude: set[str] | None = None, live_check=twitch_live,
+                  select=None) -> tuple[dict, dict | None]:
     """(category, esports skip record or None): the least-collected category not in `exclude` (a category or channel
     with no playable stream just now). esports is taken only with a live league channel (category["channel"]);
     otherwise it is skipped and the next one drawn."""
     exclude = set(exclude or ())
-    counts = collected_counts(data_dir)
+    counts = collected_counts(data_dir, select)
     # never the previous session's category (supervisor 2026-10-17: a failed tw_10 left Chess least-collected, and tw_11
     # drew it again), unless it is the only one left
-    prev = last_category(data_dir)
+    prev = last_category(data_dir, select=select)
     pool = ([c for c in TW_CATEGORIES if c["name"] not in exclude | {prev}]
             or [c for c in TW_CATEGORIES if c["name"] not in exclude] or TW_CATEGORIES)
     skipped = None
