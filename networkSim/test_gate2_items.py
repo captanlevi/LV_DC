@@ -197,6 +197,7 @@ def test_concurrency_and_overlap_items():
         (sd / "meta.json").write_text(json.dumps({"concurrency": {"mode": "trio"}}))
         r = G.session_items(sd)
         assert all(r[k]["ok"] is False and r[k]["recorded"] is False for k in ("item7", "item9", "item11", "item14")), r
+        assert r["record"] == {"flag": None, "era": None, "is_record": False}, r["record"]
     assert G.overlap_items("youtube/yt_9", fo) == {} and G.overlap_items("twitch/tw_1", None) == {}
 
 

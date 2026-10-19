@@ -330,7 +330,15 @@ def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dic
         meta = json.loads((sd / "meta.json").read_text())
     except (OSError, ValueError):
         pass
-    return {"session": str(sd), "mode": (meta.get("concurrency") or {}).get("mode", "single"),
+    c = meta.get("concurrency") or {}
+    try:
+        import record
+        is_rec = record.is_record(meta)
+    except ImportError:                                # a sha before record.py: never of record
+        is_rec = False
+    return {"session": str(sd), "mode": c.get("mode", "single"),
+            # levi: the operator sets the flag; printed so a forgotten flag or a flagged pilot shows in the round summary
+            "record": {"flag": c.get("record"), "era": c.get("era"), "is_record": is_rec},
             "ticks": len(tk), "items1_2": items1_2(sd), "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
             "item8": item8(iv, len(spans)), **concurrency_items(meta),
             **(overlap_items(f"{sd.parent.name}/{sd.name}", flow_overlap)
