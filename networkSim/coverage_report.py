@@ -65,7 +65,7 @@ import numpy as np
 
 from utils.shaping import PLATFORM_MATRICES, SCENARIOS, stationary_distribution
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from data_root import DATA_ROOT as DATA_DIR  # noqa: E402  (one setting: data_root.py)
 RULE_VERSION = "coverage-v2 (2026-10-18; Addendum Q am. 5: stall events)"
 FLOOR_SESSIONS, FLOOR_MINUTES = 5, 2.0          # Addendum Q: N = 5 sessions with >= M = 2 minutes of every class
 STALL_FLOOR_ONSETS = 3                          # am. 5: the STALL floor counts sessions with >= K = 3 stall onsets

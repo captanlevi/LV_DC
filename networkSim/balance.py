@@ -28,7 +28,7 @@ PLATFORM_TRANSITIONS: dict[str, dict[str, dict[str, float]]] = {
     "bilibili": BILIBILI_TRANSITIONS,
 }
 
-_DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data"
+from data_root import DATA_ROOT as _DEFAULT_DATA_DIR  # noqa: E402  (one setting: data_root.py)
 
 
 # ---------------------------------------------------------------------------

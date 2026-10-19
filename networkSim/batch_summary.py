@@ -30,7 +30,7 @@ from pathlib import Path
 
 import coverage_report
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from data_root import DATA_ROOT as DATA_DIR  # noqa: E402  (one setting: data_root.py)
 PLATFORMS = ("youtube", "twitch", "tiktok", "bilibili")
 
 

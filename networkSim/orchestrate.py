@@ -43,7 +43,7 @@ import preflight
 import tw_categories
 import yt_channels
 
-_RUNS_DIR = Path(__file__).parent.parent / "data"
+from data_root import DATA_ROOT as _RUNS_DIR  # noqa: E402  (one setting: data_root.py)
 
 EXIT_LOGIN_WALL = 3   # exp.py's exit code for a session aborted at a login wall (t37)
 EXIT_STOPPED = 130    # exp.py's exit code when the operator stopped the session

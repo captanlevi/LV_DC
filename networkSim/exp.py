@@ -39,7 +39,7 @@ import decode_path
 import tw_categories
 import yt_channels
 
-DATA_DIR = Path(__file__).parent.parent / "data"
+from data_root import DATA_ROOT as DATA_DIR  # noqa: E402  (one setting: data_root.py)
 
 PLATFORM_ABBREV = {
     "youtube": "yt",
@@ -752,7 +752,9 @@ if __name__ == "__main__":
     # is shaped or captured (loudly; nothing is restored: the setting holds for the era)
     import offloads
     off = offloads.ensure_off(os.environ.get("LVDC_CAPTURE_IFACE") or offloads.IFACE_DEFAULT)
-    session_meta.write(session_dir, capture={"offloads": off})
+    import data_root as _data_root            # the data root as set, and the volume each session was written to
+    data_root_rec = _data_root.record(DATA_DIR)
+    session_meta.write(session_dir, capture={"offloads": off, "data_root": data_root_rec})
     if not off["ok"]:
         from profile_clone import remove_profile_clone
         print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
@@ -772,7 +774,7 @@ if __name__ == "__main__":
     # features off); recorded per device; a flag that did not take fails the session loudly
     ifbs = [SLOT.ifb_in, SLOT.ifb_out] if SLOT is not None else ["ifb0", "ifb1"]
     ifb_off = {d: offloads.ensure_off(d, features=offloads.IFB_OFF) for d in ifbs}
-    session_meta.write(session_dir, capture={"offloads": {**off, "ifbs": ifb_off}})
+    session_meta.write(session_dir, capture={"offloads": {**off, "ifbs": ifb_off}, "data_root": data_root_rec})
     if not all(r["ok"] for r in ifb_off.values()):
         if SLOT is not None:
             session_meta.write(session_dir, concurrency=TRIO)

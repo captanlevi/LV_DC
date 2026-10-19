@@ -61,7 +61,7 @@ CURRENT_DATA = Path(__file__).resolve().parent.parent / "current_data"
 # merge-capture writes merged.pcap into the session dir at the session's own end. The volume is exFAT: every staged
 # tcpdump runs with -Z root (TCPDUMP_Z; the Makefile's root-shell stdout redirect already avoids the chown, t37) and a
 # slot checks its capture grows (capture_growing). LVDC_TRIO_STAGING overrides the place (recorded per session).
-DATA = Path(__file__).resolve().parent.parent / "data"
+from data_root import DATA_ROOT as DATA  # noqa: E402  (one setting: data_root.py)
 STAGING = Path(os.environ.get("LVDC_TRIO_STAGING") or (DATA / "_trio_staging"))
 TCPDUMP_Z = "-Z root"
 DATASET_TRIO_DIR = "_trio"                            # the counted collection's root (decode_stress's is STRESS_DIR)

@@ -111,7 +111,8 @@ def run(data_dir: Path, min_free_gb: float, sh=_sh, root_min_free_gb: float | No
 
 
 if __name__ == "__main__":
-    d = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "data"
+    from data_root import DATA_ROOT
+    d = Path(sys.argv[1]) if len(sys.argv) > 1 else DATA_ROOT
     res = run(d, float(os.environ.get("LVDC_MIN_FREE_GB", "25")))
     print(json.dumps(res, indent=1))
     sys.exit(0 if res["ok"] else 1)
