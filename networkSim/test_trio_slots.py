@@ -517,6 +517,33 @@ def test_run_trio():
                for c, e, _ in spawned}
         assert lay["yt"]["origin"] == [0, 0] and lay["tt"]["origin"] == [3840, 0] and lay["tt"]["x_screen_px"] == [5760, 1080]
         assert T.layout_of(T.SLOTS["twitch"], {}) == {"layout": "cdp"}
+        # a recorded round pin (levi 00261): the twitch slot's category / channel / state / geometry, in meta via env;
+        # another slot unpinned; and am. 15 (5)'s band start applies in trio as in single mode
+        spawned.clear()
+        plat, pin = O.parse_pin("twitch:category=Chess,channel=gothamchess,state=10,geometry=window:1920x1080",
+                                "levi 00261 coverage: 60 fps tier")
+        O.TRIO_PINS[plat] = pin
+        O.LAST_COVERAGE["youtube"] = {"initial_state_forced": {"state": "9"}}
+        try:
+            rc, _ = _trio(tmp, {"twitch": 5, "youtube": 5}, spawn)
+        finally:
+            O.TRIO_PINS.clear()
+            O.LAST_COVERAGE.pop("youtube", None)
+        by = {c[c.index("--platform") + 1]: (c, e) for c, e, _ in spawned}
+        tc, te = by["twitch"]
+        assert rc == 0 and tc[tc.index("--tw-category") + 1] == "Chess" and tc[tc.index("--tw-channel") + 1] == "gothamchess"
+        assert tc[tc.index("--initial-state") + 1] == "10" and tc[tc.index("--geometry") + 1] == "window:1920x1080"
+        rec = json.loads(te["LVDC_PICK_PINNED"])
+        assert rec["reason"] == "levi 00261 coverage: 60 fps tier" and rec["initial_state"] == "10", rec
+        yc, ye = by["youtube"]
+        assert "LVDC_PICK_PINNED" not in ye and yc[yc.index("--initial-state") + 1] == "9"
+        for bad in ("twitch:channel=x", "twitch:state=11", "youtube:category=Chess", "twitch", "zz:state=3"):
+            try:
+                O.parse_pin(bad, "r")
+                raise AssertionError(bad)
+            except ValueError:
+                pass
+
         # the "composite" layout (pilot-1, probe v3): windows at the origin, each slot's shots from its window's pixmap
         spawned.clear()
         rc, _ = _trio(tmp, {"twitch": 5}, spawn, layout="composite")

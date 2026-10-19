@@ -707,6 +707,11 @@ if __name__ == "__main__":
             session_meta.write(session_dir, preflight=json.loads(Path(os.environ["LVDC_PREFLIGHT_JSON"]).read_text()))
         except Exception as e:
             session_meta.write(session_dir, preflight={"error": repr(e)})
+    if os.environ.get("LVDC_PICK_PINNED"):   # a recorded t53 round pin (levi 00261: allowed steering if recorded)
+        try:
+            session_meta.write(session_dir, pick_pinned=json.loads(os.environ["LVDC_PICK_PINNED"]))
+        except Exception as e:
+            session_meta.write(session_dir, pick_pinned={"error": repr(e)})
     if os.environ.get("LVDC_COVERAGE_JSON"):   # orchestrate's coverage-steered matrix (prereg Addendum Q)
         try:
             session_meta.write(session_dir, coverage=coverage_report.meta_record(

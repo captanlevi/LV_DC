@@ -241,6 +241,30 @@ def preclean() -> None:
 
 
 LAST_COVERAGE: dict[str, dict] = {}       # platform -> the latest coverage record (geometry_forced: Q am. 15 (3))
+# t53 round pins (levi 00261: allowed steering if recorded; default off, trio only): platform -> {category, channel, state,
+# geometry, reason}; the slot's pick is overridden where given and the session's meta.json records pick_pinned
+TRIO_PINS: dict[str, dict] = {}
+
+
+def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
+    """'twitch:channel=gothamchess,category=Chess,state=10,geometry=window:1920x1080' -> (platform, pin)."""
+    platform, _, rest = spec.partition(":")
+    pin: dict = {"reason": reason}
+    for kv in filter(None, rest.split(",")):
+        k, _, v = kv.partition("=")
+        if k not in ("category", "channel", "state", "geometry") or not v:
+            raise ValueError(f"--trio-pin {spec!r}: {kv!r} (keys: category, channel, state, geometry)")
+        pin[k] = v
+    if platform not in coverage_report.CLASSES or len(pin) < 2:
+        raise ValueError(f"--trio-pin {spec!r}: a platform and at least one field")
+    from utils.shaping import SCENARIOS
+    if pin.get("state") is not None and pin["state"] not in SCENARIOS:
+        raise ValueError(f"--trio-pin {spec!r}: no shaper state {pin['state']!r}")
+    if (pin.get("channel") or pin.get("category")) and platform != "twitch":
+        raise ValueError(f"--trio-pin {spec!r}: category / channel pins are twitch only")
+    if pin.get("channel") and not pin.get("category"):
+        raise ValueError(f"--trio-pin {spec!r}: a channel pin names its category (exp.py's --tw-channel needs --tw-category)")
+    return platform, pin
 
 
 def coupled_geometry(p: str, geom: str | None) -> str | None:
@@ -522,14 +546,27 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     if forced != geom:
         print(f"  geometry {forced} (coupled to the coverage target; rotation drew {geom})")
         geom = forced
-    cmd = _collection_cmd(p, initial_state=most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
-                          episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix, channel=channel,
-                          geom=geom, tw_category=category, matrix=mid)
+    # Q am. 15 (5), as single mode (run_batch): a tier-class target starts in its band (the merge had kept the balance rule)
+    fi = (LAST_COVERAGE.get(p) or {}).get("initial_state_forced") if MATRIX_RULE == "coverage" else None
+    init = fi["state"] if fi else most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid)
+    pin = TRIO_PINS.get(p)
+    if pin:                             # a recorded round pin (levi 00261), never silent
+        if pin.get("category"):
+            category = {"name": pin["category"], "type": "pinned", "channel": pin.get("channel")}
+        init = pin.get("state") or init
+        geom = pin.get("geometry") or geom
+        print(f"  PINNED {p}: {json.dumps(pin)}")
+    cmd = _collection_cmd(p, initial_state=init, episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix,
+                          channel=channel, geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
     # window's own XComposite pixmap in the "composite" layout (pilot-1, probe v3)
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
            "LVQOE_SHOT_SOURCE": TRIO_SHOT_SOURCE.get(os.environ.get("LVDC_TRIO_LAYOUT") or "cdp", "cdp")}
+    env.pop("LVDC_PICK_PINNED", None)
+    if pin:
+        env["LVDC_PICK_PINNED"] = json.dumps({**pin, "initial_state": init, "geometry_used": geom,
+                                              "category_used": (category or {}).get("name")})
     if stop_signal:                     # a stop arrived during the pick: no new session
         print(f"  TRIO {p}: stop requested during the pick, no session started")
         return True
@@ -806,6 +843,11 @@ if __name__ == "__main__":
     parser.add_argument("--link-capacity-kbit", type=float, default=None,
                         help="--concurrent: the measured multi-stream goodput (the gate 1 dry run); each session records "
                              "it and flags seconds whose summed slot rates exceed it (L-A2).")
+    parser.add_argument("--trio-pin", action="append", default=[], metavar="PLATFORM:k=v,...",
+                        help="--concurrent: a recorded pin of a slot's pick (levi 00261; default off), e.g. "
+                             "'twitch:channel=gothamchess,state=10,geometry=window:1920x1080' (keys: category, channel "
+                             "[twitch], state, geometry); needs --trio-pin-reason; each session records meta pick_pinned.")
+    parser.add_argument("--trio-pin-reason", default=None, help="--trio-pin: the reason recorded with each pinned pick.")
     parser.add_argument("--trio-layout", choices=sorted(TRIO_SHOT_SOURCE), default="cdp",
                         help="--concurrent: cdp = windows at the origin, CDP shots (pilot-0); fb = the X framebuffer "
                              "enlarged to three monitor widths, one window per width, X11 shots (design §4; probe v1-v3: "
@@ -840,6 +882,17 @@ if __name__ == "__main__":
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
         if unknown:
             sys.exit(f"unknown platform(s) in --batch: {unknown}")
+        if args.trio_pin and (not args.concurrent or not args.trio_pin_reason):
+            sys.exit("--trio-pin needs --concurrent and --trio-pin-reason")
+        for spec in args.trio_pin:
+            try:
+                plat, pin = parse_pin(spec, args.trio_pin_reason)
+            except ValueError as e:
+                sys.exit(str(e))
+            import trio_slots
+            if (pin.get("geometry") or "").split(":")[0] in trio_slots.EXCLUDED_GEOMETRIES:
+                sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1")
+            TRIO_PINS[plat] = pin
         if args.concurrent:
             sys.exit(run_trio(targets, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry,
                               iface=args.iface, capacity_kbit=args.link_capacity_kbit, max_per_slot=args.max_per_slot,
