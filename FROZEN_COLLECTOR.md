@@ -92,7 +92,7 @@
 
 ## 5. Fixtures as goldens
 
-Run with `cd networkSim && for t in test_*.py; do [ "$t" = test_browser.py ] \|\| ../.venv/bin/python "$t"; done`. That is the same set as apply_at_boundary.sh.
+Run with `cd networkSim && for t in test_*.py; do [ "$t" = test_browser.py ] \|\| ../.venv/bin/python "$t"; done` and `../.venv/bin/python -m pytest -q --ignore=test_browser.py .` (both runners, as apply_at_boundary.sh: t58 T-1).
 
 | fixture | pins | test |
 |---|---|---|
@@ -108,6 +108,7 @@ Run with `cd networkSim && for t in test_*.py; do [ "$t" = test_browser.py ] \|\
 
 | fixtures/frozen_constants.json | every experiment-defining constant: the T table, the frozen measure (Python + content.js), the stuck rule, the tt dead rule and its diagnostics, the classes and their switches, the entry rule, the QA checks, the matrices (tables, caps, initial-state rules), the low-state window, the episodes, the coverage rule and floors, the decode path. A change edits the json in the same commit (`--write`) with a change-log row | test_frozen_constants.py |
 | fixtures/tt_ti37_recovered_2026-10-18.json (again) | check.json's keys and types; the one-recovery revocation | test_check_schema.py |
+| fixtures/trio_slot_commands_c1f9181.json (kept: trio_slot_commands_aaba6ae.json, identical content) | the N code at youtube=1,twitch=1,tiktok=1 reproduces c1f9181's per-slot commands, up to the tag renaming | test_nslot_equivalence.py |
 
 No behaviour in §1–4 is unpinned now.
 
@@ -182,6 +183,7 @@ No behaviour in §1–4 is unpinned now.
 | 2026-10-19 | the management port (L-6, audit item 11): the trio's tc management bypass (trio_slots._mgmt_filters) and ops/diag/trio_dry_run's take tailscaled's live UDP port as the Makefile reads it (trio_slots.mgmt_udp_port_record: `sudo -n ss -ulpnH`, else `41641`; LVDC_MGMT_UDP_PORT overrides, the tests pin `41641`), recorded with its source in meta.json concurrency.mgmt_udp_port; trio_dry_run is on the counted line's carry list, so the dry run reruns at adoption. Test: test_nslot.test_mgmt_udp_port_is_the_makefiles_live_lookup | this commit | the N-slot adoption | capture / shaping bypass | levi (t58) |
 | 2026-10-19 | history readers (L-7, N-9, audit item 12): recent_tw_channels reads both roots (single and trio), as recent_tt_rooms does; tw_categories.collected_counts skips a running session whose category is not written yet (was counted Just Chatting); a twitch channel page a sibling plays is not taken (first_url_held_by_sibling recorded; the directory pick instead); single mode's readers skip every trio-family root (any part starting with `_trio`, _trio_stress included: geometry / tw_categories / yt_channels). Tests: test_nslot.test_twitch_history_reads_both_roots_and_skips_uncategorised_running, test_explore_pick.test_trio_stress_sessions_never_count_as_single_mode, test_tw_categories | this commit | the N-slot adoption | steering, recorded | levi (t58) |
 | 2026-10-19 | the single-mode wrappers refuse a trio (T-3, audit item 13): ops/run_batch.sh refuses a spec / options with --concurrent (dropping its cleanup trap first: make disable would take the trio's shared tree down) and pause_batch.sh refuses an orchestrate --concurrent or more than one exp.py (its wait assumed one); the apply gate pauses through pause_batch.sh, so it refuses with it (drain a trio with its drain file). Test: test_ops (static) | this commit | now (ops) | ops | levi (t58) |
+| 2026-10-19 | the N = 3 golden against c1f9181 (levi's pooling condition iii, for pooling the N = 3 sessions of record with N_collect's): test_nslot_equivalence compares the N code at youtube=1,twitch=1,tiktok=1 with fixtures/trio_slot_commands_c1f9181.json, written from c1f9181's trio_slots.py and Makefile (the line those sessions ran, with the ops-only tt_room_dom loop). Its content equals aaba6ae's fixture (`0` differences, kept) and the N code matches it (`0` differences after the tag renaming). Known deltas, outside the compared commands by design: tt's own-IFB room rule (L-1, browser), the sibling claim (N-2), the steering, membership and ERA (5-7, L-3 / L-5), per-slot accounting (N-4), the live management port (L-6: equal to c1f9181's at its default `41641`, the tests pin it), the history readers (L-7, N-9), the wrappers' refusal (T-3); P3's IFB offloads are in c1f9181 too. Test only | this commit | the N-slot adoption | the pooling golden | pending: levi |
 
 ## 7. Change procedure
 

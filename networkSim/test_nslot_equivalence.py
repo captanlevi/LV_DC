@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """t56, levi's pooling ruling: the N-slot code at `--slots youtube=1,twitch=1,tiktok=1` reproduces the trio's per-slot
-commands (LV_DC aaba6ae, the counted rounds' collector, as of 74ea819) exactly, up to the tag renaming (yt1 -> yt, tw1 ->
+commands (LV_DC c1f9181, the line the N = 3 sessions of record ran: levi's pooling condition iii, 2026-10-19; it was
+aaba6ae as of 74ea819, kept as fixtures/trio_slot_commands_aaba6ae.json, identical content) exactly, up to the tag
+renaming (yt1 -> yt, tw1 ->
 tw, tt1 -> tt: lvi_yt1 -> lvi_yt, lvdc.slice/yt1 -> lvdc.slice/yt, chrome_yt1.pid -> chrome_yt.pid, ...). Compared:
 each slot's record (mark, CDP port, prio, IFBs, cgroup, egress class) at epochs 0 and 3, its tc / nft / ip commands up,
 detach and down, its make variables, and `make -n` of the slot's targets (the shaper at two states, capture, merge,
-Chrome) through those variables; plus the shared tree. fixtures/trio_slot_commands_aaba6ae.json was written from the
-trio code (python3 test_nslot_equivalence.py --write at 74ea819) before the N refactor; never rewrite it after.
+Chrome) through those variables; plus the shared tree. fixtures/trio_slot_commands_c1f9181.json was written from
+c1f9181's trio code (its trio_slots.py and Makefile, this file's commands(); never rewrite it). The N line's intended
+differences are outside these commands (FROZEN_COLLECTOR, the c1f9181 row's known deltas): tt's own-IFB room rule,
+the sibling claim, the steering / membership / ERA, the live management port (equal here at its default).
 
     python3 test_nslot_equivalence.py        (exit 0 = pass)
 """
@@ -23,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import test_make_single_mode as MS  # noqa: E402
 
-FIXTURE = HERE / "fixtures" / "trio_slot_commands_aaba6ae.json"
+FIXTURE = HERE / "fixtures" / "trio_slot_commands_c1f9181.json"
 IFACE = "wlp0s20f3"
 STATES = (["BANDWIDTH=179kbit", "DELAY=45ms", "PLR=0.5%"], ["BANDWIDTH=5200kbit", "DELAY=10ms", "PLR=0.0%"])
 SLOT_TARGETS = ("start-capture", "stop-capture", "merge-capture", "start_chrome", "kill_chrome")
@@ -93,7 +97,7 @@ def current() -> dict:
 
 
 def main() -> int:
-    if "--write" in sys.argv:                          # once, from the trio code (74ea819), before the N refactor
+    if "--write" in sys.argv:                          # once, from the trio code (written at c1f9181), never after
         import trio_slots as T
         FIXTURE.write_text(json.dumps(commands(T, list(T.SLOTS.values())), indent=1, sort_keys=True))
         print(f"wrote {FIXTURE.name}")
