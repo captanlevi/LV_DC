@@ -64,6 +64,7 @@ def five_tuples(segs: list[dict]) -> set[tuple]:
         t = s.get("five_tuple") or {}
         try:
             rip, rport = t["remote"].rsplit(":", 1)
+            rip = rip[7:] if rip.lower().startswith("::ffff:") else rip     # an IPv4-mapped address: tcpdump prints IPv4
             lport = t["local"].rsplit(":", 1)[1]
             out.add((t["transport"], rip, int(rport), int(lport)))
         except Exception:  # noqa: BLE001

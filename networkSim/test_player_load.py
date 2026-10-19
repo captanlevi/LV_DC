@@ -8,6 +8,7 @@ clock and fetch.
     python3 test_player_load.py        (exit 0 = pass)
 """
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -182,6 +183,43 @@ def test_the_dry_run_phase_reading_and_command(tmp_path=None):
         T.SESSIONS = saved
 
 
+def test_h3_failure_causes_and_the_probe():
+    """levi on the 5ba0b94 dry run (0 h3 segments, every attempt an error): speed.cloudflare.com serves no HTTP/3 (its
+    QUIC handshake ends in TLS alert 40); the endpoint is h3.speed.cloudflare.com; every failed attempt carries its
+    cause; --probe fails the dry run before any phase; IPv4-mapped peers are logged as IPv4 (the leak check's form)."""
+    import io
+    import contextlib
+    assert P.DEFAULT_URL == "https://h3.speed.cloudflare.com/__down"
+    assert P.close_cause(0x128) == "quic close 0x128 (TLS alert 40 handshake_failure)"
+    assert P.close_cause(0x0, "bye", 0x1c) == "quic close 0x0 frame 0x1c reason 'bye'" and "no CONNECTION_CLOSE" in P.close_cause(None)
+    assert P.norm_addr("::ffff:104.18.8.38", 443) == "104.18.8.38:443" and P.norm_addr("::", 5) == ":::5"
+    R = _reading()
+    seg = {"five_tuple": {"transport": "udp", "local": ":::50001", "remote": "::ffff:104.16.1.1:443"}}
+    assert R.five_tuples([seg]) == {("udp", "104.16.1.1", 443, 50001)}           # older logs normalised in the reader
+    saved = P.h3_fetcher
+    try:
+        def bad(url):
+            def fetch(n):
+                raise P.H3Error("handshake to speed.cloudflare.com: quic close 0x128 (TLS alert 40 handshake_failure)")
+            return fetch, lambda: None, lambda: None
+        P.h3_fetcher = bad
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = P.main(["--platform", "twitch", "--rate-kbit", "1000", "--proto", "h3", "--seconds", "1", "--probe"])
+        rec = json.loads(out.getvalue())
+        assert rc == 5 and rec["ok"] is False and "TLS alert 40" in rec["error"], rec
+        P.h3_fetcher = lambda url: ((lambda n: (n, {"proto": "h3", "alpn": "h3", "five_tuple": None, "fallback": False})),
+                                    lambda: None, lambda: None)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = P.main(["--platform", "twitch", "--rate-kbit", "1000", "--proto", "h3", "--seconds", "1", "--probe"])
+        assert rc == 0 and json.loads(out.getvalue())["alpn"] == "h3"
+    finally:
+        P.h3_fetcher = saved
+    src = (HERE.parent / "ops" / "diag" / "trio_dry_run.py").read_text()
+    assert '"--probe", "--url", a.player_url' in src and 'default="https://h3.speed.cloudflare.com/__down"' in src
+
+
 def main() -> int:
     test_qualifying_seconds_exclude_the_delay_line()
     test_h3_share_tuples_leaks_bursts()
@@ -191,6 +229,7 @@ def main() -> int:
     test_a_slow_fetch_stalls_and_falls_behind()
     test_tt_reconnects_every_20_s()
     test_errors_are_counted_not_fatal()
+    test_h3_failure_causes_and_the_probe()
     print("test_player_load: ok")
     return 0
 

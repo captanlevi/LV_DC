@@ -1043,7 +1043,8 @@ def main(argv=None) -> int:
     ap.add_argument("--player-python", type=Path, default=PLAYER_VENV_PY,
                     help="the diag venv's Python with aioquic (PyPI): python3 -m venv ops/diag/.venv-load && "
                          "ops/diag/.venv-load/bin/pip install aioquic")
-    ap.add_argument("--player-url", default="https://speed.cloudflare.com/__down")
+    ap.add_argument("--player-url", default="https://h3.speed.cloudflare.com/__down",
+                    help="the size endpoint, h3 and TCP alike (speed.cloudflare.com serves no HTTP/3: TLS alert 40)")
     ap.add_argument("--player-fallback-url", default=BULK_URL, help="TCP only: the HTTP Range fallback")
     ap.add_argument("--fast-segment-s", type=float, default=0.0,
                     help="Q am. 17: seconds of each slot's @fast plan under the bulk load after the bulk phase (the "
@@ -1075,6 +1076,14 @@ def main(argv=None) -> int:
         if r.returncode != 0:
             print(f"--player-load needs aioquic in {a.player_python} (python3 -m venv ops/diag/.venv-load && "
                   f"ops/diag/.venv-load/bin/pip install aioquic): {r.stderr.strip()[-200:]}", file=sys.stderr)
+            return 4
+        # the 5ba0b94 dry run's h3 states fetched nothing (the endpoint served no HTTP/3): one h3 fetch first, its cause
+        # printed, so an unreachable h3 endpoint fails here and never reads as an h3 state "not exercised"
+        r = subprocess.run([str(a.player_python), str(PLAYER), "--platform", "twitch", "--rate-kbit", "1000", "--proto",
+                            "h3", "--seconds", "1", "--probe", "--url", a.player_url], capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"--player-load: the h3 probe of {a.player_url} failed: {(r.stdout or r.stderr).strip()[-300:]}",
+                  file=sys.stderr)
             return 4
     if a.state_s < 60 or a.goodput_s < 60:
         print("note: levi's gate-1 condition is >= 60 s per state and for the goodput run", file=sys.stderr)
