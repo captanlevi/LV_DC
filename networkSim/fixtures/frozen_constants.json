@@ -914,6 +914,7 @@
   ],
   "STALL_ADVANCING_SHARE_MAX": 0.5
  },
+ "record_era": "t55-gro-off-2026-10-19",
  "shot_origin": {
   "SHOT_CALIB_MARGIN_PX": 64,
   "SHOT_CALIB_MAX_RESIDUAL": 8.0,

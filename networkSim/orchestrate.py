@@ -245,6 +245,7 @@ LAST_COVERAGE: dict[str, dict] = {}       # platform -> the latest coverage reco
 # t53 round pins (levi 00261: allowed steering if recorded; default off, trio only): platform -> {category, channel, state,
 # geometry, reason}; the slot's pick is overridden where given and the session's meta.json records pick_pinned
 TRIO_PINS: dict[str, dict] = {}
+TRIO_RECORD = False      # --trio-record: this run's sessions are of record (counted; record.ERA), steering counts only those
 
 
 def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
@@ -275,7 +276,7 @@ def coupled_geometry(p: str, geom: str | None) -> str | None:
 
 
 def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, excluded_geometries: tuple = (),
-                   data_dir: Path | None = None) -> str | None:
+                   data_dir: Path | None = None, select=None) -> str | None:
     """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
     LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such.
     data_dir: the sessions the floors count (the trio: its own root, the sessions of record; levi 00265)."""
@@ -283,8 +284,8 @@ def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, exc
     root = data_dir or _RUNS_DIR
     if MATRIX_RULE == "coverage" and p in coverage_report.CLASSES:
         try:
-            rec = (coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p), excluded_geometries) if excluded_geometries
-                   else coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p)))
+            rec = (coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p), excluded_geometries, select=select)
+                   if excluded_geometries or select else coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p)))
             print(f"  coverage : matrix {rec['matrix']} (target {(rec['target'] or {}).get('key')}, {rec['why']})")
         except Exception as e:
             rec["rule_error"] = repr(e)
@@ -356,6 +357,8 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
     trio write stays under data/_trio). Not-live skips (channel liveness, not a count) read both roots."""
     skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
     out = root or _RUNS_DIR
+    import record
+    select = record.is_record if root is not None else None   # the trio counts its sessions of record only (levi)
     if p == "youtube" and root is None:
         for r in yt_channels.apply_leave_rule(_RUNS_DIR, now):
             print(f"  LIST: {r['handle']} ({r['type']}, {r['role']}) leaves the yt list ({r['evidence']}; Addendum P); "
@@ -367,11 +370,11 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
     channel = None
     if p == "youtube":
         # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
-        channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips))
+        channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips), select=select)
         try:                                       # the rotation's view at the pick (no immediate repeat)
             (out / "_summaries").mkdir(parents=True, exist_ok=True)
             with open(out / yt_channels.PICKS_FILE, "a") as fh:
-                fh.write(json.dumps(yt_channels.pick_record(out, channel)) + "\n")
+                fh.write(json.dumps(yt_channels.pick_record(out, channel, select)) + "\n")
         except Exception as e:
             print(f"  (pick record failed: {e!r})")
         if pre_skips:
@@ -382,13 +385,14 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
                     print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")
     # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
     # NOT_LIVE_RETRY_S, like a yt channel)
-    category, esports_skip = tw_categories.next_category(out, exclude=skip) if p == "twitch" else (None, None)
+    category, esports_skip = (tw_categories.next_category(out, exclude=skip, select=select) if p == "twitch"
+                              else (None, None))
     if esports_skip:      # levi: no league channel live -> the next type; the skip goes to the daily summary
         (out / "_summaries").mkdir(parents=True, exist_ok=True)
         with open(out / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
             fh.write(json.dumps(esports_skip) + "\n")
         print(f"  esports unavailable (none of {esports_skip['checked']} live): drawing {category['name']}")
-    geom = (geometry.next_geometry(out, p, exclude_modes) if exclude_modes else geometry.next_geometry(out, p)) \
+    geom = (geometry.next_geometry(out, p, exclude_modes, select) if exclude_modes else geometry.next_geometry(out, p, select=select)) \
         if rotate_geometry else None
     return channel, category, geom
 
@@ -558,7 +562,9 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     # the pick and the coverage rule count the trio's own sessions (data/_trio: the sessions of record, levi 00265); trio v1
     # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
     channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot)
-    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES, data_dir=troot)
+    import record
+    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES, data_dir=troot,
+                         select=record.is_record)
     forced = coupled_geometry(p, geom) if rotate_geometry else geom
     if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES:
         forced = geom
@@ -583,6 +589,7 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
            "LVQOE_SHOT_SOURCE": TRIO_SHOT_SOURCE.get(os.environ.get("LVDC_TRIO_LAYOUT") or "cdp", "cdp")}
     env.pop("LVDC_PICK_PINNED", None)
+    env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
     if pin:
         env["LVDC_PICK_PINNED"] = json.dumps({**pin, "initial_state": init, "geometry_used": geom,
                                               "category_used": (category or {}).get("name")})
@@ -874,6 +881,9 @@ if __name__ == "__main__":
                              "[twitch], state, geometry); needs --trio-pin-reason; each session records meta pick_pinned. "
                              "It holds for every refill of that platform in the run (every session under a slot cap > 1).")
     parser.add_argument("--trio-pin-reason", default=None, help="--trio-pin: the reason recorded with each pinned pick.")
+    parser.add_argument("--trio-record", action="store_true",
+                        help="--concurrent: a counted run: its sessions are of record (meta concurrency.record, era "
+                             "record.ERA); steering counts only such sessions. Pilots and re-runs: leave it off.")
     parser.add_argument("--trio-layout", choices=sorted(TRIO_SHOT_SOURCE), default="cdp",
                         help="--concurrent: cdp = windows at the origin, CDP shots (pilot-0); fb = the X framebuffer "
                              "enlarged to three monitor widths, one window per width, X11 shots (design §4; probe v1-v3: "
@@ -908,6 +918,9 @@ if __name__ == "__main__":
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
         if unknown:
             sys.exit(f"unknown platform(s) in --batch: {unknown}")
+        if args.trio_record and not args.concurrent:
+            sys.exit("--trio-record needs --concurrent")
+        TRIO_RECORD = bool(args.trio_record)
         if args.trio_pin and (not args.concurrent or not args.trio_pin_reason):
             sys.exit("--trio-pin needs --concurrent and --trio-pin-reason")
         for spec in args.trio_pin:

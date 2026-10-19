@@ -79,11 +79,11 @@ PRECHECK_SKIPS_FILE = Path("_summaries") / "yt_precheck_skips.jsonl"
 PICKS_FILE = Path("_summaries") / "yt_channel_picks.jsonl"
 
 
-def pick_record(data_dir: Path, channel: dict) -> dict:
+def pick_record(data_dir: Path, channel: dict, select=None) -> dict:
     """What the rotation saw when it picked (logged per pick): the channel, the previous session's, the counts."""
-    counts = collected_counts(data_dir)
+    counts = collected_counts(data_dir, select)
     return {"ts": time.time(), "handle": channel.get("handle"), "role": channel.get("role"), "type": channel.get("type"),
-            "last": last_channel(data_dir), "no_immediate_repeat": NO_IMMEDIATE_REPEAT,
+            "last": last_channel(data_dir, select), "no_immediate_repeat": NO_IMMEDIATE_REPEAT,
             "counts": {c["handle"]: counts.get(c["handle"], 0) for c in YT_CHANNELS if c["role"] == "primary"}}
 
 
@@ -95,9 +95,10 @@ def by_handle(handle: str) -> dict | None:
     return next((c for c in YT_CHANNELS if c["handle"] == handle), None)
 
 
-def collected_counts(data_dir: Path) -> dict[str, int]:
+def collected_counts(data_dir: Path, select=None) -> dict[str, int]:
     """Accepted yt sessions per channel handle: every <...>/youtube/<session>/meta.json under data_dir (so both
-    data/youtube/ and data/<collector>/youtube/ count), except anything under _failed/."""
+    data/youtube/ and data/<collector>/youtube/ count), except anything under _failed/; select(meta) -> bool: only
+    the sessions it keeps (the trio: its sessions of record, levi)."""
     counts = {c["handle"]: 0 for c in YT_CHANNELS}
     metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts
              and "_trio" not in m.relative_to(data_dir).parts)                 # trio sessions have their own root and never count here
@@ -105,6 +106,8 @@ def collected_counts(data_dir: Path) -> dict[str, int]:
         try:
             m = json.loads(meta.read_text())
         except Exception:
+            continue
+        if select is not None and not select(m):
             continue
         h = m.get("channel_handle")
         if h in counts:
@@ -234,7 +237,7 @@ def list_record(data_dir: Path, handle: str | None) -> dict:
             "changes": LIST_CHANGES, "collector_leaves": leaves}
 
 
-def last_channel(data_dir: Path) -> str | None:
+def last_channel(data_dir: Path, select=None) -> str | None:
     """The channel of the latest single-mode yt session that played (accepted or _failed, by meta.json started_at); a
     not-live start failure is no session of the channel (the not-live skips handle it)."""
     best = None
@@ -244,6 +247,8 @@ def last_channel(data_dir: Path) -> str | None:
         try:
             m = json.loads(meta.read_text())
         except Exception:
+            continue
+        if select is not None and not select(m):
             continue
         t, h = m.get("started_at"), m.get("channel_handle")
         if NOT_LIVE_MARK in (m.get("abort_reason") or ""):
@@ -256,16 +261,16 @@ def last_channel(data_dir: Path) -> str | None:
 NO_IMMEDIATE_REPEAT = True     # supervisor 2026-10-19 (06:50 audit: a newly promoted primary was drawn back to back)
 
 
-def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: bool | None = None) -> dict:
+def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: bool | None = None, select=None) -> dict:
     """The least-collected primary (list order breaks ties), the previous yt session's channel last while another
     primary is possible (NO_IMMEDIATE_REPEAT: a channel catching up, e.g. a newly promoted primary, is spread across
     sessions instead of drawn back to back); a spare of the same type only when every primary of that type is excluded
     (e.g. not live right now)."""
     exclude = set(exclude or ()) | {r["handle"] for r in disk_leaves(data_dir)}
-    counts = collected_counts(data_dir)
+    counts = collected_counts(data_dir, select)
     prim = [c for c in YT_CHANNELS if c["role"] == "primary"]
     order = sorted(range(len(prim)), key=lambda i: (counts[prim[i]["handle"]], i))
-    last = last_channel(data_dir) if (NO_IMMEDIATE_REPEAT if no_repeat is None else no_repeat) else None
+    last = last_channel(data_dir, select) if (NO_IMMEDIATE_REPEAT if no_repeat is None else no_repeat) else None
     if last and any(p["handle"] not in exclude and p["handle"] != last for p in prim):
         order = [i for i in order if prim[i]["handle"] != last] + [i for i in order if prim[i]["handle"] == last]
     for i in order:
@@ -337,7 +342,8 @@ def yt_live_state(handle: str, timeout: float = 12.0, errors: list | None = None
     return yt_live_probe(handle, timeout, errors)["state"]
 
 
-def pick_live_channel(data_dir: Path, exclude: set[str] | None = None, probe=yt_live_state) -> tuple[dict, list[dict]]:
+def pick_live_channel(data_dir: Path, exclude: set[str] | None = None, probe=yt_live_state,
+                      select=None) -> tuple[dict, list[dict]]:
     """next_channel(), re-drawn while the probe says the pick is positively not live. Returns (channel, pre-check
     skips). If every remaining channel probes not live, falls back to the first pick (the session then fails as
     before and counts a strike)."""
@@ -345,7 +351,7 @@ def pick_live_channel(data_dir: Path, exclude: set[str] | None = None, probe=yt_
     first, skips = None, []
     for _ in range(len(YT_CHANNELS)):
         try:
-            c = next_channel(data_dir, exclude=exclude)
+            c = next_channel(data_dir, exclude=exclude, select=select)
         except RuntimeError:
             break
         first = first or c

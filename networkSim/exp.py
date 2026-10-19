@@ -740,6 +740,9 @@ if __name__ == "__main__":
             from profile_clone import remove_profile_clone
             print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
         raise ValueError("Cannot initialize the network for collection")
+    # levi (t55): each capture IFB's offloads, read only (never set), so a failed identity check can be traced
+    ifbs = [SLOT.ifb_in, SLOT.ifb_out] if SLOT is not None else ["ifb0", "ifb1"]
+    session_meta.write(session_dir, capture={"offloads": {**off, "ifbs_read_only": {d: offloads.read(d) for d in ifbs}}})
     tc_sampler = (trio_slots.TcSampler(session_dir, SLOT, capacity_kbit=args.link_capacity_kbit).start()
                   if SLOT is not None else None)
     dns_cap = trio_slots.dns_capture_start(staging) if SLOT is not None else None   # the default class's DNS (v3 §8)

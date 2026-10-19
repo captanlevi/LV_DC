@@ -102,25 +102,29 @@ def _session_spec(meta: dict) -> str | None:
     return f"player:{tgt[0]}x{tgt[1]}" if tgt and len(tgt) == 2 else None
 
 
-def collected_counts(data_dir: Path, platform: str) -> dict[str, int]:
-    """Accepted sessions per geometry entry (data/<...>/<platform>/<session>/meta.json; _failed not counted)."""
+def collected_counts(data_dir: Path, platform: str, select=None) -> dict[str, int]:
+    """Accepted sessions per geometry entry (data/<...>/<platform>/<session>/meta.json; _failed not counted); select(meta)
+    -> bool: only the sessions it keeps (the trio: its sessions of record, levi)."""
     counts = {g: 0 for g in GEOMETRY_CHOICES.get(platform, [])}
     for m in data_dir.rglob("meta.json"):
         if m.parent.parent.name != platform or "_failed" in m.parts or "_trio" in m.relative_to(data_dir).parts:   # trio: its own root
             continue
         try:
-            spec = _session_spec(json.loads(m.read_text()))
+            meta = json.loads(m.read_text())
+            spec = _session_spec(meta)
         except Exception:
+            continue
+        if select is not None and not select(meta):
             continue
         if spec in counts:
             counts[spec] += 1
     return counts
 
 
-def next_geometry(data_dir: Path, platform: str, exclude_modes: tuple = ()) -> str | None:
+def next_geometry(data_dir: Path, platform: str, exclude_modes: tuple = (), select=None) -> str | None:
     """exclude_modes (t53 trio v1: ("fullscreen",)): rotation entries of those modes are not drawn."""
     choices = [g for g in GEOMETRY_CHOICES.get(platform) or [] if g.split(":")[0] not in exclude_modes]
     if not choices:
         return None
-    counts = collected_counts(data_dir, platform)
+    counts = collected_counts(data_dir, platform, select)
     return min(choices, key=lambda g: (counts[g], choices.index(g)))

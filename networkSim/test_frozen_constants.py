@@ -29,6 +29,7 @@ import entry_quality as EQ  # noqa: E402
 import entries as E  # noqa: E402
 import geometry as GEO  # noqa: E402
 import offloads as OFF  # noqa: E402
+import record as REC  # noqa: E402
 import orchestrate as O  # noqa: E402
 import stuck as S  # noqa: E402
 from utils import netStat as NS, shaping as SH  # noqa: E402
@@ -95,7 +96,7 @@ def current() -> dict:
                      "MATRIX_TARGETS": {f"{p}/{m}": list(v) for (p, m), v in CR.MATRIX_TARGETS.items()}},
         "decode_path": {"PLATFORM_DECODE": DP.PLATFORM_DECODE, "DEFAULT": DP.DEFAULT},
         "geometry": {"GEOMETRY_CHOICES": GEO.GEOMETRY_CHOICES, "MODE_CHROME_ARGS": GEO.MODE_CHROME_ARGS},
-        "capture_offloads": {"OFF": OFF.OFF},
+        "capture_offloads": {"OFF": OFF.OFF}, "record_era": REC.ERA,
         "shot_origin": {"SHOT_CALIB_MARGIN_PX": B.SHOT_CALIB_MARGIN_PX, "SHOT_CALIB_SCALE": B.SHOT_CALIB_SCALE,
                         "SHOT_CALIB_MAX_RESIDUAL": B.SHOT_CALIB_MAX_RESIDUAL, "SHOT_CALIB_MIN_GAP": B.SHOT_CALIB_MIN_GAP},
         "entry_quality": {"ENTRY_QUALITY_PLATFORMS": EQ.ENTRY_QUALITY_PLATFORMS, "ENTRY_RULE": EQ.ENTRY_RULE,
