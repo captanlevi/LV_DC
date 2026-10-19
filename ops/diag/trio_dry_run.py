@@ -450,6 +450,11 @@ def run(a) -> dict:
                 fh.write(json.dumps(x) + "\n")
         rep["timeline"] = timeline
         rep["results"] = summarise(samples, timeline, states, a, out)
+        if a.fast_segment_s and not NO_IFB:   # Q am. 17: the @fast segment under the bulk load, its own phase
+            ph = fast_segment_phase(a, out)
+            with open(out / "fast_segment.json", "w") as fh:
+                json.dump(ph, fh)
+            rep["fast_segment"] = read_fast_segment(ph)
         if a.player_load:               # Q am. 16: the player-shaped load, its own phase on the same states
             ph = player_phase(a, states, out)
             rep["player_load"] = {"timeline": ph["timeline"], "t0_epoch": ph["t0_epoch"],
@@ -698,6 +703,87 @@ def read_player_phase(ph: dict, state_s: float) -> dict:
             "capture_kernel_drops": ph["kernel_drops"], "quic_vs_tcp_ratio": {p: R.q(v) for p, v in by_proto.items()},
             "gated": gated, "pass": all(gated.values()), "notes": R.NOTES,
             "insufficient_states": [(s, r["state"]) for s, rs in rows.items() for r in rs if r["gate"] == "insufficient"]}
+
+
+def _fast():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fast_segment", Path(__file__).resolve().parent / "fast_segment.py")
+    F = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(F)
+    return F
+
+
+def _fast_snap(s: str, t0: float, clock=time.time) -> dict:
+    return {"t": round(clock() - t0, 3), "class": class_stats(f"lvi_{s}").get("1:10"),
+            "netem": netem_stats(f"lvi_{s}").get("1:10")}
+
+
+def fast_segment_phase(a, out: Path, clock=time.time, sleep=time.sleep) -> dict:
+    """Q am. 17's landing condition: every slot's class driven by its platform's @fast plan (fast_segment.schedule,
+    seeded by --fast-seed) for --fast-segment-s under the bulk load; each change applied with rate_cmds at its time,
+    the slot's class / netem snapshotted just before and after the tc commands and fast_segment.SETTLE_S later; every
+    device sampled once a second, as the bulk phase does."""
+    F = _fast()
+    plan = {s: F.schedule(platform_of(s), s, a.fast_segment_s, a.fast_seed) for s in SESSIONS}
+    for s in SESSIONS:
+        for c in rate_cmds(a.iface, s, plan[s][0]):
+            sh(c)
+    procs = [start(in_cgroup(s, bulk_cmd(a.url, a.fast_segment_s + 5)), out / f"curl_fast_{s}_{i}.log")
+             for s in SESSIONS for i in range(a.bulk_streams)]
+    devs = [f"lvi_{s}" for s in SESSIONS] + [a.iface]
+    # the first plan step is in force from before t0 (applied above): an initial entry, no snapshots (never a change read)
+    changes: dict = {s: [{"pre": {"t": -3.0}, "post": {"t": -3.0}, "settle": None, "params": plan[s][0], "initial": True}]
+                     for s in SESSIONS}
+    samples = []
+    try:
+        sleep(3.0)                                   # the load fills the classes before the first change
+        t0 = clock()
+        ev = sorted([(e["t"], 1, s, i) for s in SESSIONS for i, e in enumerate(plan[s]) if i]
+                    + [(float(k), 0, None, None) for k in range(int(a.fast_segment_s) + 1)])
+        pending: list = []                           # settle snapshots due: (t, slot, change index)
+        for t_ev, kind, s, i in ev:
+            while True:
+                due = [x for x in pending if x[0] <= t_ev]
+                if not due:
+                    break
+                x = min(due)
+                pending.remove(x)
+                sleep(max(0.0, t0 + x[0] - clock()))
+                changes[x[1]][x[2]]["settle"] = _fast_snap(x[1], t0, clock)
+            sleep(max(0.0, t0 + t_ev - clock()))
+            if kind == 0:
+                samples.append({"t": round(clock() - t0, 3), "classes": {d: class_stats(d) for d in devs},
+                                "netem": {d: netem_stats(d) for d in devs}})
+                continue
+            e = plan[s][i]
+            prev = changes[s][-1] if changes[s] else None
+            pre = _fast_snap(s, t0, clock)
+            if prev is not None and prev.get("settle") is None:
+                pending = [x for x in pending if not (x[1] == s and x[2] == len(changes[s]) - 1)]
+            for c in rate_cmds(a.iface, s, e):
+                sh(c)
+            changes[s].append({"pre": pre, "post": _fast_snap(s, t0, clock), "settle": None, "params": e})
+            pending.append((t_ev + F.SETTLE_S, s, len(changes[s]) - 1))
+    finally:
+        stop(procs)
+    return {"plan": plan, "changes": changes, "samples": samples, "seconds": a.fast_segment_s, "seed": a.fast_seed}
+
+
+def read_fast_segment(ph: dict) -> dict:
+    """The @fast segment's gates per slot (fast_segment's docstring) and the overall pass."""
+    F = _fast()
+    per = {}
+    for s, ch in ph["changes"].items():
+        per[s] = {"matrix_id": ph["plan"][s][0]["matrix_id"], "changes": sum(1 for c in ch if not c.get("initial")),
+                  "change_drops": {k: v for k, v in F.change_drops(ch).items() if k != "per_change"},
+                  "ratio_non_straddling": F.ratio_non_straddling(ph["samples"], f"lvi_{s}", "1:10", ch, 0.0,
+                                                                 float(ph["seconds"])),
+                  **F.whole_drop_share(ch)}
+    ok = bool(per) and all(v["change_drops"]["gate"] == "pass" and v["ratio_non_straddling"]["gate"] == "pass"
+                           for v in per.values())
+    return {"per_slot": per, "pass": ok, "seconds": ph["seconds"], "seed": ph["seed"], "notes": F.NOTES,
+            "rule": "Q am. 17: no class drops at change instants beyond the set loss; the ratio in "
+                    f"[{F.RATIO_LO}, {F.RATIO_HI}] on backlogged seconds not straddling a change"}
 
 
 def bulk_cmd(url: str, seconds: float) -> str:
@@ -959,6 +1045,10 @@ def main(argv=None) -> int:
                          "ops/diag/.venv-load/bin/pip install aioquic")
     ap.add_argument("--player-url", default="https://speed.cloudflare.com/__down")
     ap.add_argument("--player-fallback-url", default=BULK_URL, help="TCP only: the HTTP Range fallback")
+    ap.add_argument("--fast-segment-s", type=float, default=0.0,
+                    help="Q am. 17: seconds of each slot's @fast plan under the bulk load after the bulk phase (the "
+                         "schedule families' landing dry run: 180); 0 = off")
+    ap.add_argument("--fast-seed", type=int, default=0, help="the @fast plans' seed (recorded)")
     a = ap.parse_args(argv)
     a.states = {k: v.split(",") for k, v in a.states.items()}
     global SESSIONS, DEFAULT_STATES
