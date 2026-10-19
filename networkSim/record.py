@@ -13,7 +13,13 @@ from __future__ import annotations
 # the N = 3 counted line at c1f9181 (t55-gro-off-2026-10-19; pooling condition iii) and this era from 5ba0b94 on; if
 # pooling (iii) fails, coverage is re-read on N_collect alone at the final checkpoint.
 ERA = "t57-n5-boundary-2026-10-20"   # the era this collector writes (capture regime unchanged: GRO / GSO / TSO off)
-RECORD_ERAS = ("t55-gro-off-2026-10-19", ERA)
+# levi on 844f115: membership is the era AND its counted line's collector (meta.json lvdc_commit.sha). t55's counted
+# line is c1f9181 alone: the flagged t55 sessions on e62883d (6) and 9dc66cb (3), the rounds before the c1f9181 restart,
+# are not of record (chaos _trio, 2026-10-20: 40 flagged sessions, t55 c1f9181 16 / e62883d 6 / 9dc66cb 3, t56 61a852d
+# 15). This era's string first exists at 844f115, so every session carrying it was written by 844f115 or a descendant:
+# no sha list (empty = the era string is the line).
+RECORD_LINES = {"t55-gro-off-2026-10-19": ("c1f9181",), ERA: ()}
+RECORD_ERAS = tuple(RECORD_LINES)
 STATED_ERAS = ("t56-nslot-2026-10-19",)
 
 
@@ -26,5 +32,11 @@ def of_record_any_era(meta: dict | None) -> bool:
 
 
 def is_record(meta: dict | None) -> bool:
+    """The record flag, an era in RECORD_LINES and, where the era lists its counted shas, the session's collector sha
+    on one of them."""
     c = (meta or {}).get("concurrency") or {}
-    return bool(c.get("record")) and c.get("era") in RECORD_ERAS
+    if not c.get("record") or c.get("era") not in RECORD_LINES:
+        return False
+    shas = RECORD_LINES[c["era"]]
+    sha = str(((meta or {}).get("lvdc_commit") or {}).get("sha") or "")
+    return not shas or any(sha.startswith(x) for x in shas)

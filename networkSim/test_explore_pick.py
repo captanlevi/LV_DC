@@ -135,7 +135,8 @@ def test_one_membership_rule_for_the_trio_targets():
                                         (True, "t55-gro-off-2026-10-19"))):
             sd = _sess(d, f"tw_{i}", "TW-M", float(i))
             m = json.loads((sd / "meta.json").read_text())
-            (sd / "meta.json").write_text(json.dumps({**m, "concurrency": {"record": rec, "era": era}}))
+            (sd / "meta.json").write_text(json.dumps({**m, "concurrency": {"record": rec, "era": era},
+                                                      "lvdc_commit": {"sha": "c1f9181"}}))
         saved = (O.TRIO_RECORD, O.TRIO_STRESS, O.TRIO_RUN_ID)
         try:
             O.TRIO_RECORD = True
@@ -157,6 +158,12 @@ def test_one_membership_rule_for_the_trio_targets():
     stated = {"concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}}
     assert not record.is_record(stated) and not record.of_record_any_era(stated)          # never, not even not_usable
     assert record.of_record_any_era({"concurrency": {"record": True, "era": "t55-gro-off-2026-10-19"}})
+    # levi on 844f115: t55 counts on its counted line only (c1f9181), never e62883d / 9dc66cb's earlier rounds
+    t55 = lambda sha: {"concurrency": {"record": True, "era": "t55-gro-off-2026-10-19"}, "lvdc_commit": {"sha": sha}}
+    assert record.is_record(t55("c1f9181" + "0" * 33)) and not record.is_record(t55("e62883d" + "0" * 33))
+    assert not record.is_record(t55("9dc66cb")) and not record.is_record(t55(None))
+    assert record.is_record({"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": "844f115"}})
+    assert record.RECORD_LINES == {"t55-gro-off-2026-10-19": ("c1f9181",), record.ERA: ()}
 
 
 def test_failure_streaks_are_per_slot_and_flags_per_session():
