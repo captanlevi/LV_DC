@@ -395,14 +395,18 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
                 unavail.pop(h)
         # pre-session liveness probe (between sessions, outside capture; fail open; not a strike); a running sibling's
         # channel is never taken (t56, levi: siblings never play the same stream at once)
-        channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips) | set(siblings) | set(unavail),
+        # trio rotation hygiene (levi / supervisor): a channel with 2 trio startup_failures is set aside until a manual check
+        import not_usable
+        na = not_usable.set_aside(root, "youtube") if root is not None else {}
+        channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips) | set(siblings) | set(unavail) | set(na),
                                                            select=select, probe=probe)
         try:                                       # the rotation's view at the pick (no immediate repeat)
             (out / "_summaries").mkdir(parents=True, exist_ok=True)
             with open(out / yt_channels.PICKS_FILE, "a") as fh:
                 fh.write(json.dumps({**yt_channels.pick_record(out, channel, select),
                                      **({"sibling_excluded": sorted(siblings)} if siblings else {}),
-                                     **({"unavailable_not_live_6h": unavail} if unavail else {})}) + "\n")
+                                     **({"unavailable_not_live_6h": unavail} if unavail else {}),
+                                     **({"not_usable": na} if na else {})}) + "\n")
         except Exception as e:
             print(f"  (pick record failed: {e!r})")
         if pre_skips:

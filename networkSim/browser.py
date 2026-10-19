@@ -2810,9 +2810,12 @@ class BrowserSession:
         elif self.platform == "twitch":
             self._master = MasterListener(self._ws_url).start()
             sib = sibling_streams(self._session_dir, "twitch")
-            self.tw_pick = {"sibling_excluded": sib} if sib else {}
+            import not_usable                    # trio rotation hygiene: 2 trio startup_failures set a channel aside
+            troot = not_usable.trio_root_of(self._session_dir)
+            na = not_usable.set_aside(troot, "twitch") if troot is not None else {}
+            self.tw_pick = {**({"sibling_excluded": sib} if sib else {}), **({"not_usable_excluded": na} if na else {})}
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
-                                              exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib)),
+                                              exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)),
                                               record=self.tw_pick)
         else:
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
@@ -2976,9 +2979,13 @@ class BrowserSession:
         """tt: pick a live, playing room that no recent session used (see TT_* above); returns the list URL or None."""
         page = self._page
         sib = sibling_streams(self._session_dir, "tiktok")      # t56: a running sibling's room is never taken
-        recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(sib))
+        import not_usable                        # trio rotation hygiene: 2 trio startup_failures set a room aside
+        troot = not_usable.trio_root_of(self._session_dir)
+        na = not_usable.set_aside(troot, "tiktok") if troot is not None else {}
+        recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(sib) | set(na))
         rec: dict = {"n_recent_sessions": TT_RECENT_ROOMS_N, "recent_excluded": recent, "min_viewers": TT_MIN_VIEWERS,
-                     "candidates": [], "tries": [], "choice": None, "sibling_excluded": sib}
+                     "candidates": [], "tries": [], "choice": None, "sibling_excluded": sib,
+                     **({"not_usable_excluded": na} if na else {})}
         self.tt_room_choice = rec
         page.navigate(ROOM_ROTATION_LIVE_URL)
         _wait_for_load(page, timeout=15)

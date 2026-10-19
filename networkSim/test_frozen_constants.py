@@ -51,11 +51,10 @@ def current() -> dict:
     return json.loads(json.dumps({
         "t_table": {"FROZEN_PLAYHEAD_MAX_S": CS.FROZEN_PLAYHEAD_MAX_S, "PLAYER_DEAD_MAX_S": CS.PLAYER_DEAD_MAX_S,
                     "FROZEN_PLAYHEAD_TOL_S": CS.FROZEN_PLAYHEAD_TOL_S},
-        "frozen_measure": {"python": {"FROZEN_ADVANCE_TICKS": CS.FROZEN_ADVANCE_TICKS,
-                                      "FROZEN_ADV_STEP_S": CS.FROZEN_ADV_STEP_S},
-                           "content_js": _js_consts(["FROZEN_TOL_S", "FROZEN_ADVANCE_TICKS", "FROZEN_ADV_MIN_S",
-                                                     "FROZEN_ADV_MAX_S", "AD_MAX_DURATION_S",
-                                                     "RESOLUTION_POLL_INTERVAL_MS"])},
+        # addendum N's stall-only run (levi 2026-10-19: the 2026-10-18 10-tick measure reverted): its only constant is
+        # the 1 s playhead tolerance (t_table's FROZEN_PLAYHEAD_TOL_S, content.js's FROZEN_TOL_S); plus the loop covariate
+        "frozen_measure": {"python": {"definition": "addendum N stall-only run", "STALL_LOOP_PLAY_MAX_S": CS.STALL_LOOP_PLAY_MAX_S},
+                           "content_js": _js_consts(["FROZEN_TOL_S", "AD_MAX_DURATION_S", "RESOLUTION_POLL_INTERVAL_MS"])},
         "stuck": {"T2_S": S.T2_S, "RUNG_MARGIN": S.RUNG_MARGIN, "REENTRY_CONFIRM_S": S.REENTRY_CONFIRM_S,
                   "RECOVERIES_PER_SESSION": S.RECOVERIES_PER_SESSION, "FALLBACK_RUNG_KBIT": S.FALLBACK_RUNG_KBIT,
                   "TT_REENTRY_CONFIRM_S": B.TT_REENTRY_CONFIRM_S,
@@ -122,6 +121,10 @@ def main() -> int:
     assert not bad, "constants drifted from fixtures/frozen_constants.json (a change edits the json and the change log):\n  " + "\n  ".join(bad)
     print("test_frozen_constants: ok")
     return 0
+
+
+def test_frozen_constants():
+    assert main() == 0
 
 
 if __name__ == "__main__":
