@@ -2759,9 +2759,13 @@ class BrowserSession:
             self.list_url = self._tt_choose_room()
         elif self.platform == "twitch":
             self._master = MasterListener(self._ws_url).start()
-            self.tw_pick = {}
+            import not_usable                    # trio rotation hygiene: 2 trio startup_failures set a channel aside
+            troot = not_usable.trio_root_of(self._session_dir)
+            na = not_usable.set_aside(troot, "twitch") if troot is not None else {}
+            self.tw_pick = {"not_usable_excluded": na} if na else {}
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
-                                              exclude=recent_tw_channels(self._session_dir), record=self.tw_pick)
+                                              exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(na)),
+                                              record=self.tw_pick)
         else:
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
         if not self.list_url:
@@ -2922,9 +2926,12 @@ class BrowserSession:
     def _tt_choose_room(self) -> str | None:
         """tt: pick a live, playing room that no recent session used (see TT_* above); returns the list URL or None."""
         page = self._page
-        recent = recent_tt_rooms(self._session_dir)
+        import not_usable                        # trio rotation hygiene: 2 trio startup_failures set a room aside
+        troot = not_usable.trio_root_of(self._session_dir)
+        na = not_usable.set_aside(troot, "tiktok") if troot is not None else {}
+        recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(na))
         rec: dict = {"n_recent_sessions": TT_RECENT_ROOMS_N, "recent_excluded": recent, "min_viewers": TT_MIN_VIEWERS,
-                     "candidates": [], "tries": [], "choice": None}
+                     "candidates": [], "tries": [], "choice": None, **({"not_usable_excluded": na} if na else {})}
         self.tt_room_choice = rec
         page.navigate(ROOM_ROTATION_LIVE_URL)
         _wait_for_load(page, timeout=15)
