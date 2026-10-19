@@ -163,6 +163,8 @@ def test_fullscreen_report():
         r = G.fullscreen_report(sd, meta)
         assert r == {"checks": 900, "not_on_top": 4, "raises": 4, "cadence_shots": 10, "cdp_fallback": 3,
                      "cdp_fallback_share": 0.3, "off_top_shots": 3, "shot_readings_flag": True}, r
+        meta["fullscreen_keeper"]["raises"] = 250                # the keeper's full count wins over the bounded list
+        assert G.fullscreen_report(sd, meta)["raises"] == 250
         assert G.fullscreen_report(sd, {}) is None
 
 

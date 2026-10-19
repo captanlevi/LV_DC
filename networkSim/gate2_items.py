@@ -295,7 +295,8 @@ def fullscreen_report(sd: Path, meta: dict) -> dict | None:
     fb = sum(1 for r in cad if r.get("capture") == "cdp_fallback")
     share = round(fb / len(cad), 3) if cad else None
     return {"checks": k.get("checks"), "not_on_top": k.get("not_on_top"),
-            "raises": sum(1 for e in k.get("events") or [] if e.get("activate_sent")),
+            # the keeper's own count (4abfc42, in full); before it, the bounded event list's (at most 200 events)
+            "raises": k["raises"] if "raises" in k else sum(1 for e in k.get("events") or [] if e.get("activate_sent")),
             "cadence_shots": len(cad), "cdp_fallback": fb, "cdp_fallback_share": share,
             "off_top_shots": sum(1 for r in cad if r.get("on_top") is False),
             "shot_readings_flag": bool(share is not None and share > FS_FALLBACK_FLAG_SHARE)}
