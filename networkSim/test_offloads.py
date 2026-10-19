@@ -70,6 +70,25 @@ def main() -> int:
     # the read itself fails: not ok
     r = O.ensure_off("wlp0s20f3", run=FakeEthtool(fail_read=True))
     assert r["ok"] is False and "read_error" in r
+    # P3 (levi 00120): a capture IFB gets IFB_OFF (segmentation incl. UDP GSO and gso-partial, coalescing), one call each
+    class FakeIfb:
+        def __init__(self):
+            self.s = {"tcp-segmentation-offload": "on", "generic-segmentation-offload": "on", "tx-udp-segmentation": "on",
+                      "tx-gso-partial": "on", "generic-receive-offload": "on", "rx-gro-list": "off"}
+            self.calls = []
+
+        def __call__(self, cmd, capture_output=True, text=True, timeout=None):
+            self.calls.append(cmd)
+            if cmd[:2] == ["ethtool", "-k"]:
+                return types.SimpleNamespace(returncode=0, stderr="", stdout="Features for lvo_yt:\n" +
+                                             "".join(f"{k}: {v}\n" for k, v in self.s.items()))
+            self.s[O.IFB_OFF[cmd[-2]]] = "off"
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    ifb = FakeIfb()
+    r = O.ensure_off("lvo_yt", run=ifb, features=O.IFB_OFF)
+    assert r["ok"] and r["requested_off"] == list(O.IFB_OFF) and r["after"]["tx-udp-segmentation"]["on"] is False, r
+    assert sorted(c[-2] for c in ifb.calls if c[0] == "sudo") == sorted(O.IFB_OFF)
+    assert O.read("lvo_yt", run=FakeIfb(), features=O.IFB_OFF)["all_off"] is False
     assert O.read("wlp0s20f3", run=FakeEthtool(gro="off", gso="off", tso="off", udpfwd="off"))["all_off"] is True
     print("test_offloads: ok")
     return 0

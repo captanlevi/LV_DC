@@ -510,6 +510,13 @@ def test_run_trio():
                                                   "calls": [{"feature": "gro", "rc": 1}]})
         assert rc == O.EXIT_OFFLOADS and not spawned and not [c for c in calls if c[0] == "apply"], calls
 
+        # P3: the default capture IFBs' offloads refused (the interface's fine): no session, EXIT_OFFLOADS, torn down
+        spawned.clear()
+        rc, calls = _trio(tmp, {"youtube": 5}, spawn,
+                          offloads=lambda d: {"iface": d, "ok": not d.startswith("lv"), "after": {}, "calls": []})
+        assert rc == O.EXIT_OFFLOADS and not spawned, rc
+        assert [c for c in calls if c[0] == "apply" and not c[1].startswith("sysctl")][-1][1].startswith("tc qdisc del")
+
         # low disk: nothing starts, the trio ends with EXIT_LOW_DISK, the tree still comes down
         spawned.clear()
         rc, calls = _trio(tmp, {"youtube": 5}, spawn, disk_gb=O.MIN_FREE_GB - 1)

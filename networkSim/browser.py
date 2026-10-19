@@ -1686,7 +1686,13 @@ _TW_BUTTON_JS = """
     if (!b) return JSON.stringify({present: false});
     const st = b.getAttribute('data-a-player-state'), label = b.getAttribute('aria-label') || '';
     const out = {present: true, state: st || (/^play/i.test(label) ? 'paused' : 'playing'), label: label};
-    if (%s) b.click();
+    // levi (252353d): the collector must never pause a playing element (a pause event it caused). The button says
+    // playing: click (Twitch's pause) only while the element is paused, in this same evaluation; a pause() on a paused
+    // element fires no pause event
+    const vs = [...document.querySelectorAll('video')].filter(v => v.getClientRects().length);
+    const v = vs.sort((a, c) => c.clientWidth * c.clientHeight - a.clientWidth * a.clientHeight)[0];
+    if (out.state === 'playing' && v && !v.paused) { out.skipped = 'element playing'; }
+    else if (%s) b.click();
     return JSON.stringify(out);
 })()
 """

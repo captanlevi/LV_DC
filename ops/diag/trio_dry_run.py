@@ -335,6 +335,13 @@ def run(a) -> dict:
             if c.startswith("tc ") or c.startswith("nft "):
                 continue                                     # the cgroups and IFBs only, for the goodput phase
             sh(c, check=not c.endswith("|| true") and "modprobe" not in c)
+        # P3 (levi 00120): the IFBs with their segmentation / coalescing offloads off, as the collector sets them
+        import offloads as _off
+        devs = [d for s in SESSIONS for d in (f"lvi_{s}", f"lvo_{s}")] + ["lvi_def", "lvo_def"]
+        rep["ifb_offloads"] = {d: _off.ensure_off(d, features=_off.IFB_OFF) for d in devs
+                               if sh(f"ip link show {d}", check=False, capture=True)}
+        if not all(r["ok"] for r in rep["ifb_offloads"].values()):
+            raise RuntimeError(f"P3: IFB offloads not off: {rep['ifb_offloads']}")
         rep["idle_ping_unshaped"] = ping_many([None], a, out, "unshaped")["root"]      # the RTT baseline
         rep["goodput"] = gp = goodput(a.iface, a.url, a.goodput_s, a.streams, out)
         need = 1.5 * TOP_STATE_KBIT * len(SESSIONS)
