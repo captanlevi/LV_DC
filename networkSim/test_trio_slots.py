@@ -411,7 +411,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     T.trio_preflight = trio_pf or (lambda *a, **k: {"ok": True, "problems": [], "checks": {}})
     O._RUNS_DIR = tmp
     O._pick = lambda p, nl, now, rg, ex=(), root=None: calls.append(("pick", p, ex, root)) and None or (None, None, None)
-    O.session_matrix = lambda p, f=None, ex=(): calls.append(("matrix", p, f, ex)) or "A"
+    O.session_matrix = lambda p, f=None, ex=(), data_dir=None: calls.append(("matrix", p, f, ex, data_dir)) or "A"
     O.accepted_sessions = lambda p, root=None: calls.append(("accepted", p, root)) and 0 or 0
     O.report_flags = lambda p, t, root=None: []
     O._summary = lambda: None
@@ -469,6 +469,7 @@ def test_run_trio():
             assert env["LVDC_TRIO_RUN"] and log.name == f"{tag}_1.log"
         assert [c[2] for c in calls if c[0] == "matrix"] == [f"_trio/_summaries/coverage_last_{t}.json" for t in ("yt", "tw", "tt")]
         assert all(c[3] == ("fullscreen",) for c in calls if c[0] == "matrix")          # trio v1: no fullscreen
+        assert all(c[4] == tmp / "_trio" for c in calls if c[0] == "matrix")        # levi 00265: the sessions of record
         assert all(c[2] == ("fullscreen",) and c[3] == tmp / "_trio" for c in calls if c[0] == "pick")
         assert not (tmp / "_summaries").exists()                 # no write into single mode's paths
         assert {c[2] for c in calls if c[0] == "accepted"} == {tmp / "_trio"}            # trio counts its own root only

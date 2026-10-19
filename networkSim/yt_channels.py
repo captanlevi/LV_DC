@@ -100,7 +100,7 @@ def collected_counts(data_dir: Path) -> dict[str, int]:
     data/youtube/ and data/<collector>/youtube/ count), except anything under _failed/."""
     counts = {c["handle"]: 0 for c in YT_CHANNELS}
     metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts
-             and "_trio" not in m.parts)                 # trio sessions have their own root and never count here
+             and "_trio" not in m.relative_to(data_dir).parts)                 # trio sessions have their own root and never count here
     for meta in sorted(metas):
         try:
             m = json.loads(meta.read_text())
@@ -116,7 +116,7 @@ def not_live_failures(data_dir: Path) -> dict[str, list[float]]:
     """Start times of the not-live failures per channel handle: data/_failed/.../youtube/<session>/meta.json."""
     out: dict[str, list[float]] = {}
     metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" in m.parts
-             and "_trio" not in m.parts)
+             and "_trio" not in m.relative_to(data_dir).parts)
     for meta in metas:
         try:
             m = json.loads(meta.read_text())
@@ -144,7 +144,7 @@ def accepted_starts(data_dir: Path) -> dict[str, list[float]]:
     """Start times of the accepted (not _failed) sessions per channel handle."""
     out: dict[str, list[float]] = {}
     metas = (m for m in data_dir.rglob("meta.json") if m.parent.parent.name == "youtube" and "_failed" not in m.parts
-             and "_trio" not in m.parts)
+             and "_trio" not in m.relative_to(data_dir).parts)
     for meta in metas:
         try:
             m = json.loads(meta.read_text())
@@ -239,7 +239,7 @@ def last_channel(data_dir: Path) -> str | None:
     not-live start failure is no session of the channel (the not-live skips handle it)."""
     best = None
     for meta in data_dir.rglob("meta.json"):
-        if meta.parent.parent.name != "youtube" or "_trio" in meta.parts:
+        if meta.parent.parent.name != "youtube" or "_trio" in meta.relative_to(data_dir).parts:
             continue
         try:
             m = json.loads(meta.read_text())

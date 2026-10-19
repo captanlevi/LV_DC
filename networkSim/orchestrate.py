@@ -273,14 +273,17 @@ def coupled_geometry(p: str, geom: str | None) -> str | None:
     return (LAST_COVERAGE.get(p) or {}).get("geometry_forced") or geom
 
 
-def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, excluded_geometries: tuple = ()) -> str | None:
+def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, excluded_geometries: tuple = (),
+                   data_dir: Path | None = None) -> str | None:
     """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
-    LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such."""
+    LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such.
+    data_dir: the sessions the floors count (the trio: its own root, the sessions of record; levi 00265)."""
     rec = {"platform": p, "rule": "fixed", "matrix": MATRIX_IDS.get(p)}
+    root = data_dir or _RUNS_DIR
     if MATRIX_RULE == "coverage" and p in coverage_report.CLASSES:
         try:
-            rec = (coverage_report.choose(_RUNS_DIR, p, COVERAGE_ALLOWED.get(p), excluded_geometries) if excluded_geometries
-                   else coverage_report.choose(_RUNS_DIR, p, COVERAGE_ALLOWED.get(p)))
+            rec = (coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p), excluded_geometries) if excluded_geometries
+                   else coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p)))
             print(f"  coverage : matrix {rec['matrix']} (target {(rec['target'] or {}).get('key')}, {rec['why']})")
         except Exception as e:
             rec["rule_error"] = repr(e)
@@ -347,25 +350,27 @@ def _summary() -> None:
 def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool, exclude_modes: tuple = (),
           root: Path | None = None) -> tuple:
     """The session's channel (yt), category (twitch) and geometry draw, and the skip records they leave (run_batch and,
-    per slot, run_trio). root (the trio's data root): its skip records go there, and Addendum P's leave rule, single
-    mode's list upkeep, does not run (every trio write stays under data/_trio)."""
+    per slot, run_trio). root (the trio's data root): its skip records go there, the rotation counts its sessions only
+    (the sessions of record; levi 00265), and Addendum P's leave rule, single mode's list upkeep, does not run (every
+    trio write stays under data/_trio). Not-live skips (channel liveness, not a count) read both roots."""
     skip = {h for h, t in not_live.items() if now - t < NOT_LIVE_RETRY_S}
     out = root or _RUNS_DIR
     if p == "youtube" and root is None:
         for r in yt_channels.apply_leave_rule(_RUNS_DIR, now):
             print(f"  LIST: {r['handle']} ({r['type']}, {r['role']}) leaves the yt list ({r['evidence']}; Addendum P); "
                   f"commit it in yt_channels.py")
-    yt_skips = yt_channels.not_live_skips(_RUNS_DIR, now) if p == "youtube" else {}
+    yt_skips = ({**yt_channels.not_live_skips(_RUNS_DIR, now), **(yt_channels.not_live_skips(root, now) if root else {})}
+                if p == "youtube" else {})
     for h, why in yt_skips.items():
         print(f"  skip {h}: {why}")
     channel = None
     if p == "youtube":
         # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
-        channel, pre_skips = yt_channels.pick_live_channel(_RUNS_DIR, exclude=skip | set(yt_skips))
+        channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips))
         try:                                       # the rotation's view at the pick (no immediate repeat)
             (out / "_summaries").mkdir(parents=True, exist_ok=True)
             with open(out / yt_channels.PICKS_FILE, "a") as fh:
-                fh.write(json.dumps(yt_channels.pick_record(_RUNS_DIR, channel)) + "\n")
+                fh.write(json.dumps(yt_channels.pick_record(out, channel)) + "\n")
         except Exception as e:
             print(f"  (pick record failed: {e!r})")
         if pre_skips:
@@ -376,13 +381,13 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
                     print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")
     # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
     # NOT_LIVE_RETRY_S, like a yt channel)
-    category, esports_skip = tw_categories.next_category(_RUNS_DIR, exclude=skip) if p == "twitch" else (None, None)
+    category, esports_skip = tw_categories.next_category(out, exclude=skip) if p == "twitch" else (None, None)
     if esports_skip:      # levi: no league channel live -> the next type; the skip goes to the daily summary
         (out / "_summaries").mkdir(parents=True, exist_ok=True)
         with open(out / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
             fh.write(json.dumps(esports_skip) + "\n")
         print(f"  esports unavailable (none of {esports_skip['checked']} live): drawing {category['name']}")
-    geom = (geometry.next_geometry(_RUNS_DIR, p, exclude_modes) if exclude_modes else geometry.next_geometry(_RUNS_DIR, p)) \
+    geom = (geometry.next_geometry(out, p, exclude_modes) if exclude_modes else geometry.next_geometry(out, p)) \
         if rotate_geometry else None
     return channel, category, geom
 
@@ -536,10 +541,10 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
               f"{json.dumps({k: pf['checks'][k] for k in pf['problems']})}")
         return False
     before, now = accepted_sessions(p, troot), time.time()
-    # the pick and the coverage rule read single mode's data (steering only; trio's own counts are its root's); trio v1
+    # the pick and the coverage rule count the trio's own sessions (data/_trio: the sessions of record, levi 00265); trio v1
     # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
     channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot)
-    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES)
+    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES, data_dir=troot)
     forced = coupled_geometry(p, geom) if rotate_geometry else geom
     if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES:
         forced = geom

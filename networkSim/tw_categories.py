@@ -61,7 +61,7 @@ def by_name(name: str) -> dict | None:
 def collected_counts(data_dir: Path) -> dict[str, int]:
     counts = {c["name"]: 0 for c in TW_CATEGORIES}
     for m in data_dir.rglob("meta.json"):
-        if m.parent.parent.name != "twitch" or "_failed" in m.parts or "_trio" in m.parts:   # trio: its own root
+        if m.parent.parent.name != "twitch" or "_failed" in m.parts or "_trio" in m.relative_to(data_dir).parts:   # trio: its own root
             continue
         try:
             name = json.loads(m.read_text()).get("tw_category") or PRE_ROTATION_CATEGORY

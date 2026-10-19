@@ -106,7 +106,7 @@ def collected_counts(data_dir: Path, platform: str) -> dict[str, int]:
     """Accepted sessions per geometry entry (data/<...>/<platform>/<session>/meta.json; _failed not counted)."""
     counts = {g: 0 for g in GEOMETRY_CHOICES.get(platform, [])}
     for m in data_dir.rglob("meta.json"):
-        if m.parent.parent.name != platform or "_failed" in m.parts or "_trio" in m.parts:   # trio: its own root
+        if m.parent.parent.name != platform or "_failed" in m.parts or "_trio" in m.relative_to(data_dir).parts:   # trio: its own root
             continue
         try:
             spec = _session_spec(json.loads(m.read_text()))
