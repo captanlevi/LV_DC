@@ -2883,6 +2883,7 @@ class BrowserSession:
         self.video_stats: str | None = None      # twitch Video Stats overlay result (meta.json)
         self.abort_at: float | None = None
         self.tt_room_choice: dict | None = None   # tt: candidates, tries and the chosen room (meta.json)
+        self.channel_pick: dict | None = None     # twitch / tt: the channel cap's state at the pick (meta.json channel_pick)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
@@ -3008,13 +3009,18 @@ class BrowserSession:
             import not_usable                    # trio rotation hygiene: 2 trio startup_failures set a channel aside
             troot = not_usable.trio_root_of(self._session_dir)
             na = not_usable.set_aside(troot, "twitch") if troot is not None else {}
-            self.tw_pick = {**({"sibling_excluded": sib} if sib else {}), **({"not_usable_excluded": na} if na else {})}
+            import channel_cap, record           # the next boundary's cap (levi): a channel at the cap is passed over
+            cap = channel_cap.cap_state(troot, "twitch", record.is_record)
+            self.channel_pick = cap
+            self.tw_pick = {**({"sibling_excluded": sib} if sib else {}), **({"not_usable_excluded": na} if na else {}),
+                            **({"cap_excluded": cap["capped"]} if cap and cap["capped"] else {})}
             first = self.first_url
             if first and "/directory/" not in first and _norm_room(first) in set(sib):
                 self.tw_pick["first_url_held_by_sibling"] = first     # t58 L-7: never the channel a sibling plays
                 first = None
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=first,
-                                              exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)),
+                                              exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)
+                                                             | set((cap or {}).get("capped") or [])),
                                               record=self.tw_pick,
                                               claim=lambda u: publish_stream(self._session_dir, "twitch", u, "intent"))
         else:
@@ -3184,7 +3190,11 @@ class BrowserSession:
         import not_usable                        # trio rotation hygiene: 2 trio startup_failures set a room aside
         troot = not_usable.trio_root_of(self._session_dir)
         na = not_usable.set_aside(troot, "tiktok") if troot is not None else {}
-        recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(sib) | set(na))
+        import channel_cap, record               # the next boundary's cap (levi): a host at the cap is passed over
+        cap = channel_cap.cap_state(troot, "tiktok", record.is_record)
+        self.channel_pick = cap
+        recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(sib) | set(na)
+                        | {_norm_room(k) for k in ((cap or {}).get("capped") or [])})
         rec: dict = {"n_recent_sessions": TT_RECENT_ROOMS_N, "recent_excluded": recent, "min_viewers": TT_MIN_VIEWERS,
                      "candidates": [], "tries": [], "choice": None, "sibling_excluded": sib,
                      **({"not_usable_excluded": na} if na else {})}

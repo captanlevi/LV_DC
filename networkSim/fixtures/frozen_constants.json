@@ -1371,7 +1371,10 @@
    }
   },
   "SIM_SEED": 0,
-  "SIM_SESSIONS": 2000
+  "SIM_SESSIONS": 2000,
+  "TW_TT_CAP_MIN": 2,
+  "TW_TT_CAP_RULE": "levi 2026-10-20: twitch / tt open pools, a cap only: max(2, ceil(0.10 x n_record)) sessions of record per channel / host",
+  "TW_TT_CAP_SHARE": 0.1
  },
  "shot_origin": {
   "SHOT_CALIB_MARGIN_PX": 64,

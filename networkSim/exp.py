@@ -905,6 +905,7 @@ if __name__ == "__main__":
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
                               player_errors=browser.player_errors, ad_wait=browser.error_watch.exposure(),
                               self_pause_resume=browser.resumer.record(),
+                              **({"channel_pick": browser.channel_pick} if browser.channel_pick is not None else {}),
                               t2_skipped=browser.t2_skipped, player_ladder=browser.player_ladder,
                               shot_origin_uncalibrated=(None if browser.shot_origin is None
                                                         else not browser.shot_origin.get("accepted")),
