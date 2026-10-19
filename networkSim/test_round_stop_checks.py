@@ -180,6 +180,13 @@ def test_verify_kinds_on_pass_sessions_are_reported_never_systematic():
     assert R.systematic(r2, [{"round_kinds": r1}], base) == []
     f1, f2 = R.round_kinds(g2("tw_100011", cls="player_frozen")), R.round_kinds(g2("tw_100014", cls="player_frozen"))
     assert any("2 consecutive" in x for x in R.systematic(f2, [{"round_kinds": f1}], base))
+    # levi on 6584cef: verify's mechanics kinds (chunk recall, flow attribution) still count; a content band does not
+    for mech in ("chunk recall 3 vs logged responses >= 10 kB", "selected flows carry 0.62 of downstream"):
+        m1, m2 = R.round_kinds(g2("tw_100015", [mech])), R.round_kinds(g2("tw_100016", [mech]))
+        assert m2["kinds"]["twitch"]["verify"] and not m2["reported"]["kinds"], m2
+        assert any("2 consecutive" in x for x in R.systematic(m2, [{"round_kinds": m1}], base)), mech
+    band = R.round_kinds(g2("tw_100017", ["B/s per tier 1200 below band [800, 950]"]))
+    assert band["kinds"] == {} and band["reported"]["kinds"]["twitch"]["verify"], band
 
 
 if __name__ == "__main__":

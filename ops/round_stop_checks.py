@@ -24,10 +24,12 @@ round_kinds.content; an earlier round's content sessions likewise, from its list
 
 Systematic exclusion (levi's rule, supervisor 2026-10-19), with --inventory (brad's json with base_rates; both shas
 checked) and --history (the earlier counted rounds' --out jsons, oldest first). Over the sessions whose check did not
-PASS (exclusions: a FAIL kind or a non-normal class, freezes included), the coarse kinds per platform (brad's kind rule;
-check's class as "class:<x>"; a kind counts once per session). verify's kinds (verify is PASS or "suspicious", it never
-excludes on its own) are reported per round with their share (round_kinds.reported), never a stop (supervisor
-2026-10-19, after round 2's 'paused while labelled playing' on PASS sessions). Stop and diagnose when:
+PASS (exclusions: a FAIL kind or a non-normal class, freezes included) and verify's mechanics kinds (VERIFY_MECHANICS:
+chunk recall, flow attribution; they could be concurrency), the coarse kinds per platform (brad's kind rule; check's
+class as "class:<x>"; a kind counts once per session). verify's label-based kinds (paused while labelled playing, label
+agreement) and content bands (B/s per tier, the speed rule) are reported per round with their share
+(round_kinds.reported), never a stop (supervisor 2026-10-19 after round 2; levi's split on 6584cef). Stop and diagnose
+when:
   - the same kind on the same platform appears in this round and the previous counted round; or
   - over all counted rounds, a platform's sessions carrying a kind number >= 3 and their share is >= 2 x the kind's
     single-mode base rate on that platform (base_rates[file][platform].coarse[kind].rate).
@@ -43,6 +45,9 @@ import sys
 from pathlib import Path
 
 COVERAGE_MIN = 0.95
+# levi on 6584cef: verify's mechanics kinds can be concurrency, so they stay in the systematic rule; its label-based kinds
+# (paused while labelled playing, label agreement) and content bands (B/s per tier, the speed rule) are reported only
+VERIFY_MECHANICS = ("chunk recall", "selected flows carry")
 
 
 def coverage(sd: Path) -> dict:
@@ -113,11 +118,11 @@ def round_kinds(gate2: dict, content: set | frozenset = frozenset()) -> dict:
             c = v.get("session_class")
             if f == "check" and c is not None and c not in ("normal", "censored"):
                 rs.append(f"class:{c}")
-            # supervisor 2026-10-19 (round 2): only exclusions count toward the systematic rule, i.e. check's non-PASS
-            # kinds (a FAIL, a non-normal class: freezes included); verify never excludes on its own (PASS or
-            # "suspicious"), so its kinds are reported per round with their share, never a stop
-            dest = kinds if f == "check" else reported
+            # supervisor 2026-10-19 (round 2): exclusions count toward the systematic rule, i.e. check's non-PASS kinds
+            # (a FAIL, a non-normal class: freezes included), and verify's mechanics kinds (VERIFY_MECHANICS, levi);
+            # verify's label-based and content-band kinds are reported per round with their share, never a stop
             for k in {reason_kind(x, coarse=True) for x in rs}:
+                dest = kinds if f == "check" or k.startswith(VERIFY_MECHANICS) else reported
                 dest.setdefault(plat, {}).setdefault(f, {}).setdefault(k, []).append(sd.name)
     share = {p: {f: {k: round(len(set(ss)) / n[p], 4) for k, ss in ks.items()} for f, ks in fk.items()}
              for p, fk in reported.items() if n.get(p)}
