@@ -39,11 +39,14 @@ def test_set_aside_and_clear():
         _sess(tr, "youtube", "yt_100013", "startup_failure", 400.0, channel_handle="@FuboSports")
         _sess(tr, "youtube", "yt_100014", "startup_failure", 500.0, channel_handle="@FuboSports")
         assert N.set_aside(tr, "youtube") == {"@FuboSports": ["yt_100013", "yt_100014"]}   # failures after the clear
-        # t58 L-3 / L-5: a pilot's or an earlier era's startup_failures never count (one membership rule)
+        # a pilot's startup_failures never count; a counted run's of an earlier era do (levi / supervisor on 5374e08:
+        # the set-aside carries across the ERA bump, FuboSports stays aside)
         _sess(tr, "tiktok", "ti_100015", "startup_failure", 1.0, rec=False, channel_url="https://www.tiktok.com/@a/live")
         _sess(tr, "tiktok", "ti_100016", "startup_failure", 2.0, channel_url="https://www.tiktok.com/@a/live",
               concurrency={"record": True, "era": "t55-gro-off-2026-10-19"})
-        assert N.set_aside(tr, "tiktok") == {}
+        assert N.set_aside(tr, "tiktok") == {}                                    # one counted failure, one pilot
+        _sess(tr, "tiktok", "ti_100017", "startup_failure", 3.0, channel_url="https://www.tiktok.com/@a/live")
+        assert N.set_aside(tr, "tiktok") == {"https://www.tiktok.com/@a/live": ["ti_100016", "ti_100017"]}
         assert N.trio_root_of(tr / "youtube" / "yt_100099") == tr.resolve()
         assert N.trio_root_of(Path(d) / "youtube" / "yt_99") is None             # single mode: never read
 

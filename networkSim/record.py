@@ -11,6 +11,13 @@ from __future__ import annotations
 ERA = "t56-nslot-2026-10-19"         # the capture regime of the counted collection (GRO / GSO / TSO off), N-slot
 
 
+def of_record_any_era(meta: dict | None) -> bool:
+    """A counted run's session, whatever its era (levi / supervisor on 5374e08): rotation hygiene (not_usable) is
+    steering memory about content, not era data, so it carries across an ERA bump; dataset and steering counts use
+    is_record."""
+    return bool(((meta or {}).get("concurrency") or {}).get("record"))
+
+
 def is_record(meta: dict | None) -> bool:
     c = (meta or {}).get("concurrency") or {}
     return bool(c.get("record")) and c.get("era") == ERA
