@@ -55,43 +55,95 @@ def test_item8_shot_free_rate():
         assert i8["playing_s_all"] == 56.0, i8
 
 
+def _d(fps):
+    return {"Q_720p": {"delivered_fps": fps}}
+
+
 def test_item4a_visibility_and_fps():
     with tempfile.TemporaryDirectory() as d:
-        a = G.session_items(session(d), {"Q_720p": 30})["item4a"]
+        a = G.session_items(session(d), _d(30.0))["item4a"]
         assert a["visibility"] == {"recorded": True, "samples": 60, "not_visible": 0, "values": {"visible": 60},
                                    "first_not_visible_t": None, "ok": True}, a
         f = a["rendered_fps"]["Q_720p"]
-        assert (f["fps_shot_free"], f["rendition_fps"], f["ok"], a["ok"]) == (30.0, 30, True, True), a
-        assert (f["fps_per_media_s_shot_free"], f["playback_rate_shot_free"], f["dropped_share_shot_free"]) == \
-            (30.0, 1.0, round(1 / 30, 3)), f
+        assert (f["fps_per_media_s_shot_free"], f["delivered_fps"], f["ratio"], f["ok"], a["ok"]) == (30.0, 30.0, 1.0, True, True), a
+        assert (f["playback_rate_shot_free"], f["dropped_share_shot_free"]) == (1.0, round(1 / 30, 3)), f
+        assert a["fps60_covered"] is False
     with tempfile.TemporaryDirectory() as d:                          # one hidden tick fails 4a
-        a = G.session_items(session(d, vis={7: "hidden"}), {"Q_720p": 30})["item4a"]
+        a = G.session_items(session(d, vis={7: "hidden"}), _d(30.0))["item4a"]
         assert a["visibility"]["not_visible"] == 1 and a["visibility"]["first_not_visible_t"] == 1007.0 and a["ok"] is False
-    with tempfile.TemporaryDirectory() as d:                          # 26 fps rendered of a 30 fps rendition: < 0.9 x
-        a = G.session_items(session(d, fps=26.0), {"Q_720p": 30})["item4a"]
-        assert a["rendered_fps"]["Q_720p"]["ok"] is False and a["ok"] is False, a
-        a = G.session_items(session(d, fps=26.0))["item4a"]           # no rendition fps: not read
-        assert a["rendered_fps"]["Q_720p"]["ok"] is None and a["rendered_fps"]["Q_720p"]["note"] == "no rendition fps"
+    with tempfile.TemporaryDirectory() as d:                          # 20 frames per media s of a 60 delivered: < 0.9 x
+        a = G.session_items(session(d, fps=20.0), _d(60.0))["item4a"]
+        assert a["rendered_fps"]["Q_720p"]["ok"] is False and a["ok"] is False and a["fps60_covered"] is True, a
+        a = G.session_items(session(d, fps=26.0))["item4a"]           # no delivered fps: not read
+        assert a["rendered_fps"]["Q_720p"]["ok"] is None and a["rendered_fps"]["Q_720p"]["note"] == "no delivered fps"
         assert a["ok"] is None
+    with tempfile.TemporaryDirectory() as d:                          # 9 playing seconds: insufficient support, not read
+        a = G.session_items(session(d, n=10, fps=20.0), _d(60.0))["item4a"]
+        assert a["rendered_fps"]["Q_720p"]["note"] == "insufficient support" and a["ok"] is True, a
+        assert a["fps60_covered"] is False
     with tempfile.TemporaryDirectory() as d:                          # a session from before the columns
         r = G.session_items(session(d, cols=COLS[:-2]))
         assert r["item4a"] == {"visibility": {"recorded": False, "ok": None}, "rendered_fps": {"recorded": False},
-                               "ok": None}, r
+                               "fps60_covered": None, "ok": None}, r
         assert r["item8"]["playing_s_all"] == 59.0
+
+
+def _tc(sd, seconds, rate=400.0, ratio=1.0, backlog=True, state="3", t0=1000.0):
+    rows, b = [], 0
+    for i in range(seconds + 1):
+        rows.append({"ts": t0 + i, "in": {"rate_kbit": rate, "bytes": b, "drops": 0, "backlog": 1500 if backlog else 0}})
+        b += int(rate * ratio * 1000 / 8)
+    (Path(sd) / "tc_stats.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    (Path(sd) / "net_labels.txt").write_text(json.dumps({"timestamp": t0 - 1, "state": state, "speed": rate}) + "\n")
+
+
+def test_item5_byte_total_ratio():
+    """levi (gate-2 call on pilot-1): per state over shaper-bound seconds, sum(bytes) x 8 / sum(rate x s) in [0.9, 1.15]."""
+    for ratio, secs, backlog, want in ((1.0, 30, True, ("PASS", True)), (0.8, 30, True, ("FAIL (starvation while queued)", False)),
+                                       (1.3, 30, True, ("above (reported)", True)), (1.0, 5, True, ("not shaper-bound", None)),
+                                       (0.5, 30, False, (None, None))):
+        with tempfile.TemporaryDirectory() as d:
+            _tc(d, secs, ratio=ratio, backlog=backlog)
+            r = G.item5(Path(d))
+            if want[0] is None:                                         # never backlogged: nothing read
+                assert r["per_state"] == {} and r["ok"] is None, r
+                continue
+            s = r["per_state"]["3"]
+            assert (s["reading"], s["ok"]) == want and s["ratio"] == round(ratio, 3), (ratio, r)
+    with tempfile.TemporaryDirectory() as d:
+        assert G.item5(Path(d)) == {"recorded": False, "ok": None}
+
+
+def test_items1_2_content_bands():
+    """levi: a non-PASS whose every reason is a content band is reported (excluded as in single mode); else it gates."""
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d)
+        (sd / "verify.json").write_text(json.dumps({"verdict": "suspicious", "reasons": ["B/s outside old p10..p90 for ['360p']"]}))
+        (sd / "check.json").write_text(json.dumps({"verdict": "PASS", "session_class": "normal", "reasons": []}))
+        r = G.items1_2(sd)
+        assert (r["1"]["ok"], r["1"]["reading"].startswith("content band only"), r["2"]["ok"]) == (None, True, True), r
+        (sd / "verify.json").write_text(json.dumps({"verdict": "FAIL", "reasons": ["B/s outside old p10..p90 for ['360p']",
+                                                                                   "chunk recall 0.40 vs logged responses"]}))
+        (sd / "check.json").write_text(json.dumps({"verdict": "PASS", "session_class": "player_frozen", "reasons": []}))
+        r = G.items1_2(sd)
+        assert r["1"]["ok"] is False and r["2"]["ok"] is False, r
 
 
 def test_cli():
     with tempfile.TemporaryDirectory() as d:
         sd = session(Path(d) / "tw_100001", shots=(30,))
-        (Path(d) / "fps.json").write_text(json.dumps({"tw_100001": {"tiers": {"Q_720p": 60}}}))
+        (Path(d) / "fps.json").write_text(json.dumps({"tw_100001": {"detail": {"Q_720p": {"delivered_fps": 60.0}}}}))
         G.main([str(sd), "--rendition-fps", str(Path(d) / "fps.json"), "--out", str(Path(d) / "o.json")])
         r = json.loads((Path(d) / "o.json").read_text())["sessions"][0]
-        assert r["item4a"]["rendered_fps"]["Q_720p"]["rendition_fps"] == 60 and r["item4a"]["ok"] is False, r
+        assert r["item4a"]["rendered_fps"]["Q_720p"]["delivered_fps"] == 60.0 and r["item4a"]["ok"] is False, r
+        assert r["items1_2"]["1"]["reading"] == "verify.json missing" and r["item5"] == {"recorded": False, "ok": None}
 
 
 def main() -> int:
     test_item8_shot_free_rate()
     test_item4a_visibility_and_fps()
+    test_item5_byte_total_ratio()
+    test_items1_2_content_bands()
     test_cli()
     print("test_gate2_items: ok")
     return 0

@@ -3,13 +3,21 @@
 from a session's labels.csv and shots/index.jsonl, for shagun's per-session gate-2 json, in both modes (the trio session
 and the single-mode reference read the same way). Read-only; no media truth.
 
+Checklist as revised by levi's gate-2 call on pilot-1 (2026-10-19, from round 1):
+  1 / 2 verify / check: PASS; a non-PASS whose every reason is a content band (verify's B/s-per-tier p10..p90; the speed
+     rule is a verify note already) is reported and the session handled as in single mode; any other reason gates.
   4a visibility: every res_meta tick's document.visibilityState is `visible` (labels.csv `visibility`; a session from
-     before the column: "not recorded"). Rendered fps while playing, per tier (labels.csv `total_frames` steps over
-     playing intervals, the tier from the ticks' short side, coverage_report.quality_class); the reference-free check
-     (levi, until >= 5 single sessions per tier carry total_frames): the shot-free rendered fps >= RENDER_FPS_MIN_SHARE x
-     the playing rendition's fps, given per tier (am. 9's rule, frames side: LVQoE scripts/audit/rendition_fps.py;
-     --rendition-fps), else "no rendition fps".
-  8  dropped frames per playing second outside +- SHOT_GUARD_S of any shot capture (every shots/index.jsonl row's
+     before the column: "not recorded"). Rendered frames per media second while playing, per tier (labels.csv
+     `total_frames` steps over the playhead's advance, shot-free; the tier from the ticks' short side) >=
+     RENDER_FPS_MIN_SHARE x the frames per media second the source delivered (LVQoE scripts/audit/rendition_fps.py
+     delivered_fps; --rendition-fps), on >= MIN_SUPPORT_S shot-free playing seconds, else "insufficient support"; no
+     delivered fps: not read. fps60_covered: a tier delivered at >= 50 fps read on enough support (twitch's 60 fps tiers
+     must be covered before twitch passes).
+  5  shaping fidelity, reference-free (trio sessions: <session>/tc_stats.jsonl): per shaper state, over the seconds the
+     slot's ingress class was shaper-bound (backlog, or drops grew: trio_slots' own rule), the byte-total ratio
+     sum(class bytes) x 8 / sum(class rate x seconds) in [ITEM5_LO, ITEM5_HI]; below: FAIL (starvation while queued);
+     above: reported; fewer than MIN_SUPPORT_S bound seconds: "not shaper-bound". A byte total is invariant to coalescing.
+  8  (reported, never gating) dropped frames per playing second outside +- SHOT_GUARD_S of any shot capture (every shots/index.jsonl row's
      [t_decide, ts], any reason), in both modes (the shot-free rule keeps it comparable when trio shots are CDP captures).
 A playing interval: two consecutive res_meta ticks, both not paused and not ad, the gap <= MAX_GAP_S and the playhead
 advancing between them. Counter steps are clamped at 0 (a new <video> element resets the counters).
@@ -28,7 +36,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from coverage_report import quality_class  # noqa: E402
 
 SHOT_GUARD_S = 2.0              # item 8 (levi 2026-10-19): +- 2 s of any shot capture
-RENDER_FPS_MIN_SHARE = 0.9      # item 4a's reference-free check (levi): rendered fps >= 0.9 x the rendition's fps
+RENDER_FPS_MIN_SHARE = 0.9      # item 4a (levi's call on pilot-1): rendered >= 0.9 x delivered frames per media second
+MIN_SUPPORT_S = 10.0            # item 4a's shot-free playing seconds per tier, item 5's shaper-bound seconds per state
+ITEM5_LO, ITEM5_HI = 0.9, 1.15  # item 5 (levi): the byte-total ratio over shaper-bound seconds
 MAX_GAP_S = 3.0                 # a tick gap above this is not a playing interval (a stalled poll, a navigation)
 
 
@@ -111,6 +121,7 @@ def item8(iv: list[dict], n_shots: int) -> dict:
 
 
 def item4a(tk: list[dict], iv: list[dict], rendition_fps: dict | None = None) -> dict:
+    """Item 4a (module docstring). rendition_fps: the session's rendition_fps.py detail, {tier: {delivered_fps, ...}}."""
     if not tk or not tk[0]["has_visibility"]:
         vis = {"recorded": False, "ok": None}
     else:
@@ -126,25 +137,100 @@ def item4a(tk: list[dict], iv: list[dict], rendition_fps: dict | None = None) ->
             xs = [x for x in iv if x["tier"] == tier and x["total"] is not None]
             fr = [x for x in xs if x["shot_free"]]
             s_all, s_free = sum(x["dt"] for x in xs), sum(x["dt"] for x in fr)
-            f_free = round(sum(x["total"] for x in fr) / s_free, 2) if s_free else None
-            ref = (rendition_fps or {}).get(tier)
             m_free = sum(x["dct"] for x in fr)
             tot_free, drop_free = sum(x["total"] for x in fr), sum(x["dropped"] or 0.0 for x in fr)
-            fps[tier] = {"fps_shot_free": f_free, "playing_s_shot_free": round(s_free, 1),
+            per_media = round(tot_free / m_free, 2) if m_free > 0 else None
+            ref = ((rendition_fps or {}).get(tier) or {}).get("delivered_fps")
+            if s_free < MIN_SUPPORT_S:
+                ok, note = None, "insufficient support"
+            elif ref is None or per_media is None:
+                ok, note = None, "no delivered fps"
+            else:
+                ok, note = per_media >= RENDER_FPS_MIN_SHARE * ref, None
+            fps[tier] = {"fps_per_media_s_shot_free": per_media, "delivered_fps": ref,
+                         "ratio": round(per_media / ref, 3) if per_media is not None and ref else None,
+                         "playing_s_shot_free": round(s_free, 1), "min_share": RENDER_FPS_MIN_SHARE,
+                         "min_support_s": MIN_SUPPORT_S, "ok": ok, **({"note": note} if note else {}),
+                         # reported beside (pilot-1's decomposition): per wall second, the playback rate, the dropped share
+                         "fps_shot_free": round(tot_free / s_free, 2) if s_free else None,
                          "fps_all": round(sum(x["total"] for x in xs) / s_all, 2) if s_all else None,
                          "playing_s_all": round(s_all, 1),
-                         # the decomposition (pilot-1, tt HEVC 1080p60 at 20 fps): frames per media second (immune to
-                         # the playback rate), the playback rate (media s per wall s) and the dropped share of the counted
-                         # frames; reported, the check stays on fps_shot_free
-                         "fps_per_media_s_shot_free": round(tot_free / m_free, 2) if m_free > 0 else None,
                          "playback_rate_shot_free": round(m_free / s_free, 3) if s_free else None,
-                         "dropped_share_shot_free": round(drop_free / tot_free, 3) if tot_free else None,
-                         "rendition_fps": ref, "min_share": RENDER_FPS_MIN_SHARE,
-                         "ok": (None if ref is None or f_free is None else f_free >= RENDER_FPS_MIN_SHARE * ref),
-                         **({} if ref is not None else {"note": "no rendition fps"})}
-    oks = [vis["ok"]] + [v["ok"] for v in fps.values()]
+                         "dropped_share_shot_free": round(drop_free / tot_free, 3) if tot_free else None}
+    read = [v["ok"] for v in fps.values() if v.get("note") != "insufficient support"]
+    oks = [vis["ok"]] + read
+    fps60 = (None if not fps else any((v.get("delivered_fps") or 0) >= 50 and v.get("note") != "insufficient support"
+                                      for v in fps.values()))
     return {"visibility": vis, "rendered_fps": fps if tk and tk[0]["has_total"] else {"recorded": False},
-            "ok": None if any(o is None for o in oks) else all(oks)}
+            "fps60_covered": fps60, "ok": None if any(o is None for o in oks) else all(oks)}
+
+
+def item5(sd: Path) -> dict:
+    """Item 5, reference-free (module docstring): per shaper state over the slot class's shaper-bound seconds."""
+    import bisect
+    p = Path(sd) / "tc_stats.jsonl"
+    if not p.exists():
+        return {"recorded": False, "ok": None}
+    rows = [r for r in (json.loads(line) for line in p.read_text().splitlines() if line.strip()) if r.get("in")]
+    nl = Path(sd) / "net_labels.txt"
+    lab = (sorted((json.loads(line) for line in nl.read_text().splitlines() if line.strip()), key=lambda x: x["timestamp"])
+           if nl.exists() else [])
+    lt = [x["timestamp"] for x in lab]
+    per: dict = {}
+    for a, b in zip(rows, rows[1:]):
+        dt = b["ts"] - a["ts"]
+        ia, ib = a["in"], b["in"]
+        db = ib["bytes"] - ia["bytes"]
+        if dt <= 0 or db < 0 or ia.get("rate_kbit") != ib.get("rate_kbit") or not ib.get("rate_kbit"):
+            continue                                       # a counter reset or a rate change inside the interval
+        if not (ib["backlog"] or ib["drops"] > ia["drops"]):
+            continue                                       # not shaper-bound (trio_slots' own rule)
+        i = bisect.bisect_right(lt, a["ts"]) - 1
+        if i < 0 or bisect.bisect_right(lt, b["ts"]) - 1 != i:
+            continue                                       # before the first state, or a state change inside
+        s = per.setdefault(str(lab[i]["state"]), [0.0, 0.0, 0])
+        s[0] += db * 8 / 1000.0
+        s[1] += ib["rate_kbit"] * dt
+        s[2] += 1
+    out, oks = {}, []
+    for st, (kbit, want, n) in sorted(per.items(), key=lambda x: int(x[0])):
+        r = round(kbit / want, 3) if want else None
+        if n < MIN_SUPPORT_S:
+            out[st] = {"bound_s": n, "ratio": r, "reading": "not shaper-bound", "ok": None}
+            continue
+        ok = r >= ITEM5_LO
+        out[st] = {"bound_s": n, "ratio": r, "ok": ok,
+                   "reading": "FAIL (starvation while queued)" if not ok else ("above (reported)" if r > ITEM5_HI else "PASS")}
+        oks.append(ok)
+    return {"recorded": True, "per_state": out, "band": [ITEM5_LO, ITEM5_HI], "min_bound_s": MIN_SUPPORT_S,
+            "ok": all(oks) if oks else None}
+
+
+CONTENT_BAND_PREFIXES = ("B/s outside old p10..p90", "speed rule accuracy")   # levi: content bands, not trio signals
+
+
+def items1_2(sd: Path) -> dict:
+    """Items 1 / 2 (module docstring): verify.json and check.json, each PASS (check: class normal or censored), a
+    content-band-only non-PASS (reported, excluded as in single mode) or a gating failure."""
+    out = {}
+    for item, name in (("1", "verify.json"), ("2", "check.json")):
+        p = Path(sd) / name
+        if not p.exists():
+            out[item] = {"recorded": False, "ok": False, "reading": f"{name} missing"}
+            continue
+        v = json.loads(p.read_text())
+        reasons = list(v.get("reasons") or [])
+        passed = v.get("verdict") == "PASS" and (item == "1" or v.get("session_class") in ("normal", "censored"))
+        content = [r for r in reasons if str(r).startswith(CONTENT_BAND_PREFIXES)]
+        if passed:
+            ok, reading = True, "PASS"
+        elif reasons and len(content) == len(reasons):
+            ok, reading = None, "content band only: reported, the session excluded as in single mode"
+        else:
+            ok, reading = False, "gates"
+        out[item] = {"verdict": v.get("verdict"), "session_class": v.get("session_class"), "reasons": reasons,
+                     "content_band_reasons": content, "ok": ok, "reading": reading}
+    return out
 
 
 def session_items(sd: Path, rendition_fps: dict | None = None) -> dict:
@@ -157,21 +243,22 @@ def session_items(sd: Path, rendition_fps: dict | None = None) -> dict:
     except (OSError, ValueError):
         pass
     return {"session": str(sd), "mode": (meta.get("concurrency") or {}).get("mode", "single"),
-            "ticks": len(tk), "item4a": item4a(tk, iv, rendition_fps), "item8": item8(iv, len(spans))}
+            "ticks": len(tk), "items1_2": items1_2(sd), "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
+            "item8": item8(iv, len(spans))}
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("sessions", nargs="+", type=Path)
     ap.add_argument("--rendition-fps", type=Path, default=None,
-                    help="json {session name: {tier: fps}} (LVQoE scripts/audit/rendition_fps.py)")
+                    help="LVQoE scripts/audit/rendition_fps.py --out json (per session: detail per tier with delivered_fps)")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args(argv)
     fps = json.loads(a.rendition_fps.read_text()) if a.rendition_fps else {}
     rows = []
     for sd in a.sessions:
         try:
-            rows.append(session_items(sd, (fps.get(sd.name) or {}).get("tiers") or fps.get(sd.name)))
+            rows.append(session_items(sd, (fps.get(sd.name) or {}).get("detail")))
         except Exception as e:  # noqa: BLE001 -- one session's failure is reported
             rows.append({"session": str(sd), "error": repr(e)[:300]})
         print(json.dumps(rows[-1]), flush=True)
