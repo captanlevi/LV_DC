@@ -119,6 +119,13 @@ def test_item5_byte_total_ratio():
         (Path(d) / "net_labels.txt").write_text(json.dumps({"timestamp": 999.0, "state": "3", "speed": 400.0}) + "\n")
         s = G.item5(Path(d))["per_state"]["3"]
         assert (s["bound_s"], s["ratio"], s["reading"]) == (15.0, 1.0, "PASS"), s
+    with tempfile.TemporaryDirectory() as d:                          # a failed class read: the rate only, skipped
+        _tc(d, 30)
+        rows = (Path(d) / "tc_stats.jsonl").read_text().splitlines()
+        rows[10] = json.dumps({"ts": json.loads(rows[10])["ts"], "in": {"rate_kbit": 400.0}})
+        (Path(d) / "tc_stats.jsonl").write_text("\n".join(rows) + "\n")
+        r = G.item5(Path(d))
+        assert r["samples_partial_skipped"] == 1 and r["per_state"]["3"]["reading"] == "PASS", r
     with tempfile.TemporaryDirectory() as d:
         assert G.item5(Path(d)) == {"recorded": False, "ok": False}
 

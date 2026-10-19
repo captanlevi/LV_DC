@@ -181,7 +181,9 @@ def item5(sd: Path) -> dict:
     p = Path(sd) / "tc_stats.jsonl"
     if not p.exists():
         return {"recorded": False, "ok": False}
-    rows = [r for r in (json.loads(line) for line in p.read_text().splitlines() if line.strip()) if r.get("in")]
+    # a sample whose class read failed holds the rate only (round 1: 15 / 1246 on yt_100004): skipped, counted
+    allrows = [r for r in (json.loads(line) for line in p.read_text().splitlines() if line.strip()) if r.get("in")]
+    rows = [r for r in allrows if all(k in r["in"] for k in ("bytes", "drops", "backlog", "rate_kbit"))]
     nl = Path(sd) / "net_labels.txt"
     lab = (sorted((json.loads(line) for line in nl.read_text().splitlines() if line.strip()), key=lambda x: x["timestamp"])
            if nl.exists() else [])
@@ -213,7 +215,7 @@ def item5(sd: Path) -> dict:
                    "reading": "FAIL (starvation while queued)" if not ok else ("above (reported)" if r > ITEM5_HI else "PASS")}
         oks.append(ok)
     return {"recorded": True, "per_state": out, "band": [ITEM5_LO, ITEM5_HI], "min_bound_s": MIN_SUPPORT_S,
-            "ok": all(oks) if oks else None}
+            "samples": len(allrows), "samples_partial_skipped": len(allrows) - len(rows), "ok": all(oks) if oks else None}
 
 
 LINK_FLAG_MAX_SHARE = 0.05     # item 7: flagged link seconds <= 5 % of the session
