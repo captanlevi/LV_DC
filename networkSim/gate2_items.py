@@ -331,11 +331,8 @@ def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dic
     except (OSError, ValueError):
         pass
     c = meta.get("concurrency") or {}
-    try:
-        import record
-        is_rec = record.is_record(meta)
-    except ImportError:                                # a sha before record.py: never of record
-        is_rec = False
+    import record
+    is_rec = record.is_record(meta)
     return {"session": str(sd), "mode": c.get("mode", "single"),
             # levi: the operator sets the flag; printed so a forgotten flag or a flagged pilot shows in the round summary
             "record": {"flag": c.get("record"), "era": c.get("era"), "is_record": is_rec},
