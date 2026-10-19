@@ -38,7 +38,8 @@ from trio_slots import conntrack_timeouts                # noqa: E402
 DNS_LEAD_S = 120.0
 FIELDS = ["frame.time_epoch", "frame.len", "ip.src", "ip.dst", "ipv6.src", "ipv6.dst", "ip.proto", "tcp.srcport", "tcp.dstport",
           "udp.srcport", "udp.dstport", "quic.dcid", "quic.scid", "tls.handshake.extensions_server_name",
-          "dns.qry.name", "dns.flags.response", "dns.count.answers", "tcp.flags.str", "quic.header_form"]
+          "dns.qry.name", "dns.flags.response", "dns.count.answers", "tcp.flags.str", "quic.header_form", "tcp.len",
+          "udp.length"]
 
 
 def tshark_rows(pcap: Path, tshark: str = "tshark") -> list[dict]:
@@ -51,6 +52,23 @@ def tshark_rows(pcap: Path, tshark: str = "tshark") -> list[dict]:
 
 def _split(v: str | None) -> list[str]:
     return [x for x in (v or "").split(",") if x]
+
+
+def link_local_multicast(k: tuple) -> bool:
+    """A flow to a link-local multicast group (224.0.0.0/24, ff02::/16): e.g. every Chrome's own mDNS on the protocol's
+    fixed 5-tuple (levi's gate-2 call on pilot-1, item 11: reported when packet-disjoint)."""
+    return any(str(ip).startswith("224.0.0.") or str(ip).lower().startswith("ff02:") for ip, _ in k[1:])
+
+
+def _payload(r: dict, k: tuple) -> int | None:
+    """The transport payload length: tcp.len, or udp.length less its 8-byte header."""
+    try:
+        if k[0] == "tcp":
+            return int((_split(r.get("tcp.len")) or [""])[0])
+        u = (_split(r.get("udp.length")) or [""])[0]
+        return int(u) - 8 if u else None
+    except ValueError:
+        return None
 
 
 def flow_key(r: dict) -> tuple | None:
@@ -94,10 +112,10 @@ def summarise(rows: list[dict], keep_udp: bool = False, keep_pkts=None) -> dict:
             f[0], f[1], f[2], f[3] = min(f[0], t), max(f[1], t), f[2] + 1, f[3] + n
             if keep_udp and k[0] == "udp":
                 udp.append((t, k, n))
-            if keep_pkts is True or (keep_pkts and k in keep_pkts):
+            if keep_pkts is True or (keep_pkts and k in keep_pkts) or link_local_multicast(k):
                 src = (_split(r.get("ip.src")) or _split(r.get("ipv6.src")) or [""])[0]
                 pkts.setdefault(k, []).append((t, src, n, (_split(r.get("tcp.flags.str")) or [""])[0],
-                                               (_split(r.get("quic.header_form")) or [""])[0]))
+                                               (_split(r.get("quic.header_form")) or [""])[0], _payload(r, k)))
         for c in _split(r.get("quic.dcid")) + _split(r.get("quic.scid")):
             if len(c.replace(":", "")) >= 8:                      # zero-length / tiny CIDs say nothing about owners
                 s = cids.setdefault(c, [t, t])
@@ -145,7 +163,7 @@ def split_detail(s: dict, default: dict, platform: str) -> dict:
             continue
         cls = collections.Counter()
         gaps = []
-        for t, src, n, fl, qf in dp:
+        for t, src, n, fl, qf, *_ in dp:
             if t < mine[0]:
                 cls["before_first"] += 1
             elif t > mine[-1]:
@@ -161,6 +179,8 @@ def split_detail(s: dict, default: dict, platform: str) -> dict:
         classes[main] += 1
         rows.append({"flow": list(k), "media": k in media, "class": main, "per_class": dict(cls),
                      "default_packets": len(dp), "default_bytes": sum(p[2] for p in dp),
+                     # levi (pilot-0b): only payload-carrying packets in the default class gate; control ones are reported
+                     "payload_packets": sum(1 for p in dp if len(p) > 5 and (p[5] or 0) > 0),
                      "up": sum(p[1] == me for p in dp), "down": sum(p[1] != me for p in dp),
                      "tcp_flags": dict(collections.Counter(p[3] for p in dp if p[3])),
                      "quic_forms": dict(collections.Counter(p[4] for p in dp if p[4])),
@@ -217,7 +237,15 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
             ca, cb = sessions[a]["s"]["cids"], sessions[b]["s"]["cids"]
             shared = [k for k in fa.keys() & fb.keys() if _spans_meet(fa[k], fb[k])]
             shared_cids = sorted(c for c in ca.keys() & cb.keys())
+            uni = [k for k in shared if not link_local_multicast(k)]
+            mc = []
+            for k in shared:
+                if link_local_multicast(k):        # packet-disjoint? no (time, length) in both pcaps
+                    pa = {(round(x[0], 6), x[2]) for x in sessions[a]["s"]["pkts"].get(k, [])}
+                    pb = {(round(x[0], 6), x[2]) for x in sessions[b]["s"]["pkts"].get(k, [])}
+                    mc.append({"flow": list(k), "packets_a": len(pa), "packets_b": len(pb), "packets_in_both": len(pa & pb)})
             pairs.append({"a": a, "b": b, "shared_flows": len(shared), "shared_flow_examples": [list(k) for k in shared[:5]],
+                          "shared_unicast_flows": len(uni), "shared_link_local_multicast": mc,
                           "shared_quic_cids": len(shared_cids), "cid_examples": shared_cids[:5]})
     per = {}
     for n in names:

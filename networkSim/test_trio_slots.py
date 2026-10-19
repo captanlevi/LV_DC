@@ -237,8 +237,10 @@ def test_siblings_and_floor():
         assert fl == {"single_floor_gb": 5.0, "largest_pcap_gb": 3.0, "floor_gb": 14.0}
 
 
-def _pkt(t, src, dst, proto, sport, dport, n=100, dcid="", sni="", qname="", resp="", ans=""):
+def _pkt(t, src, dst, proto, sport, dport, n=100, dcid="", sni="", qname="", resp="", ans="", plen=None):
     r = dict.fromkeys(F.FIELDS, "")
+    if plen is not None:
+        r["tcp.len" if proto == "tcp" else "udp.length"] = str(plen if proto == "tcp" else plen + 8)
     r.update({"frame.time_epoch": str(t), "frame.len": str(n), "ip.src": src, "ip.dst": dst, "quic.dcid": dcid,
               "tls.handshake.extensions_server_name": sni, "dns.qry.name": qname, "dns.flags.response": resp,
               "dns.count.answers": ans})
@@ -280,6 +282,22 @@ def test_flow_overlap():
                                   keep_udp=True))
     hit = rep["sessions"]["youtube/yt_1"]["default_udp_from_media_addresses"]
     assert rep["leak"] and hit["packets"] == 1 and hit["quic_packets"] == 1 and hit["bytes"] == 1200
+    # levi's call on pilot-1, item 11: each Chrome's own mDNS on the fixed 5-tuple is reported when packet-disjoint
+    mdns = lambda tt: _pkt(tt, me, "224.0.0.251", "udp", 5353, 5353, 120, plen=78)
+    s = {"youtube/yt_1": {"platform": "youtube", "window": [95.0, 200.0], "s": F.summarise(yt + [mdns(110.0), mdns(130.0)])},
+         "twitch/tw_1": {"platform": "twitch", "window": [96.0, 200.0], "s": F.summarise(tw + [mdns(115.0), mdns(125.0)])}}
+    pr = F.report(s, None)["pairs"][0]
+    assert (pr["shared_flows"], pr["shared_unicast_flows"]) == (1, 0), pr
+    assert json.loads(json.dumps(pr["shared_link_local_multicast"])) == [{"flow": ["udp", ["10.0.0.2", 5353], ["224.0.0.251", 5353]],
+                                                  "packets_a": 2, "packets_b": 2, "packets_in_both": 0}], pr
+    s["twitch/tw_1"]["s"] = F.summarise(tw + [mdns(115.0), mdns(130.0)])    # one packet in both pcaps
+    assert F.report(s, None)["pairs"][0]["shared_link_local_multicast"][0]["packets_in_both"] == 1
+    # split flows: payload-carrying packets in the default class counted apart from control ones (RST / ACK)
+    split = [_pkt(102.0, me, "172.217.1.1", "tcp", 50002, 443, 54, plen=0),
+             _pkt(102.5, "172.217.1.1", me, "tcp", 443, 50002, 1400, plen=1346)]
+    sy = F.summarise(yt, keep_pkts=True)
+    sd = F.split_detail(sy, F.summarise(split, keep_pkts=True), "youtube")
+    assert sd["flows"] == 1 and sd["rows"][0]["payload_packets"] == 1 and sd["rows"][0]["default_packets"] == 2, sd
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "nf_conntrack_udp_timeout").write_text("30\n")
         (Path(d) / "nf_conntrack_udp_timeout_stream").write_text("120\n")

@@ -154,6 +154,42 @@ def test_fullscreen_report():
         assert G.fullscreen_report(sd, {}) is None
 
 
+def test_concurrency_and_overlap_items():
+    """Items 7 / 9 / teardown from meta.concurrency (pilot-1's tw_100003 shape: slot_down's only failures re-delete what
+    slot_detach removed) and 11-14 from flow_overlap's run json (levi's call: mDNS reported when packet-disjoint)."""
+    det = [{"cmd": "tc filter del dev wlp0s20f3 parent ffff: prio 11", "rc": 0}]
+    nf = "Error: Filter with specified priority/protocol not found."
+    meta = {"concurrency": {"mode": "trio", "tc": {"flagged_share": 0.0},
+                            "capture_drops": {"dropped_kernel_total": 0}, "slot_detach": det, "staging_left": [],
+                            "slot_down": {"failed": [{"cmd": det[0]["cmd"], "err": nf}]}}}
+    r = G.concurrency_items(meta)
+    assert (r["item7"]["ok"], r["item9"]["ok"], r["teardown"]["ok"]) == (True, True, True), r
+    meta["concurrency"]["slot_down"]["failed"].append({"cmd": "ip link del lvi_tw", "err": "busy"})
+    meta["concurrency"]["capture_drops"]["dropped_kernel_total"] = 3
+    r = G.concurrency_items(meta)
+    assert (r["item9"]["ok"], r["teardown"]["ok"]) == (False, False), r
+    assert G.concurrency_items({"concurrency": {"mode": "single"}}) == {} and G.concurrency_items({}) == {}
+    mc = {"flow": ["udp", ["192.168.4.50", 5353], ["224.0.0.251", 5353]], "packets_a": 3, "packets_b": 4, "packets_in_both": 0}
+    fo = {"pairs": [{"a": "tiktok/ti_1", "b": "twitch/tw_1", "shared_flows": 1, "shared_unicast_flows": 0,
+                     "shared_link_local_multicast": [mc], "shared_quic_cids": 0}],
+          "sessions": {"twitch/tw_1": {"sibling_family_snis": {}, "default_media_snis_in_window": [],
+                                       "default_udp_from_media_addresses": {"packets": 0}, "flows_also_in_default": 1,
+                                       "dns_answers_json": {"present": True, "media_unnamed": []}}},
+          "split_detail": {"twitch/tw_1": {"rows": [{"payload_packets": 0}]}}}
+    r = G.overlap_items("twitch/tw_1", fo)
+    assert [r[k]["ok"] for k in ("item11", "item12", "item13", "item14")] == [True, True, True, True], r
+    assert (r["item11"]["link_local_multicast_flows"], r["item11"]["default_split_flows_control_only"]) == (1, 1), r
+    fo["pairs"][0]["shared_link_local_multicast"][0]["packets_in_both"] = 1        # one packet in two pcaps: gates
+    assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is False
+    fo["pairs"][0]["shared_link_local_multicast"][0]["packets_in_both"] = 0
+    fo["split_detail"]["twitch/tw_1"]["rows"].append({"payload_packets": 2})       # a payload-carrying split: gates
+    assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is False
+    del fo["split_detail"]                                                          # no --detail: not read
+    r = G.overlap_items("twitch/tw_1", fo)["item11"]
+    assert r["ok"] is None and "--detail" in r["note"], r
+    assert G.overlap_items("youtube/yt_9", fo) == {} and G.overlap_items("twitch/tw_1", None) == {}
+
+
 def test_cli():
     with tempfile.TemporaryDirectory() as d:
         sd = session(Path(d) / "tw_100001", shots=(30,))
@@ -170,6 +206,7 @@ def main() -> int:
     test_item5_byte_total_ratio()
     test_items1_2_content_bands()
     test_fullscreen_report()
+    test_concurrency_and_overlap_items()
     test_cli()
     print("test_gate2_items: ok")
     return 0

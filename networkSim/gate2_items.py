@@ -17,6 +17,14 @@ Checklist as revised by levi's gate-2 call on pilot-1 (2026-10-19, from round 1)
      slot's ingress class was shaper-bound (backlog, or drops grew: trio_slots' own rule), the byte-total ratio
      sum(class bytes) x 8 / sum(class rate x seconds) in [ITEM5_LO, ITEM5_HI]; below: FAIL (starvation while queued);
      above: reported; fewer than MIN_SUPPORT_S bound seconds: "not shaper-bound". A byte total is invariant to coalescing.
+  7 / 9 / teardown (trio, meta.json concurrency): flagged link seconds <= LINK_FLAG_MAX_SHARE; no kernel capture drop;
+     the slot came down (nothing left in staging; slot_down's only failures are "not found" deletes of filters
+     slot_detach removed with rc 0).
+  11-14 (trio, flow_overlap.py's run json, --flow-overlap; levi's call on pilot-1): 11 no unicast flow or QUIC CID
+     shared with a sibling, link-local multicast (each Chrome's own mDNS) reported when packet-disjoint, no
+     payload-carrying packet of the session's flows in the default class (control-only splits reported; needs
+     flow_overlap --detail, else not read); 12 no sibling platform's host family; 13 no media of the session's platform
+     in the default class during it; 14 every contacted media address named in dns_answers.json.
   8  (reported, never gating) dropped frames per playing second outside +- SHOT_GUARD_S of any shot capture (every shots/index.jsonl row's
      [t_decide, ts], any reason), in both modes (the shot-free rule keeps it comparable when trio shots are CDP captures).
 A playing interval: two consecutive res_meta ticks, both not paused and not ad, the gap <= MAX_GAP_S and the playhead
@@ -206,6 +214,54 @@ def item5(sd: Path) -> dict:
             "ok": all(oks) if oks else None}
 
 
+LINK_FLAG_MAX_SHARE = 0.05     # item 7: flagged link seconds <= 5 % of the session
+
+
+def concurrency_items(meta: dict) -> dict:
+    """Items 7, 9 and the teardown from meta.json concurrency (trio sessions; {} otherwise)."""
+    c = meta.get("concurrency") or {}
+    if c.get("mode") != "trio":
+        return {}
+    tc, cd = c.get("tc") or {}, c.get("capture_drops") or {}
+    fs = tc.get("flagged_share")
+    detached = {x.get("cmd") for x in c.get("slot_detach") or [] if x.get("rc") == 0}
+    bad = [f for f in (c.get("slot_down") or {}).get("failed") or []
+           if not (f.get("cmd") in detached and "not found" in str(f.get("err")))]
+    return {"item7": {"flagged_share": fs, "max": LINK_FLAG_MAX_SHARE, "ok": None if fs is None else fs <= LINK_FLAG_MAX_SHARE},
+            "item9": {"dropped_kernel_total": cd.get("dropped_kernel_total"),
+                      "ok": None if cd.get("dropped_kernel_total") is None else cd["dropped_kernel_total"] == 0},
+            "teardown": {"staging_left": c.get("staging_left"), "slot_down_failures_not_benign": bad,
+                         "ok": not c.get("staging_left") and not bad}}
+
+
+def overlap_items(name: str, fo: dict | None) -> dict:
+    """Items 11-14 for session `name` ("<platform>/<session>") from flow_overlap.py's run json; {} without it."""
+    if not fo or name not in (fo.get("sessions") or {}):
+        return {}
+    pairs = [x for x in fo.get("pairs") or [] if name in (x.get("a"), x.get("b"))]
+    rec = fo["sessions"][name]
+    sd = (fo.get("split_detail") or {}).get(name)
+    unicast = sum(x.get("shared_unicast_flows", x.get("shared_flows", 0)) for x in pairs)
+    cids = sum(x.get("shared_quic_cids", 0) for x in pairs)
+    mc = [m for x in pairs for m in x.get("shared_link_local_multicast") or []]
+    mc_both = sum(m.get("packets_in_both", 0) for m in mc)
+    payload = None if sd is None else sum(1 for r in sd.get("rows") or [] if r.get("payload_packets", 0) > 0)
+    control = None if sd is None else sum(1 for r in sd.get("rows") or [] if not r.get("payload_packets"))
+    fail11 = bool(unicast or cids or mc_both or payload)
+    ok11 = False if fail11 else (None if sd is None and rec.get("flows_also_in_default") else True)
+    item11 = {"shared_unicast_flows": unicast, "shared_quic_cids": cids, "link_local_multicast_flows": len(mc),
+              "multicast_packets_in_both": mc_both, "default_split_flows_payload": payload,
+              "default_split_flows_control_only": control, "ok": ok11,
+              **({"note": "flows also in the default class; run flow_overlap --detail"} if ok11 is None else {})}
+    fam = rec.get("sibling_family_snis") or {}
+    dm, du = rec.get("default_media_snis_in_window") or [], (rec.get("default_udp_from_media_addresses") or {}).get("packets", 0)
+    dj = rec.get("dns_answers_json") or {}
+    return {"item11": item11, "item12": {"sibling_family_snis": fam, "ok": not fam},
+            "item13": {"default_media_snis_in_window": dm, "default_udp_from_media_addresses": du, "ok": not dm and not du},
+            "item14": {"present": dj.get("present"), "media_unnamed": dj.get("media_unnamed"),
+                       "ok": None if not dj else bool(dj.get("present")) and not dj.get("media_unnamed")}}
+
+
 FS_FALLBACK_FLAG_SHARE = 0.2    # levi (t53 (a)): a fullscreen yt session's cadence shots on the CDP fallback above this
 
 
@@ -255,7 +311,7 @@ def items1_2(sd: Path) -> dict:
     return out
 
 
-def session_items(sd: Path, rendition_fps: dict | None = None) -> dict:
+def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dict | None = None) -> dict:
     sd = Path(sd)
     tk, spans = ticks(sd), shot_spans(sd)
     iv = intervals(tk, spans)
@@ -266,7 +322,9 @@ def session_items(sd: Path, rendition_fps: dict | None = None) -> dict:
         pass
     return {"session": str(sd), "mode": (meta.get("concurrency") or {}).get("mode", "single"),
             "ticks": len(tk), "items1_2": items1_2(sd), "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
-            "item8": item8(iv, len(spans)), **({"fullscreen": fs} if (fs := fullscreen_report(sd, meta)) else {})}
+            "item8": item8(iv, len(spans)), **concurrency_items(meta),
+            **overlap_items(f"{sd.parent.name}/{sd.name}", flow_overlap),
+            **({"fullscreen": fs} if (fs := fullscreen_report(sd, meta)) else {})}
 
 
 def main(argv=None) -> int:
@@ -274,13 +332,17 @@ def main(argv=None) -> int:
     ap.add_argument("sessions", nargs="+", type=Path)
     ap.add_argument("--rendition-fps", type=Path, default=None,
                     help="LVQoE scripts/audit/rendition_fps.py --out json (per session: detail per tier with delivered_fps)")
+    ap.add_argument("--flow-overlap", type=Path, action="append", default=[],
+                    help="flow_overlap.py --out json of the run (repeatable: one per run); items 11-14")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args(argv)
     fps = json.loads(a.rendition_fps.read_text()) if a.rendition_fps else {}
+    fos = [json.loads(f.read_text()) for f in a.flow_overlap]
     rows = []
     for sd in a.sessions:
         try:
-            rows.append(session_items(sd, (fps.get(sd.name) or {}).get("detail")))
+            rows.append(session_items(sd, (fps.get(sd.name) or {}).get("detail"),
+                                      next((f for f in fos if f"{sd.parent.name}/{sd.name}" in (f.get("sessions") or {})), None)))
         except Exception as e:  # noqa: BLE001 -- one session's failure is reported
             rows.append({"session": str(sd), "error": repr(e)[:300]})
         print(json.dumps(rows[-1]), flush=True)
