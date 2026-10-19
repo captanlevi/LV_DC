@@ -48,6 +48,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -322,6 +323,11 @@ def run(a) -> dict:
         return rep
     procs: list[subprocess.Popen] = []
     built = False
+    # t56 §9: the box record (CPU, swap, OOM, i915 engine busy per second; the PMU, as this runs as root) for the run
+    import gpu_record
+    box_stop = threading.Event()
+    box = threading.Thread(target=gpu_record.record, args=(out / "box_record.jsonl", 1.0, None, box_stop), daemon=True)
+    box.start()
     try:
         for c in (f"tc qdisc del dev {a.iface} root", f"tc qdisc del dev {a.iface} ingress"):
             sh(c, check=False)                               # no single-mode tree left from the last session
@@ -408,6 +414,12 @@ def run(a) -> dict:
         for c in tree_down_cmds(a.iface):
             sh(c, check=False)
         rep["torn_down"] = True
+        box_stop.set()
+        box.join(timeout=5)
+        try:
+            rep["box_record"] = gpu_record.summary(out / "box_record.jsonl")
+        except Exception as e:
+            rep["box_record"] = {"error": repr(e)[:300]}
         (out / "commands.log").write_text("\n".join(LOG) + "\n")
     return rep
 
