@@ -131,6 +131,30 @@ def test_the_recovery_and_the_abort():
         B._confirm_advancing, B._wait_for_load = saved
 
 
+def test_the_frozen_ad_replay_tw_100022():
+    """levi 00135: in an ad state with a player, no countdown change and no playhead move for > AD_FROZEN_MAX_S is
+    ad_frozen. tw_100022's pre-roll ran from 566 s (countdown 1:14 -> 0:22, with a 26 s pause at 608-634 s that must
+    not fire), then the element paused at 650.6 s and the countdown stopped at 0:21: the trigger fires 60 s after the
+    last progress the replay sees (the countdown's 0:21, read at the 660 s shot; ~651 s in the session)."""
+    fx = json.loads((HERE / "fixtures" / "tw_100022_replay.json").read_text())
+    cds = fx["countdown_from_shots"]
+    w, fired = B.PlayerErrorWatch(), None
+    for t, ad, rs, paused, ct in fx["ticks"]:
+        cd = [v for ts, v in cds if ts <= t]
+        st = {"ad": bool(ad), "video": True, "rs": rs, "ct": ct, "paused": bool(paused), "cd": cd[-1] if cd else None}
+        trig = w.step(None, st, t)
+        if trig is not None:
+            fired = trig
+            break
+    assert fired is not None and fired["reason"] == "ad_frozen", fired
+    assert 650.0 <= fired["since"] <= 661.0 and fired["t_trigger"] - fired["since"] > B.AD_FROZEN_MAX_S, fired
+    assert fired["t_trigger"] < 725.0, fired                  # by ~711-721 s, not at the session's end (1460 s)
+    w = B.PlayerErrorWatch()                                  # a running ad (countdown or playhead moving) never fires
+    for t in range(600):
+        assert w.step(None, {"ad": True, "video": True, "rs": 4, "ct": float(t // 3), "cd": None}, float(t)) is None
+    assert B.PlayerErrorWatch().exposure()["ad_frozen_max_s"] == B.AD_FROZEN_MAX_S == 60.0
+
+
 def test_the_class_and_the_reason():
     stream = [{"kind": "stream", "sustained_60s": True}]
     assert E.session_class("twitch", "FAIL", "player_error", stream, None, None, None, None) == "player_dead"

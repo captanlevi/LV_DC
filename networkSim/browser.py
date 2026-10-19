@@ -2086,7 +2086,8 @@ def _confirm_advancing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
 
 # t56 tw_100016 (levi's ruling, for the N_collect boundary): Twitch's Error #2000 page keeps the "Ad" badge, so every tick
 # read as an ad, the frozen run (non-ad ticks only) stayed 0, and the session waited ~23 min on a destroyed player. Two
-# triggers, yt / twitch (tt's dead-room watcher reads bytes, not the ad label): a player error page (Twitch "Error #<n>" /
+# triggers (a third, ad_frozen, below), yt / twitch (tt's dead-room watcher reads bytes, not the ad label): a player
+# error page (Twitch "Error #<n>" /
 # "Reload Player" in the player, yt's .ytp-error) seen for ERROR_PAGE_CONFIRM_S; an ad state with no live player (no
 # <video>, or readyState 0) for more than AD_NO_PLAYER_MAX_S (levi: treated as player-dead). Either one: the session's one
 # recovery (stuck.action's budget, shared with the frozen / dead re-entries) as a re-entry in player_dead_reentries
@@ -2095,6 +2096,14 @@ def _confirm_advancing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
 # The ad-wait exposure (ad runs, total and longest seconds) and every trigger go to meta.json (player_errors, ad_wait).
 ERROR_PAGE_CONFIRM_S = 5.0
 AD_NO_PLAYER_MAX_S = 60.0
+# t56 tw_100022 (shagun, boundary-era round 1; levi's ruling 00135): a third variant, a frozen ad. The ad label on from
+# 566 s; the pre-roll ran (countdown 1:14 at 567 s, 0:42 at 600 s, a 26 s pause, 0:32 at 640 s, 0:22 at 650 s) until the
+# element paused at 650.6 s (readyState 4, playhead still) and the countdown stopped at 0:21 for the 800 s left. In an
+# ad state with a player, progress is the ad countdown's text changing or the playhead moving more than
+# AD_FROZEN_TOL_S; neither for more than AD_FROZEN_MAX_S is player-dead ("ad_frozen"; the real ad's own pauses in that
+# session lasted 7-27 s).
+AD_FROZEN_MAX_S = 60.0
+AD_FROZEN_TOL_S = 0.05
 PLAYER_ERROR_PLATFORMS = ("youtube", "twitch")
 _PLAYER_ERROR_JS = """
 (function() {
@@ -2128,7 +2137,19 @@ _AD_PLAYER_JS = """
     const vs = [...document.querySelectorAll('video')];
     const v = vs.filter(x => x.getClientRects().length).sort((a, b) => b.clientWidth * b.clientHeight
                                                                    - a.clientWidth * a.clientHeight)[0] || vs[0];
-    return JSON.stringify({ad: document.documentElement.dataset.lvqoeAd === '1', video: !!v, rs: v ? v.readyState : null});
+    // the ad's countdown text (twitch: "... Ad (0:21)"; yt: the ad's remaining-time badge): its changes are progress
+    let cd = null;
+    for (const sel of ['[data-a-target="video-ad-countdown"]', '[data-a-target="video-ad-label"]',
+                       '#movie_player .ytp-ad-duration-remaining', '#movie_player .ytp-ad-preview-text-modern']) {
+        const e = document.querySelector(sel);
+        if (e && (e.innerText || '').trim()) { cd = (e.innerText || '').trim().slice(0, 80); break; }
+    }
+    if (cd === null) {
+        const m = (document.body ? document.body.innerText || '' : '').match(/Ad \\((\\d+:\\d\\d)\\)/);
+        cd = m ? m[1] : null;
+    }
+    return JSON.stringify({ad: document.documentElement.dataset.lvqoeAd === '1', video: !!v, rs: v ? v.readyState : null,
+                           ct: v ? v.currentTime : null, paused: v ? v.paused : null, cd: cd});
 })()
 """
 
@@ -2137,9 +2158,11 @@ class PlayerErrorWatch:
     """The two triggers above, on one poll a second: step(error, ad_player, now) -> a trigger record or None. Also the
     ad-wait exposure: runs of the ad label (start, end), their total and the longest."""
 
-    def __init__(self, confirm_s: float = ERROR_PAGE_CONFIRM_S, no_player_s: float = AD_NO_PLAYER_MAX_S):
-        self.confirm_s, self.no_player_s = confirm_s, no_player_s
+    def __init__(self, confirm_s: float = ERROR_PAGE_CONFIRM_S, no_player_s: float = AD_NO_PLAYER_MAX_S,
+                 frozen_s: float = AD_FROZEN_MAX_S):
+        self.confirm_s, self.no_player_s, self.frozen_s = confirm_s, no_player_s, frozen_s
         self.err_since = self.np_since = self.ad_since = None
+        self.fz_since, self.fz_ct, self.fz_cd = None, None, None   # the frozen-ad run: since, playhead, countdown
         self.ad_runs: list[list[float]] = []
 
     def step(self, err: dict | None, st: dict | None, now: float) -> dict | None:
@@ -2165,16 +2188,27 @@ class PlayerErrorWatch:
                         "player": st}
         else:
             self.np_since = None
+        ct, cd = (st or {}).get("ct"), (st or {}).get("cd")
+        if ad and not no_player and isinstance(ct, (int, float)):     # an unread playhead is no evidence of a freeze
+            moved = (self.fz_since is None or cd != self.fz_cd or self.fz_ct is None
+                     or abs(ct - self.fz_ct) > AD_FROZEN_TOL_S)
+            if moved:                                         # the countdown or the playhead moved: the run starts here
+                self.fz_since, self.fz_ct, self.fz_cd = now, ct, cd
+            elif now - self.fz_since > self.frozen_s:
+                return {"reason": "ad_frozen", "since": self.fz_since, "t_trigger": now, "error": err, "player": st}
+        else:
+            self.fz_since = self.fz_ct = self.fz_cd = None
         return None
 
     def reset(self) -> None:
-        """After a recovery: both triggers start over."""
-        self.err_since = self.np_since = None
+        """After a recovery: every trigger starts over."""
+        self.err_since = self.np_since = self.fz_since = self.fz_ct = self.fz_cd = None
 
     def exposure(self) -> dict:
         d = [b - a for a, b in self.ad_runs]
         return {"ad_runs": len(d), "ad_total_s": round(sum(d), 1), "ad_longest_s": round(max(d), 1) if d else 0.0,
-                "error_page_confirm_s": self.confirm_s, "ad_no_player_max_s": self.no_player_s}
+                "error_page_confirm_s": self.confirm_s, "ad_no_player_max_s": self.no_player_s,
+                "ad_frozen_max_s": self.frozen_s}
 
 
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
