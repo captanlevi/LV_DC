@@ -450,6 +450,10 @@ def run(a) -> dict:
                 fh.write(json.dumps(x) + "\n")
         rep["timeline"] = timeline
         rep["results"] = summarise(samples, timeline, states, a, out)
+        if a.player_load:               # Q am. 16: the player-shaped load, its own phase on the same states
+            ph = player_phase(a, states, out)
+            rep["player_load"] = {"timeline": ph["timeline"], "t0_epoch": ph["t0_epoch"],
+                                  **read_player_phase(ph, a.state_s)}
     except Exception as e:
         rep["error"] = repr(e)[:600]
     finally:
@@ -599,6 +603,101 @@ def single_mode_reference(a, states: dict, out: Path) -> dict:
     finally:
         sh(f"make -s -C {nsim} disable IFACE={a.iface}", check=False)
     return {"tree": "single mode's Makefile enable / slow / disable", "states": rows}
+
+
+PLAYER = Path(__file__).resolve().parent / "player_load.py"
+PLAYER_VENV_PY = Path(__file__).resolve().parent / ".venv-load" / "bin" / "python"   # aioquic (PyPI), diag only
+
+
+def player_proto(k: int) -> str:
+    """Q am. 16 / levi's read: each slot alternates HTTP/3 and TCP by state, h3 on even state indexes."""
+    return "h3" if k % 2 == 0 else "tcp"
+
+
+def player_cmd(a, s: str, k: int, p: dict, log: Path) -> str:
+    return (f"{shlex.quote(str(a.player_python))} {shlex.quote(str(PLAYER))} --platform {platform_of(s)} "
+            f"--rate-kbit {p['rate_kbit']} --proto {player_proto(k)} --seconds {a.state_s - 1} "
+            f"--url {shlex.quote(a.player_url)} --fallback-url {shlex.quote(a.player_fallback_url)} --log {log}")
+
+
+def player_phase(a, states: dict, out: Path) -> dict:
+    """Q am. 16's player-shaped load (peter's spec, levi's read 2026-10-20): its own phase on the bulk run's states and
+    timeline (state k for every slot at once, each state a.state_s), the player alone in each slot's class (a ratio read
+    beside the bulk would be the bulk's); each slot's ingress and the default class captured at snaplen 96 for the
+    5-tuple leak check; per-second class samples as the bulk phase's."""
+    procs, caps, pl = [], {}, {s: [] for s in SESSIONS}
+    for d in [f"lvi_{s}" for s in SESSIONS] + ["lvi_def"]:
+        cap = out / f"player_{d}.pcap"
+        procs.append(start(f"tcpdump -i {d} -s 96 -nn -U -w {cap}", out / f"tcpdump_player_{d}.err"))
+        caps[d] = str(cap)
+    samples, timeline = [], []
+    t0 = time.time()
+    devs = [f"lvi_{s}" for s in SESSIONS] + [a.iface]
+    for k in range(max(len(v) for v in states.values())):
+        for s in SESSIONS:
+            stop(pl[s])
+            pl[s] = []
+            if k < len(states[s]):
+                p = state_params(states[s][k])
+                for c in rate_cmds(a.iface, s, p):
+                    sh(c)
+                log = out / f"player_{s}_{k}.jsonl"
+                pl[s] = [start(in_cgroup(s, player_cmd(a, s, k, p, log)), out / f"player_{s}_{k}.err")]
+                timeline.append({"t": round(time.time() - t0, 2), "k": k, "session": s, "state": states[s][k],
+                                 "proto": player_proto(k), **p, "log": str(log)})
+        t_end = time.time() + a.state_s
+        while time.time() < t_end:
+            samples.append({"t": round(time.time() - t0, 2), "classes": {d: class_stats(d) for d in devs},
+                            "links": {d: link_stats(d) for d in [a.iface, "lvi_def"]}})
+            time.sleep(1.0)
+    for s in SESSIONS:
+        stop(pl[s])
+    stop(procs)
+    time.sleep(1.0)
+    drops = {d: (re.findall(r"(\d+) packets? dropped by kernel", (out / f"tcpdump_player_{d}.err").read_text())
+                 or [None])[-1] for d in caps if (out / f"tcpdump_player_{d}.err").exists()}
+    with open(out / "player_samples.jsonl", "w") as fh:
+        for x in samples:
+            fh.write(json.dumps(x) + "\n")
+    return {"t0_epoch": t0, "samples": samples, "timeline": timeline, "captures": caps, "kernel_drops": drops}
+
+
+def read_player_phase(ph: dict, state_s: float) -> dict:
+    """Q am. 16's gated and reported readings of the player phase (ops/diag/player_reading.py)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("player_reading", Path(__file__).resolve().parent / "player_reading.py")
+    R = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(R)
+    segs_of = {}
+    for e in ph["timeline"]:
+        try:
+            segs_of[(e["session"], e["k"])] = [json.loads(x) for x in Path(e["log"]).read_text().splitlines() if x.strip()]
+        except OSError:
+            segs_of[(e["session"], e["k"])] = []
+    rows = {s: [R.read_state(ph["samples"], s, e["k"], e, segs_of[(s, e["k"])], state_s, ph["t0_epoch"])
+                for e in ph["timeline"] if e["session"] == s] for s in SESSIONS}
+    tuples = {s: set().union(*[R.five_tuples(segs_of[(s, e["k"])]) for e in ph["timeline"] if e["session"] == s] or [set()])
+              for s in SESSIONS}
+    pkts = {}
+    for d, cap in ph["captures"].items():
+        try:
+            pkts[d] = R.parse_tcpdump(sh(f"tcpdump -nn -q -r {cap}", capture=True, check=False))
+        except Exception as e:  # noqa: BLE001
+            pkts[d] = []
+    leak = R.leaks(tuples, pkts)
+    by_proto = {}
+    for s, rs in rows.items():
+        for r in rs:
+            if r["ratio"] is not None and r["gate"] != "insufficient":
+                by_proto.setdefault(r["proto"], []).append(r["ratio"])
+    gated = {"ratio": all(r["gate"] in ("pass", "insufficient") for rs in rows.values() for r in rs),
+             "h3_exercised": all((r["h3"] or {}).get("gate", "pass") == "pass" for rs in rows.values() for r in rs),
+             "no_leak": all(n == 0 for row in leak.values() for n in row.values()),
+             "zero_capture_drops": all(v in (None, "0") for v in ph["kernel_drops"].values())}
+    return {"per_slot": rows, "leaks": leak, "player_tuples": {s: len(t) for s, t in tuples.items()},
+            "capture_kernel_drops": ph["kernel_drops"], "quic_vs_tcp_ratio": {p: R.q(v) for p, v in by_proto.items()},
+            "gated": gated, "pass": all(gated.values()), "notes": R.NOTES,
+            "insufficient_states": [(s, r["state"]) for s, rs in rows.items() for r in rs if r["gate"] == "insufficient"]}
 
 
 def bulk_cmd(url: str, seconds: float) -> str:
@@ -760,6 +859,22 @@ def ping_stats(path: Path) -> list[tuple[float, float | None]]:
     return rows
 
 
+def _reading():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("player_reading", Path(__file__).resolve().parent / "player_reading.py")
+    R = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(R)
+    return R
+
+
+def _qualifying(*a):
+    return _reading().qualifying(*a)
+
+
+def _ratio_gate(*a):
+    return _reading().ratio_gate(*a)
+
+
 def summarise(samples, timeline, states, a, out) -> dict:
     res = {}
     for s in SESSIONS:
@@ -784,7 +899,9 @@ def summarise(samples, timeline, states, a, out) -> dict:
             n = sum(1 for x in samples if t0 <= x["t"] <= t1)
             ser = [(x["t"], ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("bytes"))
                    for x in samples if t0 <= x["t"] <= t1]
+            qs, _thr = _qualifying(samples, f"lvi_{s}", "1:10", t0, t1, p["rate_kbit"], p["delay_ms"])
             rows.append({"state": st, "set": p, "seconds": round(t1 - t0, 1),
+                         "ratio_backlogged": _ratio_gate(qs, p["rate_kbit"]),
                          "per_second_ratio": per_second_ratio(ser, p["rate_kbit"]),
                          "realised_ingress_kbit": round(own * 8 / 1000 / (t1 - t0), 1),
                          "ratio_to_set": round(own * 8 / 1000 / (t1 - t0) / p["rate_kbit"], 3) if p["rate_kbit"] else None,
@@ -835,6 +952,13 @@ def main(argv=None) -> int:
     ap.add_argument("--mark-by", choices=("cgroup", "uid"), default="cgroup",
                     help="uid only in a test container whose kernel lacks nft socket cgroupv2 (users lvdc_<p> made)")
     ap.add_argument("--print-only", action="store_true", help="print the tree / rate / teardown commands and exit")
+    ap.add_argument("--player-load", action="store_true",
+                    help="Q am. 16: the player-shaped load phase (h3 / TCP alternating by state) after the bulk one")
+    ap.add_argument("--player-python", type=Path, default=PLAYER_VENV_PY,
+                    help="the diag venv's Python with aioquic (PyPI): python3 -m venv ops/diag/.venv-load && "
+                         "ops/diag/.venv-load/bin/pip install aioquic")
+    ap.add_argument("--player-url", default="https://speed.cloudflare.com/__down")
+    ap.add_argument("--player-fallback-url", default=BULK_URL, help="TCP only: the HTTP Range fallback")
     a = ap.parse_args(argv)
     a.states = {k: v.split(",") for k, v in a.states.items()}
     global SESSIONS, DEFAULT_STATES
@@ -856,6 +980,12 @@ def main(argv=None) -> int:
                 + tree_down_cmds(a.iface):
             print(c)
         return 0
+    if a.player_load:                # h3 needs aioquic in the player's Python: fail before any phase
+        r = subprocess.run([str(a.player_python), "-c", "import aioquic"], capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"--player-load needs aioquic in {a.player_python} (python3 -m venv ops/diag/.venv-load && "
+                  f"ops/diag/.venv-load/bin/pip install aioquic): {r.stderr.strip()[-200:]}", file=sys.stderr)
+            return 4
     if a.state_s < 60 or a.goodput_s < 60:
         print("note: levi's gate-1 condition is >= 60 s per state and for the goodput run", file=sys.stderr)
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "networkSim"))
