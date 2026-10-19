@@ -25,7 +25,9 @@ The matrix rule (RULE_VERSION, deterministic):
   1. target = the largest deficit to its floor: a class (STALL included), FLOOR_SESSIONS - its sessions; a tt entry
      state, TT_ENTRY_FLOOR - its entries. Ties: class order, then states.
   2. matrix = of the allowed matrices, one with fewer than EXPLORE_MIN accepted sessions first (class targets: every
-     matrix gets a yield before the yields decide); else the highest yield for the target: a tier class, its mean
+     matrix gets a yield before the yields decide; among several, EXPLORE_RULE: the fewest record attempts, ties by a
+     seeded draw, a matrix failing EXPLORE_REPEAT_CAP times in a row passed over; coverage.explore records the pick);
+     else the highest yield for the target: a tier class, its mean
      minutes per session; STALL, its mean onsets per session; an entry state, the matrix's stationary probability of
      it. Ties by matrix id (the first in sort order).
   3. no deficit: rotation over the allowed matrices, the least-collected first, ties to the lowest id
@@ -75,6 +77,14 @@ CLASSES = {"youtube": ["STALL", "Q_144p", "Q_240p", "Q_360p", "Q_480p", "Q_720p"
 DEFAULT_MATRIX = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}   # the no-deficit pick before Q am. 15 (2) (record)
 ENTRY_EXCLUDED_CLASSES = ("not_live", "login_wall", "interrupted")   # amendment 3: the entry did not happen as designed
 EXPLORE_MIN = 2
+# the explore pick among young matrices (t53 2026-10-19, levi + supervisor, for the N = 4 count; at c1f9181 it took the
+# sort-first young matrix, so twitch's TW-L was explored on every session while its failed sessions never counted):
+# the fewest record attempts (any outcome, running included), ties by a seeded draw (seed EXPLORE_SEED + the
+# platform's record attempts, recorded); a matrix whose last EXPLORE_REPEAT_CAP finished record sessions on the platform
+# were all its own and none accepted is passed over while another matrix is eligible (recorded)
+EXPLORE_RULE = "t53 2026-10-19: fewest record attempts, seeded tie draw, repeat cap"
+EXPLORE_SEED = 0
+EXPLORE_REPEAT_CAP = 2
 FLAG_AFTER_SESSIONS = 5                         # supervisor 2026-10-18: a class with zero support after 5 sessions: FLAG
 # Q am. 15 (3), revised 9dfbb62 (levi): the tier class -> state band rule and its inputs
 STEERING_RULE = "Q am. 15 (2026-10-19; (3) revised at LVQoE 9dfbb62)"   # the matrix pick's rule; the floors stay RULE_VERSION
@@ -216,6 +226,47 @@ def accepted_sessions(data_dir: Path, platform: str, select=None) -> list[Path]:
     return sorted(out)
 
 
+def attempts(data_dir: Path, platform: str, select=None) -> dict:
+    """Every session of `platform` (accepted, _failed or running; select(meta) keeps the sessions of record): per matrix
+    the attempts, their total, and the last EXPLORE_REPEAT_CAP finished ones (check.json written or set aside in
+    _failed) in start order as [matrix, accepted]."""
+    root = Path(data_dir)
+    acc = set(accepted_sessions(root, platform, select))
+    rows = []
+    for d in list((root / platform).glob("*")) + list((root / "_failed" / platform).glob("*")):
+        meta = _load(d / "meta.json")
+        if not meta or (select is not None and not select(meta)):
+            continue
+        done = (d / "check.json").exists() or d.parent.parent.name == "_failed"
+        rows.append((float(meta.get("started_at") or 0.0), d.name, (meta.get("shaper") or {}).get("matrix_id") or "unknown",
+                     d in acc, done))
+    rows.sort()
+    per = collections.Counter(m for _, _, m, _, _ in rows)
+    recent = [[m, a] for _, _, m, a, done in rows if done][-EXPLORE_REPEAT_CAP:]
+    return {"per_matrix": dict(sorted(per.items())), "total": len(rows), "recent": recent}
+
+
+def explore_pick(young: list[str], snap: dict, others: bool) -> dict:
+    """EXPLORE_RULE among the young matrices: the record of the pick; its matrix is None when every young matrix is
+    capped and `others` (a matrix with yields) can take the pick."""
+    att = snap.get("attempts") or {"per_matrix": {}, "total": 0, "recent": []}
+    rec = att["recent"]
+    capped = sorted({rec[0][0]} if len(rec) >= EXPLORE_REPEAT_CAP and len({m for m, _ in rec}) == 1
+                    and not any(a for _, a in rec) else set())
+    cand = [m for m in young if m not in capped]
+    out = {"rule": EXPLORE_RULE, "young": young, "attempts": {m: att["per_matrix"].get(m, 0) for m in young},
+           "capped": capped, "recent": rec}
+    if not cand:
+        if others:
+            return {**out, "matrix": None, "why": "every young matrix capped: the yields decide"}
+        cand, out["cap_overridden"] = list(young), True
+    low = min(out["attempts"][m] for m in cand)
+    tied = sorted(m for m in cand if out["attempts"][m] == low)
+    seed = EXPLORE_SEED + int(att["total"])
+    drawn = random.Random(seed).choice(tied) if len(tied) > 1 else tied[0]
+    return {**out, "tied": tied, "seed": seed, "matrix": drawn}
+
+
 def entry_states(meta: dict) -> list[str]:
     out = []
     for e in meta.get("entries") or []:
@@ -304,6 +355,7 @@ def snapshot(data_dir: Path, platform: str, select=None) -> dict:
                                            for c in sorted(v["tg_n"])},
                               "stall_share": round(v["stall"] / v["lab"], 4) if v["lab"] else None}
                           for k, v in sorted(pm.items())}}
+    out["attempts"] = attempts(data_dir, platform, select)
     if platform == "tiktok":
         es = entry_sessions(data_dir, platform, select)
         for sd, chk in es:
@@ -409,8 +461,12 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
         n_key = "sessions" if tgt["kind"] != "class" or tgt["key"] == "STALL" else "tier_sessions"
         young = [m for m in ids if (pm.get(m) or {}).get(n_key, 0) < EXPLORE_MIN]
         if young:
-            return {**rec, "matrix": young[0], "target": tgt, "yields": {},
-                    "why": f"explore: fewer than {EXPLORE_MIN} accepted sessions on {young}"}
+            ex = explore_pick(young, snap, others=len(young) < len(ids))
+            rec["explore"] = ex
+            if ex["matrix"] is not None:
+                return {**rec, "matrix": ex["matrix"], "target": tgt, "yields": {},
+                        "why": f"explore: fewer than {EXPLORE_MIN} accepted sessions on {young}"}
+            ids = [m for m in ids if m not in young]          # every young matrix capped: the others' yields decide
         if tgt["key"] == "STALL":
             yields = {m: pm[m].get("stall_onsets_mean") or 0.0 for m in ids}
             why = "mean stall onsets per session"

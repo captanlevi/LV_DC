@@ -214,9 +214,13 @@ def main():
         assert "Q_1080p" in rt["unreachable_targets"] and rt["geometry_forced"] is None, rt
         assert rt["geometry_excluded"] == {"modes": ["fullscreen"], "unreachable_by_geometry": ["Q_1080p"]}, rt
         assert (rt["target"] or {}).get("key") != "Q_1080p"
-        # am. 15 (6): with yt-H defined it qualifies too and, without sessions, is explored first
+        # am. 15 (6): with yt-H defined it qualifies too; without sessions on either, the explore draws between them
+        # (t53 2026-10-19: no attempts on either, a draw seeded by the platform's record attempts, 5, recorded)
         r = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"])
-        assert r["bands"]["Q_1080p"]["qualifies"] == ["H", "current"] and r["matrix"] == "H", r
+        import random
+        assert r["bands"]["Q_1080p"]["qualifies"] == ["H", "current"], r
+        assert (r["explore"]["tied"], r["explore"]["seed"]) == (["H", "current"], 5), r["explore"]
+        assert r["matrix"] == random.Random(5).choice(["H", "current"]) == r["explore"]["matrix"], r
         assert r["why"].startswith("explore") and r["geometry_forced"] == "fullscreen:1920x1080", r
         for i in range(2):
             session(d, "youtube", f"b{i}", [("Q_1080p", 60)] + allc[:-1], matrix="B")

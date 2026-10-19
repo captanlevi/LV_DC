@@ -79,9 +79,21 @@ def aggregate_dists(dists: list[dict[str, float]]) -> dict[str, float]:
     return {k: sum(d.get(k, 0.0) for d in dists) / len(dists) for k in keys}
 
 
-def load_platform_data(platform: str, data_dir: Path) -> tuple[dict[str, float], int]:
+def _selected(run: Path, select) -> bool:
+    """select(meta) on the run's meta.json (None: every run; an unreadable meta.json: not selected)."""
+    if select is None:
+        return True
+    try:
+        return bool(select(json.loads((run.parent / "meta.json").read_text())))
+    except (OSError, ValueError):
+        return False
+
+
+def load_platform_data(platform: str, data_dir: Path, select=None) -> tuple[dict[str, float], int]:
+    """select(meta) -> bool: only the runs it keeps (the trio: its sessions of record, levi 00265 / t53 2026-10-19)."""
     platform_dir = data_dir / platform
     runs = sorted(platform_dir.glob("*/net_labels.txt")) if platform_dir.exists() else []
+    runs = [f for f in runs if _selected(f, select)]
     dists = []
     for f in runs:
         if f.stat().st_size > 0:
@@ -104,7 +116,7 @@ def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix:
     targets = balance_target(platform, matrix_id)
 
     stationary = stationary_distribution(transitions)
-    actual, run_count = load_platform_data(platform, data_dir)
+    actual, run_count = load_platform_data(platform, data_dir, select)
 
     print(f"\n{'='*64}")
     print(f"  {platform.upper()}  ({run_count} collected runs)")
@@ -161,7 +173,7 @@ def balance_target(platform: str, matrix_id: str | None = None) -> dict[str, flo
 
 
 def most_needed_state(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None,
-                      matrix_id: str | None = None) -> str | None:
+                      matrix_id: str | None = None, select=None) -> str | None:
     """Return the state with the largest gap below its target share (balance_target), or None if balanced.
     A stationary-start matrix returns None (no forced start): exp.py draws the start from the stationary
     distribution, which is the target itself. yt_matrix is the older name of matrix_id (yt only)."""
@@ -173,7 +185,7 @@ def most_needed_state(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matr
     states = sorted(transitions.keys(), key=int)
     target = balance_target(platform, matrix_id)
 
-    actual, run_count = load_platform_data(platform, data_dir)
+    actual, run_count = load_platform_data(platform, data_dir, select)
     if not actual:
         return random.choice(states[len(states) // 2:])
 

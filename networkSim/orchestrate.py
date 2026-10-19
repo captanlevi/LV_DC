@@ -628,7 +628,9 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         geom = forced
     # Q am. 15 (5), as single mode (run_batch): a tier-class target starts in its band (the merge had kept the balance rule)
     fi = (LAST_COVERAGE.get(tag) or {}).get("initial_state_forced") if MATRIX_RULE == "coverage" else None
-    init = fi["state"] if fi else most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid)
+    # t53 2026-10-19 (levi; supervisor): the balance start state counts the trio's sessions of record too (00265), as the
+    # pick and the coverage rule do; at c1f9181 it read the single root (disclosed in the FROZEN log)
+    init = fi["state"] if fi else most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record)
     pin = TRIO_PINS.get(tag) or TRIO_PINS.get(p)        # a tag's own pin, else its platform's
     if pin:                             # a recorded round pin (levi 00261), never silent
         if pin.get("category"):
