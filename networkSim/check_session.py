@@ -201,11 +201,11 @@ def frozen_runs(rows: list[dict]) -> list[tuple[float, float]]:
 STALL_LOOP_PLAY_MAX_S = 10.0     # levi (t53, tw_100007): a play shorter than this between two stalls keeps a loop going
 
 
-def stall_loop_s(rows: list[dict]) -> dict:
-    """levi's covariate (tw_100007's reset-and-play loop): seconds inside stall / play alternations whose plays are all
-    < STALL_LOOP_PLAY_MAX_S. On the label timeline (stall ... start / video_start ... stall, end), a loop is a maximal
-    run of >= 2 stalls separated only by such short plays; its span runs from its first stall's start to its last
-    stall's end. {stall_loop_s, stall_loops}."""
+def stall_loop_spans(rows: list[dict]) -> list[tuple[float, float]]:
+    """levi's stall loops (tw_100007's reset-and-play loop), one (t0, t1) in epoch seconds per loop: on the label
+    timeline (stall ... start / video_start ... stall, end), a loop is a maximal run of >= 2 stalls separated only by
+    plays < STALL_LOOP_PLAY_MAX_S; its span runs from its first stall's start to its last stall's end. The one
+    definition: stall_loop_s sums it, brad's twitch loop-timing reader imports it (levi 2026-10-20)."""
     ev = []
     for r in rows:
         ty, t = r.get("type"), _f(r.get("ts"))
@@ -217,7 +217,7 @@ def stall_loop_s(rows: list[dict]) -> dict:
             if cur is not None:
                 segs.append((cur[0], cur[1], t))
             cur = (k, t)
-    total, loops, i = 0.0, 0, 0
+    spans, i = [], 0
     stalls = [n for n, s in enumerate(segs) if s[0] == "S"]
     while i < len(stalls):
         j = i
@@ -225,10 +225,18 @@ def stall_loop_s(rows: list[dict]) -> dict:
                                            for m in range(stalls[j] + 1, stalls[j + 1])):
             j += 1
         if j > i:
-            total += segs[stalls[j]][2] - segs[stalls[i]][1]
-            loops += 1
+            spans.append((segs[stalls[i]][1], segs[stalls[j]][2]))
         i = j + 1
-    return {"stall_loop_s": round(total, 1), "stall_loops": loops}
+    return spans
+
+
+def stall_loop_s(rows: list[dict]) -> dict:
+    """levi's covariate: the seconds inside stall_loop_spans and their count. {stall_loop_s, stall_loops}."""
+    spans = stall_loop_spans(rows)
+    total = 0.0
+    for t0, t1 in spans:
+        total += t1 - t0
+    return {"stall_loop_s": round(total, 1), "stall_loops": len(spans)}
 
 
 def frozen_playhead_run(rows: list[dict]) -> float:

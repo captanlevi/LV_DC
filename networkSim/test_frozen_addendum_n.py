@@ -42,6 +42,12 @@ def test_stall_loop_definition():
           (200, "stall"), (205, "start"), (300, "end")]
     rows = [{"type": ty, "ts": str(t * 1000)} for t, ty in ev]
     assert CS.stall_loop_s(rows) == {"stall_loop_s": 18.0, "stall_loops": 1}
+    # levi 2026-10-20: the spans themselves, epoch seconds, one per loop (brad's loop-timing reader imports them)
+    assert CS.stall_loop_spans(rows) == [(100.0, 118.0)]
+    two = ev[:-1] + [(206, "stall"), (209, "start"), (210, "stall"), (230, "start"), (300, "end")]
+    rows2 = [{"type": ty, "ts": str(t * 1000)} for t, ty in two]
+    assert CS.stall_loop_spans(rows2) == [(100.0, 118.0), (200.0, 230.0)]
+    assert CS.stall_loop_s(rows2) == {"stall_loop_s": 48.0, "stall_loops": 2}
 
 
 if __name__ == "__main__":
