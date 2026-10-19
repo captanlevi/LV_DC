@@ -110,6 +110,15 @@ def test_item5_byte_total_ratio():
                 continue
             s = r["per_state"]["3"]
             assert (s["reading"], s["ok"]) == want and s["ratio"] == round(ratio, 3), (ratio, r)
+    with tempfile.TemporaryDirectory() as d:                          # 0.5 s samples: 30 intervals are 15 s, read
+        rows, b = [], 0
+        for i in range(31):
+            rows.append({"ts": 1000.0 + i * 0.5, "in": {"rate_kbit": 400.0, "bytes": b, "drops": 0, "backlog": 1500}})
+            b += int(400.0 * 1000 / 8 * 0.5)
+        (Path(d) / "tc_stats.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (Path(d) / "net_labels.txt").write_text(json.dumps({"timestamp": 999.0, "state": "3", "speed": 400.0}) + "\n")
+        s = G.item5(Path(d))["per_state"]["3"]
+        assert (s["bound_s"], s["ratio"], s["reading"]) == (15.0, 1.0, "PASS"), s
     with tempfile.TemporaryDirectory() as d:
         assert G.item5(Path(d)) == {"recorded": False, "ok": None}
 

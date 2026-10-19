@@ -188,18 +188,18 @@ def item5(sd: Path) -> dict:
         i = bisect.bisect_right(lt, a["ts"]) - 1
         if i < 0 or bisect.bisect_right(lt, b["ts"]) - 1 != i:
             continue                                       # before the first state, or a state change inside
-        s = per.setdefault(str(lab[i]["state"]), [0.0, 0.0, 0])
+        s = per.setdefault(str(lab[i]["state"]), [0.0, 0.0, 0.0])
         s[0] += db * 8 / 1000.0
         s[1] += ib["rate_kbit"] * dt
-        s[2] += 1
+        s[2] += dt                                         # levi: bound seconds, whatever the sampling period
     out, oks = {}, []
     for st, (kbit, want, n) in sorted(per.items(), key=lambda x: int(x[0])):
         r = round(kbit / want, 3) if want else None
         if n < MIN_SUPPORT_S:
-            out[st] = {"bound_s": n, "ratio": r, "reading": "not shaper-bound", "ok": None}
+            out[st] = {"bound_s": round(n, 1), "ratio": r, "reading": "not shaper-bound", "ok": None}
             continue
         ok = r >= ITEM5_LO
-        out[st] = {"bound_s": n, "ratio": r, "ok": ok,
+        out[st] = {"bound_s": round(n, 1), "ratio": r, "ok": ok,
                    "reading": "FAIL (starvation while queued)" if not ok else ("above (reported)" if r > ITEM5_HI else "PASS")}
         oks.append(ok)
     return {"recorded": True, "per_state": out, "band": [ITEM5_LO, ITEM5_HI], "min_bound_s": MIN_SUPPORT_S,
