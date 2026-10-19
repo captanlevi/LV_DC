@@ -3,8 +3,9 @@
 changes). A collector-correctness tool: its fidelity read is an internal sanity figure, not a paper item.
 
 Run inside a slot's cgroup (trio_dry_run's in_cgroup), so its packets carry the slot's mark like Chrome's, it fetches
-segments from a public CDN size endpoint (default https://speed.cloudflare.com/__down?bytes=N: any size, h2 / h3, a WAN
-RTT like the real CDNs'; a box-local server would never cross the shaped interface) as a live-edge player:
+segments from a public CDN size endpoint (default https://h3.speed.cloudflare.com/__down?bytes=N: any size, h2 / h3, a
+WAN RTT like the real CDNs'; a box-local server would never cross the shaped interface; speed.cloudflare.com itself
+serves no HTTP/3: its QUIC handshake ends in TLS alert 40, the 5ba0b94 dry run's 0 h3 segments) as a live-edge player:
 
   segment k becomes available at t0 + (k - J) x D, J = ceil(B / D) (the join: the player starts B behind the live edge
   and catches up back to back, as a real player does at join and after a stall); the player fetches the next segment
@@ -31,7 +32,35 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-DEFAULT_URL = "https://speed.cloudflare.com/__down"
+DEFAULT_URL = "https://h3.speed.cloudflare.com/__down"
+# a QUIC CONNECTION_CLOSE in the crypto range (0x100 + the TLS alert): the alert's name, for the per-attempt cause
+TLS_ALERTS = {10: "unexpected_message", 40: "handshake_failure", 42: "bad_certificate", 45: "certificate_expired",
+              46: "certificate_unknown", 48: "unknown_ca", 50: "decode_error", 51: "decrypt_error",
+              70: "protocol_version", 80: "internal_error", 109: "missing_extension", 112: "unrecognized_name",
+              120: "no_application_protocol"}
+
+
+class H3Error(Exception):
+    """A failed h3 attempt with its cause (handshake close code / TLS alert, timeout, stream reset)."""
+
+
+def close_cause(code: int | None, reason: str | None = None, frame_type: int | None = None) -> str:
+    if code is None:
+        return "no CONNECTION_CLOSE seen"
+    out = f"quic close 0x{code:x}"
+    if 0x100 <= code <= 0x1ff:
+        a = code - 0x100
+        out += f" (TLS alert {a} {TLS_ALERTS.get(a, 'unknown')})"
+    if frame_type:
+        out += f" frame 0x{frame_type:x}"
+    return out + (f" reason {reason!r}" if reason else "")
+
+
+def norm_addr(ip: str, port) -> str:
+    """ip:port with an IPv4-mapped IPv6 address as plain IPv4 (aioquic's dual-stack socket reports ::ffff:a.b.c.d,
+    tcpdump prints a.b.c.d: the leak check matches on the plain form)."""
+    ip = str(ip)
+    return f"{ip[7:] if ip.lower().startswith('::ffff:') else ip}:{port}"
 FALLBACK_URL = "http://mirror.aarnet.edu.au/pub/ubuntu/releases/24.04/ubuntu-24.04.5-live-server-amd64.iso"
 RUNG_SHARE = 0.8
 # spec §2 (levi's read): segment cadence D and buffer target B per platform; tt reconnects every TT_RECONNECT_S
@@ -134,7 +163,7 @@ class Player:
 def _tuple(sock, transport: str) -> dict | None:
     try:
         lo, re_ = sock.getsockname(), sock.getpeername()
-        return {"transport": transport, "local": f"{lo[0]}:{lo[1]}", "remote": f"{re_[0]}:{re_[1]}"}
+        return {"transport": transport, "local": norm_addr(lo[0], lo[1]), "remote": norm_addr(re_[0], re_[1])}
     except Exception:  # noqa: BLE001
         return None
 
@@ -199,14 +228,18 @@ def h3_fetcher(url: str):
     from aioquic.h3.connection import H3_ALPN, H3Connection
     from aioquic.h3.events import DataReceived, HeadersReceived
     from aioquic.quic.configuration import QuicConfiguration
+    from aioquic.quic.events import ConnectionTerminated, StreamReset
 
     u = urlsplit(url)
+    st: dict = {"cm": None, "client": None, "proto": None}
 
     class H3Client(QuicConnectionProtocol):
         def __init__(self, *a, **k):
             super().__init__(*a, **k)
             self.http = H3Connection(self._quic)
             self.waiters: dict = {}
+            self.closed = None
+            st["proto"] = self                   # the handshake's protocol, for its close cause if connect fails
 
         async def get(self, path: str) -> int:
             sid = self._quic.get_next_available_stream_id()
@@ -216,9 +249,24 @@ def h3_fetcher(url: str):
             fut = self._loop.create_future()
             self.waiters[sid] = [fut, 0]
             self.transmit()
-            return await asyncio.wait_for(fut, timeout=30)
+            try:
+                return await asyncio.wait_for(fut, timeout=30)
+            except asyncio.TimeoutError:
+                got = (self.waiters.pop(sid, None) or [None, 0])[1]
+                raise H3Error(f"timeout: stream {sid} not ended in 30 s ({got} bytes; "
+                              f"{close_cause(*self.closed) if self.closed else 'connection open'})") from None
 
         def quic_event_received(self, event):
+            if isinstance(event, ConnectionTerminated):
+                self.closed = (event.error_code, event.reason_phrase, event.frame_type)
+                for w in self.waiters.values():
+                    if not w[0].done():
+                        w[0].set_exception(H3Error("connection closed: " + close_cause(*self.closed)))
+                self.waiters.clear()
+            if isinstance(event, StreamReset):
+                w = self.waiters.pop(event.stream_id, None)
+                if w is not None and not w[0].done():
+                    w[0].set_exception(H3Error(f"stream {event.stream_id} reset, code 0x{event.error_code:x}"))
             for ev in self.http.handle_event(event):
                 w = self.waiters.get(getattr(ev, "stream_id", None))
                 if w is None:
@@ -230,12 +278,18 @@ def h3_fetcher(url: str):
                     self.waiters.pop(ev.stream_id, None)
 
     loop = asyncio.new_event_loop()
-    st: dict = {"cm": None, "client": None}
 
     def open_():
         cfg = QuicConfiguration(is_client=True, alpn_protocols=H3_ALPN)
-        st["cm"] = connect(u.hostname, u.port or 443, configuration=cfg, create_protocol=H3Client)
-        st["client"] = loop.run_until_complete(st["cm"].__aenter__())
+        st["cm"], st["proto"] = connect(u.hostname, u.port or 443, configuration=cfg, create_protocol=H3Client), None
+        try:
+            st["client"] = loop.run_until_complete(asyncio.wait_for(st["cm"].__aenter__(), timeout=15))
+        except Exception as e:  # noqa: BLE001 -- the cause: the server's CONNECTION_CLOSE, else what connect raised
+            st["cm"] = st["client"] = None
+            pr = st["proto"]
+            why = (close_cause(*pr.closed) if pr is not None and pr.closed else
+                   "timeout: no handshake in 15 s" if isinstance(e, asyncio.TimeoutError) else repr(e)[:120])
+            raise H3Error(f"handshake to {u.hostname}: {why}") from None
 
     def close_():
         if st["cm"] is not None:
@@ -259,7 +313,8 @@ def h3_fetcher(url: str):
         try:
             lo = c._transport.get_extra_info("sockname")
             peer = q._network_paths[0].addr if q._network_paths else None
-            tup = {"transport": "udp", "local": f"{lo[0]}:{lo[1]}", "remote": f"{peer[0]}:{peer[1]}" if peer else None}
+            tup = {"transport": "udp", "local": norm_addr(lo[0], lo[1]),
+                   "remote": norm_addr(peer[0], peer[1]) if peer else None}
         except Exception:  # noqa: BLE001
             pass
         return got, {"proto": "h3", "alpn": getattr(q.tls, "alpn_negotiated", None), "five_tuple": tup, "fallback": False}
@@ -279,7 +334,21 @@ def main(argv=None) -> int:
     ap.add_argument("--fallback-url", default=FALLBACK_URL, help="TCP only: the HTTP Range fallback ('' for none)")
     ap.add_argument("--seconds", type=float, required=True)
     ap.add_argument("--log", default=None, help="per-segment JSON lines (default stdout)")
+    ap.add_argument("--probe", action="store_true",
+                    help="one 10 kB fetch with --proto, its outcome as one JSON line (exit 0 ok, 5 failed): the dry "
+                         "run's preflight, so an unreachable h3 endpoint fails before any phase, with its cause")
     a = ap.parse_args(argv)
+    if a.probe:
+        fetch, _, shutdown = h3_fetcher(a.url) if a.proto == "h3" else tcp_fetcher(a.url, None)
+        try:
+            got, info = fetch(10_000)
+            out = {"ok": got == 10_000, "bytes": got, **info}
+        except Exception as e:  # noqa: BLE001
+            out = {"ok": False, "error": repr(e)[:300]}
+        finally:
+            shutdown()
+        print(json.dumps({"probe": a.proto, "url": a.url, **out}))
+        return 0 if out["ok"] else 5
     fh = open(a.log, "a") if a.log else sys.stdout
 
     def log(rec):
