@@ -612,9 +612,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--slot",
-        choices=["yt", "tw", "tt"],
         default=None,
-        help="t53 trio only (orchestrate.py --concurrent sets it): run in this platform's trio slot (trio_slots.py: its "
+        help="t53 trio only (orchestrate.py --concurrent sets it): run in this slot, a tag of LVDC_TRIO_SLOTS' composition (trio_slots.py: its "
              "cgroup, mark, IFBs, egress class, CDP port, staged capture); meta.json concurrency. Requires --auto.",
     )
     parser.add_argument(
@@ -635,9 +634,10 @@ if __name__ == "__main__":
     platform = args.platform
     if args.slot:
         import trio_slots
+        err = trio_slots.slot_arg_error(args.slot, platform, args.auto)   # t56: a tag of LVDC_TRIO_SLOTS' composition
+        if err:
+            parser.error(err)
         SLOT = trio_slots.slot_of(args.slot)
-        if SLOT.platform != platform or not args.auto:
-            parser.error(f"--slot {args.slot} is the {SLOT.platform} slot and needs --auto")
         import browser as _browser_mod          # every CDP call of browser.py and session_meta goes to the slot's port
         _browser_mod.CDP_BASE = session_meta.CDP_BASE = f"http://localhost:{SLOT.cdp_port}"
         LAYOUT = trio_slots.layout_of(SLOT, os.environ)  # design §4: the "fb" layout puts each slot at its own origin

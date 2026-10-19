@@ -138,6 +138,16 @@ def build_slots(composition: dict[str, int]) -> dict[str, "Slot"]:
     return out
 
 
+def slot_arg_error(tag: str, platform: str, auto: bool) -> str | None:
+    """exp.py --slot (t56: shagun's N = 4 gate, 1941f80: the parser still offered the trio's tags, so every slot exited
+    rc 2): a tag of the run's composition (LVDC_TRIO_SLOTS), on its own platform, with --auto; else the error text."""
+    if tag not in SLOTS:
+        return f"--slot {tag!r}: not a slot of the composition ({', '.join(SLOTS)})"
+    if SLOTS[tag].platform != platform or not auto:
+        return f"--slot {tag} is the {SLOTS[tag].platform} slot and needs --auto"
+    return None
+
+
 def composition_of(slots: dict) -> dict[str, int]:
     out: dict[str, int] = {}
     for s in slots.values():

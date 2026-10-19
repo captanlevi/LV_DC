@@ -191,3 +191,24 @@ def test_yt_sibling_exclusion_and_long_not_live():
             assert "unavailable_not_live_6h" not in rec and ch["handle"] == a, (ch, rec)
         finally:
             O._RUNS_DIR = saved
+
+
+def test_exp_accepts_the_composition_tags():
+    """shagun's N = 4 gate at 1941f80: exp.py's --slot still offered the trio's tags only (choices yt / tw / tt), so
+    every slot's exp.py exited rc 2 and decode_stress ran no session. Now: no fixed choices; trio_slots.slot_arg_error
+    takes any tag of the composition on its own platform with --auto."""
+    src = (HERE / "exp.py").read_text()
+    i = src.index('"--slot",')
+    assert "choices" not in src[i:src.index(")", i)] and "slot_arg_error(args.slot, platform, args.auto)" in src
+    saved = dict(T.SLOTS)
+    try:
+        T.SLOTS.clear()
+        T.SLOTS.update(T.build_slots({"youtube": 2, "twitch": 1, "tiktok": 1}))
+        assert T.slot_arg_error("yt2", "youtube", True) is None and T.slot_arg_error("tt1", "tiktok", True) is None
+        assert "not a slot of the composition" in T.slot_arg_error("yt3", "youtube", True)
+        assert "not a slot of the composition" in T.slot_arg_error("yt", "youtube", True)     # the trio's old tag
+        assert "is the youtube slot" in T.slot_arg_error("yt1", "twitch", True)
+        assert "needs --auto" in T.slot_arg_error("tw1", "twitch", False)
+    finally:
+        T.SLOTS.clear()
+        T.SLOTS.update(saved)
