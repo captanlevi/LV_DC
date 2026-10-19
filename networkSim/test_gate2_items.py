@@ -62,6 +62,8 @@ def test_item4a_visibility_and_fps():
                                    "first_not_visible_t": None, "ok": True}, a
         f = a["rendered_fps"]["Q_720p"]
         assert (f["fps_shot_free"], f["rendition_fps"], f["ok"], a["ok"]) == (30.0, 30, True, True), a
+        assert (f["fps_per_media_s_shot_free"], f["playback_rate_shot_free"], f["dropped_share_shot_free"]) == \
+            (30.0, 1.0, round(1 / 30, 3)), f
     with tempfile.TemporaryDirectory() as d:                          # one hidden tick fails 4a
         a = G.session_items(session(d, vis={7: "hidden"}), {"Q_720p": 30})["item4a"]
         assert a["visibility"]["not_visible"] == 1 and a["visibility"]["first_not_visible_t"] == 1007.0 and a["ok"] is False

@@ -93,7 +93,7 @@ def intervals(tk: list[dict], spans: list[tuple[float, float]], guard_s: float =
             continue
         near = any(s0 - guard_s < b["t"] and a["t"] < s1 + guard_s for s0, s1 in spans)
         step = (lambda k: None if a[k] is None or b[k] is None else max(0.0, b[k] - a[k]))
-        out.append({"t0": a["t"], "dt": dt, "dropped": step("dropped"), "total": step("total"),
+        out.append({"t0": a["t"], "dt": dt, "dct": b["ct"] - a["ct"], "dropped": step("dropped"), "total": step("total"),
                     "tier": a["tier"] if a["tier"] == b["tier"] else None, "shot_free": not near})
     return out
 
@@ -128,9 +128,18 @@ def item4a(tk: list[dict], iv: list[dict], rendition_fps: dict | None = None) ->
             s_all, s_free = sum(x["dt"] for x in xs), sum(x["dt"] for x in fr)
             f_free = round(sum(x["total"] for x in fr) / s_free, 2) if s_free else None
             ref = (rendition_fps or {}).get(tier)
+            m_free = sum(x["dct"] for x in fr)
+            tot_free, drop_free = sum(x["total"] for x in fr), sum(x["dropped"] or 0.0 for x in fr)
             fps[tier] = {"fps_shot_free": f_free, "playing_s_shot_free": round(s_free, 1),
                          "fps_all": round(sum(x["total"] for x in xs) / s_all, 2) if s_all else None,
-                         "playing_s_all": round(s_all, 1), "rendition_fps": ref, "min_share": RENDER_FPS_MIN_SHARE,
+                         "playing_s_all": round(s_all, 1),
+                         # the decomposition (pilot-1, tt HEVC 1080p60 at 20 fps): frames per media second (immune to
+                         # the playback rate), the playback rate (media s per wall s) and the dropped share of the counted
+                         # frames; reported, the check stays on fps_shot_free
+                         "fps_per_media_s_shot_free": round(tot_free / m_free, 2) if m_free > 0 else None,
+                         "playback_rate_shot_free": round(m_free / s_free, 3) if s_free else None,
+                         "dropped_share_shot_free": round(drop_free / tot_free, 3) if tot_free else None,
+                         "rendition_fps": ref, "min_share": RENDER_FPS_MIN_SHARE,
                          "ok": (None if ref is None or f_free is None else f_free >= RENDER_FPS_MIN_SHARE * ref),
                          **({} if ref is not None else {"note": "no rendition fps"})}
     oks = [vis["ok"]] + [v["ok"] for v in fps.values()]
