@@ -176,8 +176,8 @@ def test_yt_sibling_exclusion_and_long_not_live():
             ch, _, _ = O._pick("youtube", {}, now, False, (), trio, probe=lambda h: "live")   # read live: back at once
             rec = json.loads((trio / Y.PICKS_FILE).read_text().splitlines()[-1])
             # back in the draw at once (levi 2026-10-20: the tie among 0-count primaries is the seeded shuffle, recorded)
-            assert "unavailable_not_live_6h" not in rec and a in rec["tie"]["tied"] and ch["handle"] in rec["tie"]["tied"], rec
-            assert ch["pick"]["tie"]["seed"] == Y.CHANNEL_TIE_SEED + 0, ch                # no yt session in the root yet
+            assert "unavailable_not_live_6h" not in rec and a in rec["rule_state"]["candidates"], rec
+            assert ch["handle"] in rec["rule_state"]["tied"] and ch["pick"]["rule_state"]["seed"] == Y.CHANNEL_TIE_SEED + 0, ch
         finally:
             O._RUNS_DIR = saved
 

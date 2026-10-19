@@ -1,0 +1,248 @@
+{
+"what": "chaos data/_trio yt draws, every session dir (accepted and _failed, any era, pilots), in start order, 2026-10-20 after boundary-era round 2: the replay for levi's full channel-diversity rule (00133). Metadata only: handle, start, record flag, era, the collector's short sha, failed.",
+"draws": [
+{
+"session": "yt_100001",
+"failed": true,
+"handle": "@BeanBoltTV",
+"started_at": 1792342334.487696,
+"record": null,
+"era": null,
+"sha": "0681990"
+},
+{
+"session": "yt_100002",
+"failed": false,
+"handle": "@BeanBoltTV",
+"started_at": 1792347318.7398129,
+"record": null,
+"era": null,
+"sha": "6a4d26a"
+},
+{
+"session": "yt_100003",
+"failed": false,
+"handle": "@dwnews",
+"started_at": 1792365428.068764,
+"record": null,
+"era": null,
+"sha": "d3fd725"
+},
+{
+"session": "yt_100004",
+"failed": false,
+"handle": "@dwnews",
+"started_at": 1792370070.462148,
+"record": null,
+"era": null,
+"sha": "35594da"
+},
+{
+"session": "yt_100005",
+"failed": false,
+"handle": "@AlJazeeraEnglish",
+"started_at": 1792377614.745868,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "e62883d"
+},
+{
+"session": "yt_100006",
+"failed": false,
+"handle": "@dwnews",
+"started_at": 1792379873.8420615,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "e62883d"
+},
+{
+"session": "yt_100007",
+"failed": true,
+"handle": "@FuboSports",
+"started_at": 1792386484.268839,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "9dc66cb"
+},
+{
+"session": "yt_100008",
+"failed": false,
+"handle": "@FuboSports",
+"started_at": 1792388708.5489345,
+"record": false,
+"era": "t55-gro-off-2026-10-19",
+"sha": "5b6928a"
+},
+{
+"session": "yt_100009",
+"failed": false,
+"handle": "@RetroWorldVideos",
+"started_at": 1792388746.1865087,
+"record": false,
+"era": "t55-gro-off-2026-10-19",
+"sha": "5b6928a"
+},
+{
+"session": "yt_100010",
+"failed": true,
+"handle": "@FuboSports",
+"started_at": 1792391231.9161625,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "c1f9181"
+},
+{
+"session": "yt_100011",
+"failed": false,
+"handle": "@RetroWorldVideos",
+"started_at": 1792394060.1262784,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "c1f9181"
+},
+{
+"session": "yt_100012",
+"failed": false,
+"handle": "@LofiGirl",
+"started_at": 1792398572.969514,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "c1f9181"
+},
+{
+"session": "yt_100013",
+"failed": false,
+"handle": "@everybodychillradio",
+"started_at": 1792400322.0897105,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "c1f9181"
+},
+{
+"session": "yt_100014",
+"failed": false,
+"handle": "@SBC-TV1",
+"started_at": 1792404661.4772773,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "c1f9181"
+},
+{
+"session": "yt_100015",
+"failed": false,
+"handle": "@ScottishWildlifeGarden",
+"started_at": 1792407296.148916,
+"record": true,
+"era": "t55-gro-off-2026-10-19",
+"sha": "c1f9181"
+},
+{
+"session": "yt_100016",
+"failed": false,
+"handle": "@AlJazeeraEnglish",
+"started_at": 1792426054.1263251,
+"record": false,
+"era": "t56-nslot-2026-10-19",
+"sha": "61a852d"
+},
+{
+"session": "yt_100017",
+"failed": false,
+"handle": "@dwnews",
+"started_at": 1792426088.7926717,
+"record": false,
+"era": "t56-nslot-2026-10-19",
+"sha": "61a852d"
+},
+{
+"session": "yt_100018",
+"failed": false,
+"handle": "@AlJazeeraEnglish",
+"started_at": 1792429841.5521164,
+"record": true,
+"era": "t56-nslot-2026-10-19",
+"sha": "61a852d"
+},
+{
+"session": "yt_100019",
+"failed": false,
+"handle": "@dwnews",
+"started_at": 1792429878.5811007,
+"record": true,
+"era": "t56-nslot-2026-10-19",
+"sha": "61a852d"
+},
+{
+"session": "yt_100020",
+"failed": false,
+"handle": "@MonsterJam",
+"started_at": 1792432184.5567696,
+"record": true,
+"era": "t56-nslot-2026-10-19",
+"sha": "61a852d"
+},
+{
+"session": "yt_100021",
+"failed": false,
+"handle": "@RetroWorldVideos",
+"started_at": 1792432220.4741495,
+"record": true,
+"era": "t56-nslot-2026-10-19",
+"sha": "61a852d"
+},
+{
+"session": "yt_100022",
+"failed": false,
+"handle": "@LofiGirl",
+"started_at": 1792434274.9887235,
+"record": true,
+"era": "t56-nslot-2026-10-19",
+"sha": "61a852d"
+},
+{
+"session": "yt_100023",
+"failed": false,
+"handle": "@everybodychillradio",
+"started_at": 1792434310.8164885,
+"record": true,
+"era": "t56-nslot-2026-10-19",
+"sha": "61a852d"
+},
+{
+"session": "yt_100024",
+"failed": false,
+"handle": "@AlJazeeraEnglish",
+"started_at": 1792440062.704911,
+"record": true,
+"era": "t57-n5-boundary-2026-10-20",
+"sha": "b9e53d3"
+},
+{
+"session": "yt_100025",
+"failed": false,
+"handle": "@dwnews",
+"started_at": 1792440098.957607,
+"record": true,
+"era": "t57-n5-boundary-2026-10-20",
+"sha": "b9e53d3"
+},
+{
+"session": "yt_100026",
+"failed": false,
+"handle": "@MonsterJam",
+"started_at": 1792449031.9123328,
+"record": true,
+"era": "t57-n5-boundary-2026-10-20",
+"sha": "da076b2"
+},
+{
+"session": "yt_100027",
+"failed": false,
+"handle": "@BeanBoltTV",
+"started_at": 1792449067.3122425,
+"record": true,
+"era": "t57-n5-boundary-2026-10-20",
+"sha": "da076b2"
+}
+]
+}

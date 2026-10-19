@@ -27,6 +27,7 @@ after the latest.
 from __future__ import annotations
 
 import json
+import math
 import random
 import re
 import time
@@ -115,7 +116,7 @@ def pick_record(data_dir: Path, channel: dict, select=None) -> dict:
     """What the rotation saw when it picked (logged per pick): the channel, the previous session's, the counts."""
     counts = collected_counts(data_dir, select)
     return {"ts": time.time(), "handle": channel.get("handle"), "role": channel.get("role"), "type": channel.get("type"),
-            "last": last_channel(data_dir, select), "no_immediate_repeat": NO_IMMEDIATE_REPEAT, "tie": dict(LAST_TIE),
+            "last": last_channel(data_dir, select), "no_immediate_repeat": NO_IMMEDIATE_REPEAT, "rule_state": dict(LAST_PICK),
             "counts": {c["handle"]: counts.get(c["handle"], 0) for c in YT_CHANNELS if c["role"] == "primary"}}
 
 
@@ -292,11 +293,10 @@ def last_channel(data_dir: Path, select=None) -> str | None:
 
 NO_IMMEDIATE_REPEAT = True     # supervisor 2026-10-19 (06:50 audit: a newly promoted primary was drawn back to back)
 # levi 2026-10-20 (peter 00221: at every era restart the per-era counts tie at 0 and list order drew AlJazeera then dwnews,
-# on the class order's low-tier targets): ties among the least-collected go to a seeded shuffle, never list order; the
-# seed is CHANNEL_TIE_SEED + the root's yt sessions (any outcome), recorded with the pick (meta.json channel_pick)
+# on the class order's low-tier targets): ties go to a seeded shuffle, never list order; the seed is CHANNEL_TIE_SEED +
+# the root's yt sessions (any outcome), recorded with the pick (meta.json channel_pick). 3845ee7 tied the least-collected;
+# the full rule below (DIVERSITY_RULE) ties the least-recently-drawn.
 CHANNEL_TIE_SEED = 0
-CHANNEL_TIE_RULE = "levi 2026-10-20: least-collected, ties by a seeded shuffle (seed + the root's yt sessions)"
-LAST_TIE: dict = {}
 
 
 def draw_seed(data_dir: Path) -> int:
@@ -307,35 +307,76 @@ def draw_seed(data_dir: Path) -> int:
     return CHANNEL_TIE_SEED + n
 
 
+# levi's ruling 00133, the full rule (the next count boundary; channel identity only, never QoE, measured yield or labels):
+#   1. least-recently-drawn first, over every yt draw under the root (accepted and _failed, any era, pilots included:
+#      identity is content, not era data), never-drawn first, ties by the seeded shuffle (CHANNEL_TIE_SEED + draws);
+#   2. a distinct-channel floor F (CHANNEL_FLOOR, else the listed primaries: yt 10): while fewer than F channels have a
+#      session of record (select), a channel that already has one is passed over while an eligible 0-count one exists
+#      (a never-live channel cannot block it);
+#   3. a per-channel cap: a channel at >= max(2, ceil(CHANNEL_CAP_MULT / F x n_record)) sessions of record is passed over
+#      while another eligible channel is below it.
+# Eligible: a primary not excluded (not live, sibling, set aside, left the list), or a spare of a type whose primaries
+# are all excluded. Every stage is recorded with the pick (LAST_PICK -> the pick record -> meta.json channel_pick).
+CHANNEL_FLOOR: int | None = None
+CHANNEL_CAP_MULT = 2
+DIVERSITY_RULE = ("levi 00133: least-recently-drawn across every draw (any era, pilots), seeded tie; floor F = the "
+                  "listed primaries; cap max(2, ceil(2 / F x n_record)); channel identity only")
+LAST_PICK: dict = {}
+
+
+def last_draws(data_dir: Path) -> dict[str, float]:
+    """The latest started_at per channel handle over every yt session dir under data_dir, accepted and _failed, any era,
+    pilots included (the trio root's own; under the main root, trio sessions excluded as collected_counts does)."""
+    out: dict[str, float] = {}
+    root = Path(data_dir)
+    for meta in root.rglob("meta.json"):
+        if meta.parent.parent.name != "youtube" or any(x.startswith("_trio") for x in meta.relative_to(root).parts):
+            continue
+        try:
+            m = json.loads(meta.read_text())
+        except Exception:
+            continue
+        h, t = m.get("channel_handle"), m.get("started_at")
+        if h and isinstance(t, (int, float)) and t > out.get(h, float("-inf")):
+            out[h] = float(t)
+    return out
+
+
 def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: bool | None = None, select=None) -> dict:
-    """The least-collected primary (list order breaks ties), the previous yt session's channel last while another
-    primary is possible (NO_IMMEDIATE_REPEAT: a channel catching up, e.g. a newly promoted primary, is spread across
-    sessions instead of drawn back to back); a spare of the same type only when every primary of that type is excluded
-    (e.g. not live right now)."""
+    """The next channel by DIVERSITY_RULE (the comment above). The previous draw is least recent by construction, so
+    no immediate repeat while another channel is eligible (no_repeat kept for the callers; the rule implies it)."""
     exclude = set(exclude or ()) | {r["handle"] for r in disk_leaves(data_dir)}
     counts = collected_counts(data_dir, select)
     prim = [c for c in YT_CHANNELS if c["role"] == "primary"]
     seed = draw_seed(data_dir)
     rnd = random.Random(seed)
     key = {c["handle"]: rnd.random() for c in YT_CHANNELS}          # the seeded shuffle (list order fixes the draws)
-    order = sorted(range(len(prim)), key=lambda i: (counts[prim[i]["handle"]], key[prim[i]["handle"]]))
     elig = [p for p in prim if p["handle"] not in exclude]
-    low = min((counts[p["handle"]] for p in elig), default=None)
-    LAST_TIE.clear()
-    LAST_TIE.update(rule=CHANNEL_TIE_RULE, seed=seed, tied=sorted(p["handle"] for p in elig if counts[p["handle"]] == low))
-    last = last_channel(data_dir, select) if (NO_IMMEDIATE_REPEAT if no_repeat is None else no_repeat) else None
-    if last and any(p["handle"] not in exclude and p["handle"] != last for p in prim):
-        order = [i for i in order if prim[i]["handle"] != last] + [i for i in order if prim[i]["handle"] == last]
-    for i in order:
-        c = prim[i]
-        if c["handle"] not in exclude:
-            return c
-        if any(p["type"] == c["type"] and p["handle"] not in exclude for p in prim):
-            continue
-        spares = [s for s in YT_CHANNELS if s["role"] == "spare" and s["type"] == c["type"] and s["handle"] not in exclude]
-        if spares:
-            return sorted(spares, key=lambda s: (counts[s["handle"]], key[s["handle"]]))[0]
-    raise RuntimeError("no live channel left in the list")
+    types_out = {p["type"] for p in prim} - {p["type"] for p in elig}
+    elig += [c for c in YT_CHANNELS if c["role"] == "spare" and c["type"] in types_out and c["handle"] not in exclude]
+    if not elig:
+        raise RuntimeError("no live channel left in the list")
+    F = CHANNEL_FLOOR or len(prim)
+    n_rec = sum(counts.values())
+    cap = max(2, math.ceil(CHANNEL_CAP_MULT / F * n_rec))
+    distinct = sum(1 for n in counts.values() if n > 0)
+    cands, stages = list(elig), []
+    zero = [c for c in cands if counts[c["handle"]] == 0]
+    if distinct < F and zero and len(zero) < len(cands):
+        cands, stages = zero, stages + ["floor"]
+    below = [c for c in cands if counts[c["handle"]] < cap]
+    if below and len(below) < len(cands):
+        cands, stages = below, stages + ["cap"]
+    last = last_draws(data_dir)
+    cands.sort(key=lambda c: (last.get(c["handle"], float("-inf")), key[c["handle"]]))
+    first = last.get(cands[0]["handle"], float("-inf"))
+    LAST_PICK.clear()
+    LAST_PICK.update(rule=DIVERSITY_RULE, seed=seed, floor=F, distinct_record=distinct, n_record=n_rec, cap=cap,
+                     stages=stages or ["lru"], candidates=[c["handle"] for c in cands],
+                     tied=sorted(c["handle"] for c in cands if last.get(c["handle"], float("-inf")) == first),
+                     counts={c["handle"]: counts[c["handle"]] for c in elig},
+                     last_draw={c["handle"]: last.get(c["handle"]) for c in elig}, drawn=cands[0]["handle"])
+    return cands[0]
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 import yt_channels as Y  # noqa: E402
 
 NL = "error: RuntimeError: Failed to navigate to a live youtube stream"
@@ -60,9 +61,10 @@ def test_leave_rule():
         assert [r["handle"] for r in rec["collector_leaves"]] == ["@MonsterJam"]
         assert rec["version"] == len(Y.LIST_CHANGES) + 1
         assert "@MonsterJam" in {r["handle"] for r in Y.disk_leaves(d)}
-        # MonsterJam left, FUELTV excluded: the sport spare substitutes
-        ex = {c["handle"] for c in Y.YT_CHANNELS if c["role"] == "primary" and c["type"] != "sport"} | {"@FUELTVMoto"}
-        assert Y.next_channel(d, exclude=ex)["handle"] == "@FuboSports"
+        # MonsterJam left, FUELTV excluded: the sport spare substitutes (eligible as its type has no primary left; never
+        # drawn, so the least recent)
+        assert Y.next_channel(d, exclude={"@FUELTVMoto"})["handle"] == "@FuboSports"
+        assert "@FuboSports" in Y.LAST_PICK["candidates"] and Y.LAST_PICK["last_draw"]["@FuboSports"] is None, Y.LAST_PICK
 
 
 def test_precheck_observations():
@@ -103,8 +105,9 @@ def test_promotion():
 
 
 def test_no_immediate_repeat_and_trio_excluded():
-    """supervisor 2026-10-19: the least-collected primary, never the previous yt session's channel while another is
-    possible; trio sessions (data/_trio) never count in single mode's rotation (channels, geometry, twitch categories)."""
+    """levi 00133's full rule: the least-recently-drawn primary (so never the previous yt session's channel while another
+    is possible); trio sessions (data/_trio) never count in single mode's rotation (channels, geometry, twitch
+    categories)."""
     import geometry
     import tw_categories
     prim = [c["handle"] for c in Y.YT_CHANNELS if c["role"] == "primary"]
@@ -113,15 +116,15 @@ def test_no_immediate_repeat_and_trio_excluded():
         for i, h in enumerate(prim):                     # every primary twice, the last one once (the least collected)
             for k in range(1 if h == prim[-1] else 2):
                 meta(d, f"youtube/yt_{i}{k}", channel_handle=h, started_at=100.0 + i * 10 + k)
-        assert Y.next_channel(d, no_repeat=False)["handle"] == prim[-1]
+        assert Y.next_channel(d, no_repeat=False)["handle"] == prim[0]                # drawn longest ago (t = 101)
+        assert Y.LAST_PICK["stages"] == ["lru"] and Y.LAST_PICK["cap"] == 4               # 19 of record: max(2, ceil(3.8))
         meta(d, "youtube/yt_99", channel_handle=prim[-1], started_at=10_000.0)        # it was the latest session
         assert Y.last_channel(d) == prim[-1]
         assert Y.collected_counts(d)[prim[-1]] == 2
         meta(d, "youtube/yt_98", channel_handle=prim[0], started_at=20_000.0)         # now prim[0] is the latest
         c = Y.next_channel(d)
-        # least-collected, no repeat; the 2-count tie goes to the seeded shuffle (levi 2026-10-20), not list order
-        assert c["handle"] != prim[0] and Y.LAST_TIE["tied"] == sorted(prim[1:]) and c["handle"] in prim[1:], (c, Y.LAST_TIE)
-        assert Y.LAST_TIE["seed"] == Y.CHANNEL_TIE_SEED + len(list((d / "youtube").glob("yt_*")))
+        assert c["handle"] == prim[1] and Y.LAST_PICK["drawn"] == prim[1]               # now the least recent; no repeat
+        assert Y.LAST_PICK["seed"] == Y.CHANNEL_TIE_SEED + len(list((d / "youtube").glob("yt_*")))
         only = {c["handle"] for c in Y.YT_CHANNELS} - {prim[0]}
         assert Y.next_channel(d, exclude=only)["handle"] == prim[0]                   # the only one left: it repeats
         meta(d, "_trio/youtube/yt_100001", channel_handle=prim[1], started_at=30_000.0,
@@ -150,14 +153,15 @@ def test_no_immediate_repeat_and_trio_excluded():
         assert Y.last_channel(d) == prim[0]                                           # a not-live start: no session
         rec = Y.pick_record(d, c)
         assert rec["handle"] == c["handle"] and rec["last"] == prim[0] and rec["no_immediate_repeat"] is True
-        assert rec["tie"]["rule"] == Y.CHANNEL_TIE_RULE and "seed" in rec["tie"]                 # the tie, recorded
+        assert rec["rule_state"]["rule"] == Y.DIVERSITY_RULE and "seed" in rec["rule_state"]   # the rule, recorded
 
 
 def test_the_restart_pair_is_broken_by_the_seeded_tie():
     """levi 2026-10-20 (peter 00221): chaos's trio record at b9e53d3 (24 yt session dirs; of record: c1f9181's t55
     RetroWorld, LofiGirl, everybodychillradio, SBC-TV1, ScottishWildlifeGarden, one each) left AlJazeera, dwnews,
-    MonsterJam, FUELTVMoto and BeanBoltTV tied at 0, and list order drew AlJazeera + dwnews, the pair that opened every
-    era. The seeded tie (seed 24) draws MonsterJam + AlJazeera from the same counts (replayed on chaos, 2026-10-20)."""
+    MonsterJam, FUELTVMoto and BeanBoltTV at 0, and list order drew AlJazeera + dwnews, the pair that opened every era.
+    Under the full rule the floor keeps the 0-count channels, dwnews (drawn last in the stated run) goes behind the
+    never-drawn four, and their seeded tie (seed 24) draws MonsterJam + AlJazeera."""
     import record
     with tempfile.TemporaryDirectory() as d:
         tr = Path(d) / "_trio"
@@ -171,13 +175,78 @@ def test_the_restart_pair_is_broken_by_the_seeded_tie():
                 meta(tr, f"youtube/yt_{100001 + i}", channel_handle="@dwnews", started_at=float(i),
                      concurrency={"mode": "trio", "record": True, "era": "t56-nslot-2026-10-19"})   # a stated run
         a = Y.next_channel(tr, select=record.is_record)
-        assert Y.LAST_TIE["seed"] == 24 and Y.LAST_TIE["tied"] == sorted(
-            ["@AlJazeeraEnglish", "@dwnews", "@MonsterJam", "@FUELTVMoto", "@BeanBoltTV"]), Y.LAST_TIE
+        assert Y.LAST_PICK["seed"] == 24 and Y.LAST_PICK["stages"] == ["floor"] and Y.LAST_PICK["tied"] == sorted(
+            ["@AlJazeeraEnglish", "@MonsterJam", "@FUELTVMoto", "@BeanBoltTV"]), Y.LAST_PICK
         b = Y.next_channel(tr, exclude={a["handle"]}, select=record.is_record)
         assert (a["handle"], b["handle"]) == ("@MonsterJam", "@AlJazeeraEnglish"), (a, b)
 
 
+def test_the_full_rule_forward():
+    """levi 00133, simulated forward on an empty trio root (every draw a session of record): the floor gives the first
+    F = 10 draws to 10 distinct primaries, LRU then round-robins (3 each after 30 draws); a never-live channel cannot
+    hold the floor; the cap passes over a channel at max(2, ceil(2 / F x n_record)) while another is below it."""
+    import record
+    rec = {"concurrency": {"mode": "trio", "record": True, "era": record.ERA}}
+    prim = [c["handle"] for c in Y.YT_CHANNELS if c["role"] == "primary"]
+    with tempfile.TemporaryDirectory() as d:
+        tr = Path(d) / "_trio"
+        drawn = []
+        for i in range(30):
+            c = Y.next_channel(tr, select=record.is_record)["handle"]
+            drawn.append(c)
+            meta(tr, f"youtube/yt_{100001 + i}", channel_handle=c, started_at=float(i), **rec)
+        assert sorted(drawn[:10]) == sorted(prim) and all(drawn.count(h) == 3 for h in prim), drawn
+        assert all(drawn[k] != drawn[k + 1] for k in range(29))
+    with tempfile.TemporaryDirectory() as d:                 # FUELTVMoto never live: the floor fills with the other 9
+        tr = Path(d) / "_trio"
+        drawn = []
+        for i in range(12):
+            c = Y.next_channel(tr, exclude={"@FUELTVMoto"}, select=record.is_record)["handle"]
+            drawn.append(c)
+            meta(tr, f"youtube/yt_{100001 + i}", channel_handle=c, started_at=float(i), **rec)
+        assert len(set(drawn[:9])) == 9 and "@FUELTVMoto" not in drawn and Y.LAST_PICK["stages"] == ["lru"], drawn
+    with tempfile.TemporaryDirectory() as d:                 # the cap: 20 of record, cap max(2, ceil(4.0)) = 4
+        tr = Path(d) / "_trio"
+        for i in range(20):
+            h = prim[0] if i < 5 else prim[1 + (i % 9)]
+            meta(tr, f"youtube/yt_{100001 + i}", channel_handle=h, started_at=-1000.0 if h == prim[0] else float(i), **rec)
+        c = Y.next_channel(tr, select=record.is_record)
+        assert Y.LAST_PICK["cap"] == 4 and "cap" in Y.LAST_PICK["stages"] and c["handle"] != prim[0], Y.LAST_PICK
+        others = {c["handle"] for c in Y.YT_CHANNELS} - {prim[0]}
+        assert Y.next_channel(tr, exclude=others, select=record.is_record)["handle"] == prim[0]  # alone: the cap yields
+        prim_others = {h for h in prim if h != prim[0]}                # the other primaries out: their types' spares in,
+        c = Y.next_channel(tr, exclude=prim_others, select=record.is_record)  # and below the cap they go first
+        assert c["role"] == "spare" and "cap" in Y.LAST_PICK["stages"], (c, Y.LAST_PICK)
+
+
+def test_the_rule_on_the_records_draws():
+    """The full rule replayed on every prefix of chaos's 27 trio yt draws (fixtures/trio_yt_draws_2026-10-20.json; all
+    channels taken as live): it never repeats the previous draw, never takes a channel at the cap while one below is
+    eligible, and before boundary-era round 1 (after yt_100023) its first pick is not the AlJazeera / dwnews pair that
+    list order drew (yt_100024 / 025)."""
+    import record
+    draws = json.loads((HERE / "fixtures" / "trio_yt_draws_2026-10-20.json").read_text())["draws"]
+    picks = {}
+    for k in range(1, len(draws) + 1):
+        with tempfile.TemporaryDirectory() as d:
+            tr = Path(d) / "_trio"
+            for r in draws[:k]:
+                meta(tr, f"{'_failed/' if r['failed'] else ''}youtube/{r['session']}", channel_handle=r["handle"],
+                     started_at=r["started_at"], concurrency={"record": r["record"], "era": r["era"]},
+                     lvdc_commit={"sha": r["sha"]})
+            c = Y.next_channel(tr, select=record.is_record)
+            st = dict(Y.LAST_PICK)
+            assert c["handle"] != draws[k - 1]["handle"], (k, c, st)
+            counts = Y.collected_counts(tr, record.is_record)
+            if counts[c["handle"]] >= st["cap"]:
+                assert all(counts[h] >= st["cap"] for h in st["counts"]), (k, st)
+            picks[draws[k - 1]["session"]] = c["handle"]
+    assert picks["yt_100023"] not in ("@AlJazeeraEnglish", "@dwnews"), picks["yt_100023"]
+
+
 def main() -> int:
+    test_the_rule_on_the_records_draws()
+    test_the_full_rule_forward()
     test_the_restart_pair_is_broken_by_the_seeded_tie()
     test_no_immediate_repeat_and_trio_excluded()
     test_list()
