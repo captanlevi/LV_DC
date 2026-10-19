@@ -82,7 +82,7 @@ def test_am15_initial_state_and_low_yield():
     matrix's start rule. (6): low_yield lists a class whose best qualifying matrix over >= 5 sessions yields < 0.5 min."""
     import random
     import orchestrate as O
-    mats = PLATFORM_MATRICES["youtube"]
+    mats = BASE["youtube"]      # the base matrices (am. 17's families qualify on their own occupancy: test_schedule_families)
     bands = C.band_map("youtube", mats, sorted(mats))
     rec = {"platform": "youtube", "matrix": "current", "target": {"kind": "class", "key": "Q_1080p"}, "bands": bands}
     rng = random.Random(0)
