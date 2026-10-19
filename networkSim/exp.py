@@ -740,9 +740,18 @@ if __name__ == "__main__":
             from profile_clone import remove_profile_clone
             print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
         raise ValueError("Cannot initialize the network for collection")
-    # levi (t55): each capture IFB's offloads, read only (never set), so a failed identity check can be traced
+    # P3 (levi 00120, counted round 1): each capture IFB's segmentation / coalescing offloads off and read back (the
+    # egress mirror clones Chrome's GSO super-skbs whole; the IFB segments them before its tap only with its own
+    # features off); recorded per device; a flag that did not take fails the session loudly
     ifbs = [SLOT.ifb_in, SLOT.ifb_out] if SLOT is not None else ["ifb0", "ifb1"]
-    session_meta.write(session_dir, capture={"offloads": {**off, "ifbs_read_only": {d: offloads.read(d) for d in ifbs}}})
+    ifb_off = {d: offloads.ensure_off(d, features=offloads.IFB_OFF) for d in ifbs}
+    session_meta.write(session_dir, capture={"offloads": {**off, "ifbs": ifb_off}})
+    if not all(r["ok"] for r in ifb_off.values()):
+        if SLOT is not None:
+            session_meta.write(session_dir, concurrency=TRIO)
+        from profile_clone import remove_profile_clone
+        print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
+        raise ValueError(f"P3: capture IFB offloads not off: {({d: r['after'] for d, r in ifb_off.items() if not r['ok']})}")
     tc_sampler = (trio_slots.TcSampler(session_dir, SLOT, capacity_kbit=args.link_capacity_kbit).start()
                   if SLOT is not None else None)
     dns_cap = trio_slots.dns_capture_start(staging) if SLOT is not None else None   # the default class's DNS (v3 §8)

@@ -699,6 +699,14 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     screen = fb = dstage = ddir = ct_before = None
     try:
         apply(T.shared_up_cmds(iface))
+        # P3 (levi 00120): the default class's capture IFBs with their segmentation / coalescing offloads off, as every
+        # slot's (exp.py); refused: no session starts (the tree comes down in the finally)
+        import offloads as _off
+        ensure_ifb = offloads if offloads is not None else (lambda d: _off.ensure_off(d, features=_off.IFB_OFF))
+        ifb_off = {d: ensure_ifb(d) for d in ("lvi_def", "lvo_def")}
+        if not all(r.get("ok") for r in ifb_off.values()):
+            print(f"  TRIO: the default capture IFBs' offloads are not off ({json.dumps(ifb_off)}): no session starts")
+            end_rc = EXIT_OFFLOADS
         os.environ["LVDC_TRIO_LAYOUT"] = layout
         if layout == "fb":               # design §4: room for three non-overlapping windows beside the monitor
             screen = xrandr(None)
@@ -721,7 +729,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                                        "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
                                        "conntrack_timeouts_before": ct_before, "conntrack_timeouts": T.conntrack_timeouts(),
                                        "conntrack_set": ct_set[0], "resolver_cache_flushed": flush[0],
-                                       "layout": layout, "screen": screen, "framebuffer": fb})
+                                       "layout": layout, "screen": screen, "framebuffer": fb, "ifb_offloads": ifb_off})
         print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {run_id} up: {targets}, max per slot {max_per_slot}, "
               f"layout {layout}")
         while True:
