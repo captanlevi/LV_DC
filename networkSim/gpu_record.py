@@ -17,8 +17,9 @@ not change (its sha does not move).
     python3 networkSim/gpu_record.py --stamp <run>/box_record.jsonl <session_dir> ...        (after the round)
 
 --stamp (after the sessions end; no root): per session, the record's lines inside [meta started_at - 1, ended_at + 1]
-go to <session>/box_record.jsonl (with the header), and meta.json box_record gets the record's path and sha256, the
-recorder's code sha, the GPU source, the lines copied and the session's slot key (meta concurrency.cgroup's last part).
+go to <session>/box_record.jsonl. Its header is the recorder's (code sha256, commit, GPU source) plus "stamp": the run
+record's path and sha256, the window, the session's slot key (meta concurrency.cgroup's last part) and the lines
+copied. meta.json is never edited (levi: it is the collector's raw record; hashes of it must not go stale).
 Coverage (Addendum T: >= 0.95 of a counted session's seconds with a data line) and the join to label ticks are the
 post-hoc readers' (brad / levi). Line keys: "t" epoch seconds on the box's clock (the second's end); a data line has
 "gpu_busy_pct"; "error" and "gap" lines mark lost seconds.
@@ -393,9 +394,9 @@ def summary(path: Path, t0: float | None = None, t1: float | None = None, report
 
 
 def stamp(record_path: Path, session_dirs: list[Path]) -> list[dict]:
-    """After the round: each session's slice of the record to <session>/box_record.jsonl and meta.json box_record
-    (record path / sha256, the recorder's code sha, the lines copied, the slot key). A session without started_at /
-    ended_at gets {"error"} in meta."""
+    """After the round: each session's slice of the record to <session>/box_record.jsonl, its header the recorder's
+    plus "stamp" (run record path / sha256, window, slot, lines). meta.json is read, never written. A session without
+    started_at / ended_at gets no file and an "error" in the result."""
     record_path = Path(record_path)
     hdr, rows = read(record_path)
     rec_sha = hashlib.sha256(record_path.read_bytes()).hexdigest()
@@ -405,20 +406,16 @@ def stamp(record_path: Path, session_dirs: list[Path]) -> list[dict]:
         meta = json.loads((sd / "meta.json").read_text())
         t0, t1 = meta.get("started_at"), meta.get("ended_at")
         cg = ((meta.get("concurrency") or {}).get("cgroup") or "")
-        base = {"record": str(record_path), "record_sha256": rec_sha,
-                "code": {k: (hdr or {}).get(k) for k in ("file_sha256", "lvdc_commit")},
-                "gpu_source": (hdr or {}).get("gpu_source"), "slot": cg.rsplit("/", 1)[-1] or None}
+        st = {"record": str(record_path), "record_sha256": rec_sha, "slot": cg.rsplit("/", 1)[-1] or None}
         if not (isinstance(t0, (int, float)) and isinstance(t1, (int, float)) and t1 > t0):
-            res = {**base, "error": "meta has no started_at / ended_at"}
-        else:
-            mine = [r for r in rows if t0 - 1 <= r["t"] <= t1 + 1]
-            with open(sd / "box_record.jsonl", "w") as fh:
-                for r in ([hdr] if hdr else []) + mine:
-                    fh.write(json.dumps(r) + "\n")
-            res = {**base, "lines": len(mine), "window": [t0, t1]}
-        meta["box_record"] = res
-        (sd / "meta.json").write_text(json.dumps(meta, indent=1, default=str))
-        out.append({"session": sd.name, **res})
+            out.append({"session": sd.name, **st, "error": "meta has no started_at / ended_at"})
+            continue
+        mine = [r for r in rows if t0 - 1 <= r["t"] <= t1 + 1]
+        st.update(window=[t0 - 1, t1 + 1], lines=len(mine))
+        with open(sd / "box_record.jsonl", "w") as fh:
+            for r in [{**(hdr or {"header": True}), "stamp": st}] + mine:
+                fh.write(json.dumps(r) + "\n")
+        out.append({"session": sd.name, **st})
     return out
 
 

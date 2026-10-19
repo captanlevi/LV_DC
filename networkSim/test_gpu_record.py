@@ -2,7 +2,7 @@
 """The device record (gpu_record.py, levi's Addendum T): the PMU's engine list from sysfs, the perf_event_attr layout,
 DRM fdinfo parsing and the per-class fallback (a client counted once), the busy % arithmetic, each slot's Chrome
 process tree (cgroup cpu.stat, per-role /proc ticks, a slot first seen without a baseline), a record written with an
-error that reopens the reader and a gap line, the summary, the post-round stamp (each session's slice and meta), and the
+error that reopens the reader and a gap line, the summary, the post-round stamp (each session's slice; meta untouched), and the
 CLI on a box with neither PMU nor /proc."""
 import ctypes
 import json
@@ -162,7 +162,8 @@ def test_record_error_gap_and_summary():
 
 
 def test_stamp():
-    """Each session's slice (with the header) and meta.json box_record; a session without times gets an error."""
+    """Each session's slice with the recorder's header plus the stamp (record sha256, window, slot, lines); meta.json is
+    never written; a session without times gets no file and an error."""
     with tempfile.TemporaryDirectory() as d:
         rec = Path(d) / "box_record.jsonl"
         hdr = {"header": True, "gpu_source": "i915-pmu", "file_sha256": "a" * 64, "lvdc_commit": "c" * 40}
@@ -173,13 +174,15 @@ def test_stamp():
                       (b, {"started_at": None})):
             sd.mkdir()
             (sd / "meta.json").write_text(json.dumps(m))
+        metas = {sd: (sd / "meta.json").read_bytes() for sd in (a, b)}
         res = G.stamp(rec, [a, b])
-        ma = json.loads((a / "meta.json").read_text())["box_record"]
-        assert ma["slot"] == "yt" and ma["code"] == {"file_sha256": "a" * 64, "lvdc_commit": "c" * 40}, ma
-        assert ma["lines"] == 8 and ma["record_sha256"] and ma["window"] == [104.5, 110.2], ma
+        assert all((sd / "meta.json").read_bytes() == raw for sd, raw in metas.items())   # meta untouched
         sl = [json.loads(x) for x in (a / "box_record.jsonl").read_text().splitlines()]
-        assert sl[0]["header"] and [x["t"] for x in sl[1:]] == [100.0 + i for i in range(4, 12)], sl
-        assert "error" in json.loads((b / "meta.json").read_text())["box_record"] and len(res) == 2
+        h = sl[0]
+        assert h["header"] and h["file_sha256"] == "a" * 64 and h["lvdc_commit"] == "c" * 40, h
+        assert h["stamp"]["slot"] == "yt" and h["stamp"]["lines"] == 8 and h["stamp"]["window"] == [103.5, 111.2], h
+        assert len(h["stamp"]["record_sha256"]) == 64 and [x["t"] for x in sl[1:]] == [100.0 + i for i in range(4, 12)]
+        assert "error" in res[1] and not (b / "box_record.jsonl").exists()
         assert G.main(["--stamp", str(rec), str(a)]) == 0 and G.main(["--stamp", str(rec), str(b)]) == 1
 
 
