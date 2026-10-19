@@ -119,7 +119,9 @@ def test_no_immediate_repeat_and_trio_excluded():
         assert Y.collected_counts(d)[prim[-1]] == 2
         meta(d, "youtube/yt_98", channel_handle=prim[0], started_at=20_000.0)         # now prim[0] is the latest
         c = Y.next_channel(d)
-        assert c["handle"] != prim[0] and c["handle"] == prim[1], c                   # least-collected, no repeat
+        # least-collected, no repeat; the 2-count tie goes to the seeded shuffle (levi 2026-10-20), not list order
+        assert c["handle"] != prim[0] and Y.LAST_TIE["tied"] == sorted(prim[1:]) and c["handle"] in prim[1:], (c, Y.LAST_TIE)
+        assert Y.LAST_TIE["seed"] == Y.CHANNEL_TIE_SEED + len(list((d / "youtube").glob("yt_*")))
         only = {c["handle"] for c in Y.YT_CHANNELS} - {prim[0]}
         assert Y.next_channel(d, exclude=only)["handle"] == prim[0]                   # the only one left: it repeats
         meta(d, "_trio/youtube/yt_100001", channel_handle=prim[1], started_at=30_000.0,
@@ -147,10 +149,36 @@ def test_no_immediate_repeat_and_trio_excluded():
              abort_reason="error: RuntimeError: Failed to navigate to a live youtube stream")
         assert Y.last_channel(d) == prim[0]                                           # a not-live start: no session
         rec = Y.pick_record(d, c)
-        assert rec["handle"] == prim[1] and rec["last"] == prim[0] and rec["no_immediate_repeat"] is True
+        assert rec["handle"] == c["handle"] and rec["last"] == prim[0] and rec["no_immediate_repeat"] is True
+        assert rec["tie"]["rule"] == Y.CHANNEL_TIE_RULE and "seed" in rec["tie"]                 # the tie, recorded
+
+
+def test_the_restart_pair_is_broken_by_the_seeded_tie():
+    """levi 2026-10-20 (peter 00221): chaos's trio record at b9e53d3 (24 yt session dirs; of record: c1f9181's t55
+    RetroWorld, LofiGirl, everybodychillradio, SBC-TV1, ScottishWildlifeGarden, one each) left AlJazeera, dwnews,
+    MonsterJam, FUELTVMoto and BeanBoltTV tied at 0, and list order drew AlJazeera + dwnews, the pair that opened every
+    era. The seeded tie (seed 24) draws MonsterJam + AlJazeera from the same counts (replayed on chaos, 2026-10-20)."""
+    import record
+    with tempfile.TemporaryDirectory() as d:
+        tr = Path(d) / "_trio"
+        rec_ch = ["@RetroWorldVideos", "@LofiGirl", "@everybodychillradio", "@SBC-TV1", "@ScottishWildlifeGarden"]
+        for i in range(24):
+            if i < 5:
+                meta(tr, f"youtube/yt_{100001 + i}", channel_handle=rec_ch[i], started_at=float(i),
+                     concurrency={"mode": "trio", "record": True, "era": "t55-gro-off-2026-10-19"},
+                     lvdc_commit={"sha": "c1f9181"})
+            else:
+                meta(tr, f"youtube/yt_{100001 + i}", channel_handle="@dwnews", started_at=float(i),
+                     concurrency={"mode": "trio", "record": True, "era": "t56-nslot-2026-10-19"})   # a stated run
+        a = Y.next_channel(tr, select=record.is_record)
+        assert Y.LAST_TIE["seed"] == 24 and Y.LAST_TIE["tied"] == sorted(
+            ["@AlJazeeraEnglish", "@dwnews", "@MonsterJam", "@FUELTVMoto", "@BeanBoltTV"]), Y.LAST_TIE
+        b = Y.next_channel(tr, exclude={a["handle"]}, select=record.is_record)
+        assert (a["handle"], b["handle"]) == ("@MonsterJam", "@AlJazeeraEnglish"), (a, b)
 
 
 def main() -> int:
+    test_the_restart_pair_is_broken_by_the_seeded_tie()
     test_no_immediate_repeat_and_trio_excluded()
     test_list()
     test_leave_rule()

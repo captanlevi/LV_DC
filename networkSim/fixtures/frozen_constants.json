@@ -1338,7 +1338,11 @@
   "t57-n5-boundary-2026-10-20": []
  },
  "schedules": {
+  "CHANNEL_TIE_RULE": "levi 2026-10-20: least-collected, ties by a seeded shuffle (seed + the root's yt sessions)",
+  "CHANNEL_TIE_SEED": 0,
   "DEFICIT_RANK": "Q am. 17: deficit share = missing / floor, classes, entry states and families alike",
+  "DEFICIT_TIE_RULE": "levi 2026-10-20: equal top deficit shares, a seeded draw (seed + the platform's record attempts)",
+  "DEFICIT_TIE_SEED": 0,
   "FAMILY_BASE": {
    "tiktok": "TT-M",
    "twitch": "TW-M",

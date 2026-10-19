@@ -31,6 +31,7 @@ import geometry as GEO  # noqa: E402
 import offloads as OFF  # noqa: E402
 import record as REC  # noqa: E402
 import schedule_occupancy as SO  # noqa: E402
+import yt_channels as YT  # noqa: E402
 import orchestrate as O  # noqa: E402
 import stuck as S  # noqa: E402
 from utils import netStat as NS, shaping as SH  # noqa: E402
@@ -84,6 +85,8 @@ def current() -> dict:
         "episodes": {"EPISODES_V2": O.EPISODES_V2, "episode_s": episode_s},
         "schedules": {"SCHEDULES": {k: {**v, "redraw_s": list(v["redraw_s"])} for k, v in SH.SCHEDULES.items()},
                       "FAMILY_BASE": SH.FAMILY_BASE, "FAMILY_FLOOR": CR.FAMILY_FLOOR, "DEFICIT_RANK": CR.DEFICIT_RANK,
+                      "DEFICIT_TIE_SEED": CR.DEFICIT_TIE_SEED, "DEFICIT_TIE_RULE": CR.DEFICIT_TIE_RULE,
+                      "CHANNEL_TIE_SEED": YT.CHANNEL_TIE_SEED, "CHANNEL_TIE_RULE": YT.CHANNEL_TIE_RULE,
                       "OCCUPANCY_SHA256": SO.OCCUPANCY_SHA256, "SIM_SEED": SO.SIM_SEED, "SIM_SESSIONS": SO.SIM_SESSIONS},
         "coverage": {"MATRIX_RULE": O.MATRIX_RULE, "MATRIX_IDS": O.MATRIX_IDS, "COVERAGE_ALLOWED": O.COVERAGE_ALLOWED,
                      "RULE_VERSION": CR.RULE_VERSION, "FLOOR_SESSIONS": CR.FLOOR_SESSIONS,

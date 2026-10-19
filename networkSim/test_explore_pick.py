@@ -57,7 +57,11 @@ def test_the_c1f9181_case_moves_off_tw_l():
             "per_matrix": {"TW-L": 4}, "total": 4, "recent": [["TW-L", False], ["TW-L", False]]}, snap["attempts"]
         r = C.pick_matrix(snap, TW)
         ex = r["explore"]
-        assert r["target"]["key"] == "STALL" and r["why"].startswith("explore"), r
+        # levi 2026-10-20: every deficit equal (no session yet): the target is the seeded draw among them, not class order
+        tie = r["target_tie"]
+        assert tie["seed"] == C.DEFICIT_TIE_SEED + 4 and tie["tied"][0] == "STALL" and "Q_1080p" not in tie["tied"], tie
+        assert r["target"]["key"] == tie["drawn"] == random.Random(tie["seed"]).choice(tie["tied"]), r
+        assert r["why"].startswith("explore"), r
         assert ex["young"] == ["TW-L", "TW-M", "current"] and ex["capped"] == ["TW-L"], ex
         assert ex["tied"] == ["TW-M", "current"] and ex["seed"] == C.EXPLORE_SEED + 4, ex
         assert r["matrix"] == random.Random(C.EXPLORE_SEED + 4).choice(["TW-M", "current"]) != "TW-L", r

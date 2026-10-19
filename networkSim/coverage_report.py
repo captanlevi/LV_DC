@@ -126,6 +126,11 @@ MATRIX_TARGETS = {("youtube", "H"): ("Q_1080p",)}   # Q am. 15 (6): yt-H is draw
 # occupancy (schedule_occupancy.py), never on the base matrix's stationary mass
 FAMILY_FLOOR = 5
 DEFICIT_RANK = "Q am. 17: deficit share = missing / floor, classes, entry states and families alike"
+# levi 2026-10-20 (peter 00221: at an era restart every deficit is equal and the class order took the low-tier classes
+# first, lining up with the yt list order's channels): the target among the equal top shares is a seeded draw, never the
+# class order; seed DEFICIT_TIE_SEED + the platform's record attempts, recorded (coverage.target_tie)
+DEFICIT_TIE_SEED = 0
+DEFICIT_TIE_RULE = "levi 2026-10-20: equal top deficit shares, a seeded draw (seed + the platform's record attempts)"
 
 
 def drawable(platform: str, matrix_id: str, target_key: str | None) -> bool:
@@ -493,6 +498,11 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
         return {**rec, "matrix": m, "target": None, "yields": {}, "default_rotation": True,
                 "why": "no deficit: rotation, least-collected matrix" + (" (every deficit unreachable)" if defs else "")}
     tgt = live[0]
+    tied = [d for d in live if d["share"] == tgt["share"]]
+    if len(tied) > 1:
+        seed = DEFICIT_TIE_SEED + int((snap.get("attempts") or {}).get("total", 0))
+        tgt = random.Random(seed).choice(tied)
+        rec["target_tie"] = {"rule": DEFICIT_TIE_RULE, "tied": [d["key"] for d in tied], "seed": seed, "drawn": tgt["key"]}
     if tgt["kind"] == "schedule":                          # am. 17: a family's floor is met by the family itself
         return {**rec, "matrix": tgt["key"], "target": tgt, "yields": {}, "why": f"schedule floor {FAMILY_FLOOR}"}
     if tgt["kind"] == "class" and tgt["key"] in bands:     # only matrices that reach the class's band

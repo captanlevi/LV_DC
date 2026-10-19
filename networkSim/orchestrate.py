@@ -457,11 +457,13 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
                                                            select=select, probe=probe)
         try:                                       # the rotation's view at the pick (no immediate repeat)
             (out / "_summaries").mkdir(parents=True, exist_ok=True)
+            prec = {**yt_channels.pick_record(out, channel, select),
+                    **({"sibling_excluded": sorted(siblings)} if siblings else {}),
+                    **({"unavailable_not_live_6h": unavail} if unavail else {}),
+                    **({"not_usable": na} if na else {})}
             with open(out / yt_channels.PICKS_FILE, "a") as fh:
-                fh.write(json.dumps({**yt_channels.pick_record(out, channel, select),
-                                     **({"sibling_excluded": sorted(siblings)} if siblings else {}),
-                                     **({"unavailable_not_live_6h": unavail} if unavail else {}),
-                                     **({"not_usable": na} if na else {})}) + "\n")
+                fh.write(json.dumps(prec) + "\n")
+            channel = {**channel, "pick": prec}    # levi 2026-10-20: the pick and its seeded tie in meta.json channel_pick
         except Exception as e:
             print(f"  (pick record failed: {e!r})")
         if pre_skips:
@@ -727,6 +729,9 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
            "LVDC_TRIO_SLOTS": ",".join(f"{k}={v}" for k, v in T.composition_of(T.SLOTS).items()),
            "LVQOE_SHOT_SOURCE": TRIO_SHOT_SOURCE.get(os.environ.get("LVDC_TRIO_LAYOUT") or "cdp", "cdp")}
     env.pop("LVDC_PICK_PINNED", None)
+    env.pop("LVDC_CHANNEL_PICK", None)
+    if (channel or {}).get("pick"):
+        env["LVDC_CHANNEL_PICK"] = json.dumps(channel["pick"], default=str)
     env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
     env.pop("LVDC_TRIO_YT_FULLSCREEN", None)
     if yt_fs:

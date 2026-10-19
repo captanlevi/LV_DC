@@ -743,6 +743,11 @@ if __name__ == "__main__":
             session_meta.write(session_dir, preflight=json.loads(Path(os.environ["LVDC_PREFLIGHT_JSON"]).read_text()))
         except Exception as e:
             session_meta.write(session_dir, preflight={"error": repr(e)})
+    if os.environ.get("LVDC_CHANNEL_PICK"):  # the yt channel draw, its counts and seeded tie (levi 2026-10-20)
+        try:
+            session_meta.write(session_dir, channel_pick=json.loads(os.environ["LVDC_CHANNEL_PICK"]))
+        except Exception as e:
+            session_meta.write(session_dir, channel_pick={"error": repr(e)})
     if os.environ.get("LVDC_PICK_PINNED"):   # a recorded t53 round pin (levi 00261: allowed steering if recorded)
         try:
             session_meta.write(session_dir, pick_pinned=json.loads(os.environ["LVDC_PICK_PINNED"]))

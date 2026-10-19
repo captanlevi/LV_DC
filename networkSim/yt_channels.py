@@ -27,6 +27,7 @@ after the latest.
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 import urllib.request
@@ -114,7 +115,7 @@ def pick_record(data_dir: Path, channel: dict, select=None) -> dict:
     """What the rotation saw when it picked (logged per pick): the channel, the previous session's, the counts."""
     counts = collected_counts(data_dir, select)
     return {"ts": time.time(), "handle": channel.get("handle"), "role": channel.get("role"), "type": channel.get("type"),
-            "last": last_channel(data_dir, select), "no_immediate_repeat": NO_IMMEDIATE_REPEAT,
+            "last": last_channel(data_dir, select), "no_immediate_repeat": NO_IMMEDIATE_REPEAT, "tie": dict(LAST_TIE),
             "counts": {c["handle"]: counts.get(c["handle"], 0) for c in YT_CHANNELS if c["role"] == "primary"}}
 
 
@@ -290,6 +291,20 @@ def last_channel(data_dir: Path, select=None) -> str | None:
 
 
 NO_IMMEDIATE_REPEAT = True     # supervisor 2026-10-19 (06:50 audit: a newly promoted primary was drawn back to back)
+# levi 2026-10-20 (peter 00221: at every era restart the per-era counts tie at 0 and list order drew AlJazeera then dwnews,
+# on the class order's low-tier targets): ties among the least-collected go to a seeded shuffle, never list order; the
+# seed is CHANNEL_TIE_SEED + the root's yt sessions (any outcome), recorded with the pick (meta.json channel_pick)
+CHANNEL_TIE_SEED = 0
+CHANNEL_TIE_RULE = "levi 2026-10-20: least-collected, ties by a seeded shuffle (seed + the root's yt sessions)"
+LAST_TIE: dict = {}
+
+
+def draw_seed(data_dir: Path) -> int:
+    """CHANNEL_TIE_SEED + every yt session dir under data_dir (accepted and _failed): one seed per draw, reproducible."""
+    root = Path(data_dir)
+    n = sum(1 for d in list((root / "youtube").glob("yt_*")) + list((root / "_failed" / "youtube").glob("yt_*"))
+            if d.is_dir())
+    return CHANNEL_TIE_SEED + n
 
 
 def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: bool | None = None, select=None) -> dict:
@@ -300,7 +315,14 @@ def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: boo
     exclude = set(exclude or ()) | {r["handle"] for r in disk_leaves(data_dir)}
     counts = collected_counts(data_dir, select)
     prim = [c for c in YT_CHANNELS if c["role"] == "primary"]
-    order = sorted(range(len(prim)), key=lambda i: (counts[prim[i]["handle"]], i))
+    seed = draw_seed(data_dir)
+    rnd = random.Random(seed)
+    key = {c["handle"]: rnd.random() for c in YT_CHANNELS}          # the seeded shuffle (list order fixes the draws)
+    order = sorted(range(len(prim)), key=lambda i: (counts[prim[i]["handle"]], key[prim[i]["handle"]]))
+    elig = [p for p in prim if p["handle"] not in exclude]
+    low = min((counts[p["handle"]] for p in elig), default=None)
+    LAST_TIE.clear()
+    LAST_TIE.update(rule=CHANNEL_TIE_RULE, seed=seed, tied=sorted(p["handle"] for p in elig if counts[p["handle"]] == low))
     last = last_channel(data_dir, select) if (NO_IMMEDIATE_REPEAT if no_repeat is None else no_repeat) else None
     if last and any(p["handle"] not in exclude and p["handle"] != last for p in prim):
         order = [i for i in order if prim[i]["handle"] != last] + [i for i in order if prim[i]["handle"] == last]
@@ -312,7 +334,7 @@ def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: boo
             continue
         spares = [s for s in YT_CHANNELS if s["role"] == "spare" and s["type"] == c["type"] and s["handle"] not in exclude]
         if spares:
-            return sorted(spares, key=lambda s: counts[s["handle"]])[0]
+            return sorted(spares, key=lambda s: (counts[s["handle"]], key[s["handle"]]))[0]
     raise RuntimeError("no live channel left in the list")
 
 
