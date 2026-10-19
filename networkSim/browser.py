@@ -1622,6 +1622,25 @@ _PLAY_JS = """
 })()
 """
 SELF_PAUSE_HOLD_S = 3.0
+# t53 (supervisor, peter's tw_100005 / tw_100006 read): after a state-1 underrun Twitch's own controller stays "paused" and
+# undoes a video.play() at once (start re-paused in the same ms, every press). On twitch a press re-paused within
+# RESUME_CHECK_S is retried through Twitch's play button (a click, or a pause / play cycle when the button says
+# playing over the paused element), which goes through the controller; after
+# TW_BUTTON_MAX_FAILS button presses that leave it paused, the collector stops pressing for that pause and the frozen
+# watchdog's re-entry (a reload) stays the fallback. Every press and its outcome go to ad_actions.jsonl.
+RESUME_CHECK_S = 1.0
+TW_BUTTON_MAX_FAILS = 3
+_TW_BUTTON_JS = """
+(function() {
+    const b = document.querySelector('button[data-a-target="player-play-pause-button"]');
+    if (!b) return JSON.stringify({present: false});
+    const st = b.getAttribute('data-a-player-state'), label = b.getAttribute('aria-label') || '';
+    const out = {present: true, state: st || (/^play/i.test(label) ? 'paused' : 'playing'), label: label};
+    if (%s) b.click();
+    return JSON.stringify(out);
+})()
+"""
+TW_BUTTON_CYCLE_GAP_S = 0.5     # the controller says playing over a paused element: pause, then play, through it
 
 
 class SelfPauseResumer:
@@ -1638,11 +1657,20 @@ class SelfPauseResumer:
         self.paused_since = None      # first observation of the current pause
         self.eligible_since = None    # start of the current eligible run (or of the wait after a press)
         self.stall_seen = False       # stall label on at any observation of the current pause
+        self.button_fails = 0         # twitch: button presses that left the current pause paused
+        self.gave_up = False          # twitch: TW_BUTTON_MAX_FAILS reached; the frozen watchdog takes over
+
+    def note_button_fail(self) -> None:
+        self.button_fails += 1
+        self.gave_up = self.button_fails >= TW_BUTTON_MAX_FAILS
 
     def step(self, state: dict | None, now: float) -> dict | None:
         if not state or not state.get("paused"):
             self.paused_since = self.eligible_since = None
             self.stall_seen = False
+            self.button_fails, self.gave_up = 0, False
+            return None
+        if self.gave_up:
             return None
         if self.paused_since is None:
             self.paused_since = now
@@ -1659,6 +1687,43 @@ class SelfPauseResumer:
         self.eligible_since = now                        # retry only after another hold
         return {"action": "resume_after_self_pause", "reason": "after_stall" if self.stall_seen else "no_stall",
                 "paused_s": round(now - self.paused_since, 3)}
+
+
+def resume_press(page, platform: str, resumer: "SelfPauseResumer", press: dict, wait) -> dict | None:
+    """One resume: video.play(); on twitch, if the element is paused again RESUME_CHECK_S later, Twitch's own play
+    button, then its outcome (a button press that leaves it paused counts toward resumer.gave_up). Returns the log
+    record (None when nothing was pressed)."""
+    if not page.eval(_PLAY_JS):
+        return None
+    rec = {**press, "via": "video_play"}
+    if platform != "twitch":
+        return rec
+
+    def paused() -> bool | None:
+        s = json.loads(page.eval(_PLAYER_STATE_JS) or "null")
+        return None if not s else bool(s.get("paused"))
+    wait(RESUME_CHECK_S)
+    if paused() is not True:
+        rec["outcome"] = "playing"
+        return rec
+    rec["outcome"] = "re_paused"
+    # Twitch's button: when its controller says paused, one click plays; when it says playing over the paused element
+    # (the 2026-10-17 self-pause DOM: "Pause (space/k)", data-a-player-state="playing"), a pause / play cycle through it
+    btn = json.loads(page.eval(_TW_BUTTON_JS % "true") or "null") or {"present": False}
+    rec["button"] = btn
+    if btn.get("present"):
+        if btn.get("state") == "playing":
+            wait(TW_BUTTON_CYCLE_GAP_S)
+            rec["button_cycle"] = json.loads(page.eval(_TW_BUTTON_JS % "true") or "null")
+        wait(RESUME_CHECK_S)
+        still = paused()
+        rec["button_outcome"] = "still_paused" if still is True else "playing"
+        if still is True:
+            resumer.note_button_fail()
+    else:
+        resumer.note_button_fail()
+    rec["button_fails"], rec["gave_up"] = resumer.button_fails, resumer.gave_up
+    return rec
 
 
 # addendum N (fixed 2026-10-18): content.js's frozen-playhead run, in seconds (= check_session.frozen_runs); the
@@ -1939,9 +2004,11 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
         try:
             now = time.time()
             press = resumer.step(json.loads(page.eval(_PLAYER_STATE_JS) or "null"), now)
-            if press and page.eval(_PLAY_JS) and log_path is not None:
-                with open(log_path, "a") as fh:
-                    fh.write(json.dumps({"ts": now, "platform": platform, **press}) + "\n")
+            if press:
+                rec = resume_press(page, platform, resumer, press, stop.wait)
+                if rec is not None and log_path is not None:
+                    with open(log_path, "a") as fh:
+                        fh.write(json.dumps({"ts": now, "platform": platform, **rec}) + "\n")
         except Exception:
             pass
         try:
