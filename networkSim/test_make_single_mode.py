@@ -51,10 +51,10 @@ def main() -> int:
         return 0
     assert cur == GOLDEN.read_text(), "single mode's make -n output changed (t53: byte-identical with the flag off)"
     import trio_slots                                    # the overrides a slot actually passes (exp.py --slot)
-    slot = dry(HERE / "Makefile", trio_slots.make_vars(trio_slots.slot_of("yt"), Path("/T")))
-    for want in ("dev lvi_yt parent 1: classid 1:10", "classid 1:11 htb", "parent 1:11 netem", "tcpdump -i lvo_yt",
-                 "/C/lvi_yt.pid", "--remote-debugging-port=9223", "/C/chrome_yt.pid", "/C/chrome_yt.log",
-                 "<REPO>/networkSim/in_cgroup.sh lvdc.slice/yt env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log",
+    slot = dry(HERE / "Makefile", trio_slots.make_vars(trio_slots.slot_of("yt1"), Path("/T")))   # t56: slot tags
+    for want in ("dev lvi_yt1 parent 1: classid 1:10", "classid 1:11 htb", "parent 1:11 netem", "tcpdump -i lvo_yt1",
+                 "/C/lvi_yt1.pid", "--remote-debugging-port=9223", "/C/chrome_yt1.pid", "/C/chrome_yt1.log",
+                 "<REPO>/networkSim/in_cgroup.sh lvdc.slice/yt1 env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log",
                  "[r]emote-debugging-port=9223", '> "/T/incoming.pcap" 2> "/T/tcpdump_in.err"',
                  '> "/T/outgoing.pcap" 2> "/T/tcpdump_out.err"', "mergecap -w /S/yt_1/merged.pcap /T/incoming.pcap "
                  "/T/outgoing.pcap", "rm /T/incoming.pcap"):
@@ -64,7 +64,7 @@ def main() -> int:
     # same burst / cburst / quantum tc derives from it) and netem, only the device and the egress class differ
     for st in (["BANDWIDTH=179kbit", "DELAY=45ms", "PLR=0.5%"], ["BANDWIDTH=296kbit", "DELAY=30ms", "PLR=0.2%"]):
         one = subprocess.run(["make", "-s", "-n", "slow", *VARS, *st], cwd=HERE, capture_output=True, text=True).stdout
-        tw = trio_slots.slot_of("tw")
+        tw = trio_slots.slot_of("tw1")
         trio = subprocess.run(["make", "-s", "-n", "slow", *VARS, *st, *trio_slots.make_vars(tw)], cwd=HERE,
                               capture_output=True, text=True).stdout
         assert one and trio.replace(tw.ifb_in, "ifb0").replace(tw.egress_class, "1:10") == one, (one, trio)
@@ -91,6 +91,11 @@ def main() -> int:
     assert "--test-type" in fs and "--no-sandbox" in fs and "--test-type" not in pl
     print("test_make_single_mode: ok")
     return 0
+
+
+def test_make_single_mode():
+    """The script's checks under pytest too (levi t58 T-1: the apply gate runs both runners)."""
+    assert main() == 0
 
 
 if __name__ == "__main__":

@@ -47,5 +47,10 @@ def main() -> int:
     return 0
 
 
+def test_main():
+    """The script's own checks under pytest too (levi t58 T-1: the apply gate runs both runners)."""
+    assert main() in (0, None)
+
+
 if __name__ == "__main__":
     sys.exit(main())

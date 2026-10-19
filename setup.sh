@@ -118,7 +118,8 @@ echo "Installing Python packages..."
     scapy \
     "websocket-client>=1.0" \
     pandas \
-    numpy
+    numpy \
+    pytest          # the apply gate's second runner (levi t58 T-1: ops/apply_at_boundary.sh runs pytest too)
 
 # Optional: network_core (may not be needed on all machines).
 if ! "$VENV/bin/pip" install --quiet "network_core>=0.5.3" 2>/dev/null; then
