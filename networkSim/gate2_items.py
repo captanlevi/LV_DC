@@ -5,8 +5,9 @@ and the single-mode reference read the same way). Read-only; no media truth.
 
 Checklist as revised by levi's gate-2 call on pilot-1 (2026-10-19, from round 1):
   3  frames coverage (levi's ruling 2026-10-20 §2, gating): LVQoE extract_frames.frames_coverage (recovered media
-     bodies / sized media responses; --frames-coverage, scripts/audit/frames_coverage.py's json) >= single mode's min for
-     the platform (brad's frozen single table, --single-table / --single-table-sha); not read: a FAIL.
+     bodies / sized media responses; --frames-coverage, scripts/audit/frames_coverage.py's json) >= min(single mode's min
+     for the platform, 1.0) (brad's frozen single table, --single-table / --single-table-sha); not read, or the two
+     definitions differ: a FAIL.
 An item not recorded is a FAIL (ok false, recorded false; levi); ok null only where a rule says "reported" (4a
 insufficient support, 5 not shaper-bound, 1 / 2 content band only). Admission: no gated ok is false.
   1 / 2 verify / check: PASS; a non-PASS whose every reason is a content band (verify's B/s-per-tier p10..p90; the speed
@@ -421,28 +422,41 @@ def load_single_table(path: Path, expect: str | None) -> dict:
     if not expect or not sha.startswith(expect):
         raise SystemExit(f"refused: single table sha {sha[:12]} (expected {expect})")
     t = json.loads(raw)
-    mins = (t.get("frames_coverage") or {}).get("min_by_platform")
+    fc = t.get("frames_coverage") or {}
+    mins = fc.get("min_by_platform")
     if not mins:
         raise SystemExit("refused: the single table carries no frames_coverage.min_by_platform")
-    return {"sha": sha, "min_by_platform": mins, "definition": (t.get("frames_coverage") or {}).get("definition")}
+    return {"sha": sha, "min_by_platform": mins, "definition": fc.get("definition"), "code": fc.get("code") or t.get("code")}
+
+
+ITEM3_FLOOR_CAP = 1.0   # levi on f74eb4f (prereg 45ac220a): coverage >= 1 means every logged sized response recovered
 
 
 def item3(sd: Path, coverage: dict | None, table: dict | None) -> dict:
-    """Item 3 (levi's ruling 2026-10-20 §2, gating): frames coverage, LVQoE extract_frames.frames_coverage (the one
-    definition: recovered media bodies / sized media responses; scripts/audit/frames_coverage.py's json, --frames-coverage),
-    >= single mode's min for the platform (brad's frozen table, --single-table). Not read (either input missing, or the
-    session absent from the coverage json): recorded False, ok False (an item not recorded is a FAIL)."""
+    """Item 3 (levi's ruling 2026-10-20 §2, signed on f74eb4f with two changes; gating): frames coverage, LVQoE
+    extract_frames.frames_coverage (the one definition: recovered media bodies / sized media responses;
+    scripts/audit/frames_coverage.py's json, --frames-coverage) >= the floor min(single mode's min for the platform,
+    ITEM3_FLOOR_CAP) (brad's frozen table, --single-table; a single min above 1 is the log's undercount, never a gate).
+    Not read (an input missing, the session absent from the coverage json, or the coverage json's definition not the
+    table's): recorded False, ok False (an item not recorded is a FAIL). Both code stamps recorded."""
     plat = Path(sd).parent.name
     rec = ((coverage or {}).get("sessions") or {}).get(Path(sd).name)
+    if table is not None and coverage is not None and coverage.get("definition") != table.get("definition"):
+        return {"recorded": False, "ok": False, "reading": "not read: definition mismatch",
+                "coverage_definition": coverage.get("definition"), "table_definition": table.get("definition"),
+                "coverage_code": coverage.get("code"), "table_code": table.get("code")}
     if table is None or rec is None or rec.get("coverage") is None or plat not in table["min_by_platform"]:
         why = ("no --single-table" if table is None else "no coverage record for the session" if rec is None
                else "no sized media response or no frames summary" if rec.get("coverage") is None
                else f"no single-mode min for {plat}")
         return {"recorded": False, "ok": False, "reading": f"not read: {why}"}
-    lo = float(table["min_by_platform"][plat])
+    single_min = float(table["min_by_platform"][plat])
+    floor = min(single_min, ITEM3_FLOOR_CAP)
     return {"coverage": rec["coverage"], "bodies": rec.get("bodies"), "responses": rec.get("responses"),
-            "frames_schema": rec.get("frames_schema"), "single_min": lo, "table_sha": table["sha"][:12],
-            "definition": coverage.get("definition"), "ok": rec["coverage"] >= lo}
+            "frames_schema": rec.get("frames_schema"), "single_min": single_min, "floor": floor,
+            "table_sha": table["sha"][:12], "definition": coverage.get("definition"),
+            "coverage_code": coverage.get("code"), "table_code": table.get("code"), "ok": rec["coverage"] >= floor}
+
 
 
 def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dict | None = None,

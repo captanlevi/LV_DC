@@ -284,7 +284,8 @@ def test_item3_frames_coverage_against_the_single_min():
     import hashlib
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
-        tab = {"frames_coverage": {"min_by_platform": {"youtube": 1.0, "twitch": 0.9}, "definition": "extract_frames.frames_coverage"}}
+        tab = {"frames_coverage": {"min_by_platform": {"youtube": 1.0, "twitch": 0.9, "tiktok": 1.3},
+                                   "definition": "extract_frames.frames_coverage", "code": {"sha": "b" * 40, "dirty": False}}}
         raw = json.dumps(tab).encode()
         (d / "table.json").write_bytes(raw)
         sha = hashlib.sha256(raw).hexdigest()
@@ -295,13 +296,23 @@ def test_item3_frames_coverage_against_the_single_min():
                 raise AssertionError(bad)
             except SystemExit:
                 pass
-        cov = {"definition": "extract_frames.frames_coverage", "sessions": {
+        cov = {"definition": "extract_frames.frames_coverage", "code": {"sha": "a" * 40, "dirty": False}, "sessions": {
             "yt_100001": {"coverage": 1.07, "bodies": 199, "responses": 186, "frames_schema": 6},
             "tw_100001": {"coverage": 0.5, "bodies": 1, "responses": 2, "frames_schema": 6},
             "ti_100001": {"coverage": None, "bodies": None, "responses": 0, "frames_schema": None}}}
         yt = G.item3(d / "youtube" / "yt_100001", cov, t)
-        assert yt["ok"] is True and yt["single_min"] == 1.0 and yt["table_sha"] == sha[:12], yt
+        assert yt["ok"] is True and (yt["single_min"], yt["floor"]) == (1.0, 1.0) and yt["table_sha"] == sha[:12], yt
+        assert yt["coverage_code"]["sha"] == "a" * 40 and yt["table_code"]["sha"] == "b" * 40
         assert G.item3(d / "twitch" / "tw_100001", cov, t)["ok"] is False                    # below the min
+        # levi on f74eb4f: the floor is min(single min, 1.0): a single min above 1 (the log's undercount) never gates
+        cov["sessions"]["ti_100002"] = {"coverage": 1.1, "bodies": 11, "responses": 10, "frames_schema": 6}
+        tt = G.item3(d / "tiktok" / "ti_100002", cov, t)
+        assert tt["ok"] is True and (tt["single_min"], tt["floor"]) == (1.3, 1.0), tt
+        # the coverage json's definition must be the table's (a FAIL, both stamps recorded)
+        other = {**cov, "definition": "extract_frames.frames_coverage_v2"}
+        mm = G.item3(d / "youtube" / "yt_100001", other, t)
+        assert mm["ok"] is False and mm["recorded"] is False and mm["reading"] == "not read: definition mismatch", mm
+        assert mm["coverage_definition"] == "extract_frames.frames_coverage_v2" and mm["table_code"]["sha"] == "b" * 40
         for sd, tb, why in ((d / "tiktok" / "ti_100001", t, "no sized media response"),
                             (d / "youtube" / "yt_100009", t, "no coverage record"),
                             (d / "youtube" / "yt_100001", None, "no --single-table")):
