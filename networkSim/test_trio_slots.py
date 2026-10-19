@@ -421,7 +421,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
         calls.append(("pick", p, ex, root, siblings)) and None or (None, None, None)
     O.session_matrix = (lambda p, f=None, ex=(), data_dir=None, select=None, reserved=None, key=None:
                         calls.append(("matrix", p, f, ex, data_dir, select, reserved, key)) or "A")
-    O.accepted_sessions = lambda p, root=None: calls.append(("accepted", p, root)) and 0 or 0
+    O.accepted_sessions = lambda p, root=None, select=None: calls.append(("accepted", p, root)) and 0 or 0
     O.report_flags = lambda p, t, root=None: []
     O._summary = lambda: None
     O.preclean = lambda: calls.append(("preclean",))

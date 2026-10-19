@@ -486,15 +486,17 @@ def _slots_log(session_dir: Path | None) -> Path | None:
     return Path(session_dir).resolve().parent.parent / "_summaries" / "trio_slots.jsonl"
 
 
-def publish_stream(session_dir: Path | None, platform: str, url: str | None) -> None:
-    """This slot's current stream to the slots log (best effort; never raises)."""
+def publish_stream(session_dir: Path | None, platform: str, url: str | None, event: str = "stream") -> None:
+    """This slot's stream to the slots log (best effort; never raises): "stream" once landed, "intent" when picked, before
+    the confirm / preroll (t58 N-2, supervisor: a sibling refilling during that time read nothing and could take the same
+    room). A later intent or stream of the slot's session replaces it."""
     log = _slots_log(session_dir)
     if log is None or not url:
         return
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as fh:
-            fh.write(json.dumps({"event": "stream", "slot": os.environ["LVDC_SLOT_TAG"], "session": Path(session_dir).name,
+            fh.write(json.dumps({"event": event, "slot": os.environ["LVDC_SLOT_TAG"], "session": Path(session_dir).name,
                                  "platform": platform, "url": _norm_room(url), "run": os.environ["LVDC_TRIO_RUN"],
                                  "t": time.time()}) + "\n")
     except Exception:
@@ -503,7 +505,8 @@ def publish_stream(session_dir: Path | None, platform: str, url: str | None) -> 
 
 def sibling_streams(session_dir: Path | None, platform: str, log: Path | None = None) -> list[str]:
     """The streams (normalised URLs) of `platform` that this run's other slots hold now: each slot's latest session
-    (a start without a later end / exit for that slot) and its latest stream event."""
+    (a start without a later end / exit for that slot) and its latest stream or intent event (a pick claims its stream
+    before the confirm / preroll: t58 N-2)."""
     log = log or _slots_log(session_dir)
     if log is None or not log.exists():
         return []
@@ -519,7 +522,7 @@ def sibling_streams(session_dir: Path | None, platform: str, log: Path | None = 
             cur[s] = [e.get("session"), e.get("platform"), None]
         elif e.get("event") in ("end", "exit"):
             cur.pop(s, None)
-        elif e.get("event") == "stream" and e.get("run") == run and s in cur and cur[s][0] == e.get("session"):
+        elif e.get("event") in ("stream", "intent") and e.get("run") == run and s in cur and cur[s][0] == e.get("session"):
             cur[s][2] = e.get("url")
     return sorted({u for s, (_, pl, u) in cur.items() if s != me and pl == platform and u})
 
@@ -566,6 +569,17 @@ TT_LOW_STATES = {1, 2, 3, 4}   # shaper states in which a dead-looking player is
 # the PLAYING_REF_S before the dead clock (supervisor 2026-10-18, peter's ti_43 read): at state 8 (3636 kbit) tt's
 # hd5 stream arrived at about 2 Mbit/s through the dead run (pcap) and the share of the shaper rate alone read no_media.
 SHAPED_IFACE = os.environ.get("LVDC_IFB_INGRESS", "ifb0")
+# t58 L-1 (brad's audit): in a trio / N-slot session exp.py sets SHAPED_IFACE to the slot's own ingress IFB (lvi_<tag>)
+# and RX_OWN_IFB, so tt's room-end rule (b) reads the slot's own downstream bytes; summing every interface (siblings'
+# streams included) meant its idle test never held in a trio, and ifb0 does not exist there (make disable). Single mode
+# unchanged: every interface, as before
+RX_OWN_IFB = False
+
+
+def room_rx_source() -> str:
+    """The bytes tt's room-end rule (b) reads (meta.json room_rx_source): the slot's own ingress IFB, or every
+    interface (single mode)."""
+    return SHAPED_IFACE if RX_OWN_IFB else "all_interfaces"
 PLAYER_DEAD_ALIVE_SHARE = 0.5
 PLAYING_REF_S = 30.0              # the pre-dead window whose shaped downstream is the stream's own rate
 PLAYING_REF_MIN_PROGRESS = 0.8    # ... counted only when the player progressed on this share of its ticks
@@ -1515,8 +1529,10 @@ def _video_is_advancing(page: CDPPage) -> bool:
 
 
 def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first_url: str | None = None,
-                      exclude: list[str] | None = None, record: dict | None = None) -> str | None:
-    """Returns the list URL that delivered a playing live video (None if none did)."""
+                      exclude: list[str] | None = None, record: dict | None = None, claim=None) -> str | None:
+    """Returns the list URL that delivered a playing live video (None if none did). claim(url), when given, is called with
+    the channel as soon as it is picked (a given channel page before navigating; twitch's directory pick on the click),
+    before the playback check (t58 N-2: the sibling claim)."""
     """
     Try each URL in LIVE_URLS[platform].  For directory/discovery pages,
     execute platform-specific JS to click into a live room.  Then kick play
@@ -1528,6 +1544,8 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
         urls = [first_url]
     for url in urls:
         print(f"[browser] Navigating to {url}", flush=True)
+        if claim is not None and first_url:
+            claim(url)
         page.navigate(url)
         # Wait until location.href actually changes — _wait_for_load alone is not
         # enough because the old page may already be in readyState=complete.
@@ -1562,6 +1580,8 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
                     record.update(directory=url, excluded_recent=exclude, candidates=res.get("candidates"),
                                   pick=res.get("pick"), error=res.get("error"))
                 clicked = res.get("pick") or (page.eval(pick_js) if not res.get("candidates") else None)
+                if claim is not None and isinstance(clicked, str) and clicked.startswith("http"):
+                    claim(clicked)
             else:
                 clicked = page.eval(pick_js)
             if clicked:
@@ -2816,7 +2836,8 @@ class BrowserSession:
             self.tw_pick = {**({"sibling_excluded": sib} if sib else {}), **({"not_usable_excluded": na} if na else {})}
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
                                               exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)),
-                                              record=self.tw_pick)
+                                              record=self.tw_pick,
+                                              claim=lambda u: publish_stream(self._session_dir, "twitch", u, "intent"))
         else:
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
         if not self.list_url:
@@ -3029,6 +3050,7 @@ class BrowserSession:
               f"{TT_RECENT_ROOMS_N} sessions", flush=True)
         for c in order[:TT_MAX_TRIES]:
             t: dict = {"room": c["href"], "viewers": c["viewers"], "live_badge": c["live_badge"], "t_nav": time.time()}
+            publish_stream(self._session_dir, "tiktok", c["href"], "intent")      # t58 N-2: claimed before the preroll
             try:
                 if not c.get("fallback"):
                     page.navigate(c["href"])
@@ -3069,7 +3091,9 @@ class BrowserSession:
                     self.room_play_clicks += 1
                 except Exception:
                     pass
-            dead = w.feed(s, time.time(), shaper_state=state, rx_bytes=_rx_bytes(), shaped_rx_bytes=_shaped_rx_bytes())
+            own = _shaped_rx_bytes()
+            dead = w.feed(s, time.time(), shaper_state=state, rx_bytes=own if RX_OWN_IFB else _rx_bytes(),
+                          shaped_rx_bytes=own)
             self.room_discontinuities = w.discontinuities
             if dead:
                 rec = {"reason": dead, "at": time.time(), "sample": s, "shaper_state": state,
@@ -3175,6 +3199,8 @@ class BrowserSession:
                     time.sleep(1)
                 picked = self._page.eval(_pick_new_room_js(visited))
                 rec["picked"], rec["t_enter"] = picked, time.time()
+                if isinstance(picked, str) and picked:
+                    publish_stream(self._session_dir, "tiktok", picked, "intent")     # t58 N-2: claimed on the click
                 ok = False
                 deadline = time.time() + 30
                 while time.time() < deadline and not self._stop.is_set():

@@ -6,7 +6,9 @@ they sit under data/_trio. The rule is this one predicate; the era changes only 
 """
 from __future__ import annotations
 
-ERA = "t55-gro-off-2026-10-19"      # the capture regime of the counted collection (GRO / GSO / TSO off)
+# t58 L-5 (levi): bumped at the N-slot adoption, the count boundary it restarts; earlier eras (t55-gro-off-2026-10-19:
+# the trio counted rounds at c1f9181) and every pilot are not of record for this era's steering, targets or not_usable
+ERA = "t56-nslot-2026-10-19"         # the capture regime of the counted collection (GRO / GSO / TSO off), N-slot
 
 
 def is_record(meta: dict | None) -> bool:

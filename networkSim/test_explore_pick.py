@@ -122,6 +122,27 @@ def test_the_balance_start_state_reads_only_the_selected_runs():
     assert "most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record)" in src
 
 
+def test_one_membership_rule_for_the_trio_targets():
+    """t58 L-3 / L-5 (levi; audit item 6): a counted run's targets and failure count count its sessions of record only
+    (orchestrate.trio_select, record.is_record: the flag and the current ERA); a pilot run counts every trio session."""
+    import orchestrate as O
+    import record
+    with tempfile.TemporaryDirectory() as d:
+        for i, (rec, era) in enumerate(((True, record.ERA), (False, record.ERA), (True, "t55-gro-off-2026-10-19"))):
+            sd = _sess(d, f"tw_{i}", "TW-M", float(i))
+            m = json.loads((sd / "meta.json").read_text())
+            (sd / "meta.json").write_text(json.dumps({**m, "concurrency": {"record": rec, "era": era}}))
+        saved = O.TRIO_RECORD
+        try:
+            O.TRIO_RECORD = True
+            assert O.trio_select() is record.is_record and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 1
+            O.TRIO_RECORD = False
+            assert O.trio_select() is None and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 3
+        finally:
+            O.TRIO_RECORD = saved
+    assert record.ERA == "t56-nslot-2026-10-19"
+
+
 def main() -> int:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

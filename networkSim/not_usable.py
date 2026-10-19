@@ -1,6 +1,7 @@
 """not_usable.py: rotation hygiene for the trio (levi / supervisor 2026-10-19, after counted round 1's yt_100007 on
 @FuboSports: usable 0.22, startup_failure): a yt channel, twitch channel or tt room with NOT_USABLE_FAILURES
-startup_failure sessions in the trio root (accepted or _failed) is set aside, never picked, until a manual check clears
+startup_failure sessions of record in the trio root (accepted or _failed; record.is_record, t58 L-3 / L-5: one membership
+rule with the targets and the steering) is set aside, never picked, until a manual check clears
 it. A manual check is a line in the trio root's _summaries/not_usable_cleared.json, {key: {"cleared_at": <epoch s>,
 "by": ..., "note": ...}}; only startup_failures after cleared_at count again. Each pick records the keys set aside, with
 their sessions. Single mode is unchanged (its own root is never read here).
@@ -9,6 +10,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import record
 
 NOT_USABLE_FAILURES = 2
 CLEARED_FILE = Path("_summaries") / "not_usable_cleared.json"
@@ -40,8 +43,8 @@ def scan(trio_root: Path, platform: str) -> dict[str, list[str]]:
             meta = json.loads((d / "meta.json").read_text())
         except (OSError, ValueError):
             continue
-        if chk.get("session_class") != "startup_failure":
-            continue
+        if chk.get("session_class") != "startup_failure" or not record.is_record(meta):
+            continue                           # t58 L-3 / L-5: sessions of record only (one membership rule)
         k = key_of(platform, meta)
         t = float(meta.get("started_at") or 0)
         if k and t > float((cleared.get(k) or {}).get("cleared_at") or 0):

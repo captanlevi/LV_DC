@@ -97,20 +97,6 @@ def test_session_record():
     assert set(rec["lvdc_commit"]) >= {"sha", "dirty"}
 
 
-def main() -> int:
-    test_slot_table()
-    test_reservation_and_fullscreen_token()
-    test_pick_matrix_reserved()
-    test_run_at_n6()
-    test_session_record()
-    print("test_nslot: ok")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-
-
 def test_sibling_streams():
     """levi (t56): a slot's landed stream goes to the run's slots log; a refill's choice sees its running siblings'
     streams of the same platform (not its own, not an ended slot's, not another run's)."""
@@ -212,3 +198,116 @@ def test_exp_accepts_the_composition_tags():
     finally:
         T.SLOTS.clear()
         T.SLOTS.update(saved)
+
+
+def test_a_pick_is_claimed_before_it_lands():
+    """t58 N-2 (brad's audit): a pick is claimed at once ("intent" in the slots log), before tt's confirm / preroll or
+    twitch's playback check, so a sibling refilling meanwhile excludes it; the slot's later intent (the next try) or its
+    landed stream replaces the claim. _navigate_to_live calls claim() with the twitch directory pick before the
+    playback check."""
+    try:
+        import websocket  # noqa: F401
+    except ImportError:
+        sys.modules["websocket"] = types.ModuleType("websocket")
+    import browser as B
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "_trio"
+        log = root / "_summaries" / "trio_slots.jsonl"
+        log.parent.mkdir(parents=True)
+        log.write_text("".join(json.dumps(e) + "\n" for e in (
+            {"event": "start", "slot": "tt1", "session": "ti_100020", "platform": "tiktok", "run": "R"},
+            {"event": "start", "slot": "tt2", "session": "ti_100021", "platform": "tiktok", "run": "R"})))
+        env = {k: os.environ.get(k) for k in ("LVDC_TRIO_RUN", "LVDC_SLOT_TAG")}
+        try:
+            os.environ.update(LVDC_TRIO_RUN="R", LVDC_SLOT_TAG="tt1")
+            mine = root / "tiktok" / "ti_100020"
+            B.publish_stream(mine, "tiktok", "https://www.tiktok.com/@a/live", "intent")      # first try, in preroll
+            os.environ["LVDC_SLOT_TAG"] = "tt2"
+            other = root / "tiktok" / "ti_100021"
+            assert B.sibling_streams(other, "tiktok") == ["https://www.tiktok.com/@a/live"]
+            os.environ["LVDC_SLOT_TAG"] = "tt1"
+            B.publish_stream(mine, "tiktok", "https://www.tiktok.com/@b/live", "intent")      # @a failed: next try
+            os.environ["LVDC_SLOT_TAG"] = "tt2"
+            assert B.sibling_streams(other, "tiktok") == ["https://www.tiktok.com/@b/live"]
+            os.environ["LVDC_SLOT_TAG"] = "tt1"
+            B.publish_stream(mine, "tiktok", "https://www.tiktok.com/@b/live")                # landed
+            os.environ["LVDC_SLOT_TAG"] = "tt2"
+            assert B.sibling_streams(other, "tiktok") == ["https://www.tiktok.com/@b/live"]
+            ev = [json.loads(x) for x in log.read_text().splitlines()]
+            assert [e["event"] for e in ev[2:]] == ["intent", "intent", "stream"], ev
+        finally:
+            for k, v in env.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+    calls = []
+
+    class Page:
+        def navigate(self, url):
+            calls.append(("navigate", url))
+
+        def eval(self, js):
+            if js == "location.href":
+                return "https://www.twitch.tv/directory/all"
+            if "exclude" in js and "candidates" in js:
+                return json.dumps({"pick": "https://www.twitch.tv/somechan", "candidates": ["https://www.twitch.tv/somechan"]})
+            return True
+    saved = (B._wait_for_load, B._video_is_advancing, B.LIVE_URLS.get("twitch"))
+    B._wait_for_load, B._video_is_advancing = (lambda *a, **k: None), (lambda page: calls.append(("check", None)) or False)
+    B.LIVE_URLS["twitch"] = ["https://www.twitch.tv/directory/all"]
+    try:
+        B._navigate_to_live(Page(), "twitch", timeout=0.05, exclude=[], record={},
+                            claim=lambda u: calls.append(("claim", u)))
+    finally:
+        B._wait_for_load, B._video_is_advancing, B.LIVE_URLS["twitch"] = saved
+    order = [c[0] for c in calls]
+    assert ("claim", "https://www.twitch.tv/somechan") in calls and order.index("claim") < order.index("check"), calls
+
+
+def test_tt_idle_rule_reads_the_slots_own_ifb():
+    """t58 L-1 (brad's audit): in a slot, tt's room-end rule (b) reads the slot's own ingress IFB (exp.py sets
+    SHAPED_IFACE = lvi_<tag> and RX_OWN_IFB); with every interface summed, a sibling's stream kept the idle test false
+    and a dead room never ended. Single mode keeps every interface; meta records the source (room_rx_source)."""
+    try:
+        import websocket  # noqa: F401
+    except ImportError:
+        sys.modules["websocket"] = types.ModuleType("websocket")
+    import browser as B
+    assert B.RX_OWN_IFB is False and B.room_rx_source() == "all_interfaces"
+    w_own, w_all = B.TTRoomWatch(t_max_s=60), B.TTRoomWatch(t_max_s=60)
+    flat = {"has_video": True, "src": "blob:x", "rs": 4, "buf_end": 5.0, "ct": 3.0, "decoded": 100}
+    out_own = out_all = None
+    for i in range(130):                                   # the slot's own class idle; a sibling streams 500 kB/s
+        t = 1000.0 + i
+        out_own = out_own or w_own.feed(dict(flat), t, shaper_state=8, rx_bytes=10_000, shaped_rx_bytes=10_000)
+        out_all = out_all or w_all.feed(dict(flat), t, shaper_state=8, rx_bytes=10_000 + 500_000 * i)
+    assert out_own == "no_progress" and out_all is None, (out_own, out_all)
+    src = (Path(__file__).resolve().parent / "exp.py").read_text()
+    assert "_browser_mod.SHAPED_IFACE, _browser_mod.RX_OWN_IFB = SLOT.ifb_in, True" in src
+    assert '"room_rx_source": _room_rx_source()' in src and "return _b.room_rx_source()" in src
+    bsrc = (Path(__file__).resolve().parent / "browser.py").read_text()
+    assert "rx_bytes=own if RX_OWN_IFB else _rx_bytes()" in bsrc
+    saved = (B.SHAPED_IFACE, B.RX_OWN_IFB)
+    try:
+        B.SHAPED_IFACE, B.RX_OWN_IFB = T.SLOTS["tt1"].ifb_in, True
+        assert B.room_rx_source() == "lvi_tt1"
+    finally:
+        B.SHAPED_IFACE, B.RX_OWN_IFB = saved
+
+
+def main() -> int:
+    test_slot_table()
+    test_reservation_and_fullscreen_token()
+    test_pick_matrix_reserved()
+    test_run_at_n6()
+    test_session_record()
+    test_sibling_streams()
+    test_yt_sibling_exclusion_and_long_not_live()
+    test_exp_accepts_the_composition_tags()
+    test_a_pick_is_claimed_before_it_lands()
+    test_tt_idle_rule_reads_the_slots_own_ifb()
+    print("test_nslot: ok")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

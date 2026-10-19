@@ -215,16 +215,28 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
         balance_report(platform, _RUNS_DIR, yt_matrix=yt_matrix, matrix_id=MATRIX_IDS.get(platform))
 
 
-def accepted_sessions(platform: str, runs_dir: Path | None = None) -> int:
+def accepted_sessions(platform: str, runs_dir: Path | None = None, select=None) -> int:
     """PASS sessions on disk (data/<platform>/*/check.json); a FAIL is archived to data/_failed and not counted. The
-    batch recounts these at every start, so a restart resumes where it stopped. runs_dir: the trio's own root."""
+    batch recounts these at every start, so a restart resumes where it stopped. runs_dir: the trio's own root; select:
+    meta.json -> bool, the sessions that count (trio_select(): a counted run's sessions of record, t58 L-3 / L-5)."""
     n = 0
     for c in ((runs_dir or _RUNS_DIR) / platform).glob("*/check.json"):
         try:
-            n += json.loads(c.read_text()).get("verdict") == "PASS"
+            if json.loads(c.read_text()).get("verdict") != "PASS":
+                continue
+            n += select is None or bool(select(json.loads((c.parent / "meta.json").read_text())))
         except Exception:
             pass
     return n
+
+
+def trio_select():
+    """t58 L-3 / L-5 (levi; brad's audit item 6): one membership rule for the trio's targets, its failure count, the
+    rotation hygiene (not_usable) and the steering: a counted run (--trio-record) counts its sessions of record only
+    (record.is_record: the flag and the current ERA); a pilot run counts every session in the trio root, as before
+    (counting record ones only would never reach a pilot's targets)."""
+    import record
+    return record.is_record if TRIO_RECORD else None
 
 
 def free_share() -> float:
@@ -447,7 +459,8 @@ def _account(p: str, rc: int, before: int, channel: dict | None, category: dict 
         not_live[category.get("channel") or category["name"]] = now
     if rc not in NOT_A_FAILURE:
         frozen[p] = 0
-        fails[p] = 0 if (accepted_sessions(p, runs_dir) if runs_dir else accepted_sessions(p)) > before else fails[p] + 1
+        fails[p] = 0 if (accepted_sessions(p, runs_dir, trio_select()) if runs_dir else accepted_sessions(p)) > before \
+            else fails[p] + 1
     if fails[p] >= MAX_CONSECUTIVE_FAIL and p not in paused:
         paused[p] = f"{fails[p]} consecutive sessions without a PASS"
     if p in paused:
@@ -606,7 +619,7 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         print(f"\n  PREFLIGHT FAILED for the {p} slot ({', '.join(pf['problems'])}): draining the trio. "
               f"{json.dumps({k: pf['checks'][k] for k in pf['problems']})}")
         return False
-    before, now = accepted_sessions(p, troot), time.time()
+    before, now = accepted_sessions(p, troot, trio_select()), time.time()
     # the pick and the coverage rule count the trio's own sessions (data/_trio: the sessions of record, levi 00265); trio v1
     # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
     sib = {(r.get("channel") or {}).get("handle") for t2, r in running.items() if t2 != tag and r.get("channel")} - {None}
@@ -818,7 +831,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                     _account(p, rc, r["before"], r["channel"], r["category"], r["now"], paused, fails, frozen, not_live,
                              troot)
             draining = bool(stop_signal) or end_rc != 0 or drain_path.exists()
-            done = {p: accepted_sessions(p, troot) >= targets[p] for p in targets}
+            done = {p: accepted_sessions(p, troot, trio_select()) >= targets[p] for p in targets}
             todo = [tag for p in BATCH_ORDER for tag, s in T.SLOTS.items() if s.platform == p and p in targets
                     and p not in paused and (max_per_slot is None or started[tag] < max_per_slot) and not done[p]]
             if not running and (draining or not todo):
@@ -866,7 +879,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     end_rc = end_rc or (EXIT_STOPPED if stop_signal else 0)
     print(f"\nTRIO {run_id} finished (rc {end_rc})." + (f" Paused: {paused}" if paused else ""))
     for p in targets:
-        print(f"  {p}: {accepted_sessions(p, troot)}/{targets[p]} trio sessions accepted, "
+        print(f"  {p}: {accepted_sessions(p, troot, trio_select())}/{targets[p]} trio sessions accepted, "
               f"{sum(n for tag, n in started.items() if T.SLOTS[tag].platform == p)} started")
     return end_rc
 

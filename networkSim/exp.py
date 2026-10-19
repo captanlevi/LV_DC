@@ -486,6 +486,12 @@ async def experiment(
     return None
 
 
+def _room_rx_source() -> str:
+    """t58 L-1: browser.room_rx_source (exp.py's `browser` is the session's Browser, not the module)."""
+    import browser as _b
+    return _b.room_rx_source()
+
+
 def save_json(path: str | Path, data: list[NetLabel]):
     save_data = [asdict(obj) for obj in data]
     with open(path, "w") as f:
@@ -640,6 +646,8 @@ if __name__ == "__main__":
         SLOT = trio_slots.slot_of(args.slot)
         import browser as _browser_mod          # every CDP call of browser.py and session_meta goes to the slot's port
         _browser_mod.CDP_BASE = session_meta.CDP_BASE = f"http://localhost:{SLOT.cdp_port}"
+        # t58 L-1: tt's idle rule and the shaped-bytes record read this slot's own ingress IFB, never ifb0 / every iface
+        _browser_mod.SHAPED_IFACE, _browser_mod.RX_OWN_IFB = SLOT.ifb_in, True
         LAYOUT = trio_slots.layout_of(SLOT, os.environ)  # design §4: the "fb" layout puts each slot at its own origin
         if LAYOUT["layout"] == "fb":
             _browser_mod.WINDOW_ORIGIN, _browser_mod.X_SCREEN_PX = tuple(LAYOUT["origin"]), tuple(LAYOUT["x_screen_px"])
@@ -881,6 +889,8 @@ if __name__ == "__main__":
                                            **decode_path.hevc_decision(browser.decode_gpu, browser.decode_page)},
                               tw_pick=browser.tw_pick, room_play_clicks=browser.room_play_clicks,
                               room_discontinuities=browser.room_discontinuities,
+                              # t58 L-1: the bytes tt's room-end rule (b) reads (a slot's own IFB, or every interface)
+                              **({"room_rx_source": _room_rx_source()} if platform == "tiktok" else {}),
                               entry_quality=browser.entry_quality)
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data

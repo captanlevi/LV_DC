@@ -10,13 +10,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import not_usable as N  # noqa: E402
+import record  # noqa: E402
+
+REC = {"concurrency": {"record": True, "era": record.ERA}}       # a session of record (t58 L-3 / L-5)
 
 
-def _sess(root: Path, plat: str, name: str, cls: str, t: float, failed: bool = True, **meta):
+def _sess(root: Path, plat: str, name: str, cls: str, t: float, failed: bool = True, rec: bool = True, **meta):
     d = root / ("_failed" if failed else "") / plat / name
     d.mkdir(parents=True)
     (d / "check.json").write_text(json.dumps({"verdict": "FAIL" if failed else "PASS", "session_class": cls}))
-    (d / "meta.json").write_text(json.dumps({"started_at": t, **meta}))
+    (d / "meta.json").write_text(json.dumps({"started_at": t, **(REC if rec else {}), **meta}))
 
 
 def test_set_aside_and_clear():
@@ -36,6 +39,11 @@ def test_set_aside_and_clear():
         _sess(tr, "youtube", "yt_100013", "startup_failure", 400.0, channel_handle="@FuboSports")
         _sess(tr, "youtube", "yt_100014", "startup_failure", 500.0, channel_handle="@FuboSports")
         assert N.set_aside(tr, "youtube") == {"@FuboSports": ["yt_100013", "yt_100014"]}   # failures after the clear
+        # t58 L-3 / L-5: a pilot's or an earlier era's startup_failures never count (one membership rule)
+        _sess(tr, "tiktok", "ti_100015", "startup_failure", 1.0, rec=False, channel_url="https://www.tiktok.com/@a/live")
+        _sess(tr, "tiktok", "ti_100016", "startup_failure", 2.0, channel_url="https://www.tiktok.com/@a/live",
+              concurrency={"record": True, "era": "t55-gro-off-2026-10-19"})
+        assert N.set_aside(tr, "tiktok") == {}
         assert N.trio_root_of(tr / "youtube" / "yt_100099") == tr.resolve()
         assert N.trio_root_of(Path(d) / "youtube" / "yt_99") is None             # single mode: never read
 
