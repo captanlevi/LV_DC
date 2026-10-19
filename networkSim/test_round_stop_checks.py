@@ -125,8 +125,46 @@ def test_startup_failure_rule():
         assert not res["ok"] and any("siblings failed ['tw_100007']" in x for x in res["gating"]), res
 
 
+def test_a_content_startup_failure_is_no_systematic_event():
+    """supervisor 2026-10-19 (yt_100010 after yt_100007, one channel): a startup_failure read as content is left out of
+    the round's kinds and counts (listed under content), and an earlier round's too, from its list or, for a round written
+    before the list, re-read by the same rule; a gating one still counts, so two in a row stop."""
+    def sess(root, rel, cls, t, verdict="FAIL", **meta):
+        d = root / rel
+        d.mkdir(parents=True)
+        (d / "check.json").write_text(json.dumps({"verdict": verdict, "session_class": cls}))
+        (d / "meta.json").write_text(json.dumps({"started_at": t, **meta}))
+        hdr = {"header": True, "stamp": {"window": [t - 1, t + 101]}}
+        (d / "box_record.jsonl").write_text("".join(json.dumps(x) + "\n" for x in
+                                                    [hdr] + [{"t": t + i + 0.5, "gpu_busy_pct": {}} for i in range(100)]))
+        return d
+    sf = lambda name: _row(name, session=f"/d/youtube/{name}",
+                           items1_2={"1": {"ok": True, "reading": "PASS"},
+                                     "2": {"ok": False, "reasons": [], "session_class": "startup_failure",
+                                           "reading": "gates: class:startup_failure"}})
+    base = {"check": {"youtube": {"coarse": {"class:startup_failure": {"sessions": 1, "rate": 0.01}}}}, "verify": {}}
+    with tempfile.TemporaryDirectory() as d:
+        data = Path(d) / "data"
+        a = sess(data, "_trio/_failed/youtube/yt_100007", "startup_failure", 1000.0, channel_handle="@FuboSports")
+        b = sess(data, "_trio/_failed/youtube/yt_100010", "startup_failure", 3000.0, channel_handle="@FuboSports")
+        old_r1 = {"round_kinds": R.round_kinds({"sessions": [sf("yt_100007")]})}    # written before the content list
+        assert "content" in old_r1["round_kinds"] and old_r1["round_kinds"]["kinds"]
+        del old_r1["round_kinds"]["content"]
+        r1 = R.check({"sessions": [sf("yt_100007")]}, None, [a], [], base)
+        assert r1["ok"] and r1["round_kinds"]["content"] == ["yt_100007"] and r1["round_kinds"]["kinds"] == {}, r1
+        for hist in ([r1], [old_r1]):
+            r2 = R.check({"sessions": [sf("yt_100010")]}, None, [b], hist, base)
+            assert r2["ok"] and r2["round_kinds"]["content"] == ["yt_100010"], (hist, r2)
+        sess(data, "_trio/youtube/yt_100008", "normal", 2000.0, verdict="PASS", channel_handle="@FuboSports")
+        r2 = R.check({"sessions": [sf("yt_100010")]}, None, [b], [old_r1], base)   # it played (yt_100008): gates
+        assert not r2["ok"] and any("played before ['yt_100008']" in x for x in r2["gating"]), r2
+        assert r2["round_kinds"]["kinds"] == {"youtube": {"check": {"class:startup_failure": ["yt_100010"]}}}, r2
+        assert not any("consecutive" in x for x in r2["gating"]), r2        # yt_100007 (before yt_100008) stays content
+
+
 if __name__ == "__main__":
     test_stop_rule()
     test_startup_failure_rule()
     test_systematic_rule()
+    test_a_content_startup_failure_is_no_systematic_event()
     print("test_round_stop_checks: ok")

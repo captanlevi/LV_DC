@@ -18,7 +18,9 @@ Everything else goes to the report (non-gating items with a reading, the device-
 startup_failure (levi's ruling 2026-10-19, after yt_100007 on @FuboSports): a session whose check class is
 startup_failure stops the chain only if its channel / room played normally before in either mode (an accepted PASS
 session on the same key, single mode's root or the trio's), or a sibling in the same round also failed to start;
-otherwise it reads "content, excluded": its items 1 / 2 do not gate (resource items still do) and it is reported.
+otherwise it reads "content, excluded": its items 1 / 2 do not gate (resource items still do), it is reported, and it
+is no event for the systematic rule below (supervisor 2026-10-19: left out of this round's kinds and counts, listed in
+round_kinds.content; an earlier round's content sessions likewise, from its list or re-read by the same rule).
 
 Systematic exclusion (levi's rule, supervisor 2026-10-19), with --inventory (brad's json with base_rates; both shas
 checked) and --history (the earlier counted rounds' --out jsons, oldest first). Over the sessions whose verify / check
@@ -88,14 +90,17 @@ def load_base_rates(inv: dict, expect: str | None) -> dict:
     return inv["base_rates"]
 
 
-def round_kinds(gate2: dict) -> dict:
+def round_kinds(gate2: dict, content: set | frozenset = frozenset()) -> dict:
     """{"n_sessions": {platform: n}, "kinds": {platform: {file: {kind: [sessions]}}}} over this round's sessions: the
-    coarse kinds of every verify / check that did not PASS."""
+    coarse kinds of every verify / check that did not PASS. A session in `content` (a startup_failure read as content,
+    startup_failure_rule) is no collection event: left out of the kinds and the counts, listed under "content"."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "networkSim"))
     from gate2_items import reason_kind
     n, kinds = {}, {}
     for r in gate2.get("sessions") or []:
         sd = Path(r.get("session", ""))
+        if sd.name in content:
+            continue
         plat = sd.parent.name
         n[plat] = n.get(plat, 0) + 1
         for item, f in (("1", "verify"), ("2", "check")):
@@ -108,12 +113,52 @@ def round_kinds(gate2: dict) -> dict:
                 rs.append(f"class:{c}")
             for k in {reason_kind(x, coarse=True) for x in rs}:
                 kinds.setdefault(plat, {}).setdefault(f, {}).setdefault(k, []).append(sd.name)
-    return {"n_sessions": n, "kinds": kinds}
+    return {"n_sessions": n, "kinds": kinds, "content": sorted(content)}
 
 
-def systematic(cur: dict, history: list[dict], base: dict) -> list[str]:
-    """Levi's systematic-exclusion stops (module docstring) for this round's kinds against the earlier rounds'."""
+def history_content(h: dict, sessions: list[Path]) -> set:
+    """An earlier round's sessions read as content: its recorded list, or, for a round written before the list existed,
+    each of its startup_failure sessions found beside this round's (the same roots) whose key never played normally
+    before it (startup_failure_rule; that round's siblings unknown)."""
+    rk = h.get("round_kinds") or {}
+    if "content" in rk:
+        return set(rk["content"])
+    names = {x for fk in (rk.get("kinds") or {}).values() for ks in fk.values() for ss in ks.values() for x in ss}
+    out = set()
+    for name in names:
+        for sd in sessions:
+            sd = Path(sd).resolve()
+            root = sd.parent.parent.parent if sd.parent.parent.name == "_failed" else sd.parent.parent
+            for d in (root / sd.parent.name / name, root / "_failed" / sd.parent.name / name):
+                sf = startup_failure_rule(d, []) if d.exists() else None
+                if sf is not None and not sf["gates"]:
+                    out.add(name)
+    return out
+
+
+def _without(rk: dict, drop: set) -> dict:
+    """round_kinds without the sessions in `drop` (an earlier round's content sessions; counts reduced to match)."""
+    if not drop:
+        return rk
+    kinds, n = {}, dict(rk.get("n_sessions") or {})
+    for plat, fk in (rk.get("kinds") or {}).items():
+        gone = set()
+        for f, ks in fk.items():
+            for k, ss in ks.items():
+                keep = [x for x in ss if x not in drop]
+                gone |= set(ss) - set(keep)
+                if keep:
+                    kinds.setdefault(plat, {}).setdefault(f, {})[k] = keep
+        n[plat] = max(n.get(plat, 0) - len(gone), 0)
+    return {**rk, "n_sessions": n, "kinds": kinds}
+
+
+def systematic(cur: dict, history: list[dict], base: dict, hist_content: list[set] | None = None) -> list[str]:
+    """Levi's systematic-exclusion stops (module docstring) for this round's kinds against the earlier rounds' (each
+    without its content sessions, hist_content)."""
     bad = []
+    hc = hist_content or [set()] * len(history)
+    history = [{**h, "round_kinds": _without(h["round_kinds"], c)} for h, c in zip(history, hc)]
     prev = history[-1]["round_kinds"] if history else None
     for plat, fk in cur["kinds"].items():
         for f, ks in fk.items():
@@ -184,7 +229,7 @@ def startup_failure_rule(sd: Path, round_sessions: list[Path]) -> dict | None:
 def check(gate2: dict, teardown: dict | None, sessions: list[Path], history: list[dict] | None = None,
           base: dict | None = None) -> dict:
     rows = {Path(r.get("session", "")).name: r for r in gate2.get("sessions") or []}
-    bad, report = [], {}
+    bad, report, content = [], {}, set()
     if teardown is not None and not teardown.get("clean"):
         bad.append("run teardown not clean: " + json.dumps({k: v.get("ok") for k, v in (teardown.get("checks") or {}).items()}))
     for sd in sessions:
@@ -205,6 +250,7 @@ def check(gate2: dict, teardown: dict | None, sessions: list[Path], history: lis
             else:                                          # levi: content, excluded; items 1 / 2 do not gate
                 b = [x for x in b if not x.startswith(("item 1:", "item 2:"))]
                 n.insert(0, f"startup_failure: content, excluded ({sf['key']} never played in either mode)")
+                content.add(name)                          # nor does it count toward a systematic stop
         cov = coverage(sd)
         if not cov["ok"]:
             b.append(f"device record: {cov.get('why') or cov.get('covered_share')}")
@@ -212,9 +258,9 @@ def check(gate2: dict, teardown: dict | None, sessions: list[Path], history: lis
             n.insert(0, "in _failed (stops only on the reader's gating items)")
         bad += [f"{name} {x}" for x in b]
         report[name] = {"reported": n, "device_record": cov}
-    rk = round_kinds(gate2)
+    rk = round_kinds(gate2, content)
     if base is not None:
-        bad += systematic(rk, history or [], base)
+        bad += systematic(rk, history or [], base, [history_content(h, sessions) for h in history or []])
     return {"ok": not bad, "gating": bad, "report": report, "round_kinds": rk,
             "systematic_rule": "on" if base is not None else "off (no --inventory)"}
 
