@@ -241,7 +241,11 @@ def startup_failure_rule(sd: Path, round_sessions: list[Path]) -> dict | None:
             played.append(d.name)
     sib = [Path(x).name for x in round_sessions if Path(x).resolve() != Path(sd).resolve()
            and _json(Path(x) / "check.json").get("session_class") == "startup_failure"]
-    return {"key": key, "played_before": sorted(played), "siblings_failed": sib, "gates": bool(played or sib)}
+    # levi 2026-10-20 (tw_100016): a session whose collector logged a player error (an error page or the ad-wait
+    # ceiling: meta.json player_errors) failed on mechanics, never content: it gates and is tallied
+    perr = [e.get("reason") for e in meta.get("player_errors") or []]
+    return {"key": key, "played_before": sorted(played), "siblings_failed": sib, "player_errors": perr,
+            "gates": bool(played or sib or perr)}
 
 
 def check(gate2: dict, teardown: dict | None, sessions: list[Path], history: list[dict] | None = None,
@@ -264,7 +268,8 @@ def check(gate2: dict, teardown: dict | None, sessions: list[Path], history: lis
         sf = startup_failure_rule(sd, sessions)
         if sf is not None:
             if sf["gates"]:
-                b.append(f"startup_failure gates: played before {sf['played_before']} / siblings failed {sf['siblings_failed']}")
+                b.append(f"startup_failure gates: played before {sf['played_before']} / siblings failed {sf['siblings_failed']}"
+                         + (f" / player errors {sf['player_errors']}" if sf["player_errors"] else ""))
             else:                                          # levi: content, excluded; items 1 / 2 do not gate
                 b = [x for x in b if not x.startswith(("item 1:", "item 2:"))]
                 n.insert(0, f"startup_failure: content, excluded ({sf['key']} never played in either mode)")

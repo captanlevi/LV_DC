@@ -123,6 +123,12 @@ def test_startup_failure_rule():
         tw = sess(data, "_trio/_failed/twitch/tw_100007", "startup_failure", 1000.0, channel_url="https://www.twitch.tv/robcdee")
         res = R.check({"sessions": [fail2("yt_100007"), fail2("tw_100007")]}, None, [yt, tw])
         assert not res["ok"] and any("siblings failed ['tw_100007']" in x for x in res["gating"]), res
+    with tempfile.TemporaryDirectory() as d:   # levi (tw_100016): a logged player error is mechanics, never content
+        data = Path(d) / "data"
+        tw = sess(data, "_trio/_failed/twitch/tw_100016", "startup_failure", 1000.0,
+                  channel_url="https://www.twitch.tv/x", player_errors=[{"reason": "error_page"}])
+        res = R.check({"sessions": [fail2("tw_100016")]}, None, [tw])
+        assert not res["ok"] and any("player errors ['error_page']" in x for x in res["gating"]), res
 
 
 def test_a_content_startup_failure_is_no_systematic_event():

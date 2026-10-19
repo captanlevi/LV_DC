@@ -263,8 +263,37 @@ def test_concurrency_and_overlap_items():
         (sd / "meta.json").write_text(json.dumps({"concurrency": {"mode": "trio"}}))
         r = G.session_items(sd)
         assert all(r[k]["ok"] is False and r[k]["recorded"] is False for k in ("item7", "item9", "item11", "item14")), r
-        assert r["record"] == {"flag": None, "era": None, "is_record": False}, r["record"]
+        assert r["record"] == {"flag": None, "era": None, "expected_era": None, "era_source": "no collector sha",
+                               "is_record": None}, r["record"]
     assert G.overlap_items("youtube/yt_9", fo) == {} and G.overlap_items("twitch/tw_1", None) == {}
+
+
+def test_the_expected_era_is_the_collectors():
+    """levi (N = 5 round 1): the era is read from the session's collector (record.py at its lvdc_commit.sha, or
+    --lvdc-sha / --expect-era), never from the reader's tree."""
+    import subprocess
+    with tempfile.TemporaryDirectory() as d:
+        repo = Path(d)
+        (repo / "networkSim").mkdir()
+        (repo / "networkSim" / "record.py").write_text('ERA = "t56-nslot-2026-10-19"\n')
+        g = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+        subprocess.run(g + ["init", "-q"], check=True)
+        subprocess.run(g + ["add", "-A"], check=True)
+        subprocess.run(g + ["commit", "-qm", "x"], check=True)
+        sha = subprocess.run(g + ["rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        assert G.era_at(sha, repo) == "t56-nslot-2026-10-19" and G.era_at("0" * 40, repo) is None
+        meta = {"concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}, "lvdc_commit": {"sha": sha}}
+        saved = G.era_at.__defaults__
+        G.era_at.__defaults__ = (repo,)
+        try:
+            r = G.record_status(meta)
+            assert r["is_record"] is True and r["expected_era"] == "t56-nslot-2026-10-19" and "lvdc_commit" in r["era_source"], r
+            assert G.record_status(meta, lvdc_sha="0" * 40)["is_record"] is None          # unresolved: unknown, not False
+        finally:
+            G.era_at.__defaults__ = saved
+        assert G.record_status(meta, expect_era="t55-gro-off-2026-10-19")["is_record"] is False
+        assert G.record_status({**meta, "concurrency": {"record": False, "era": "t56-nslot-2026-10-19"}},
+                               expect_era="t56-nslot-2026-10-19")["is_record"] is False
 
 
 def test_cli():
@@ -351,6 +380,7 @@ def main() -> int:
     test_items1_2_inventory()
     test_fullscreen_report()
     test_concurrency_and_overlap_items()
+    test_the_expected_era_is_the_collectors()
     test_cli()
     print("test_gate2_items: ok")
     return 0

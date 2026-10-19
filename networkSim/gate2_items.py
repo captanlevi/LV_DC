@@ -475,8 +475,44 @@ def item3_not_applicable(rows: list[dict]) -> dict:
     return {"n": len(na), "sessions": na}
 
 
+# levi 2026-10-20 (N = 5 round 1: is_record False on all 5, the reader's own record.ERA was t55's): the era a session's
+# record flag is read against is the collector's that wrote it, never this reader's tree: --expect-era, else record.py
+# at --lvdc-sha, else at the session's own meta.json lvdc_commit.sha (git show in this repo). Unresolved: is_record None.
+_ERA_RE = re.compile(r'^ERA\s*=\s*"([^"]+)"', re.M)
+_ERA_AT: dict = {}
+
+
+def era_at(sha: str, repo: Path = Path(__file__).resolve().parents[1]) -> str | None:
+    """record.ERA at a collector sha (networkSim/record.py in that commit), or None."""
+    if sha not in _ERA_AT:
+        import subprocess
+        try:
+            r = subprocess.run(["git", "-C", str(repo), "show", f"{sha}:networkSim/record.py"], capture_output=True,
+                               text=True, timeout=30)
+            m = _ERA_RE.search(r.stdout) if r.returncode == 0 else None
+            _ERA_AT[sha] = m.group(1) if m else None
+        except Exception:  # noqa: BLE001
+            _ERA_AT[sha] = None
+    return _ERA_AT[sha]
+
+
+def record_status(meta: dict, expect_era: str | None = None, lvdc_sha: str | None = None) -> dict:
+    """The session's record flag and era against the expected era (the comment above), with its source."""
+    c = meta.get("concurrency") or {}
+    if expect_era:
+        era, src = expect_era, "--expect-era"
+    else:
+        sha = lvdc_sha or (meta.get("lvdc_commit") or {}).get("sha")
+        era = era_at(sha) if sha else None
+        src = (f"record.py at {sha[:12]} ({'--lvdc-sha' if lvdc_sha else 'the session meta lvdc_commit'})" if sha
+               else "no collector sha")
+    is_rec = None if era is None else (bool(c.get("record")) and c.get("era") == era)
+    return {"flag": c.get("record"), "era": c.get("era"), "expected_era": era, "era_source": src, "is_record": is_rec}
+
+
 def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dict | None = None,
-                  inventory: dict | None = None, coverage: dict | None = None, table: dict | None = None) -> dict:
+                  inventory: dict | None = None, coverage: dict | None = None, table: dict | None = None,
+                  expect_era: str | None = None, lvdc_sha: str | None = None) -> dict:
     sd = Path(sd)
     tk, spans = ticks(sd), shot_spans(sd)
     iv = intervals(tk, spans)
@@ -486,11 +522,9 @@ def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dic
     except (OSError, ValueError):
         pass
     c = meta.get("concurrency") or {}
-    import record
-    is_rec = record.is_record(meta)
     return {"session": str(sd), "mode": c.get("mode", "single"),
             # levi: the operator sets the flag; printed so a forgotten flag or a flagged pilot shows in the round summary
-            "record": {"flag": c.get("record"), "era": c.get("era"), "is_record": is_rec},
+            "record": record_status(meta, expect_era, lvdc_sha),
             "ticks": len(tk), "items1_2": items1_2(sd, inventory), "item3": item3(sd, coverage, table),
             "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
             "item8": item8(iv, len(spans)), **concurrency_items(meta),
@@ -514,6 +548,10 @@ def main(argv=None) -> int:
     ap.add_argument("--single-table", type=Path, default=None,
                     help="item 3: brad's frozen single-mode table (its frames_coverage.min_by_platform)")
     ap.add_argument("--single-table-sha", default=None, help="the table file's expected sha256 prefix (refused otherwise)")
+    ap.add_argument("--expect-era", default=None, help="the collector era a session of record carries (record.ERA)")
+    ap.add_argument("--lvdc-sha", default=None,
+                    help="the round's collector sha: the expected era is record.py's ERA there (default: each session's "
+                         "meta.json lvdc_commit.sha); never this reader's own tree")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args(argv)
     fps = json.loads(a.rendition_fps.read_text()) if a.rendition_fps else {}
@@ -526,7 +564,7 @@ def main(argv=None) -> int:
         try:
             rows.append(session_items(sd, (fps.get(sd.name) or {}).get("detail"),
                                       next((f for f in fos if f"{sd.parent.name}/{sd.name}" in (f.get("sessions") or {})), None),
-                                      inv, cov, table))
+                                      inv, cov, table, a.expect_era, a.lvdc_sha))
         except Exception as e:  # noqa: BLE001 -- one session's failure is reported
             rows.append({"session": str(sd), "error": repr(e)[:300]})
         print(json.dumps(rows[-1]), flush=True)
