@@ -242,15 +242,28 @@ def test_siblings_and_floor():
             (data / rel).parent.mkdir(parents=True)
             with open(data / rel, "wb") as fh:
                 fh.truncate(n)
-        fl = T.trio_root_floor_gb(data, 5.0, n_slots=3)
-        assert fl == {"single_floor_gb": 5.0, "largest_pcap_gb": 3.0, "n_slots": 3, "floor_gb": 14.0}
-        # t58 N-5: the trio root's pcaps are scanned too, and the floor scales with the slot count
-        (data / T.TRIO_DIR / "twitch" / "tw_100001").mkdir(parents=True)
-        with open(data / T.TRIO_DIR / "twitch" / "tw_100001" / "merged.pcap", "wb") as fh:
-            fh.truncate(4_000_000_000)
-        assert T.trio_root_floor_gb(data, 5.0, n_slots=5) == {"single_floor_gb": 5.0, "largest_pcap_gb": 4.0, "n_slots": 5,
-                                                              "floor_gb": 25.0}
-        assert T.trio_root_floor_gb(data, 5.0)["n_slots"] == len(T.SLOTS)
+        fl = T.staging_floor_gb(data, 25.0, n_slots=3)
+        assert {k: fl[k] for k in ("base_gb", "largest_pcap_gb", "n_slots", "floor_gb")} == \
+            {"base_gb": 25.0, "largest_pcap_gb": 3.0, "n_slots": 3, "floor_gb": 34.0}, fl
+        assert fl["applies_to"] == "data volume (trio staging)" and fl["staging"] == str(T.STAGING)
+        # t58: the counted trio root's pcaps count, decode_stress's (held top state) never; the floor scales with N
+        for rel, n in (("_trio/twitch/tw_100001/merged.pcap", 4_000_000_000),
+                       ("_trio_stress/twitch/tw_900001/merged.pcap", 9_000_000_000)):
+            (data / rel).parent.mkdir(parents=True)
+            with open(data / rel, "wb") as fh:
+                fh.truncate(n)
+        fl = T.staging_floor_gb(data, 25.0, n_slots=5)
+        assert (fl["largest_pcap_gb"], fl["floor_gb"]) == (4.0, 45.0), fl
+        assert T.staging_floor_gb(data, 25.0)["n_slots"] == len(T.SLOTS)
+        # the staged capture is writing (levi): every file past the pcap header
+        st = Path(d) / "stage"
+        st.mkdir()
+        (st / "incoming.pcap").write_bytes(b"x" * 24)
+        assert T.capture_growing(st) == {"sizes": {"incoming.pcap": 24, "outgoing.pcap": None}, "ok": False}
+        (st / "incoming.pcap").write_bytes(b"x" * 200)
+        (st / "outgoing.pcap").write_bytes(b"x" * 100)
+        assert T.capture_growing(st)["ok"] is True
+        assert "TCPDUMP_Z=-Z root" in T.capture_vars(st) and T.STAGING.parent.name == "data"
 
 
 def _pkt(t, src, dst, proto, sport, dport, n=100, dcid="", sni="", qname="", resp="", ans=""):

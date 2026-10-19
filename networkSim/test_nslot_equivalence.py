@@ -9,7 +9,8 @@ detach and down, its make variables, and `make -n` of the slot's targets (the sh
 Chrome) through those variables; plus the shared tree. fixtures/trio_slot_commands_c1f9181.json was written from
 c1f9181's trio code (its trio_slots.py and Makefile, this file's commands(); never rewrite it). The N line's intended
 differences are outside these commands (FROZEN_COLLECTOR, the c1f9181 row's known deltas): tt's own-IFB room rule,
-the sibling claim, the steering / membership / ERA, the live management port (equal here at its default).
+the sibling claim, the steering / membership / ERA, the live management port (equal here at its default). One known
+delta lies inside them and is asserted, then undone, by name (KNOWN_DELTAS): the staged tcpdump's -Z root (t58).
 
     python3 test_nslot_equivalence.py        (exit 0 = pass)
 """
@@ -96,6 +97,26 @@ def current() -> dict:
         T.SLOTS.update(saved)
 
 
+def staged_tcpdump_as_root(got: dict) -> list[str]:
+    """Known delta (t58, levi / supervisor 2026-10-19: capture staging moved to the exFAT data volume): every slot's
+    staged tcpdump runs with -Z root (make variable TCPDUMP_Z). Asserted present in the N code, then taken out, so the
+    rest compares exactly; returns what it found."""
+    seen = []
+    for tag, s in got["slots"].items():
+        assert "TCPDUMP_Z=-Z root" in s["make_vars"], (tag, s["make_vars"])
+        s["make_vars"] = [v for v in s["make_vars"] if v != "TCPDUMP_Z=-Z root"]
+        seen.append(f"{tag}: make_vars TCPDUMP_Z=-Z root")
+        if "make_n" in s:
+            sc = s["make_n"]["start-capture"]
+            assert sc.count("tcpdump -Z root -i") == 2, (tag, sc)
+            s["make_n"]["start-capture"] = sc.replace("tcpdump -Z root -i", "tcpdump -i")
+            seen.append(f"{tag}: start-capture tcpdump -Z root (2)")
+    return seen
+
+
+KNOWN_DELTAS = (("staged tcpdump runs as root (t58: staging on the data volume)", staged_tcpdump_as_root),)
+
+
 def main() -> int:
     if "--write" in sys.argv:                          # once, from the trio code (written at c1f9181), never after
         import trio_slots as T
@@ -107,6 +128,8 @@ def main() -> int:
     if not shutil.which("make"):
         for s in want["slots"].values():
             s.pop("make_n", None)
+    for name, undo in KNOWN_DELTAS:                    # each intended difference asserted present, then undone
+        assert undo(got), name
     assert got == want, "the N code at youtube=1,twitch=1,tiktok=1 differs from the trio's per-slot commands"
     print("test_nslot_equivalence: ok")
     return 0

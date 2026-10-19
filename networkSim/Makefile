@@ -39,6 +39,9 @@ TS_UDP_PORT := $(shell sudo -n ss -ulpnH 2>/dev/null | awk '/tailscaled/ {n=spli
 MGMT_UDP_PORT ?= $(if $(TS_UDP_PORT),$(TS_UDP_PORT),41641)
 MGMT_TCP_PORT ?= 22
 CAPTURE_BPF = not (udp port $(MGMT_UDP_PORT) or tcp port $(MGMT_TCP_PORT))
+# t58: a trio slot's staged capture passes TCPDUMP_Z=-Z root (trio_slots.capture_vars: staging on the exFAT data volume);
+# single mode leaves it empty, its commands unchanged
+TCPDUMP_Z ?=
 
 # v2 (LVQoE t35, rushi 2026-10-16): the TLS key log is KEPT, one per session, so every session can be re-decoded
 # offline (HTTP/3 and SABR request bodies included). remove_ssl_keys / remove_http_logs are no longer called.
@@ -133,8 +136,8 @@ start-capture:
 	@# v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails ("Couldn't change ownership of
 	@# savefile") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never
 	@# opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.
-	@sudo sh -c 'exec tcpdump -i $(IFB_INGRESS) -U -w - "$(CAPTURE_BPF)" > "$(IN_FILE)"$(if $(CAPTURE_ERR_IN), 2> "$(CAPTURE_ERR_IN)",)' & echo $$! > $(CAPTURE_DIR)/$(IFB_INGRESS).pid
-	@sudo sh -c 'exec tcpdump -i $(IFB_EGRESS) -U -w - "$(CAPTURE_BPF)" > "$(OUT_FILE)"$(if $(CAPTURE_ERR_OUT), 2> "$(CAPTURE_ERR_OUT)",)' & echo $$! > $(CAPTURE_DIR)/$(IFB_EGRESS).pid
+	@sudo sh -c 'exec tcpdump $(TCPDUMP_Z) -i $(IFB_INGRESS) -U -w - "$(CAPTURE_BPF)" > "$(IN_FILE)"$(if $(CAPTURE_ERR_IN), 2> "$(CAPTURE_ERR_IN)",)' & echo $$! > $(CAPTURE_DIR)/$(IFB_INGRESS).pid
+	@sudo sh -c 'exec tcpdump $(TCPDUMP_Z) -i $(IFB_EGRESS) -U -w - "$(CAPTURE_BPF)" > "$(OUT_FILE)"$(if $(CAPTURE_ERR_OUT), 2> "$(CAPTURE_ERR_OUT)",)' & echo $$! > $(CAPTURE_DIR)/$(IFB_EGRESS).pid
 	@echo "✅ Capture started"
 
 

@@ -343,6 +343,25 @@ def test_twitch_history_reads_both_roots_and_skips_uncategorised_running():
     assert 'self.tw_pick["first_url_held_by_sibling"] = first' in src
 
 
+def test_staging_on_the_data_volume():
+    """t58 (supervisor / levi, after the N = 5 decode_stress hit the rootfs floor): a trio session's capture is staged
+    on the data volume (data/_trio_staging) with every staged tcpdump as root (-Z root: the slots', the default class's
+    and the DNS capture); exp.py fails a slot loudly when its capture is not growing once playing; the trio's raised
+    floor applies to the data volume (orchestrate's preflight), the rootfs keeps single mode's."""
+    assert T.STAGING.name == "_trio_staging" and T.STAGING.parent.name == "data"
+    assert "TCPDUMP_Z=-Z root" in T.default_capture_vars(Path("/T"))
+    import inspect
+    assert "{TCPDUMP_Z}" in inspect.getsource(T.dns_capture_start)
+    here = Path(__file__).resolve().parent
+    exp_src, orch_src = (here / "exp.py").read_text(), (here / "orchestrate.py").read_text()
+    assert 'TRIO["capture_growth"] = {**trio_slots.capture_growing(staging)' in exp_src
+    assert 'raise RuntimeError(f"capture not growing in {staging}' in exp_src
+    assert "preflight.run(_RUNS_DIR, max(MIN_FREE_GB, floor[\"floor_gb\"]))" in orch_src
+    assert "trio_root_floor_gb" not in orch_src and "root_min_free_gb=floor" not in orch_src
+    mk = (here / "Makefile").read_text()
+    assert mk.count("exec tcpdump $(TCPDUMP_Z) -i") == 2 and "TCPDUMP_Z ?=" in mk
+
+
 def main() -> int:
     test_slot_table()
     test_reservation_and_fullscreen_token()
@@ -356,6 +375,7 @@ def main() -> int:
     test_tt_idle_rule_reads_the_slots_own_ifb()
     test_mgmt_udp_port_is_the_makefiles_live_lookup()
     test_twitch_history_reads_both_roots_and_skips_uncategorised_running()
+    test_staging_on_the_data_volume()
     print("test_nslot: ok")
     return 0
 

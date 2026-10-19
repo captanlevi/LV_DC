@@ -662,8 +662,9 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     if gb < MIN_FREE_GB:
         print(f"\n  Data volume {gb:.0f} GB free < {MIN_FREE_GB} GB: draining the trio.")
         raise _TrioStop(EXIT_LOW_DISK)
-    floor = floor or T.trio_root_floor_gb(_RUNS_DIR, preflight.ROOT_MIN_FREE_GB)
-    pf = {**preflight.run(_RUNS_DIR, MIN_FREE_GB, root_min_free_gb=floor["floor_gb"]), "trio_root_floor": floor}
+    floor = floor or T.staging_floor_gb(_RUNS_DIR, MIN_FREE_GB)
+    # t58: the trio stages on the data volume, so its raised floor is the volume's; the rootfs keeps single mode's
+    pf = {**preflight.run(_RUNS_DIR, max(MIN_FREE_GB, floor["floor_gb"])), "trio_staging_floor": floor}
     pf_path = summaries / f"preflight_last_{s.tag}.json"
     pf_path.write_text(json.dumps(pf, indent=1))
     if not pf["ok"]:
@@ -817,7 +818,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     if not pre["ok"]:                    # nothing touched: no tree, no capture, no session
         print(f"\n  TRIO PREFLIGHT FAILED ({', '.join(pre['problems'])}): not starting the trio.")
         return EXIT_PREFLIGHT
-    floor = T.trio_root_floor_gb(_RUNS_DIR, preflight.ROOT_MIN_FREE_GB)   # once per run (it stats every pcap)
+    floor = T.staging_floor_gb(_RUNS_DIR, MIN_FREE_GB)   # once per run (it stats every pcap); the data volume's
     old = {s: signal.signal(s, _on_signal) for s in (signal.SIGINT, signal.SIGTERM)}
     preclean()
     for s in T.SLOTS.values():

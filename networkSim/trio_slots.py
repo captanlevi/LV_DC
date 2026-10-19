@@ -56,9 +56,15 @@ def mgmt_udp_port() -> int:
     return mgmt_udp_port_record()["port"]
 HERE = Path(__file__).resolve().parent
 CURRENT_DATA = Path(__file__).resolve().parent.parent / "current_data"
-# A2 (supervisor): during a trio session its pcaps are written on the root filesystem (SSD), not the data volume (USB
-# exFAT, three writers); merge-capture writes merged.pcap into the session dir at the session's own end
-STAGING = CURRENT_DATA / "trio_staging"
+# t58 (supervisor / levi 2026-10-19, after the N = 5 decode_stress hit the rootfs floor): a trio session's pcaps are
+# staged on the data volume, data/_trio_staging (A2's rootfs staging retired: the rootfs cannot hold N slots' captures);
+# merge-capture writes merged.pcap into the session dir at the session's own end. The volume is exFAT: every staged
+# tcpdump runs with -Z root (TCPDUMP_Z; the Makefile's root-shell stdout redirect already avoids the chown, t37) and a
+# slot checks its capture grows (capture_growing). LVDC_TRIO_STAGING overrides the place (recorded per session).
+DATA = Path(__file__).resolve().parent.parent / "data"
+STAGING = Path(os.environ.get("LVDC_TRIO_STAGING") or (DATA / "_trio_staging"))
+TCPDUMP_Z = "-Z root"
+DATASET_TRIO_DIR = "_trio"                            # the counted collection's root (decode_stress's is STRESS_DIR)
 # supervisor 2026-10-19: trio sessions have their own data root, data/_trio/<platform>/ (single mode's accepted counts,
 # coverage snapshot, checkpoint list and verify loop never see them: am. 13's "never pooled silently", mechanically)
 # t56 decode_stress (design v4 §9 (5)): uncounted real sessions under their own root, data/_trio_stress, never data/_trio
@@ -351,7 +357,23 @@ def make_vars(s: Slot, staging: Path | None = None) -> list[str]:
 
 def capture_vars(staging: Path) -> list[str]:
     return [f"IN_FILE={staging / 'incoming.pcap'}", f"OUT_FILE={staging / 'outgoing.pcap'}",
-            f"CAPTURE_ERR_IN={staging / 'tcpdump_in.err'}", f"CAPTURE_ERR_OUT={staging / 'tcpdump_out.err'}"]
+            f"CAPTURE_ERR_IN={staging / 'tcpdump_in.err'}", f"CAPTURE_ERR_OUT={staging / 'tcpdump_out.err'}",
+            f"TCPDUMP_Z={TCPDUMP_Z}"]
+
+
+PCAP_HEADER_BYTES = 24
+
+
+def capture_growing(staging: Path, files=("incoming.pcap", "outgoing.pcap")) -> dict:
+    """t58 (levi): a staged capture is writing: each file exists and is past the pcap header (`24` B; the t55 exFAT
+    incident left header-only pcaps that passed as sessions). {sizes, ok}."""
+    sizes = {}
+    for f in files:
+        try:
+            sizes[f] = (Path(staging) / f).stat().st_size
+        except OSError:
+            sizes[f] = None
+    return {"sizes": sizes, "ok": all(v is not None and v > PCAP_HEADER_BYTES for v in sizes.values())}
 
 
 def default_capture_vars(staging: Path) -> list[str]:
@@ -702,7 +724,7 @@ DNS_TSHARK_FILTER = "dns.qry.type == 1 or dns.qry.type == 28"      # LVQoE scan_
 
 
 def dns_capture_start(staging: Path) -> subprocess.Popen:
-    cmd = (f'exec tcpdump -i lvi_def -U -w - "{DNS_FILTER}" > "{staging / "dns_default.pcap"}" '
+    cmd = (f'exec tcpdump {TCPDUMP_Z} -i lvi_def -U -w - "{DNS_FILTER}" > "{staging / "dns_default.pcap"}" '
            f'2> "{staging / "dns_default.err"}"')
     return subprocess.Popen(["sudo", "-n", "sh", "-c", cmd])
 
@@ -838,19 +860,21 @@ def conntrack_timeouts(proc: Path = Path("/proc/sys/net/netfilter")) -> dict:
     return out
 
 
-def trio_root_floor_gb(runs_dir: Path, single_floor_gb: float, platforms=("youtube", "twitch", "tiktok"),
-                       n_slots: int | None = None) -> dict:
-    """A2: in trio mode the root filesystem floor = single mode's + the slot count (t58 N-5: was a fixed three) times the
-    largest per-session pcap observed (merged.pcap of accepted and _failed sessions, single mode's root and the trio's:
-    t58 N-5, the trio's own sessions were not scanned)."""
+def staging_floor_gb(runs_dir: Path, base_gb: float, platforms=("youtube", "twitch", "tiktok"),
+                     n_slots: int | None = None) -> dict:
+    """The data volume's floor while the trio stages there (t58): the volume's own floor + the slot count (N-5) times
+    the largest per-session pcap of the dataset roots (merged.pcap of accepted and _failed sessions, single mode's root
+    and the counted trio root data/_trio; never decode_stress's _trio_stress, whose held top-state pcaps inflated it:
+    supervisor 2026-10-19, the N = 5 run)."""
     n = n_slots if n_slots is not None else len(SLOTS)
     largest = 0
-    for root in (runs_dir, runs_dir / TRIO_DIR):
+    for root in (runs_dir, runs_dir / DATASET_TRIO_DIR):
         for p in platforms:
             for f in list((root / p).glob("*/merged.pcap")) + list((root / "_failed" / p).glob("*/merged.pcap")):
                 try:
                     largest = max(largest, f.stat().st_size)
                 except OSError:
                     pass
-    return {"single_floor_gb": single_floor_gb, "largest_pcap_gb": round(largest / 1e9, 2), "n_slots": n,
-            "floor_gb": round(single_floor_gb + n * largest / 1e9, 1)}
+    return {"base_gb": base_gb, "largest_pcap_gb": round(largest / 1e9, 2), "n_slots": n,
+            "floor_gb": round(base_gb + n * largest / 1e9, 1), "applies_to": "data volume (trio staging)",
+            "staging": str(STAGING)}

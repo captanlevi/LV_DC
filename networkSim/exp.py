@@ -821,7 +821,11 @@ if __name__ == "__main__":
             browser.start()
             if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
                 TRIO["socket_owner_start"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
+                # t58 (levi): the staged capture is writing, once playing; an empty capture never passes as a session
+                TRIO["capture_growth"] = {**trio_slots.capture_growing(staging), "at": time.time()}
                 session_meta.write(session_dir, concurrency=TRIO)
+                if not TRIO["capture_growth"]["ok"]:
+                    raise RuntimeError(f"capture not growing in {staging}: {TRIO['capture_growth']['sizes']}")
             # Chrome's version while it surely answers (tw_43: refused at finish); finish falls back to it
             session_meta.write(session_dir, chrome_start=session_meta.chrome_version(tries=3))
             if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
