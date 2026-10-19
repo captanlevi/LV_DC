@@ -1335,7 +1335,7 @@
    "youtube": "A"
   },
   "FAMILY_FLOOR": 5,
-  "OCCUPANCY_SHA256": "3e5440b7d52c9ab64a650bf295c2c56577373262633c58ae95b0db82e73d0d80",
+  "OCCUPANCY_SHA256": "82b38d49337dc25e4e3a66ef0058e0aedf45cfde5774ca3e85b22ee2ecc9061e",
   "SCHEDULES": {
    "fast": {
     "episode_s": 12,
@@ -1343,10 +1343,10 @@
      2.4,
      6.0
     ],
-    "self_loops": true
+    "self_loops": false
    },
    "slow": {
-    "episode_s": 300,
+    "episodes": 3,
     "redraw_s": [
      12.0,
      30.0

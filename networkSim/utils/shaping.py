@@ -348,17 +348,18 @@ TWITCH_MATRICES = {
 PLATFORM_MATRICES = {"youtube": YOUTUBE_MATRICES, "tiktok": TIKTOK_MATRICES, "twitch": TWITCH_MATRICES}
 
 
-# LVQoE prereg Addendum Q am. 17 (2026-10-20, levi at LVQoE 67bc6b3e; low cap corrected for TT-M after it): two schedule
-# families on each platform's default stationary matrix, session time held (episodes = round(base episodes x
-# BASE_EPISODE_S / episode_s)). "@slow": 300 s episodes, the next state drawn without self-loops (renormalised), the
-# within-episode re-draw at base (12-30 s). "@fast": 12 s episodes, self-loops kept, re-draw at D/5-D/2. Every family's
-# low-state cap is in seconds: the base matrix's cap x BASE_EPISODE_S (TW-M 120, A 360, TT-M 240); a low episode is cut
-# at the cap and the rest of it held at netStat._MIN_RECOVERY_STATE. A family id is "<base>@<schedule>"; its tuple is
-# the base's (transitions, cap in base episodes, start rule): the start rules are the base's (am. 15 (5) included).
+# LVQoE prereg Addendum Q am. 17 (2026-10-20, levi at LVQoE 67bc6b3e; low cap corrected for TT-M after it; parameters
+# at LVQoE 3c409b93, supervisor for rushi): two schedule families on each platform's default stationary matrix, session
+# time held. "@slow": 3 episodes of the session's time / 3 (yt 420 s, twitch / tt 460 s), the re-draw at base
+# (12-30 s). "@fast": 12 s episodes (episodes = round(base episodes x BASE_EPISODE_S / 12)), re-draw at D/5-D/2. Both
+# draw the next state without self-loops (renormalised). Every family's low-state cap is in seconds: the base matrix's
+# cap x BASE_EPISODE_S (TW-M 120, A 360, TT-M 240); a low episode is cut at the cap and the rest of it held at
+# netStat._MIN_RECOVERY_STATE. A family id is "<base>@<schedule>"; its tuple is the base's (transitions, cap in base
+# episodes, start rule): the start rules are the base's (am. 15 (5) included).
 BASE_EPISODE_S = 60
 SCHEDULES = {
-    "slow": {"episode_s": 300, "self_loops": False, "redraw_s": (12.0, 30.0)},
-    "fast": {"episode_s": 12, "self_loops": True, "redraw_s": (2.4, 6.0)},
+    "slow": {"episodes": 3, "self_loops": False, "redraw_s": (12.0, 30.0)},
+    "fast": {"episode_s": 12, "self_loops": False, "redraw_s": (2.4, 6.0)},
 }
 FAMILY_BASE = {"youtube": "A", "tiktok": "TT-M", "twitch": "TW-M"}
 for _p, _table in PLATFORM_MATRICES.items():
@@ -366,9 +367,10 @@ for _p, _table in PLATFORM_MATRICES.items():
         _table[f"{FAMILY_BASE[_p]}@{_s}"] = _table[FAMILY_BASE[_p]]
 
 
-def schedule_of(matrix_id: str | None, cap_episodes: int | None = None) -> dict:
+def schedule_of(matrix_id: str | None, cap_episodes: int | None = None, base_episodes: int | None = None) -> dict:
     """A matrix id's schedule: "base" (BASE_EPISODE_S episodes, self-loops, the re-draw at D/5-D/2, the cap in episodes)
-    or its family's (am. 17). cap_episodes: the matrix's cap in base episodes (its low_cap_s = cap x BASE_EPISODE_S)."""
+    or its family's (am. 17). cap_episodes: the matrix's cap in base episodes (its low_cap_s = cap x BASE_EPISODE_S);
+    base_episodes: the platform's base episodes per session (EPISODES_V2), which @slow's episode length divides."""
     base, _, fam = (matrix_id or "").partition("@")
     low_cap_s = cap_episodes * BASE_EPISODE_S if cap_episodes is not None else None
     if not fam:
@@ -377,13 +379,16 @@ def schedule_of(matrix_id: str | None, cap_episodes: int | None = None) -> dict:
     if fam not in SCHEDULES:
         raise ValueError(f"{matrix_id!r}: no schedule {fam!r} (one of {sorted(SCHEDULES)})")
     s = SCHEDULES[fam]
-    return {"schedule": fam, "base_matrix": base, "episode_s": s["episode_s"], "self_loops": s["self_loops"],
+    if "episodes" in s and base_episodes is None:
+        raise ValueError(f"{matrix_id!r}: its episode length is the session's time / {s['episodes']}: base_episodes needed")
+    ep_s = s["episode_s"] if "episode_s" in s else base_episodes * BASE_EPISODE_S / s["episodes"]
+    return {"schedule": fam, "base_matrix": base, "episode_s": ep_s, "self_loops": s["self_loops"],
             "redraw_s": list(s["redraw_s"]), "low_cap_s": low_cap_s}
 
 
 def session_episodes(base_episodes: int, matrix_id: str | None) -> int:
     """am. 17: the session time held: a family's episodes = round(base episodes x BASE_EPISODE_S / its episode_s)."""
-    return int(round(base_episodes * BASE_EPISODE_S / schedule_of(matrix_id)["episode_s"]))
+    return int(round(base_episodes * BASE_EPISODE_S / schedule_of(matrix_id, base_episodes=base_episodes)["episode_s"]))
 
 
 def next_state_no_self(curr: str, transition_dict: dict[str, dict[str, float]], rng=random) -> str:

@@ -3,7 +3,7 @@
 schedule families on each platform's default stationary matrix. Covered:
   - the ids ("<m>@slow|fast") on the base's tuple, their schedules, episodes holding the session time, the low-state cap
     in seconds = the base cap x 60 s (TW-M 120, A 360, TT-M 240);
-  - the generator: exact episodes, @slow without self-loops, the cap in seconds (a low episode cut at the cap and held
+  - the generator: exact episodes, no self-loops (parameters at LVQoE 3c409b93), the cap in seconds (a low episode cut at the cap and held
     at state 4 for the rest of it), no sub-step under 1 s;
   - the committed occupancy (schedule_occupancy.py): its sha256 is OCCUPANCY_SHA256 and a fresh seeded simulation
     reproduces it; @slow's occupancy is not the base's stationary mass;
@@ -34,7 +34,7 @@ FAMILIES = {"twitch": ("TW-M", 2, 23), "youtube": ("A", 6, 21), "tiktok": ("TT-M
 
 def _run(matrix_id, platform, seed=0, transitions=None, forced=None, episodes=None):
     t, cap, _ = SH.PLATFORM_MATRICES[platform][matrix_id]
-    sc = SH.schedule_of(matrix_id, cap)
+    sc = SH.schedule_of(matrix_id, cap, FAMILIES[platform][2])
     random.seed(seed)
     eps = episodes or SH.session_episodes(FAMILIES[platform][2], matrix_id)
     rows = list(NS.family_episode_generator(sc["episode_s"], transitions or t, sc["redraw_s"], sc["low_cap_s"],
@@ -60,21 +60,24 @@ def test_ids_schedules_and_episodes():
         for fam in ("slow", "fast"):
             mid = f"{base}@{fam}"
             assert SH.PLATFORM_MATRICES[p][mid] == SH.PLATFORM_MATRICES[p][base]          # the base's tuple
-            sc = SH.schedule_of(mid, cap)
+            sc = SH.schedule_of(mid, cap, eps)
             assert sc["schedule"] == fam and sc["base_matrix"] == base and sc["low_cap_s"] == cap * 60
+            assert sc["self_loops"] is False                                              # parameters 3c409b93
+            # the session time held: @slow 3 episodes of session / 3, @fast 12 s episodes
+            assert abs(SH.session_episodes(eps, mid) * sc["episode_s"] - eps * 60) <= (0 if fam == "slow" else 6)
         assert SH.schedule_of(base, cap)["schedule"] == "base" and SH.schedule_of(base, cap)["episode_s"] == 60
-    assert {k: SH.schedule_of(f"TW-M@{k}", 2)["low_cap_s"] for k in ("slow", "fast")} == {"slow": 120, "fast": 120}
-    assert SH.schedule_of("A@slow", 6)["low_cap_s"] == 360 and SH.schedule_of("TT-M@fast", 4)["low_cap_s"] == 240
-    assert SH.schedule_of("TW-M@slow")["self_loops"] is False and SH.schedule_of("TW-M@fast")["self_loops"] is True
-    assert SH.schedule_of("TW-M@slow")["redraw_s"] == [12.0, 30.0] and SH.schedule_of("TW-M@fast")["redraw_s"] == [2.4, 6.0]
-    assert [SH.session_episodes(23, m) for m in ("TW-M", "TW-M@slow", "TW-M@fast")] == [23, 5, 115]
-    assert [SH.session_episodes(21, m) for m in ("A", "A@slow", "A@fast")] == [21, 4, 105]
+    assert SH.schedule_of("TW-M@slow", 2, 23)["episode_s"] == 460 and SH.schedule_of("A@slow", 6, 21)["episode_s"] == 420
+    assert SH.schedule_of("A@slow", 6, 21)["low_cap_s"] == 360 and SH.schedule_of("TT-M@fast", 4)["low_cap_s"] == 240
+    assert SH.schedule_of("TW-M@slow", 2, 23)["redraw_s"] == [12.0, 30.0] and SH.schedule_of("TW-M@fast")["redraw_s"] == [2.4, 6.0]
+    assert [SH.session_episodes(23, m) for m in ("TW-M", "TW-M@slow", "TW-M@fast")] == [23, 3, 115]
+    assert [SH.session_episodes(21, m) for m in ("A", "A@slow", "A@fast")] == [21, 3, 105]
     assert SH.schedule_of("hold:5")["schedule"] == "base" and SH.schedule_of(None)["schedule"] == "base"
-    try:
-        SH.schedule_of("TW-M@medium")
-        raise AssertionError("an unknown schedule must raise")
-    except ValueError:
-        pass
+    for bad in ("TW-M@medium", "TW-M@slow"):          # an unknown schedule; @slow without the base episodes
+        try:
+            SH.schedule_of(bad)
+            raise AssertionError(f"{bad} must raise")
+        except ValueError:
+            pass
 
 
 def test_generator_exact_episodes_no_self_loops_and_the_cap():
@@ -91,26 +94,26 @@ def test_generator_exact_episodes_no_self_loops_and_the_cap():
                 assert longest <= sc["low_cap_s"] + 1e-6, (p, fam, longest)
                 ep = _episodes(rows, sc["episode_s"])
                 assert len(ep) == eps
-                if fam == "slow":                  # no self-loop: each episode starts away from the last one's end
-                    assert all(b[0].state != a[-1].state for a, b in zip(ep, ep[1:])), [[r.state for r in e] for e in ep]
+                # no self-loop (both families): each episode starts away from the last one's end
+                assert all(b[0].state != a[-1].state for a, b in zip(ep, ep[1:])), [[r.state for r in e] for e in ep]
 
 
 def test_a_low_episode_is_cut_at_the_cap_and_held_at_4():
-    stay_low = {"2": {"2": 1.0}, "4": {"2": 1.0}}         # every draw goes back to 2: only the cap leaves it
-    rows, sc, _ = _run("TW-M@slow", "twitch", transitions=stay_low, forced="2", episodes=3)
-    ep = _episodes(rows, 300)
-    for e in ep:
+    low_only = {"2": {"3": 1.0}, "3": {"2": 1.0}, "4": {"2": 1.0}}   # every draw is low: only the cap leaves it
+    rows, sc, _ = _run("TW-M@slow", "twitch", transitions=low_only, forced="2")
+    ep = _episodes(rows, 460)
+    for e in ep:                                          # 120 s low, then the other 340 s of the episode at 4
         low = sum(r.duration for r in e if r.state == "2")
         held = sum(r.duration for r in e if r.state == "4")
-        assert abs(low - 120) < 1e-6 and abs(held - 180) < 1e-6 and [r.state for r in e] == sorted(
+        assert abs(low - 120) < 1e-6 and abs(held - 340) < 1e-6 and [r.state for r in e] == sorted(
             [r.state for r in e], key=lambda s: s != "2"), [(r.state, r.duration) for r in e]
-    rows, sc, _ = _run("TW-M@fast", "twitch", transitions={"2": {"2": 1.0}, "4": {"2": 1.0}}, forced="2", episodes=22)
+    rows, sc, _ = _run("TW-M@fast", "twitch", transitions=low_only, forced="2", episodes=22)
     states = [e[0].state for e in _episodes(rows, 12)]
-    assert states == ["2"] * 10 + ["4"] + ["2"] * 10 + ["4"], states     # 10 x 12 s = 120 s, then one at 4
-    rows, _, _ = _run("A@slow", "youtube", transitions={"2": {"3": 1.0}, "3": {"2": 1.0}, "4": {"2": 1.0}}, forced="2",
-                      episodes=2)
-    ep = _episodes(rows, 300)                            # 360 s: the first low episode whole, the second cut at 60 s
-    assert {r.state for r in ep[0]} == {"2"} and abs(sum(r.duration for r in ep[1] if r.state == "3") - 60) < 1e-6
+    assert states == ["2", "3"] * 5 + ["4"] + ["2", "3"] * 5 + ["4"], states     # 10 x 12 s = 120 s, then one at 4
+    rows, _, _ = _run("A@slow", "youtube", transitions=low_only, forced="2", episodes=2)
+    for e in _episodes(rows, 420):                        # yt A's cap is 360 s: 360 s low, the last 60 s at 4
+        assert abs(sum(r.duration for r in e if r.state == "2") - 360) < 1e-6
+        assert abs(sum(r.duration for r in e if r.state == "4") - 60) < 1e-6
 
 
 def test_the_committed_occupancy():
@@ -143,7 +146,7 @@ def test_a_family_qualifies_on_its_own_occupancy():
             assert v["min_mass_family"][m] == round(thr, 4) and ((m in v["qualifies"]) == (mass >= thr and mass > 0))
         assert v["mass"]["TW-M"] == round(sum(p for s, p in SH.stationary_distribution(tw["TW-M"][0]).items()
                                               if s in v["band"]), 4)
-    assert C.session_minutes("twitch", "TW-M@slow") == 25.0 and C.session_minutes("youtube", "A@slow") == 20.0
+    assert C.session_minutes("twitch", "TW-M@slow") == 23.0 and C.session_minutes("youtube", "A@slow") == 21.0
     assert C.session_minutes("twitch", "TW-M") == 23.0
 
 
@@ -187,12 +190,12 @@ def test_young_families_are_explored_for_a_class_target():
 
 
 def test_the_record():
-    sc = {**SH.schedule_of("TW-M@slow", 2), "episodes": 5}
+    sc = {**SH.schedule_of("TW-M@slow", 2, 23), "episodes": 3}
     sched = {k: v for k, v in sc.items() if k != "episode_s"}
     sh = session_meta.shaper_config("twitch", SH.TWITCH_TRANSITIONS_M, sc["episode_s"], matrix_id="TW-M@slow",
                                     low_state_cap=2, **sched)
     assert {k: sh[k] for k in ("matrix_id", "episode_s", "schedule", "low_cap_s", "episodes", "self_loops")} == {
-        "matrix_id": "TW-M@slow", "episode_s": 300, "schedule": "slow", "low_cap_s": 120, "episodes": 5, "self_loops": False}
+        "matrix_id": "TW-M@slow", "episode_s": 460, "schedule": "slow", "low_cap_s": 120, "episodes": 3, "self_loops": False}
     assert CS.low_cap_s(sh) == 120 and CS.low_cap_s({"low_state_cap": 4, "episode_s": 60}) == 240
     src = (HERE / "exp.py").read_text()
     assert 'schedule={**SCHEDULE, "episodes": args.episodes}' in src and 'episode_time_in_seconds=SCHEDULE["episode_s"]' in src

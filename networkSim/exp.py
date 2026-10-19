@@ -686,7 +686,7 @@ if __name__ == "__main__":
         SHAPER_OPTS.update(initial_state_fn=None)
     # Q am. 17: the matrix id's schedule (base, or a "<m>@slow|fast" family: its episode length, self-loop rule, re-draw
     # and low-state cap in seconds, the base matrix's cap x 60 s); recorded in meta.json shaper
-    SCHEDULE = schedule_of(matrix_id, low_cap)
+    SCHEDULE = schedule_of(matrix_id, low_cap, coverage_report.SESSION_EPISODES.get(platform))
     if SCHEDULE["schedule"] != "base":
         SHAPER_GEN = family_episode_generator
         SHAPER_OPTS = {"initial_state_fn": SHAPER_OPTS.get("initial_state_fn"), "redraw_s": tuple(SCHEDULE["redraw_s"]),

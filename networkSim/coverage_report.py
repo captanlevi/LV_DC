@@ -404,7 +404,7 @@ def state_mass(platform: str, matrices: dict, matrix_id: str) -> dict[str, float
 
 def session_minutes(platform: str, matrix_id: str) -> float:
     """A session's shaped minutes under the matrix's schedule (the base: SESSION_EPISODES of 60 s)."""
-    sc = schedule_of(matrix_id)
+    sc = schedule_of(matrix_id, base_episodes=SESSION_EPISODES[platform])
     return session_episodes(SESSION_EPISODES[platform], matrix_id) * sc["episode_s"] / 60.0
 
 

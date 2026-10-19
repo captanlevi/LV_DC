@@ -29,7 +29,7 @@ from utils.shaping import (PLATFORM_MATRICES, SCENARIOS, SCHEDULES, schedule_of,
 SIM_SEED = 0
 SIM_SESSIONS = 2000
 FIXTURE = HERE / "fixtures" / "schedule_occupancy.json"
-OCCUPANCY_SHA256 = "3e5440b7d52c9ab64a650bf295c2c56577373262633c58ae95b0db82e73d0d80"
+OCCUPANCY_SHA256 = "82b38d49337dc25e4e3a66ef0058e0aedf45cfde5774ca3e85b22ee2ecc9061e"
 
 
 def families(platform: str) -> list[str]:
@@ -40,7 +40,7 @@ def simulate(platform: str, matrix_id: str, base_episodes: int, sessions: int = 
     """The family's occupancy over `sessions` simulated sessions (seeded per platform and id; the global random state
     is restored), its state changes per session (cuts at the cap included) and the schedule simulated."""
     transitions, cap, init = PLATFORM_MATRICES[platform][matrix_id]
-    sc = schedule_of(matrix_id, cap)
+    sc = schedule_of(matrix_id, cap, base_episodes)
     eps = session_episodes(base_episodes, matrix_id)
     pi = stationary_distribution(transitions)
     states = sorted(pi, key=int)
