@@ -14,7 +14,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import session_names as S  # noqa: E402
 
 
+def _one(args):
+    import session_names as SN
+    return str(SN.next_session_dir(Path(args[0]), "youtube", "yt", floor=100000))
+
+
+def test_concurrent_names():
+    """t56: slots of one platform start sessions concurrently; every name is handed out once."""
+    import multiprocessing as mp
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        with mp.get_context("fork").Pool(8) as pool:
+            names = pool.map(_one, [(d,)] * 24)
+        assert len(set(names)) == 24 and sorted(int(n.rsplit("_", 1)[1]) for n in names) == list(range(100001, 100025)), names
+
+
 def main():
+    test_concurrent_names()
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         for n in (1, 2):

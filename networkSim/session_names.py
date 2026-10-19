@@ -26,19 +26,30 @@ def _highest_existing(data_dir: Path, platform: str, abbrev: str) -> int:
 def next_session_dir(data_dir: Path, platform: str, abbrev: str, floor: int = 0) -> Path:
     """Create and return data/<platform>/<abbrev>_<n> with n above every name ever handed out; persist n. floor (t53
     trio: data_dir = data/_trio, its own counter): n above it too, so trio names never meet single mode's."""
+    import fcntl
     data_dir = Path(data_dir)
     cp = counter_path(data_dir, platform)
-    try:
-        last = int(json.loads(cp.read_text())["last"])
-    except (OSError, ValueError, KeyError, TypeError):
-        last = 0
-    n = max(last, _highest_existing(data_dir, platform, abbrev), floor) + 1
-    while (data_dir / platform / f"{abbrev}_{n}").exists() or (data_dir / "_failed" / platform / f"{abbrev}_{n}").exists():
-        n += 1
     cp.parent.mkdir(parents=True, exist_ok=True)
-    tmp = cp.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"platform": platform, "abbrev": abbrev, "last": n}))
-    os.replace(tmp, cp)
-    sd = data_dir / platform / f"{abbrev}_{n}"
-    sd.mkdir(parents=True, exist_ok=True)
+    # t56: two slots of one platform start their sessions concurrently: the counter is read, advanced and the dir made
+    # under an exclusive lock, and the dir is created exclusively (a name is handed out once)
+    with open(cp.with_suffix(".lock"), "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            last = int(json.loads(cp.read_text())["last"])
+        except (OSError, ValueError, KeyError, TypeError):
+            last = 0
+        n = max(last, _highest_existing(data_dir, platform, abbrev), floor) + 1
+        while True:
+            while (data_dir / platform / f"{abbrev}_{n}").exists() or (data_dir / "_failed" / platform / f"{abbrev}_{n}").exists():
+                n += 1
+            sd = data_dir / platform / f"{abbrev}_{n}"
+            sd.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                sd.mkdir()
+                break
+            except FileExistsError:
+                n += 1
+        tmp = cp.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"platform": platform, "abbrev": abbrev, "last": n}))
+        os.replace(tmp, cp)
     return sd

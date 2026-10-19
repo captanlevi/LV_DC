@@ -18,7 +18,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import orchestrate as O                                  # noqa: E402
-assert "trio_slots" not in sys.modules, "single mode imports trio_slots"
+
+
+def test_single_mode_does_not_import_trio_slots():
+    """In a fresh interpreter: under pytest another test module may already have imported trio_slots."""
+    import subprocess
+    r = subprocess.run([sys.executable, "-c", "import sys, orchestrate; "
+                        "sys.exit('trio_slots' in sys.modules)"], cwd=HERE, capture_output=True, text=True)
+    assert r.returncode == 0, ("single mode imports trio_slots", r.stderr[-500:])
 import trio_slots as T                                   # noqa: E402
 import flow_overlap as F                                 # noqa: E402
 
@@ -41,8 +48,8 @@ def test_tree_is_gate1s():
     assert {s.cdp_port for s in T.SLOTS.values()}.isdisjoint({9222})
     assert len({s.prio for s in T.SLOTS.values()}) == 3
     # nft resolves the cgroup path when the rule is added: the cgroup first
-    up = T.slot_up_cmds(T.SLOTS["youtube"], IF)
-    assert up[0] == "mkdir -p /sys/fs/cgroup/lvdc.slice/yt" and up[1].startswith("nft add rule")
+    up = T.slot_up_cmds(T.SLOTS["yt1"], IF)
+    assert up[0] == "mkdir -p /sys/fs/cgroup/lvdc.slice/yt1" and up[1].startswith("nft add rule")
 
 
 def test_leak_fixes():
@@ -53,10 +60,10 @@ def test_leak_fixes():
     restore = [c for c in up if "lvdc restore" in c]
     assert len(restore) == 1 and "meta mark 0 ct mark & 0xf0 == 0x10 meta mark set ct mark" in restore[0]
     assert up.index(restore[0]) > up.index(next(c for c in up if "nft add chain" in c))
-    yt = T.SLOTS["youtube"]
+    yt = T.SLOTS["yt1"]
     e3 = yt.with_epoch(100003)
-    assert (e3.mark, e3.egress_class, e3.prio, e3.tag) == (0x311, "1:311", 10, "yt") and e3.record()["epoch"] == 3
-    assert yt.with_epoch(16).mark == 0x11 and T.SLOTS["tiktok"].with_epoch(5).mark == 0x513
+    assert (e3.mark, e3.egress_class, e3.prio, e3.tag) == (0x311, "1:311", 10, "yt1") and e3.record()["epoch"] == 3
+    assert yt.with_epoch(16).mark == 0x11 and T.SLOTS["tt1"].with_epoch(5).mark == 0x513
     eg = [c for c in up if "parent 1: protocol all prio 5 matchall action connmark continue" in c]
     assert len(eg) == 1 and up.index(eg[0]) > max(i for i, c in enumerate(up) if "parent 1: protocol ip prio 1" in c)
     drop = [c for c in up if "handle 0x10/0xf0 fw action drop" in c]
@@ -69,14 +76,14 @@ def test_leak_fixes():
         root = Path(d)
         _proc(root, 100, 1, "/opt/google/chrome/chrome --remote-debugging-port=9223",
               "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.google.Chrome-100.scope")
-        _proc(root, 101, 100, "chrome --type=utility --utility-sub-type=network.mojom.NetworkService", "0::/lvdc.slice/yt")
+        _proc(root, 101, 100, "chrome --type=utility --utility-sub-type=network.mojom.NetworkService", "0::/lvdc.slice/yt1")
         _proc(root, 102, 100, "chrome --type=utility --utility-sub-type=audio.mojom.AudioService",
               "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.google.Chrome-100.scope")
         moved = []
 
         def mover(pid):
             moved.append(pid)
-            (root / str(pid) / "cgroup").write_text("0::/lvdc.slice/yt\n")
+            (root / str(pid) / "cgroup").write_text("0::/lvdc.slice/yt1\n")
             return True
         sw = T.CgroupSweeper(yt, lambda: 100, proc=root, mover=mover)
         assert sw.sweep() == 2 and moved == [100, 102]
@@ -88,7 +95,7 @@ def test_leak_fixes():
 
 
 def test_slot_down_touches_only_its_own():
-    yt = T.SLOTS["youtube"]
+    yt = T.SLOTS["yt1"]
     down = "\n".join(T.slot_down_cmds(yt, IF, nft_handle=7))
     for o in ("tw", "tt"):
         assert f"lvi_{o}" not in down and f"lvo_{o}" not in down and f"lvdc.slice/{o}" not in down
@@ -97,19 +104,19 @@ def test_slot_down_touches_only_its_own():
     assert "nft delete rule inet lvdc_trio out handle 7" in down
     assert "qdisc del dev wlp0s20f3 root" not in down and "ingress" not in down.replace("parent ffff:", "")
     assert "ifb0" not in down and "ifb1" not in down
-    listing = ('table inet lvdc_trio {\n chain out { # handle 1\n  socket cgroupv2 level 2 "lvdc.slice/yt" meta mark '
-               'set 0x00000011 ct mark set meta mark comment "lvdc slot yt" # handle 4\n  socket cgroupv2 level 2 '
-               '"lvdc.slice/tw" meta mark set 0x00000012 ct mark set meta mark comment "lvdc slot tw" # handle 5\n }\n}')
-    assert T.nft_handle_of(yt, listing) == 4 and T.nft_handle_of(T.SLOTS["twitch"], listing) == 5
-    assert T.nft_handle_of(T.SLOTS["tiktok"], listing) is None
+    listing = ('table inet lvdc_trio {\n chain out { # handle 1\n  socket cgroupv2 level 2 "lvdc.slice/yt1" meta mark '
+               'set 0x00000011 ct mark set meta mark comment "lvdc slot yt1" # handle 4\n  socket cgroupv2 level 2 '
+               '"lvdc.slice/tw1" meta mark set 0x00000012 ct mark set meta mark comment "lvdc slot tw1" # handle 5\n }\n}')
+    assert T.nft_handle_of(yt, listing) == 4 and T.nft_handle_of(T.SLOTS["tw1"], listing) == 5
+    assert T.nft_handle_of(T.SLOTS["tt1"], listing) is None
 
 
 def test_records_and_parsers():
     assert T.concurrency_record(None) == {"mode": "single"}
-    r = T.concurrency_record(T.slot_of("tt"), link_capacity_kbit=104100.0)
+    r = T.concurrency_record(T.slot_of("tt1"), link_capacity_kbit=104100.0)
     assert r["mode"] == "trio" and r["pool"] == "per_session" and r["mark"] == "0x13" and r["cdp_port"] == 9225
-    assert r["ifb_in"] == "lvi_tt" and r["egress_class"] == "1:13" and r["cgroup"] == "lvdc.slice/tt"
-    err = ("tcpdump: listening on lvi_yt, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n"
+    assert r["ifb_in"] == "lvi_tt1" and r["egress_class"] == "1:13" and r["cgroup"] == "lvdc.slice/tt1"
+    err = ("tcpdump: listening on lvi_yt1, link-type EN10MB (Ethernet), snapshot length 262144 bytes\n"
            "48211 packets captured\n48211 packets received by filter\n0 packets dropped by kernel\n")
     assert T.capture_drops(err) == {"captured": 48211, "received": 48211, "dropped_kernel": 0}
     assert T.capture_drops("") == {"captured": None, "received": None, "dropped_kernel": None}
@@ -134,18 +141,18 @@ def _proc(root: Path, pid: int, ppid: int, cmd: str, cg: str):
 
 
 def test_socket_owner():
-    yt = T.SLOTS["youtube"]
+    yt = T.SLOTS["yt1"]
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
-        _proc(root, 100, 1, "/opt/google/chrome/chrome --remote-debugging-port=9223", "0::/lvdc.slice/yt")
-        _proc(root, 101, 100, "chrome --type=zygote", "0::/lvdc.slice/yt")
+        _proc(root, 100, 1, "/opt/google/chrome/chrome --remote-debugging-port=9223", "0::/lvdc.slice/yt1")
+        _proc(root, 101, 100, "chrome --type=zygote", "0::/lvdc.slice/yt1")
         _proc(root, 102, 100, "chrome --type=utility --utility-sub-type=network.mojom.NetworkService",
-              "0::/lvdc.slice/yt")
-        _proc(root, 103, 101, "chrome --type=renderer", "0::/lvdc.slice/yt")
-        _proc(root, 200, 1, "chrome --remote-debugging-port=9224", "0::/lvdc.slice/tw")
+              "0::/lvdc.slice/yt1")
+        _proc(root, 103, 101, "chrome --type=renderer", "0::/lvdc.slice/yt1")
+        _proc(root, 200, 1, "chrome --remote-debugging-port=9224", "0::/lvdc.slice/tw1")
         rec = T.socket_owner(100, yt, proc=root)
         assert rec["processes"] == 4 and rec["network_service_pids"] == [102] and rec["all_in_slot"]
-        assert rec["network_service_cgroups"] == ["0::/lvdc.slice/yt"] and rec["outside_slot"] == []
+        assert rec["network_service_cgroups"] == ["0::/lvdc.slice/yt1"] and rec["outside_slot"] == []
         (root / "102" / "cgroup").write_text("0::/user.slice/user-1000.slice/session-2.scope\n")
         rec = T.socket_owner(100, yt, proc=root)
         assert not rec["all_in_slot"] and rec["outside_slot"][0]["pid"] == 102
@@ -154,27 +161,27 @@ def test_socket_owner():
 
 
 def test_tc_sampler():
-    yt = T.SLOTS["youtube"]
+    yt = T.SLOTS["yt1"]
     seq = iter([(0, 0, 0), (1514, 0, 125000), (0, 2, 250000), (0, 2, 375000)])
     state = {}
 
     def sh(cmd):
-        if cmd == "tc -s class show dev lvi_yt":
+        if cmd == "tc -s class show dev lvi_yt1":
             state["cur"] = next(seq)
             b, dr, by = state["cur"]
             return (f"class htb 1:10 root leaf 8001: prio 0 rate 5Mbit ceil 5Mbit burst 1600b cburst 1600b \n"
                     f" Sent {by} bytes 10 pkt (dropped {dr}, overlimits 0 requeues 0) \n backlog {b}b 1p requeues 0\n")
-        if cmd == "tc class show dev lvi_tw":
+        if cmd == "tc class show dev lvi_tw1":
             return "class htb 1:10 root leaf 8002: prio 0 rate 9Mbit ceil 9Mbit burst 1600b cburst 1600b \n"
         return ""
     with tempfile.TemporaryDirectory() as d:
         net = Path(d) / "net"
-        for dev in ("lvi_yt", "lvi_tw"):
+        for dev in ("lvi_yt1", "lvi_tw1"):
             (net / dev).mkdir(parents=True)
         s = T.TcSampler(Path(d), yt, capacity_kbit=12000.0, sh=sh, net=net)
         for _ in range(4):
             row = s.sample()
-        assert row["set_rates_kbit"] == {"yt": 5000.0, "tw": 9000.0} and row["flagged"]
+        assert row["set_rates_kbit"] == {"yt1": 5000.0, "tw1": 9000.0} and row["flagged"]
         sm = s.summary()
         assert sm["samples"] == 4 and sm["shaper_bound_share"] == round(2 / 3, 3) and sm["ingress_drops"] == 2
         assert sm["flagged_share"] == 1.0 and sm["qa_flag"]
@@ -400,7 +407,7 @@ class FakeProc:
 
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
-          xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None):
+          xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None, slots=None):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry", "free_gb")}
@@ -411,7 +418,8 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     T.trio_preflight = trio_pf or (lambda *a, **k: {"ok": True, "problems": [], "checks": {}})
     O._RUNS_DIR = tmp
     O._pick = lambda p, nl, now, rg, ex=(), root=None: calls.append(("pick", p, ex, root)) and None or (None, None, None)
-    O.session_matrix = lambda p, f=None, ex=(), data_dir=None, select=None: calls.append(("matrix", p, f, ex, data_dir, select)) or "A"
+    O.session_matrix = (lambda p, f=None, ex=(), data_dir=None, select=None, reserved=None, key=None:
+                        calls.append(("matrix", p, f, ex, data_dir, select, reserved, key)) or "A")
     O.accepted_sessions = lambda p, root=None: calls.append(("accepted", p, root)) and 0 or 0
     O.report_flags = lambda p, t, root=None: []
     O._summary = lambda: None
@@ -434,10 +442,13 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
                         spawn=spawn, apply=lambda cmds, check=True: calls.append(("apply", cmds[0], check)) or
                         [{"cmd": c, "rc": 0} for c in cmds],
                         make=lambda args: calls.append(("make", args[0])) or 0, sleep=sleep, layout=layout,
-                        xrandr=xrandr, offloads=offloads or (lambda iface: {"iface": iface, "ok": True, "after": {}, "calls": []}))
+                        xrandr=xrandr, offloads=offloads or (lambda iface: {"iface": iface, "ok": True, "after": {}, "calls": []}),
+                        slots=slots)
     finally:
         for k, v in saved.items():
             setattr(O, k, v)
+        T.SLOTS.clear()                                  # run_trio's composition is the process's; the tests restore it
+        T.SLOTS.update(T.build_slots(T.TRIO_COMPOSITION))
         O.preflight.run, T.nft_handle_of, T.STAGING, T.trio_preflight = saved_pf, saved_nft, saved_stage, saved_tpf
         T.conntrack_timeouts = saved_ct
     return rc, calls
@@ -467,7 +478,7 @@ def test_run_trio():
             assert cmd[cmd.index("--link-capacity-kbit") + 1] == "104100.0"
             assert env["LVQOE_SHOT_SOURCE"] == "cdp" and env["LVDC_PREFLIGHT_JSON"].endswith(f"preflight_last_{tag}.json")
             assert env["LVDC_TRIO_RUN"] and log.name == f"{tag}_1.log"
-        assert [c[2] for c in calls if c[0] == "matrix"] == [f"_trio/_summaries/coverage_last_{t}.json" for t in ("yt", "tw", "tt")]
+        assert [c[2] for c in calls if c[0] == "matrix"] == [f"_trio/_summaries/coverage_last_{t}.json" for t in ("yt1", "tw1", "tt1")]
         assert all(c[3] == ("fullscreen",) for c in calls if c[0] == "matrix")          # trio v1: no fullscreen
         import record
         assert all(c[4] == tmp / "_trio" and c[5] is record.is_record for c in calls if c[0] == "matrix")   # levi: of record
@@ -482,7 +493,7 @@ def test_run_trio():
         assert sysctl == ["sysctl -w net.netfilter.nf_conntrack_udp_timeout_stream=3600",
                           "sysctl -w net.netfilter.nf_conntrack_udp_timeout_stream=120"], sysctl   # set, then restored
         assert ev[0]["conntrack_timeouts_before"] == {"nf_conntrack_udp_timeout_stream": 120}
-        assert sorted(e["slot"] for e in ev if e["event"] == "exit") == ["tt", "tw", "yt"]
+        assert sorted(e["slot"] for e in ev if e["event"] == "exit") == ["tt1", "tw1", "yt1"]
 
         # rolling: no max -> a slot is refilled when its session ends, until drained
         spawned.clear()
@@ -525,20 +536,20 @@ def test_run_trio():
                    for _, e, _ in spawned)
         lay = {T.slot_of(c[c.index("--slot") + 1]).tag: T.layout_of(T.slot_of(c[c.index("--slot") + 1]), e)
                for c, e, _ in spawned}
-        assert lay["yt"]["origin"] == [0, 0] and lay["tt"]["origin"] == [3840, 0] and lay["tt"]["x_screen_px"] == [5760, 1080]
-        assert T.layout_of(T.SLOTS["twitch"], {}) == {"layout": "cdp"}
+        assert lay["yt1"]["origin"] == [0, 0] and lay["tt1"]["origin"] == [3840, 0] and lay["tt1"]["x_screen_px"] == [5760, 1080]
+        assert T.layout_of(T.SLOTS["tw1"], {}) == {"layout": "cdp"}
         # a recorded round pin (levi 00261): the twitch slot's category / channel / state / geometry, in meta via env;
         # another slot unpinned; and am. 15 (5)'s band start applies in trio as in single mode
         spawned.clear()
         plat, pin = O.parse_pin("twitch:category=Chess,channel=gothamchess,state=10,geometry=window:1920x1080",
                                 "levi 00261 coverage: 60 fps tier")
         O.TRIO_PINS[plat] = pin
-        O.LAST_COVERAGE["youtube"] = {"initial_state_forced": {"state": "9"}}
+        O.LAST_COVERAGE["yt1"] = {"initial_state_forced": {"state": "9"}}      # t56: keyed by slot tag
         try:
             rc, _ = _trio(tmp, {"twitch": 5, "youtube": 5}, spawn)
         finally:
             O.TRIO_PINS.clear()
-            O.LAST_COVERAGE.pop("youtube", None)
+            O.LAST_COVERAGE.pop("yt1", None)
         by = {c[c.index("--platform") + 1]: (c, e) for c, e, _ in spawned}
         tc, te = by["twitch"]
         assert rc == 0 and tc[tc.index("--tw-category") + 1] == "Chess" and tc[tc.index("--tw-channel") + 1] == "gothamchess"
@@ -559,7 +570,7 @@ def test_run_trio():
         rc, _ = _trio(tmp, {"twitch": 5}, spawn, layout="composite")
         assert rc == 0 and spawned and all(e["LVQOE_SHOT_SOURCE"] == "composite" and e["LVDC_TRIO_LAYOUT"] == "composite"
                                            for _, e, _ in spawned)
-        assert T.layout_of(T.SLOTS["twitch"], {"LVDC_TRIO_LAYOUT": "composite"}) == {"layout": "composite"}
+        assert T.layout_of(T.SLOTS["tw1"], {"LVDC_TRIO_LAYOUT": "composite"}) == {"layout": "composite"}
         assert O.TRIO_SHOT_SOURCE == {"cdp": "cdp", "fb": "x11", "composite": "composite"}
         # it did not grow (a window manager that keeps the screen): no session, EXIT_PREFLIGHT, restored, torn down
         fbs.clear()

@@ -362,7 +362,8 @@ def deficits(snap: dict, states: list[str] = ()) -> list[dict]:
     return sorted(out, key=lambda d: (-d["deficit"], d["order"]))
 
 
-def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, excluded_geometries: tuple = ()) -> dict:
+def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, excluded_geometries: tuple = (),
+                reserved: dict | None = None) -> dict:
     """The rule (module docstring) on a snapshot. matrices: the platform's {id: (transitions, low cap, init rule)}.
     excluded_geometries (t53 trio v1: ("fullscreen",)): a class whose only geometry (GEOMETRY_FOR_CLASS) is of an
     excluded mode is unreachable, recorded in unreachable_targets and geometry_excluded."""
@@ -370,6 +371,11 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
     ids = sorted(allowed or matrices)
     states = sorted({s for m in ids for s in matrices[m][0]}, key=int) if platform == "tiktok" else []
     defs = deficits(snap, states)
+    if reserved:   # t56: a class a running sibling slot already holds is that much nearer its floor (siblings spread)
+        for d in defs:
+            if d["kind"] == "class" and reserved.get(d["key"]):
+                d["deficit"] = float(d["deficit"]) - reserved[d["key"]]
+        defs = sorted((d for d in defs if d["deficit"] > 0), key=lambda d: (-d["deficit"], d["order"]))
     bands = band_map(platform, matrices, ids)
     # am. 15 (3): a tier class no allowed matrix can reach is not drawn; the next deficit is the target
     unreachable = [d["key"] for d in defs if d["kind"] == "class" and d["key"] in bands and not bands[d["key"]]["qualifies"]]
@@ -381,6 +387,8 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
            "snapshot": snap, "bands": bands, "unreachable_targets": unreachable, "default_rotation": False, "geometry_forced": None}
     if excluded_geometries:
         rec["geometry_excluded"] = {"modes": list(excluded_geometries), "unreachable_by_geometry": no_geom}
+    if reserved:
+        rec["reserved"] = dict(reserved)
     pm = snap["per_matrix"]
     if not live:      # am. 15 (2): rotate, the least-collected allowed matrix first, ties to the lowest id
         rot = [m for m in ids if drawable(platform, m, None)] or ids         # am. 15 (6): never a target-only matrix
@@ -433,10 +441,11 @@ def initial_state_forced(rec: dict, matrices: dict, rng=random) -> dict | None:
 
 
 def choose(data_dir: Path, platform: str, allowed: list[str] | None = None, excluded_geometries: tuple = (),
-           select=None) -> dict:
+           select=None, reserved: dict | None = None) -> dict:
     """orchestrate, before each session: the snapshot, the rule's choice for `platform` and, for a tier-class target,
     the forced initial state (Q am. 15 (5))."""
-    rec = pick_matrix(snapshot(data_dir, platform, select), PLATFORM_MATRICES[platform], allowed, excluded_geometries)
+    rec = pick_matrix(snapshot(data_dir, platform, select), PLATFORM_MATRICES[platform], allowed, excluded_geometries,
+                      reserved)
     return {**rec, "initial_state_forced": initial_state_forced(rec, PLATFORM_MATRICES[platform]),
             "taken_at": dt.datetime.now().isoformat(timespec="seconds")}
 

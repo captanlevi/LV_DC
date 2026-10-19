@@ -64,10 +64,30 @@ except Exception:                               # the container test copies only
 
 CG_ROOT = Path("/sys/fs/cgroup")
 SLICE = "lvdc.slice"
-SESSIONS = {"yt": 0x11, "tw": 0x12, "tt": 0x13}            # session -> fw mark (also its egress class minor)
 NFT_TABLE = "lvdc_trio"
 # tw holds states 1 and 2 (pilot-0: twitch's per-second rate p95 at its two lowest states, against single mode's)
-DEFAULT_STATES = {"yt": ["3", "7", "10"], "tw": ["1", "2", "9"], "tt": ["8", "4", "6"]}
+PLATFORM_STATES = {"youtube": ["3", "7", "10"], "twitch": ["1", "2", "9"], "tiktok": ["8", "4", "6"]}
+_ABBREV = {"youtube": "yt", "twitch": "tw", "tiktok": "tt"}
+
+
+def sessions_of(composition: dict) -> dict:
+    """t56: tag -> fw mark (also its egress class minor) for a composition, by trio_slots.build_slots' rule (platform order
+    youtube, twitch, tiktok; slot k: <abbrev><i>, mark 0x11 + k). Inline: the container test copies only this script
+    (test_trio_dry_run checks it against build_slots)."""
+    out, k = {}, 0
+    for p in ("youtube", "twitch", "tiktok"):
+        for i in range(1, int(composition.get(p, 0)) + 1):
+            out[f"{_ABBREV[p]}{i}"] = 0x11 + k
+            k += 1
+    return out
+
+
+def platform_of(tag: str) -> str:
+    return {v: k for k, v in _ABBREV.items()}[re.sub(r"\d+$", "", tag)]
+
+
+SESSIONS = sessions_of({"youtube": 1, "twitch": 1, "tiktok": 1})    # --slots changes it (main)
+DEFAULT_STATES = {s: PLATFORM_STATES[platform_of(s)] for s in SESSIONS}
 MGMT_UDP_PORT, MGMT_TCP_PORT = 41641, 22
 BULK_URL = "http://mirror.aarnet.edu.au/pub/ubuntu/releases/24.04/ubuntu-24.04.5-live-server-amd64.iso"   # ~3 GB
 MARK_BY = "cgroup"  # "uid" only for a test kernel without nft socket cgroupv2 (each session a user lvdc_<p>)
@@ -571,7 +591,7 @@ def check_session_reference(data: Path, states: dict) -> dict:
     """Levi (3), from the record: per platform and state, the accepted single-mode sessions' check.json episode shaper
     ratios (measured / set downstream): n sessions, n episodes, [min, max], median. Demand-limited (players do not
     saturate), so a lower bound only (the gate-2 checklist's one-sided reading)."""
-    plat = {"yt": "youtube", "tw": "twitch", "tt": "tiktok"}
+    plat = {s: platform_of(s) for s in SESSIONS}
     out = {}
     for s, pl in plat.items():
         by: dict = {}
@@ -657,6 +677,7 @@ def main(argv=None) -> int:
     ap.add_argument("--iface", default="wlp0s20f3")
     ap.add_argument("--out", default=f"/tmp/trio_dry_run_{int(time.time())}")
     ap.add_argument("--state-s", type=float, default=60.0, help="seconds per state (levi: >= 60)")
+    ap.add_argument("--slots", default=None, help="t56: the composition, e.g. youtube=2,twitch=2,tiktok=2 (default one each)")
     ap.add_argument("--states", type=lambda x: dict(kv.split("=") for kv in x.split()), default={},
                     help="per session states, e.g. 'yt=3,7,10 tw=5,9,2 tt=8,4,6'")
     ap.add_argument("--goodput-s", type=float, default=60.0)
@@ -678,6 +699,11 @@ def main(argv=None) -> int:
     ap.add_argument("--print-only", action="store_true", help="print the tree / rate / teardown commands and exit")
     a = ap.parse_args(argv)
     a.states = {k: v.split(",") for k, v in a.states.items()}
+    global SESSIONS, DEFAULT_STATES
+    if a.slots:                                       # t56: the step's composition (--slots youtube=2,twitch=2,tiktok=2)
+        comp = {k: int(v) for k, v in (kv.split("=") for kv in a.slots.split(","))}
+        SESSIONS = sessions_of(comp)
+        DEFAULT_STATES = {s: PLATFORM_STATES[platform_of(s)] for s in SESSIONS}
     global NO_IFB, MARK_BY, NO_CONNMARK
     NO_IFB, MARK_BY, NO_CONNMARK = a.no_ifb, a.mark_by, a.no_connmark
     if MARK_BY == "uid" and not a.print_only:

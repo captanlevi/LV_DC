@@ -20,6 +20,7 @@ pid files are never used by a slot. Commands are strings run as root (`sudo -n` 
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import threading
@@ -96,10 +97,51 @@ ORPHAN_PRIO = 40          # the shared drop for a mark of ours with no slot filt
 # conntrack's UDP stream timeout while a trio runs (pilot-0 read, levi 1b: at the box's 120 s an idle QUIC flow lost its
 # entry and so its mark, and the server's next packets reached the unshaped default class); set by run_trio, restored
 TRIO_UDP_STREAM_TIMEOUT_S = 3600
-# marks and preferences as gate 1 (trio_dry_run.SESSIONS); CDP ports beside single mode's 9222
-SLOTS = {"youtube": Slot("youtube", "yt", 0x11, 9223, 10),
-         "twitch": Slot("twitch", "tw", 0x12, 9224, 11),
-         "tiktok": Slot("tiktok", "tt", 0x13, 9225, 12)}
+# t56 (design v4 §9): N slots from a composition {platform: count}, platform order youtube, twitch, tiktok; slot k (in that
+# order) is <abbrev><i> (yt1, yt2, tw1 ...) with mark base 0x11 + k, CDP port 9223 + k, filter prio 10 + k. The marks'
+# low byte 0x1X is ours (0x10 stays the orphan drop's pattern), so at most MAX_SLOTS; the trio (one each) is yt1 / tw1 / tt1
+# on the trio's marks, ports and prios (test_nslot_equivalence: aaba6ae's commands up to the tag renaming).
+PLATFORM_ORDER = ("youtube", "twitch", "tiktok")
+ABBREV = {"youtube": "yt", "twitch": "tw", "tiktok": "tt"}
+MAX_SLOTS = 15
+TRIO_COMPOSITION = {"youtube": 1, "twitch": 1, "tiktok": 1}
+
+
+def parse_composition(spec: str | None) -> dict[str, int]:
+    """'youtube=2,twitch=2,tiktok=2' -> {platform: count}; None / empty: the trio's."""
+    if not spec:
+        return dict(TRIO_COMPOSITION)
+    comp = {}
+    for kv in spec.split(","):
+        k, _, v = kv.strip().partition("=")
+        if k not in ABBREV or not v.isdigit() or int(v) < 0:
+            raise ValueError(f"--slots {spec!r}: {kv!r} (platform=count, platforms {list(ABBREV)})")
+        comp[k] = int(v)
+    return {p: comp[p] for p in PLATFORM_ORDER if comp.get(p)}
+
+
+def build_slots(composition: dict[str, int]) -> dict[str, "Slot"]:
+    """{tag: Slot} for a composition (module comment above)."""
+    out, k = {}, 0
+    for p in PLATFORM_ORDER:
+        for i in range(1, int(composition.get(p, 0)) + 1):
+            tag = f"{ABBREV[p]}{i}"
+            out[tag] = Slot(p, tag, 0x11 + k, 9223 + k, 10 + k)
+            k += 1
+    if not out or len(out) > MAX_SLOTS:
+        raise ValueError(f"composition {composition}: 1..{MAX_SLOTS} slots (the mark space)")
+    return out
+
+
+def composition_of(slots: dict) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for s in slots.values():
+        out[s.platform] = out.get(s.platform, 0) + 1
+    return out
+
+
+# the run's slots: orchestrate --slots, passed to every slot's exp.py as LVDC_TRIO_SLOTS (the composition)
+SLOTS: dict[str, "Slot"] = build_slots(parse_composition(os.environ.get("LVDC_TRIO_SLOTS")))
 
 
 def layout_of(s: Slot, env) -> dict:
@@ -109,13 +151,16 @@ def layout_of(s: Slot, env) -> dict:
     if lay != "fb":
         return {"layout": lay}
     w, h = (int(x) for x in env["LVDC_TRIO_SCREEN"].split("x"))
-    k = list(SLOTS).index(s.platform)
+    k = list(SLOTS).index(s.tag)
     return {"layout": "fb", "screen": [w, h], "x_screen_px": [w * len(SLOTS), h], "origin": [k * w, 0], "index": k}
 
 
 def slot_of(tag_or_platform: str) -> Slot:
+    """A slot by its tag; a platform names its first slot (the trio's one)."""
+    if tag_or_platform in SLOTS:
+        return SLOTS[tag_or_platform]
     for s in SLOTS.values():
-        if tag_or_platform in (s.tag, s.platform):
+        if tag_or_platform == s.platform:
             return s
     raise KeyError(f"no trio slot {tag_or_platform!r}")
 
@@ -550,8 +595,11 @@ def concurrency_record(s: Slot | None, **extra) -> dict:
     import os
     import record
     # of record (levi): a counted run (orchestrate --trio-record) under the current era; steering counts only these
+    import session_meta
+    # t56 (levi's pooling ruling): n, the composition and the collector's sha per session
     return {"mode": "trio", "pool": "per_session", **s.record(), "record": os.environ.get("LVDC_TRIO_RECORD") == "1",
-            "era": record.ERA, **extra}
+            "era": record.ERA, "n": len(SLOTS), "composition": composition_of(SLOTS),
+            "lvdc_commit": session_meta.lvdc_commit(), **extra}
 
 
 def slots_log_append(path: Path, rec: dict) -> None:

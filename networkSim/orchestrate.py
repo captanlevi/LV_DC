@@ -249,8 +249,12 @@ TRIO_RECORD = False      # --trio-record: this run's sessions are of record (cou
 
 
 def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
-    """'twitch:channel=gothamchess,category=Chess,state=10,geometry=window:1920x1080' -> (platform, pin)."""
-    platform, _, rest = spec.partition(":")
+    """'twitch:channel=gothamchess,category=Chess,state=10,geometry=window:1920x1080' -> (platform, pin); the key may
+    also be a slot tag (t56: 'yt2:state=10'), which pins that slot alone -> (tag, pin)."""
+    import re
+    key, _, rest = spec.partition(":")
+    m = re.fullmatch(r"(yt|tw|tt)(\d+)", key)
+    platform = {"yt": "youtube", "tw": "twitch", "tt": "tiktok"}[m.group(1)] if m else key
     pin: dict = {"reason": reason}
     for kv in filter(None, rest.split(",")):
         k, _, v = kv.partition("=")
@@ -266,7 +270,7 @@ def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
         raise ValueError(f"--trio-pin {spec!r}: category / channel pins are twitch only")
     if pin.get("channel") and not pin.get("category"):
         raise ValueError(f"--trio-pin {spec!r}: a channel pin names its category (exp.py's --tw-channel needs --tw-category)")
-    return platform, pin
+    return key, pin
 
 
 def coupled_geometry(p: str, geom: str | None) -> str | None:
@@ -276,7 +280,7 @@ def coupled_geometry(p: str, geom: str | None) -> str | None:
 
 
 def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, excluded_geometries: tuple = (),
-                   data_dir: Path | None = None, select=None) -> str | None:
+                   data_dir: Path | None = None, select=None, reserved: dict | None = None, key: str | None = None) -> str | None:
     """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
     LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such.
     data_dir: the sessions the floors count (the trio: its own root, the sessions of record; levi 00265)."""
@@ -284,13 +288,14 @@ def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, exc
     root = data_dir or _RUNS_DIR
     if MATRIX_RULE == "coverage" and p in coverage_report.CLASSES:
         try:
-            rec = (coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p), excluded_geometries, select=select)
-                   if excluded_geometries or select else coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p)))
+            rec = (coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p), excluded_geometries, select=select,
+                                          reserved=reserved)
+                   if excluded_geometries or select or reserved else coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p)))
             print(f"  coverage : matrix {rec['matrix']} (target {(rec['target'] or {}).get('key')}, {rec['why']})")
         except Exception as e:
             rec["rule_error"] = repr(e)
             print(f"  coverage rule failed ({e!r}): matrix {rec['matrix']} (fixed)")
-    LAST_COVERAGE[p] = rec
+    LAST_COVERAGE[key or p] = rec                      # t56: the trio keys it by slot tag (two slots of one platform)
     path = _RUNS_DIR / summary_file
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rec, indent=1, default=str))
@@ -541,11 +546,27 @@ def free_gb(path: Path) -> float:
     return shutil.disk_usage(path).free / 1e9
 
 
-def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused: dict, not_live: dict,
+def _reserved(tag: str, T, running: dict) -> dict:
+    """t56: the classes the running sibling slots of tag's platform already target (one each), and yt Q_1080p while
+    another slot holds the fullscreen layout (one at a time: the keeper can keep one window on top)."""
+    import collections
+    p, out = T.SLOTS[tag].platform, collections.Counter()
+    for t2, r in running.items():
+        if t2 == tag:
+            continue
+        if T.SLOTS[t2].platform == p and r.get("target"):
+            out[r["target"]] += 1
+        if str(r.get("geom") or "").startswith("fullscreen") and p == "youtube":
+            out["Q_1080p"] += 1000                        # unreachable while the token is held: the next deficit
+    return dict(out)
+
+
+def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, paused: dict, not_live: dict,
                  rotate_geometry: bool, yt_matrix: str, capacity_kbit: float | None, run_id: str, summaries: Path,
                  spawn, floor: dict | None = None, stop_signal: list | None = None) -> bool:
-    """Start the next session in p's slot (run_trio); False when its preflight failed (the trio drains)."""
-    s, troot = T.SLOTS[p], _RUNS_DIR / T.TRIO_DIR
+    """Start the next session in slot `tag` (run_trio); False when its preflight failed (the trio drains)."""
+    s, troot = T.SLOTS[tag], _RUNS_DIR / T.TRIO_DIR
+    p = s.platform
     gb = free_gb(_RUNS_DIR)
     if gb < MIN_FREE_GB:
         print(f"\n  Data volume {gb:.0f} GB free < {MIN_FREE_GB} GB: draining the trio.")
@@ -563,30 +584,35 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
     # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
     channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot)
     import record
+    reserved = _reserved(tag, T, running)
     mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES, data_dir=troot,
-                         select=record.is_record)
-    forced = coupled_geometry(p, geom) if rotate_geometry else geom
+                         select=record.is_record, reserved=reserved or None, key=tag)
+    forced = coupled_geometry(tag, geom) if rotate_geometry else geom
+    if forced and forced.startswith("fullscreen") and any(str(r.get("geom") or "").startswith("fullscreen")
+                                                           for t2, r in running.items() if t2 != tag):
+        forced = geom                                     # the fullscreen token is held (design v4: one at a time)
     if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES:
         forced = geom
     if forced != geom:
         print(f"  geometry {forced} (coupled to the coverage target; rotation drew {geom})")
         geom = forced
     # Q am. 15 (5), as single mode (run_batch): a tier-class target starts in its band (the merge had kept the balance rule)
-    fi = (LAST_COVERAGE.get(p) or {}).get("initial_state_forced") if MATRIX_RULE == "coverage" else None
+    fi = (LAST_COVERAGE.get(tag) or {}).get("initial_state_forced") if MATRIX_RULE == "coverage" else None
     init = fi["state"] if fi else most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid)
-    pin = TRIO_PINS.get(p)
+    pin = TRIO_PINS.get(tag) or TRIO_PINS.get(p)        # a tag's own pin, else its platform's
     if pin:                             # a recorded round pin (levi 00261), never silent
         if pin.get("category"):
             category = {"name": pin["category"], "type": "pinned", "channel": pin.get("channel")}
         init = pin.get("state") or init
         geom = pin.get("geometry") or geom
-        print(f"  PINNED {p}: {json.dumps(pin)}")
+        print(f"  PINNED {tag}: {json.dumps(pin)}")
     cmd = _collection_cmd(p, initial_state=init, episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix,
                           channel=channel, geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
     # window's own XComposite pixmap in the "composite" layout (pilot-1, probe v3)
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
+           "LVDC_TRIO_SLOTS": ",".join(f"{k}={v}" for k, v in T.composition_of(T.SLOTS).items()),
            "LVQOE_SHOT_SOURCE": TRIO_SHOT_SOURCE.get(os.environ.get("LVDC_TRIO_LAYOUT") or "cdp", "cdp")}
     env.pop("LVDC_PICK_PINNED", None)
     env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
@@ -594,17 +620,18 @@ def _trio_refill(p: str, T, targets: dict, started: dict, running: dict, paused:
         env["LVDC_PICK_PINNED"] = json.dumps({**pin, "initial_state": init, "geometry_used": geom,
                                               "category_used": (category or {}).get("name")})
     if stop_signal:                     # a stop arrived during the pick: no new session
-        print(f"  TRIO {p}: stop requested during the pick, no session started")
+        print(f"  TRIO {tag}: stop requested during the pick, no session started")
         return True
-    started[p] += 1
-    log = troot / TRIO_LOGS / run_id / f"{s.tag}_{started[p]}.log"
-    print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {p} slot ({s.tag}) session {started[p]}: "
+    started[tag] += 1
+    log = troot / TRIO_LOGS / run_id / f"{s.tag}_{started[tag]}.log"
+    print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {p} slot ({s.tag}) session {started[tag]}: "
           f"{before}/{targets[p]} accepted"
           + (f"; channel {channel['handle']}" if channel else "")
           + (f"; category {category['name']}" if category else "")
           + (f"; geometry {geom}" if geom else "") + f"\n  Running: {' '.join(cmd)}\n  log: {log}")
-    running[p] = {"proc": spawn(cmd, env, log), "before": before, "channel": channel, "category": category,
-                  "now": now, "t": time.time(), "log": str(log)}
+    running[tag] = {"proc": spawn(cmd, env, log), "before": before, "channel": channel, "category": category,
+                    "now": now, "t": time.time(), "log": str(log), "geom": geom,
+                    "target": ((LAST_COVERAGE.get(tag) or {}).get("target") or {}).get("key")}
     return True
 
 
@@ -621,8 +648,10 @@ def _xrandr(fb: str | None):
 def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = True, iface: str = "wlp0s20f3",
              capacity_kbit: float | None = None, max_per_slot: int | None = None,
              stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S, layout: str = "cdp",
-             spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None, offloads=None) -> int:
-    """One slot per platform (trio_slots.SLOTS), each refilled when its session ends (A1), until every platform has its
+             spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None, offloads=None,
+             slots: dict | None = None) -> int:
+    """t56: the slots of a composition (`slots` {platform: count}, default the trio's one each; trio_slots.build_slots),
+    keyed by tag; each slot refilled when its session ends (A1); targets and accounting per platform, until every platform has its
     target of PASS trio sessions (counted in the trio's own data root, data/_trio/<platform>: single mode never sees
     them), or `max_per_slot` sessions started per slot (the pilot: 1). Trio v1 draws no fullscreen geometry, and a
     coverage class that needs one is unreachable (recorded). Per slot exactly as run_batch
@@ -639,6 +668,10 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT / EXIT_OFFLOADS when that ended it."""
     import signal
     import trio_slots as T
+    if slots:                                             # the run's composition, for every slot's exp.py too
+        T.SLOTS.clear()
+        T.SLOTS.update(T.build_slots(slots))
+    os.environ["LVDC_TRIO_SLOTS"] = ",".join(f"{k}={v}" for k, v in T.composition_of(T.SLOTS).items())
     apply = apply or T.apply
     try:
         _offloads_or_exit(iface, offloads)
@@ -657,8 +690,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     fails = {p: 0 for p in targets}
     frozen = {p: 0 for p in targets}
     not_live: dict[str, float] = {}
-    started = {p: 0 for p in targets}
-    running: dict[str, dict] = {}
+    started = {tag: 0 for tag in T.SLOTS}
+    running: dict[str, dict] = {}                         # by slot tag
     end_rc, last_start = 0, 0.0
     stop_signal: list[int] = []
 
@@ -677,7 +710,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     _consume_drain("stale")
     repo = Path(__file__).resolve().parent.parent
     tpl = Path(os.environ.get("LVDC_PROFILE_TEMPLATES", str(repo / "profiles")))
-    pre = T.trio_preflight([p for p in targets if p in T.SLOTS], repo, tpl, _RUNS_DIR)
+    platforms = {s.platform for s in T.SLOTS.values()}
+    pre = T.trio_preflight([p for p in targets if p in platforms], repo, tpl, _RUNS_DIR)
     (summaries / "trio_preflight_last.json").write_text(json.dumps(pre, indent=1))
     if not pre["ok"]:                    # nothing touched: no tree, no capture, no session
         print(f"\n  TRIO PREFLIGHT FAILED ({', '.join(pre['problems'])}): not starting the trio.")
@@ -712,19 +746,22 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
         make(["start-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
         T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
                                        "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
+                                       "slots": {k: s.record() for k, s in T.SLOTS.items()},
+                                       "composition": T.composition_of(T.SLOTS),
                                        "conntrack_timeouts_before": ct_before, "conntrack_timeouts": T.conntrack_timeouts(),
                                        "conntrack_set": ct_set[0], "resolver_cache_flushed": flush[0],
                                        "layout": layout, "screen": screen, "framebuffer": fb})
         print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {run_id} up: {targets}, max per slot {max_per_slot}, "
               f"layout {layout}")
         while True:
-            for p, r in list(running.items()):
+            for tag, r in list(running.items()):
                 rc = r["proc"].poll()
                 if rc is None:
                     continue
-                del running[p]
-                T.slots_log_append(slots_log, {"event": "exit", "slot": T.SLOTS[p].tag, "rc": rc, "t": time.time()})
-                print(f"[{dt.datetime.now():%H:%M}] TRIO {p}: exp.py rc {rc} (log {r['log']})")
+                del running[tag]
+                p = T.SLOTS[tag].platform
+                T.slots_log_append(slots_log, {"event": "exit", "slot": tag, "rc": rc, "t": time.time()})
+                print(f"[{dt.datetime.now():%H:%M}] TRIO {tag}: exp.py rc {rc} (log {r['log']})")
                 try:
                     report_flags(p, r["t"], troot)
                 except Exception as e:
@@ -736,15 +773,16 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                     _account(p, rc, r["before"], r["channel"], r["category"], r["now"], paused, fails, frozen, not_live,
                              troot)
             draining = bool(stop_signal) or end_rc != 0 or drain_path.exists()
-            todo = [p for p in BATCH_ORDER if p in targets and p in T.SLOTS and p not in paused
-                    and (max_per_slot is None or started[p] < max_per_slot) and accepted_sessions(p, troot) < targets[p]]
+            done = {p: accepted_sessions(p, troot) >= targets[p] for p in targets}
+            todo = [tag for p in BATCH_ORDER for tag, s in T.SLOTS.items() if s.platform == p and p in targets
+                    and p not in paused and (max_per_slot is None or started[tag] < max_per_slot) and not done[p]]
             if not running and (draining or not todo):
                 break
-            for p in ([] if draining else todo):
-                if p in running or time.time() - last_start < stagger_s:
+            for tag in ([] if draining else todo):
+                if tag in running or time.time() - last_start < stagger_s:
                     continue
                 try:
-                    if not _trio_refill(p, T, targets, started, running, paused, not_live, rotate_geometry, yt_matrix,
+                    if not _trio_refill(tag, T, targets, started, running, paused, not_live, rotate_geometry, yt_matrix,
                                         capacity_kbit, run_id, summaries, spawn, floor, stop_signal):
                         end_rc = end_rc or EXIT_PREFLIGHT
                         break
@@ -752,19 +790,19 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                     end_rc = end_rc or e.rc
                     break
                 except Exception as e:      # never a crash under running siblings: drain instead
-                    print(f"  TRIO {p} slot could not start a session ({e!r}): draining the trio")
+                    print(f"  TRIO {tag} slot could not start a session ({e!r}): draining the trio")
                     end_rc = end_rc or 1
                     break
                 last_start = time.time()
             sleep(poll_s)
     finally:
-        for p, r in running.items():        # only after an unexpected error: every session finalises before the teardown
-            print(f"  TRIO: waiting for the {p} session to finalise before the teardown")
+        for tag, r in running.items():      # only after an unexpected error: every session finalises before the teardown
+            print(f"  TRIO: waiting for the {tag} session to finalise before the teardown")
             try:
                 r["proc"].send_signal(signal.SIGTERM)
                 r["proc"].wait(timeout=900)
             except Exception as e:
-                print(f"  ({p}: {e!r})")
+                print(f"  ({tag}: {e!r})")
         if ddir is not None:
             make(["stop-capture"] + T.default_capture_vars(dstage))
             make(["merge-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
@@ -783,7 +821,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     end_rc = end_rc or (EXIT_STOPPED if stop_signal else 0)
     print(f"\nTRIO {run_id} finished (rc {end_rc})." + (f" Paused: {paused}" if paused else ""))
     for p in targets:
-        print(f"  {p}: {accepted_sessions(p, troot)}/{targets[p]} trio sessions accepted, {started[p]} started")
+        print(f"  {p}: {accepted_sessions(p, troot)}/{targets[p]} trio sessions accepted, "
+              f"{sum(n for tag, n in started.items() if T.SLOTS[tag].platform == p)} started")
     return end_rc
 
 
@@ -875,7 +914,10 @@ if __name__ == "__main__":
     parser.add_argument("--link-capacity-kbit", type=float, default=None,
                         help="--concurrent: the measured multi-stream goodput (the gate 1 dry run); each session records "
                              "it and flags seconds whose summed slot rates exceed it (L-A2).")
-    parser.add_argument("--trio-pin", action="append", default=[], metavar="PLATFORM:k=v,...",
+    parser.add_argument("--slots", default=None, metavar="youtube=2,twitch=2,tiktok=2",
+                        help="--concurrent (t56): the composition, one slot per count (tags yt1, yt2, tw1 ...; at most "
+                             "15); default the trio's, one each. Fixed for the run and recorded in every session.")
+    parser.add_argument("--trio-pin", action="append", default=[], metavar="PLATFORM|TAG:k=v,...",
                         help="--concurrent: a recorded pin of a slot's pick (levi 00261; default off), e.g. "
                              "'twitch:channel=gothamchess,state=10,geometry=window:1920x1080' (keys: category, channel "
                              "[twitch], state, geometry); needs --trio-pin-reason; each session records meta pick_pinned. "
@@ -933,9 +975,15 @@ if __name__ == "__main__":
                 sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1")
             TRIO_PINS[plat] = pin
         if args.concurrent:
+            import trio_slots
+            try:
+                comp = trio_slots.parse_composition(args.slots)
+                trio_slots.build_slots(comp)
+            except ValueError as e:
+                sys.exit(str(e))
             sys.exit(run_trio(targets, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry,
                               iface=args.iface, capacity_kbit=args.link_capacity_kbit, max_per_slot=args.max_per_slot,
-                              layout=args.trio_layout))
+                              layout=args.trio_layout, slots=comp))
         run_batch(targets, auto=True, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry)
         sys.exit(0)
 
