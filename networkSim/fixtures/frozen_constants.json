@@ -1326,7 +1326,11 @@
   ],
   "STALL_ADVANCING_SHARE_MAX": 0.5
  },
- "record_era": "t56-nslot-2026-10-19",
+ "record_era": "t57-n5-boundary-2026-10-20",
+ "record_eras": [
+  "t55-gro-off-2026-10-19",
+  "t57-n5-boundary-2026-10-20"
+ ],
  "schedules": {
   "DEFICIT_RANK": "Q am. 17: deficit share = missing / floor, classes, entry states and families alike",
   "FAMILY_BASE": {
@@ -1363,6 +1367,9 @@
   "SHOT_CALIB_MIN_GAP": 4.0,
   "SHOT_CALIB_SCALE": 4
  },
+ "stated_eras": [
+  "t56-nslot-2026-10-19"
+ ],
  "stuck": {
   "FALLBACK_RUNG_KBIT": {
    "tiktok": 1800.0,

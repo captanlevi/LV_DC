@@ -129,16 +129,19 @@ def test_one_membership_rule_for_the_trio_targets():
     import orchestrate as O
     import record
     with tempfile.TemporaryDirectory() as d:
-        for i, (rec, era) in enumerate(((True, record.ERA), (False, record.ERA), (True, "t55-gro-off-2026-10-19"))):
+        # levi 2026-10-20: the record eras (the c1f9181 counted line's t55 and this era) count, the stated t56-nslot run
+        # (61a852d rounds 1-3) never does
+        for i, (rec, era) in enumerate(((True, record.ERA), (False, record.ERA), (True, "t56-nslot-2026-10-19"),
+                                        (True, "t55-gro-off-2026-10-19"))):
             sd = _sess(d, f"tw_{i}", "TW-M", float(i))
             m = json.loads((sd / "meta.json").read_text())
             (sd / "meta.json").write_text(json.dumps({**m, "concurrency": {"record": rec, "era": era}}))
         saved = (O.TRIO_RECORD, O.TRIO_STRESS, O.TRIO_RUN_ID)
         try:
             O.TRIO_RECORD = True
-            assert O.trio_select() is record.is_record and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 1
+            assert O.trio_select() is record.is_record and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 2
             O.TRIO_RECORD = False
-            assert O.trio_select() is None and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 3
+            assert O.trio_select() is None and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 4
             # decode_stress (shagun 2026-10-19): its targets count this run's sessions only, never an earlier run's
             m = json.loads((Path(d) / "twitch" / "tw_1" / "meta.json").read_text())
             (Path(d) / "twitch" / "tw_1" / "meta.json").write_text(json.dumps(
@@ -149,7 +152,11 @@ def test_one_membership_rule_for_the_trio_targets():
             assert O.accepted_sessions("twitch", Path(d), O.trio_select()) == 0
         finally:
             O.TRIO_RECORD, O.TRIO_STRESS, O.TRIO_RUN_ID = saved
-    assert record.ERA == "t56-nslot-2026-10-19"
+    assert record.ERA == "t57-n5-boundary-2026-10-20"
+    assert record.RECORD_ERAS == ("t55-gro-off-2026-10-19", record.ERA) and record.STATED_ERAS == ("t56-nslot-2026-10-19",)
+    stated = {"concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}}
+    assert not record.is_record(stated) and not record.of_record_any_era(stated)          # never, not even not_usable
+    assert record.of_record_any_era({"concurrency": {"record": True, "era": "t55-gro-off-2026-10-19"}})
 
 
 def test_failure_streaks_are_per_slot_and_flags_per_session():
