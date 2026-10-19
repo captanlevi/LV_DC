@@ -212,6 +212,33 @@ def ipv6_state() -> dict:
     return {"available": True, "disable_ipv6": conf, "global_v6_addresses": bool(addrs and "inet6" in addrs)}
 
 
+def display_state(drm_root: str = "/sys/class/drm") -> dict:
+    """Decision A (levi 00271 item 4, supervisor 2026-10-19), read only: the monitor's DPMS state (`xset q`: DPMS
+    enabled, "Monitor is On / Off / in Standby / in Suspend") and the display topology (`xrandr --listproviders`; each
+    connected DRM connector and its card's driver). Both change GPU load: on chaos X renders on the Intel GPU while the
+    monitor hangs off the NVIDIA (reverse PRIME), so every displayed frame is copied across, and DPMS off may drop it."""
+    import re
+    out: dict = {"at": time.time()}
+    q = _run(["xset", "q"])
+    out["dpms_enabled"] = None if q is None else (True if "DPMS is Enabled" in q else
+                                                 False if "DPMS is Disabled" in q else None)
+    m = re.search(r"Monitor is (On|Off|in Standby|in Suspend)", q or "")
+    out["monitor"] = m.group(1) if m else None
+    prov = _run(["xrandr", "--listproviders"])
+    out["providers"] = [line.strip() for line in prov.splitlines()[1:] if line.strip()] if prov else None
+    connected = []
+    for c in sorted(Path(drm_root).glob("card*-*")):
+        try:
+            if (c / "status").read_text().strip() != "connected":
+                continue
+            card = c.name.split("-", 1)[0]
+            connected.append({"connector": c.name, "driver": (Path(drm_root) / card / "device" / "driver").resolve().name})
+        except OSError:
+            continue
+    out["connected"] = connected
+    return out
+
+
 def shaper_config(platform: str, transitions: dict, episode_s: int, **extra) -> dict:
     from utils.shaping import SCENARIOS
     scen = {k: {kk: vv for kk, vv in vars(v).items()} for k, v in SCENARIOS.items()}
