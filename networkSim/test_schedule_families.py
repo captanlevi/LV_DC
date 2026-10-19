@@ -189,6 +189,21 @@ def test_young_families_are_explored_for_a_class_target():
     assert r["matrix"] == "TW-M@fast", r                         # the fewest attempts
 
 
+def test_the_report_shows_each_familys_q1080p_minutes():
+    """levi on 198f541: the coverage report lists per family (and its base) the Q_1080p minutes per tier session."""
+    pm = {m: {"sessions": n, "tier_sessions": n, "class_minutes_mean": {"Q_1080p": q}}
+          for m, n, q in (("TW-M", 6, 0.4), ("TW-M@fast", 3, 1.25), ("TW-M@slow", 2, 0.0), ("TW-L", 4, 0.0))}
+    snap = {**_snap({}, pm), "n_sessions": 15, "stall_onsets_pooled": 0, "stall_run_s": {}, "stall_band": [0, 1]}
+    for c in snap["classes"].values():
+        c["criterion"] = ">= 2.0 min"
+    rep = {"rule": C.RULE_VERSION, "floors": {"sessions": 5, "minutes": 2.0},
+           "platforms": {"twitch": {"snapshot": snap, "deficits": [], "low_yield": [], "flags": [],
+                                    "buffer_median_s_over_sessions": None, "twitch_latency_median_s_over_sessions": None}}}
+    line = [x for x in C.markdown(rep) if x.startswith("schedule families, Q_1080p minutes")]
+    assert line == ["schedule families, Q_1080p minutes (mean per tier session x tier sessions): TW-M 0.4 x 6, "
+                    "TW-M@fast 1.25 x 3, TW-M@slow 0.0 x 2"], line
+
+
 def test_the_record():
     sc = {**SH.schedule_of("TW-M@slow", 2, 23), "episodes": 3}
     sched = {k: v for k, v in sc.items() if k != "episode_s"}

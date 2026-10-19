@@ -669,6 +669,10 @@ def markdown(rep: dict) -> list[str]:
                   f"interrupted)" if p == "tiktok" else ""), "",
                "| class | sessions meeting the floor | criterion | minutes |", "|---|---|---|---|"]
         md += [f"| {c} | {x['sessions_ge_min']} | {x['criterion']} | {x['minutes']} |" for c, x in s["classes"].items()]
+        fam = {m: x for m, x in s["per_matrix"].items() if "@" in m or m == DEFAULT_MATRIX.get(p)}
+        if fam:   # levi on 198f541: per schedule family (and its base) the Q_1080p minutes, a fast-switch 1080p visible
+            md += ["", "schedule families, Q_1080p minutes (mean per tier session x tier sessions): " + ", ".join(
+                f"{m} {x['class_minutes_mean'].get('Q_1080p')} x {x['tier_sessions']}" for m, x in sorted(fam.items()))]
         md += ["", "deficits: " + (", ".join(f"{d['key']} {d['deficit']}" for d in v["deficits"]) or "none"),
                f"low_yield (best qualifying matrix < {LOW_YIELD_MIN_PER_SESSION} min / session over >= "
                f"{LOW_YIELD_MIN_SESSIONS} sessions): "
