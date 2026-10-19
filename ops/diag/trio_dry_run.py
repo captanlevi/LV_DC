@@ -543,6 +543,13 @@ def _delta(samples: list[dict], dev: str, cls: str, t0: float, t1: float, key: s
     return int((w[-1]["classes"][dev][cls].get(key) or 0) - (w[0]["classes"][dev][cls].get(key) or 0))
 
 
+def _span(samples: list[dict], dev: str, cls: str, t0: float, t1: float) -> float:
+    """The seconds _delta's bytes cover: the first to the last sample in the window (levi 2026-10-20: the bulk ratio's
+    denominator; the window length overstated it by ~1.3 s in 56.5 s and understated every bulk ratio ~2 %)."""
+    w = [x for x in samples if t0 <= x["t"] <= t1 and cls in (x["classes"].get(dev) or {})]
+    return (w[-1]["t"] - w[0]["t"]) if len(w) >= 2 else 0.0
+
+
 def _link_delta(samples: list[dict], dev: str, t0: float, t1: float, key: str = "rx_bytes") -> int:
     w = [x for x in samples if t0 <= x["t"] <= t1 and dev in x["links"] and x["links"][dev]]
     return int(w[-1]["links"][dev][key] - w[0]["links"][dev][key]) if len(w) >= 2 else 0
@@ -1052,7 +1059,8 @@ def summarise(samples, timeline, states, a, out, fast=None) -> dict:
             ser = [(x["t"], ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("bytes"))
                    for x in samples if t0 <= x["t"] <= t1]
             qs, _thr = _qualifying(samples, f"lvi_{s}", "1:10", t0, t1, p["rate_kbit"], p["delay_ms"])
-            ratio_to_set = round(own * 8 / 1000 / (t1 - t0) / p["rate_kbit"], 3) if p["rate_kbit"] else None
+            span = _span(samples, f"lvi_{s}", "1:10", t0, t1)
+            ratio_to_set = round(own * 8 / 1000 / span / p["rate_kbit"], 3) if p["rate_kbit"] and span else None
             a_gate = R.rate_stage_gate(fast, samples, f"lvi_{s}", t0, t1, p["rate_kbit"])
             a_valid = R.validate_on_bulk(a_gate, ratio_to_set)
             valid.append({"session": s, "state": st, **a_valid})
@@ -1060,8 +1068,9 @@ def summarise(samples, timeline, states, a, out, fast=None) -> dict:
                          "ratio_backlogged": _ratio_gate(qs, p["rate_kbit"]),
                          "rate_stage": a_gate, "rate_stage_validation": a_valid,
                          "per_second_ratio": per_second_ratio(ser, p["rate_kbit"]),
-                         "realised_ingress_kbit": round(own * 8 / 1000 / (t1 - t0), 1),
-                         "ratio_to_set": round(own * 8 / 1000 / (t1 - t0) / p["rate_kbit"], 3) if p["rate_kbit"] else None,
+                         "span_s": round(span, 1),
+                         "realised_ingress_kbit": round(own * 8 / 1000 / span, 1) if span else None,
+                         "ratio_to_set": ratio_to_set,
                          "class_drops": drops, "shaper_bound_share": round(bound / n, 3) if n else None,
                          "netem_drop_share_under_bulk": netem_loss, "set_loss_share": round(p["loss_pct"] / 100, 5),
                          "other_sessions_bytes_same_window": others, "default_class_bytes_same_window": default_in})

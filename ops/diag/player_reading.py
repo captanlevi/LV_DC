@@ -25,13 +25,14 @@ H3_MIN_SHARE = 0.9
 BURST_S, PAUSE_S = 2.0, 0.5
 # levi's ruling on the 5ba0b94 dry run (00132 -> peter's proposal, option A): the qualifying second is the rate stage busy,
 # read from the HTB leaf class's own token bucket, not its backlog (a whole segment held in netem's delay line fills the
-# backlog while HTB, unable to dequeue it, sits idle with its tokens refilling). At TOKENS_HZ: a second qualifies when
-# >= TOKENS_MIN_BUSY of its TOKENS_HZ samples have tokens <= 0 and bytes moving; at 1 Hz (weaker, stated): tokens <= 0
-# at both bounding samples and bytes moving. Validated on the bulk phase of the same run: >= VALID_MIN_SHARE of each
-# slot-state's seconds qualify and the ratio is within VALID_TOL of the bulk's own, else (A) is not reading the shaper.
+# backlog while HTB, unable to dequeue it, sits idle with its tokens refilling). At TOKENS_HZ (levi, after 730b0a0a's
+# per-second form read tt's ~70-85 %-busy seconds at ~0.85 from their partial edges; set before the next run): a
+# sampling interval qualifies when tokens <= 0 at both its samples and bytes moved; the ratio is per state over the
+# qualifying intervals (bytes / (rate x their seconds)), support their summed seconds; at 1 Hz (weaker, stated): tokens
+# <= 0 at both bounding samples and bytes moving. Validated on the bulk phase of the same run: >= VALID_MIN_SHARE of each
+# slot-state's time qualifies and the ratio is within VALID_TOL of the bulk's own, else (A) is not reading the shaper.
 # The backlog rule stays a reported third column for one run; (B) per-fetch delivery is reported.
 TOKENS_HZ = 10
-TOKENS_MIN_BUSY = 9
 VALID_MIN_SHARE, VALID_TOL = 0.9, 0.02
 FETCH_BDP_MULT = 4
 
@@ -67,22 +68,14 @@ def _cls(x: dict, dev: str, cls: str = "1:10") -> dict:
     return ((x.get("classes") or {}).get(dev) or {}).get(cls) or {}
 
 
-def rate_stage_seconds_10hz(fast: list[dict], dev: str, t0: float, t1: float) -> tuple[list, int]:
-    """(qualifying (seconds, bytes) pairs, whole seconds in the window) under the 10 Hz rule; fast: [{t, dev: {bytes,
-    tokens}}] at TOKENS_HZ."""
-    rows = [x for x in fast if dev in x and x[dev].get("tokens") is not None and x[dev].get("bytes") is not None]
-    out, n = [], 0
-    s = int(t0) + (1 if t0 > int(t0) else 0)
-    while s + 1 <= t1:
-        n += 1
-        w = [x for x in rows if s <= x["t"] < s + 1]
-        prev = [x for x in rows if x["t"] < s][-1:]
-        seq = prev + w
-        busy = sum(1 for a, b in zip(seq, seq[1:]) if b[dev]["tokens"] <= 0 and b[dev]["bytes"] > a[dev]["bytes"])
-        if len(w) >= TOKENS_MIN_BUSY and busy >= TOKENS_MIN_BUSY and len(seq) >= 2:
-            out.append((seq[-1]["t"] - seq[0]["t"], seq[-1][dev]["bytes"] - seq[0][dev]["bytes"]))
-        s += 1
-    return out, n
+def rate_stage_intervals_10hz(fast: list[dict], dev: str, t0: float, t1: float) -> tuple[list, float]:
+    """(qualifying (seconds, bytes) intervals, the window's sampled seconds) under the TOKENS_HZ rule: consecutive samples
+    inside [t0, t1] with tokens <= 0 at both and bytes moved; fast: [{t, dev: {bytes, tokens}}]."""
+    rows = [x for x in fast if dev in x and t0 <= x["t"] <= t1 and x[dev].get("tokens") is not None
+            and x[dev].get("bytes") is not None]
+    out = [(b["t"] - a["t"], b[dev]["bytes"] - a[dev]["bytes"]) for a, b in zip(rows, rows[1:])
+           if a[dev]["tokens"] <= 0 and b[dev]["tokens"] <= 0 and b[dev]["bytes"] > a[dev]["bytes"]]
+    return out, (rows[-1]["t"] - rows[0]["t"]) if len(rows) >= 2 else 0.0
 
 
 def rate_stage_seconds_1hz(samples: list[dict], dev: str, t0: float, t1: float) -> list:
@@ -100,12 +93,16 @@ def rate_stage_seconds_1hz(samples: list[dict], dev: str, t0: float, t1: float) 
 def rate_stage_gate(fast: list[dict] | None, samples: list[dict], dev: str, t0: float, t1: float, rate_kbit: float) -> dict:
     """Option A's gate over the window: the 10 Hz rule when the window has fast samples, else the 1 Hz form (weaker)."""
     if fast and any(dev in x and t0 <= x["t"] <= t1 for x in fast):
-        q, n = rate_stage_seconds_10hz(fast, dev, t0, t1)
-        mode = f"{TOKENS_HZ} Hz: >= {TOKENS_MIN_BUSY} of {TOKENS_HZ} samples tokens <= 0, bytes moving"
+        q, n = rate_stage_intervals_10hz(fast, dev, t0, t1)
+        mode = f"{TOKENS_HZ} Hz intervals: tokens <= 0 at both samples, bytes moved"
     else:
         q, n = rate_stage_seconds_1hz(samples, dev, t0, t1), max(0, int(t1 - t0))
         mode = "1 Hz (weaker): tokens <= 0 at both bounding samples, bytes moving"
-    return {"mode": mode, "window_s": n, "qualifying_share": round(len(q) / n, 3) if n else None, **ratio_gate(q, rate_kbit)}
+    secs = sum(d for d, _ in q)
+    ratio = (sum(b for _, b in q) * 8 / 1000 / secs / rate_kbit) if secs and rate_kbit else None
+    gate = "insufficient" if secs < MIN_QUAL_S else ("pass" if RATIO_LO <= ratio <= RATIO_HI else "fail")
+    return {"mode": mode, "window_s": round(n, 1), "qualifying_share": round(secs / n, 3) if n else None,
+            "qualifying_s": round(secs, 1), "ratio": round(ratio, 3) if ratio is not None else None, "gate": gate}
 
 
 def validate_on_bulk(gate: dict, bulk_ratio: float | None) -> dict:
@@ -113,7 +110,7 @@ def validate_on_bulk(gate: dict, bulk_ratio: float | None) -> dict:
     bulk's own (realised over set across the window)."""
     share, r = gate.get("qualifying_share"), gate.get("ratio")
     ok = (share is not None and share >= VALID_MIN_SHARE and r is not None and bulk_ratio is not None
-          and abs(r - bulk_ratio) <= VALID_TOL)
+          and abs(r - bulk_ratio) <= VALID_TOL + 1e-9)     # both rounded to 3 places: 0.984 - 0.964 is 0.020000...02
     return {"qualifying_share": share, "ratio_a": r, "bulk_ratio": bulk_ratio, "ok": bool(ok)}
 
 

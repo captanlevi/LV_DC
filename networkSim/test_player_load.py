@@ -198,20 +198,30 @@ def test_the_dry_run_phase_reading_and_command(tmp_path=None):
 
 
 def test_option_a_the_rate_stage_busy():
-    """levi's ruling (00132, option A): a second qualifies when >= 9 of its 10 token samples have tokens <= 0 and bytes
-    moving; a netem-held burst (tokens refilling, nothing sent) never does; at 1 Hz (weaker) tokens <= 0 at both bounding
-    samples; validated on the bulk: >= 0.9 of the seconds and the ratio within 0.02 of the bulk's own."""
+    """levi's ruling (00132, option A; its 100 ms form set after 730b0a0a): a sampling interval qualifies when tokens <= 0
+    at both its samples and bytes moved; the ratio is over the qualifying intervals, so a load busy ~70 % of each second
+    (tt's 1 s chunks) reads its busy intervals' rate, not ~0.85; a netem-held burst (tokens refilling, nothing sent)
+    never qualifies; at 1 Hz (weaker) tokens <= 0 at both bounding samples; validated on the bulk: >= 0.9 of the time
+    and the ratio within 0.02 of the bulk's own."""
     R = _reading()
-    q, n = R.rate_stage_seconds_10hz(_fast(30), "lvi_tw1", 0.0, 30.0)
-    assert n == 30 and len(q) == 30, (len(q), n)                     # every second: 9-10 busy transitions
+    q, n = R.rate_stage_intervals_10hz(_fast(30), "lvi_tw1", 0.0, 30.0)
+    assert len(q) == 299 and abs(n - 29.9) < 1e-6, (len(q), n)        # every interval busy
     g = R.rate_stage_gate(_fast(30), [], "lvi_tw1", 0.0, 30.0, 1600.0)
-    assert g["ratio"] == 1.0 and g["gate"] == "pass" and g["mode"].startswith("10 Hz"), g
-    assert R.rate_stage_seconds_10hz(_fast(30, busy_of_10=8), "lvi_tw1", 0.0, 30.0)[0] == []   # 8 of 10: no
-    q, _ = R.rate_stage_seconds_10hz(_fast(30, flat=set(range(10, 20))), "lvi_tw1", 0.0, 30.0)
-    assert len(q) == 20, len(q)                                       # the 10 held seconds out, the rest in
+    assert g["ratio"] == 1.0 and g["gate"] == "pass" and g["mode"].startswith("10 Hz intervals") and g["qualifying_share"] == 1.0, g
+    g8 = R.rate_stage_gate(_fast(30, busy_of_10=8), [], "lvi_tw1", 0.0, 30.0, 1600.0)   # busy 80 % of each second
+    assert g8["ratio"] == 1.0 and 0.65 <= g8["qualifying_share"] <= 0.75 and g8["gate"] == "pass", g8
+    tail = _fast(30, busy_of_10=7)
+    for x in tail:                                                     # the deficit outlasts the sending: no bytes
+        if round(x["t"] * 10) % 10 == 7:
+            x["lvi_tw1"]["tokens"] = -1
+    gt = R.rate_stage_gate(tail, [], "lvi_tw1", 0.0, 30.0, 1600.0)
+    assert gt["ratio"] == 1.0, gt                                      # the per-second form read these at ~0.85
+    q, _ = R.rate_stage_intervals_10hz(_fast(30, flat=set(range(10, 20))), "lvi_tw1", 0.0, 30.0)
+    assert abs(sum(d for d, _ in q) - 19.8) < 0.15, sum(d for d, _ in q)  # the 10 held seconds (and their edges) out
     g1 = R.rate_stage_gate(None, _samples([0] * 30), "lvi_tw1", 0.0, 29.0, 1600.0)
     assert g1["mode"].startswith("1 Hz (weaker)") and g1["gate"] == "pass" and g1["ratio"] == 1.0, g1
     assert R.rate_stage_gate(None, _samples([0] * 30, tokens=900), "lvi_tw1", 0.0, 29.0, 1600.0)["gate"] == "insufficient"
+    assert R.validate_on_bulk({"qualifying_share": 0.968, "ratio": 0.984}, 0.964)["ok"]   # exactly 0.02: within
     ok = R.validate_on_bulk({"qualifying_share": 0.95, "ratio": 0.99}, 0.995)
     assert ok["ok"] and not R.validate_on_bulk({"qualifying_share": 0.95, "ratio": 0.96}, 0.99)["ok"]
     assert not R.validate_on_bulk({"qualifying_share": 0.8, "ratio": 0.99}, 0.99)["ok"]
