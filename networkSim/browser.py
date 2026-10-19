@@ -2055,8 +2055,102 @@ def _confirm_advancing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
     return False, {"not_playing": True, **{k: st.get(k) for k in ("paused", "readyState", "rs") if k in st}}
 
 
+# t56 tw_100016 (levi's ruling, for the N_collect boundary): Twitch's Error #2000 page keeps the "Ad" badge, so every tick
+# read as an ad, the frozen run (non-ad ticks only) stayed 0, and the session waited ~23 min on a destroyed player. Two
+# triggers, yt / twitch (tt's dead-room watcher reads bytes, not the ad label): a player error page (Twitch "Error #<n>" /
+# "Reload Player" in the player, yt's .ytp-error) seen for ERROR_PAGE_CONFIRM_S; an ad state with no live player (no
+# <video>, or readyState 0) for more than AD_NO_PLAYER_MAX_S (levi: treated as player-dead). Either one: the session's one
+# recovery (stuck.action's budget, shared with the frozen / dead re-entries) as a re-entry in player_dead_reentries
+# (LVQoE's labeler censors t_nav -> the next video_start): Twitch's reload button clicked when the page shows one, else the
+# channel URL navigated; then the playhead must advance (stuck.REENTRY_CONFIRM_S) or the session aborts "player_error".
+# The ad-wait exposure (ad runs, total and longest seconds) and every trigger go to meta.json (player_errors, ad_wait).
+ERROR_PAGE_CONFIRM_S = 5.0
+AD_NO_PLAYER_MAX_S = 60.0
+PLAYER_ERROR_PLATFORMS = ("youtube", "twitch")
+_PLAYER_ERROR_JS = """
+(function() {
+    const vis = (el) => !!el && el.offsetParent !== null && el.getClientRects().length > 0;
+    const h = location.hostname;
+    let text = '', code = null, btn = null;
+    if (h.includes('twitch.')) {
+        const root = document.querySelector('[data-a-target="video-player"]') || document.querySelector('.video-player');
+        if (!root) return null;
+        text = root.innerText || '';
+        const m = text.match(/Error #(\\d+)/);
+        btn = [...root.querySelectorAll('button')].find(b => vis(b) &&
+            /reload player/i.test((b.textContent || '') + ' ' + (b.getAttribute('aria-label') || '')));
+        if (!m && !btn) return null;
+        code = m ? m[1] : null;
+        if (%(click)s && btn) btn.click();
+    } else if (h.includes('youtube.')) {
+        const e = document.querySelector('#movie_player .ytp-error');
+        if (!vis(e)) return null;
+        text = e.innerText || '';
+    } else {
+        return null;
+    }
+    return JSON.stringify({code: code, text: text.replace(/\\s+/g, ' ').trim().slice(0, 200), reload_button: !!btn});
+})()
+"""
+_PLAYER_ERROR_CHECK_JS = _PLAYER_ERROR_JS % {"click": "false"}
+_PLAYER_ERROR_RELOAD_JS = _PLAYER_ERROR_JS % {"click": "true"}
+_AD_PLAYER_JS = """
+(function() {
+    const vs = [...document.querySelectorAll('video')];
+    const v = vs.filter(x => x.getClientRects().length).sort((a, b) => b.clientWidth * b.clientHeight
+                                                                   - a.clientWidth * a.clientHeight)[0] || vs[0];
+    return JSON.stringify({ad: document.documentElement.dataset.lvqoeAd === '1', video: !!v, rs: v ? v.readyState : null});
+})()
+"""
+
+
+class PlayerErrorWatch:
+    """The two triggers above, on one poll a second: step(error, ad_player, now) -> a trigger record or None. Also the
+    ad-wait exposure: runs of the ad label (start, end), their total and the longest."""
+
+    def __init__(self, confirm_s: float = ERROR_PAGE_CONFIRM_S, no_player_s: float = AD_NO_PLAYER_MAX_S):
+        self.confirm_s, self.no_player_s = confirm_s, no_player_s
+        self.err_since = self.np_since = self.ad_since = None
+        self.ad_runs: list[list[float]] = []
+
+    def step(self, err: dict | None, st: dict | None, now: float) -> dict | None:
+        ad = bool((st or {}).get("ad"))
+        if ad and self.ad_since is None:
+            self.ad_since = now
+            self.ad_runs.append([now, now])
+        elif ad:
+            self.ad_runs[-1][1] = now
+        else:
+            self.ad_since = None
+        if err:
+            self.err_since = self.err_since or now
+            if now - self.err_since >= self.confirm_s:
+                return {"reason": "error_page", "since": self.err_since, "t_trigger": now, "error": err, "ad": ad}
+        else:
+            self.err_since = None
+        no_player = st is None or not st.get("video") or (st.get("rs") or 0) == 0
+        if ad and no_player:
+            self.np_since = self.np_since or now
+            if now - self.np_since > self.no_player_s:
+                return {"reason": "ad_no_player", "since": self.np_since, "t_trigger": now, "error": err,
+                        "player": st}
+        else:
+            self.np_since = None
+        return None
+
+    def reset(self) -> None:
+        """After a recovery: both triggers start over."""
+        self.err_since = self.np_since = None
+
+    def exposure(self) -> dict:
+        d = [b - a for a, b in self.ad_runs]
+        return {"ad_runs": len(d), "ad_total_s": round(sum(d), 1), "ad_longest_s": round(max(d), 1) if d else 0.0,
+                "error_page_confirm_s": self.confirm_s, "ad_no_player_max_s": self.no_player_s}
+
+
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
-                     on_wall=None, on_frozen=None, on_stuck=None) -> None:
+                     on_wall=None, on_frozen=None, on_stuck=None, on_player_error=None,
+                     error_watch: PlayerErrorWatch | None = None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
     Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
     calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table); passes the
@@ -2098,6 +2192,19 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                         fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": result}) + "\n")
         except Exception:
             pass
+        if on_player_error is not None and error_watch is not None:   # t56 tw_100016: error page / ad, no player
+            try:
+                err = json.loads(page.eval(_PLAYER_ERROR_CHECK_JS) or "null")
+                st = json.loads(page.eval(_AD_PLAYER_JS) or "null")
+            except Exception:
+                err = st = None
+            trig = error_watch.step(err, st, time.time())
+            if trig is not None:
+                try:
+                    on_player_error(trig)
+                except Exception as exc:
+                    print(f"[browser] player-error recovery failed: {exc!r}", flush=True)
+                error_watch.reset()
         if on_wall is not None and not walled:
             try:
                 if page.eval(_WALL_JS):
@@ -2717,6 +2824,8 @@ class BrowserSession:
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
+        self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
+        self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
         self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
         self.decode_gpu: dict | None = None       # Chrome's GPU video-decode report at launch (decode_path.py; meta.json)
@@ -2973,7 +3082,8 @@ class BrowserSession:
         self._watcher = threading.Thread(
             target=_ad_watcher_loop,
             args=(self._page, self.platform, self._stop, log_path, self._on_wall, self._on_frozen,
-                  self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None),
+                  self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
+                  self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch),
             daemon=True,
             name="ad-watcher",
         )
@@ -3327,6 +3437,65 @@ class BrowserSession:
             self.abort_reason, self.abort_at = "player_frozen", time.time()
         print(f"[browser] PLAYER FROZEN (stuck-player rule, {why}): censored at {self.censored['t']:.0f}, shaper "
               f"{rec['shaper']} — aborting the session", flush=True)
+
+    def _player_error(self, trig: dict) -> None:
+        """PlayerErrorWatch's trigger: the session's one recovery as a re-entry (player_dead_reentries), else abort
+        "player_error" (session_class reads it as player_dead; startup_failure keeps precedence)."""
+        if self.abort_reason is not None:
+            return
+        try:
+            url = self._page.eval("location.href")
+        except Exception:
+            url = None
+        rec = {**trig, "url": url or self.channel_url}
+        with self._recovery_lock:
+            used = len(self.player_dead_reentries) + len(self.frozen_reentries)
+            if stuck.action(used) == "reenter":
+                r = self._reenter_error(rec)
+                rec["reentry"] = {k: r.get(k) for k in ("t_nav", "method", "ok", "outcome")}
+                self.player_errors.append(rec)
+                print(f"[browser] PLAYER ERROR ({trig['reason']}: {(trig.get('error') or {}).get('text')}): "
+                      f"re-entered by {r['method']} ({r['outcome']})", flush=True)
+                if r["outcome"] == "continue":
+                    return
+                why = "reentry_not_playing"
+            else:
+                why = "recovery_used"
+        rec["abort"] = why
+        if rec not in self.player_errors:
+            self.player_errors.append(rec)
+        if self.abort_reason is None:
+            self.abort_reason, self.abort_at = "player_error", time.time()
+        print(f"[browser] PLAYER ERROR ({trig['reason']}, {why}) — aborting the session", flush=True)
+
+    def _reenter_error(self, rec: dict) -> dict:
+        """The recovery after a player error: Twitch's reload button when the page shows one (a viewer's click), else
+        the channel URL navigated with the entry setup redone; the playhead must advance within stuck.REENTRY_CONFIRM_S.
+        Recorded in player_dead_reentries (the labeler censors t_nav -> the next video_start)."""
+        r = {"reason": rec["reason"], "t_trigger": rec["t_trigger"], "since": rec["since"], "error": rec.get("error"),
+             "t_nav": time.time()}
+        try:
+            clicked = None
+            if (rec.get("error") or {}).get("reload_button"):
+                clicked = json.loads(self._page.eval(_PLAYER_ERROR_RELOAD_JS) or "null")
+            if clicked and clicked.get("reload_button"):
+                r["method"] = "reload_button"
+            else:
+                r["method"] = "navigate"
+                r["t_nav"] = time.time()
+                self._page.navigate(rec["url"])
+                _wait_for_load(self._page, timeout=15)
+            r["t_enter"] = time.time()
+            ok, detail = _confirm_advancing(self._page, stuck.REENTRY_CONFIRM_S)
+            r.update(ok=bool(ok), t_playing=time.time() if ok else None, confirm=detail,
+                     confirm_s=stuck.REENTRY_CONFIRM_S, url_after=self._page.eval("location.href"))
+            if ok and r["method"] == "navigate":
+                r["setup"] = self._after_reentry_setup()
+        except Exception as exc:
+            r.update(ok=False, error_reentry=repr(exc))
+        r["outcome"] = "continue" if r.get("ok") else "player_error"
+        self.player_dead_reentries.append(r)
+        return r
 
     def _reenter_frozen(self, rec: dict) -> dict:
         """The one stuck-player re-entry: the same room (tt, through _reenter_room's confirmation) or channel (yt /

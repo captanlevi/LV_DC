@@ -226,7 +226,7 @@ def session_class(platform: str, verdict: str, abort_reason: str | None, entries
         return "startup_failure"
     if ab == "room_ended":
         return "room_ended"
-    if ab == "player_dead" or dead_over_t(dead_run_s, dead_t):
+    if ab in ("player_dead", "player_error") or dead_over_t(dead_run_s, dead_t):   # player_error: yt / twitch (t56)
         return "player_dead"
     if recovered_dead and RECOVERED_DEAD_CLASS != "normal":
         return RECOVERED_DEAD_CLASS

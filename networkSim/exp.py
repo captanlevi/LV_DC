@@ -895,6 +895,7 @@ if __name__ == "__main__":
                               tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
+                              player_errors=browser.player_errors, ad_wait=browser.error_watch.exposure(),
                               t2_skipped=browser.t2_skipped, player_ladder=browser.player_ladder,
                               shot_origin_uncalibrated=(None if browser.shot_origin is None
                                                         else not browser.shot_origin.get("accepted")),

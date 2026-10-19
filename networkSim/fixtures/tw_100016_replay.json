@@ -1,0 +1,15 @@
+{
+ "what": "tw_100016 (t56 N = 5 round 1, slot tw1; _trio/_failed/twitch): the per-tick player state as run-lengths, for PlayerErrorWatch's replay (levi's ruling 00128). Seconds from the session's video_start.",
+ "source": {"labels_csv_sha256": "9b188fbb71e1564b54b91b886a5a0e2e827345c879b20bd96d9bbfdf6bdacf66",
+            "media_events_sha256": "debcd962a7801a5ff973ac76cc1e0ebf5c8134c9318aa82b9bf21aa9c3c6264f",
+            "error_page": "shots: tick69 (61.8 s) the stalled pre-roll ad; tick79 (72.0 s) to the last (tick1411) Twitch's error page 'There was a network error. Please try again. (Error #2000)' with 'Click Here to Reload Player', the 'Ad' badge on; media_events kWebMediaPlayerDestroyed at 65.5 s"},
+ "runs": [
+  {"t0": 0.2, "t1": 2.2, "ad": false, "rs": 0, "video": true, "error_page": false},
+  {"t0": 3.1, "t1": 3.1, "ad": false, "rs": 4, "video": true, "error_page": false},
+  {"t0": 4.1, "t1": 16.1, "ad": true, "rs": 4, "video": true, "error_page": false},
+  {"t0": 17.1, "t1": 65.1, "ad": true, "rs": 2, "video": true, "error_page": false},
+  {"t0": 66.1, "t1": 71.1, "ad": true, "rs": 0, "video": true, "error_page": false},
+  {"t0": 72.0, "t1": 1407.1, "ad": true, "rs": 0, "video": true, "error_page": true}
+ ],
+ "error": {"code": "2000", "text": "There was a network error. Please try again. (Error #2000) Click Here to Reload Player", "reload_button": true}
+}
