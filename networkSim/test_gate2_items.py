@@ -138,6 +138,22 @@ def test_items1_2_content_bands():
         assert r["1"]["ok"] is False and r["2"]["ok"] is False, r
 
 
+def test_fullscreen_report():
+    """levi (t53 (a)): per fullscreen yt session the keeper's counts and the cadence shots' CDP-fallback share, flagged
+    above 0.2."""
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d)
+        (sd / "shots").mkdir()
+        rows = ([{"reason": "cadence", "capture": "x11", "on_top": True}] * 7
+                + [{"reason": "cadence", "capture": "cdp_fallback", "on_top": False}] * 3 + [{"reason": "tier_change"}])
+        (sd / "shots" / "index.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        meta = {"fullscreen_keeper": {"checks": 900, "not_on_top": 4, "events": [{"activate_sent": True}] * 4}}
+        r = G.fullscreen_report(sd, meta)
+        assert r == {"checks": 900, "not_on_top": 4, "raises": 4, "cadence_shots": 10, "cdp_fallback": 3,
+                     "cdp_fallback_share": 0.3, "off_top_shots": 3, "shot_readings_flag": True}, r
+        assert G.fullscreen_report(sd, {}) is None
+
+
 def test_cli():
     with tempfile.TemporaryDirectory() as d:
         sd = session(Path(d) / "tw_100001", shots=(30,))
@@ -153,6 +169,7 @@ def main() -> int:
     test_item4a_visibility_and_fps()
     test_item5_byte_total_ratio()
     test_items1_2_content_bands()
+    test_fullscreen_report()
     test_cli()
     print("test_gate2_items: ok")
     return 0

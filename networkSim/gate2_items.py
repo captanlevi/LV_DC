@@ -206,6 +206,28 @@ def item5(sd: Path) -> dict:
             "ok": all(oks) if oks else None}
 
 
+FS_FALLBACK_FLAG_SHARE = 0.2    # levi (t53 (a)): a fullscreen yt session's cadence shots on the CDP fallback above this
+
+
+def fullscreen_report(sd: Path, meta: dict) -> dict | None:
+    """t53 (a), per fullscreen-in-trio session (meta.fullscreen_keeper): the keeper's checks / not_on_top / raises and
+    the share of cadence shots captured by the CDP fallback (on_top false, or a failed grab); above
+    FS_FALLBACK_FLAG_SHARE the session's shot-derived readings (the anchor, screenshot MAD) carry a flag. None otherwise."""
+    k = meta.get("fullscreen_keeper")
+    if not k:
+        return None
+    idx = Path(sd) / "shots" / "index.jsonl"
+    rows = [json.loads(line) for line in idx.read_text().splitlines() if line.strip()] if idx.exists() else []
+    cad = [r for r in rows if r.get("reason") == "cadence"]
+    fb = sum(1 for r in cad if r.get("capture") == "cdp_fallback")
+    share = round(fb / len(cad), 3) if cad else None
+    return {"checks": k.get("checks"), "not_on_top": k.get("not_on_top"),
+            "raises": sum(1 for e in k.get("events") or [] if e.get("activate_sent")),
+            "cadence_shots": len(cad), "cdp_fallback": fb, "cdp_fallback_share": share,
+            "off_top_shots": sum(1 for r in cad if r.get("on_top") is False),
+            "shot_readings_flag": bool(share is not None and share > FS_FALLBACK_FLAG_SHARE)}
+
+
 CONTENT_BAND_PREFIXES = ("B/s outside old p10..p90", "speed rule accuracy")   # levi: content bands, not trio signals
 
 
@@ -244,7 +266,7 @@ def session_items(sd: Path, rendition_fps: dict | None = None) -> dict:
         pass
     return {"session": str(sd), "mode": (meta.get("concurrency") or {}).get("mode", "single"),
             "ticks": len(tk), "items1_2": items1_2(sd), "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
-            "item8": item8(iv, len(spans))}
+            "item8": item8(iv, len(spans)), **({"fullscreen": fs} if (fs := fullscreen_report(sd, meta)) else {})}
 
 
 def main(argv=None) -> int:
