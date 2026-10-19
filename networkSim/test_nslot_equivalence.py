@@ -62,6 +62,18 @@ def rename(obj, tags: dict):
     return obj
 
 
+def repo_paths(obj):
+    """Any checkout's path to <REPO> (make_vars' CHROME_PREFIX carries in_cgroup.sh's absolute path; the fixture was
+    written in /private/tmp/wt-lvdc-nslot), so the comparison holds in every checkout."""
+    if isinstance(obj, dict):
+        return {k: repo_paths(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [repo_paths(x) for x in obj]
+    if isinstance(obj, str):
+        return re.sub(r"/[^\s'\"]*?(?=/networkSim/)", "<REPO>", obj)
+    return obj
+
+
 def current() -> dict:
     """The N code at the trio's composition, renamed to the trio's tags."""
     import trio_slots as T
@@ -83,8 +95,8 @@ def main() -> int:
         FIXTURE.write_text(json.dumps(commands(T, list(T.SLOTS.values())), indent=1, sort_keys=True))
         print(f"wrote {FIXTURE.name}")
         return 0
-    want = json.loads(FIXTURE.read_text())
-    got = json.loads(json.dumps(current(), sort_keys=True))
+    want = repo_paths(json.loads(FIXTURE.read_text()))
+    got = repo_paths(json.loads(json.dumps(current(), sort_keys=True)))
     if not shutil.which("make"):
         for s in want["slots"].values():
             s.pop("make_n", None)
