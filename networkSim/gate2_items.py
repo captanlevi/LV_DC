@@ -48,7 +48,8 @@ from coverage_report import quality_class  # noqa: E402
 SHOT_GUARD_S = 2.0              # item 8 (levi 2026-10-19): +- 2 s of any shot capture
 RENDER_FPS_MIN_SHARE = 0.9      # item 4a (levi's call on pilot-1): rendered >= 0.9 x delivered frames per media second
 MIN_SUPPORT_S = 10.0            # item 4a's shot-free playing seconds per tier, item 5's shaper-bound seconds per state
-ITEM5_LO, ITEM5_HI = 0.9, 1.15  # item 5 (levi): the byte-total ratio over shaper-bound seconds
+ITEM5_LO, ITEM5_HI = 0.9, 1.15
+TC_PARTIAL_MAX_SHARE = 0.1      # item 5 (levi): more partial tc samples than this share: "tc recording incomplete", a FAIL  # item 5 (levi): the byte-total ratio over shaper-bound seconds
 MAX_GAP_S = 3.0                 # a tick gap above this is not a playing interval (a stalled poll, a navigation)
 
 
@@ -214,8 +215,12 @@ def item5(sd: Path) -> dict:
         out[st] = {"bound_s": round(n, 1), "ratio": r, "ok": ok,
                    "reading": "FAIL (starvation while queued)" if not ok else ("above (reported)" if r > ITEM5_HI else "PASS")}
         oks.append(ok)
+    partial = len(allrows) - len(rows)
+    incomplete = bool(allrows) and partial / len(allrows) > TC_PARTIAL_MAX_SHARE      # levi: then not read, a FAIL
     return {"recorded": True, "per_state": out, "band": [ITEM5_LO, ITEM5_HI], "min_bound_s": MIN_SUPPORT_S,
-            "samples": len(allrows), "samples_partial_skipped": len(allrows) - len(rows), "ok": all(oks) if oks else None}
+            "samples": len(allrows), "samples_partial_skipped": partial,
+            **({"reading": "tc recording incomplete"} if incomplete else {}),
+            "ok": False if incomplete else (all(oks) if oks else None)}
 
 
 LINK_FLAG_MAX_SHARE = 0.05     # item 7: flagged link seconds <= 5 % of the session

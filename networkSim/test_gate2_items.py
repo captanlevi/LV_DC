@@ -126,6 +126,11 @@ def test_item5_byte_total_ratio():
         (Path(d) / "tc_stats.jsonl").write_text("\n".join(rows) + "\n")
         r = G.item5(Path(d))
         assert r["samples_partial_skipped"] == 1 and r["per_state"]["3"]["reading"] == "PASS", r
+        for i in range(2, 30, 3):                                       # more than 0.1 partial: incomplete, a FAIL
+            rows[i] = json.dumps({"ts": json.loads(rows[i])["ts"], "in": {"rate_kbit": 400.0}})
+        (Path(d) / "tc_stats.jsonl").write_text("\n".join(rows) + "\n")
+        r = G.item5(Path(d))
+        assert r["ok"] is False and r["reading"] == "tc recording incomplete", r
     with tempfile.TemporaryDirectory() as d:
         assert G.item5(Path(d)) == {"recorded": False, "ok": False}
 
