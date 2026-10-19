@@ -843,6 +843,8 @@ if __name__ == "__main__":
                 if hit:
                     meta_extra.update(channel_handle=hit["handle"], channel_type=hit["type"])
             browser.stop()
+            if browser.fs_keeper is not None:           # t53 (a): fullscreen in trio, the focus keeper's record
+                meta_extra["fullscreen_keeper"] = browser.fs_keeper
         else:
             # Export labels from extension storage directly
             from browser import _export_via_service_worker

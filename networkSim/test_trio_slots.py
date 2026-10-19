@@ -400,7 +400,7 @@ class FakeProc:
 
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
-          xrandr=None, trio_pf=None, disk_gb=1000.0):
+          xrandr=None, trio_pf=None, disk_gb=1000.0, coupled=None):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry", "free_gb")}
@@ -417,7 +417,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     O._summary = lambda: None
     O.preclean = lambda: calls.append(("preclean",))
     O.most_needed_state = lambda *a, **k: None
-    O.coupled_geometry = lambda p, g: g
+    O.coupled_geometry = coupled or (lambda p, g: g)
     O.preflight.run = lambda *a, **k: {"ok": pf_ok, "problems": [] if pf_ok else ["rootfs"],
                                        "checks": {"rootfs": {"ok": pf_ok}}, "kw": k}
     T.nft_handle_of = lambda s, listing=None: None
@@ -543,6 +543,24 @@ def test_run_trio():
                 raise AssertionError(bad)
             except ValueError:
                 pass
+
+        # t53 (a), default off: a Q_1080p target couples fullscreen; only with --trio-yt-fullscreen does the yt slot take
+        # it (env LVDC_TRIO_YT_FULLSCREEN to its process alone); without, the rotation's draw stands
+        fs = lambda p, g: "fullscreen:1920x1080" if p == "youtube" else g
+        for on in (False, True):
+            spawned.clear()
+            O.TRIO_YT_FULLSCREEN = on
+            try:
+                rc, calls = _trio(tmp, {"youtube": 5, "twitch": 5}, spawn, coupled=fs)
+            finally:
+                O.TRIO_YT_FULLSCREEN = False
+            by = {c[c.index("--platform") + 1]: (c, e) for c, e, _ in spawned}
+            yc, ye = by["youtube"]
+            got = yc[yc.index("--geometry") + 1] if "--geometry" in yc else None
+            assert (got == "fullscreen:1920x1080") is on and (ye.get("LVDC_TRIO_YT_FULLSCREEN") == "1") is on, (on, yc)
+            assert "LVDC_TRIO_YT_FULLSCREEN" not in by["twitch"][1]
+            mx = [c for c in calls if c[0] == "matrix" and c[1] == "youtube"]
+            assert mx and mx[0][3] == (() if on else ("fullscreen",)), mx
 
         # the "composite" layout (pilot-1, probe v3): windows at the origin, each slot's shots from its window's pixmap
         spawned.clear()
