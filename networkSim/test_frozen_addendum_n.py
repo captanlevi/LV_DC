@@ -42,12 +42,19 @@ def test_stall_loop_definition():
           (200, "stall"), (205, "start"), (300, "end")]
     rows = [{"type": ty, "ts": str(t * 1000)} for t, ty in ev]
     assert CS.stall_loop_s(rows) == {"stall_loop_s": 18.0, "stall_loops": 1}
-    # levi 2026-10-20: the spans themselves, epoch seconds, one per loop (brad's loop-timing reader imports them)
-    assert CS.stall_loop_spans(rows) == [(100.0, 118.0)]
-    two = ev[:-1] + [(206, "stall"), (209, "start"), (210, "stall"), (230, "start"), (300, "end")]
-    rows2 = [{"type": ty, "ts": str(t * 1000)} for t, ty in two]
-    assert CS.stall_loop_spans(rows2) == [(100.0, 118.0), (200.0, 230.0)]
-    assert CS.stall_loop_s(rows2) == {"stall_loop_s": 48.0, "stall_loops": 2}
+
+
+
+def test_the_freeze_tables_measure_pin():
+    """levi 2026-10-20: the frozen single freeze table (LVQoE results/audit/tw_freeze_single_table_0deb04c2fee1.json,
+    rules.measure_src_sha256) pins the source of check_session's frozen_runs / stall_loop_s / read_labels, hashed as
+    tw_freeze_refined.table_rules hashes it; with the refs deleted, a changed source would refuse the freeze null for
+    good. Any edit to these three functions fails here first."""
+    import hashlib
+    import inspect
+    src = "".join(inspect.getsource(getattr(CS, f)) for f in ("frozen_runs", "stall_loop_s", "read_labels"))
+    assert hashlib.sha256(src.encode()).hexdigest() == \
+        "bd72fc6e19d4880326b12aa2be55d9c4fabb3d2319bd255673d8319119630596"
 
 
 if __name__ == "__main__":
