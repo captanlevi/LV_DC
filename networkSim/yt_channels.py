@@ -79,6 +79,37 @@ PRECHECK_SKIPS_FILE = Path("_summaries") / "yt_precheck_skips.jsonl"
 PICKS_FILE = Path("_summaries") / "yt_channel_picks.jsonl"
 
 
+LONG_NOT_LIVE_S = 6 * 3600     # levi (t56, BeanBoltTV): a primary pre-checked not live for >= 6 h leaves the tie
+REENTRY_PROBES_PER_PICK = 2
+
+
+def long_not_live(data_dirs: list[Path], now: float, span_s: float = LONG_NOT_LIVE_S) -> dict[str, dict]:
+    """Primaries unavailable for the least-collected tie (levi): every pre-check since the channel was last seen live (a
+    probe that read live, or an accepted session's start) read not live, at least two of them, the first >= span_s
+    ago. {handle: {first, last, n}}; it re-enters when a probe reads it live (a "live" record in the pre-check log)."""
+    recs, starts = [], {}
+    for d in data_dirs:
+        f = Path(d) / PRECHECK_SKIPS_FILE
+        if f.exists():
+            for line in f.read_text().splitlines():
+                try:
+                    recs.append(json.loads(line))
+                except ValueError:
+                    continue
+        for h, ts in accepted_starts(Path(d)).items():
+            starts[h] = max([starts.get(h, 0.0)] + ts)
+    out = {}
+    for c in (c for c in YT_CHANNELS if c["role"] == "primary"):
+        h = c["handle"]
+        mine = sorted((r for r in recs if r.get("handle") == h and isinstance(r.get("ts"), (int, float))),
+                      key=lambda r: r["ts"])
+        seen = max([starts.get(h, 0.0)] + [r["ts"] for r in mine if r.get("state") == "live"])
+        nl = [r["ts"] for r in mine if r["ts"] > seen and r.get("state") == "not_live"]
+        if len(nl) >= 2 and now - nl[0] >= span_s:
+            out[h] = {"first": nl[0], "last": nl[-1], "n": len(nl)}
+    return out
+
+
 def pick_record(data_dir: Path, channel: dict, select=None) -> dict:
     """What the rotation saw when it picked (logged per pick): the channel, the previous session's, the counts."""
     counts = collected_counts(data_dir, select)

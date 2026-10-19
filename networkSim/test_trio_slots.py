@@ -417,7 +417,8 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     T.conntrack_timeouts = lambda proc=None: {"nf_conntrack_udp_timeout_stream": 120}
     T.trio_preflight = trio_pf or (lambda *a, **k: {"ok": True, "problems": [], "checks": {}})
     O._RUNS_DIR = tmp
-    O._pick = lambda p, nl, now, rg, ex=(), root=None: calls.append(("pick", p, ex, root)) and None or (None, None, None)
+    O._pick = lambda p, nl, now, rg, ex=(), root=None, siblings=frozenset(), probe=None: \
+        calls.append(("pick", p, ex, root, siblings)) and None or (None, None, None)
     O.session_matrix = (lambda p, f=None, ex=(), data_dir=None, select=None, reserved=None, key=None:
                         calls.append(("matrix", p, f, ex, data_dir, select, reserved, key)) or "A")
     O.accepted_sessions = lambda p, root=None: calls.append(("accepted", p, root)) and 0 or 0

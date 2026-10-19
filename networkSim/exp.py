@@ -715,6 +715,7 @@ if __name__ == "__main__":
             layout=LAYOUT,
             trio_run=os.environ.get("LVDC_TRIO_RUN"), slots_log=str(slots_log)))
         session_meta.write(session_dir, concurrency=TRIO)
+        os.environ["LVDC_SLOT_TAG"] = SLOT.tag            # t56: browser.publish_stream / sibling_streams
         trio_slots.slots_log_append(slots_log, {"event": "start", "slot": SLOT.tag, "session": session_dir.name,
                                                 "platform": platform, "t": time.time(), "pid": os.getpid(),
                                                 "run": os.environ.get("LVDC_TRIO_RUN")})

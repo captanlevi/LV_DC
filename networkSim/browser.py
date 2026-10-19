@@ -477,6 +477,53 @@ def _pick_twitch_js(exclude: list[str]) -> str:
 """ % json.dumps(exclude)
 
 
+# t56 (levi on peter's t37 facts): siblings never play the same yt channel, twitch channel or tt room at once. Each slot's
+# landed stream goes to the run's slots log ("stream" events; exp.py sets LVDC_SLOT_TAG, orchestrate LVDC_TRIO_RUN);
+# a refill's twitch channel / tt room choice excludes the streams its running siblings hold, recorded in the pick
+def _slots_log(session_dir: Path | None) -> Path | None:
+    if session_dir is None or not os.environ.get("LVDC_TRIO_RUN") or not os.environ.get("LVDC_SLOT_TAG"):
+        return None
+    return Path(session_dir).resolve().parent.parent / "_summaries" / "trio_slots.jsonl"
+
+
+def publish_stream(session_dir: Path | None, platform: str, url: str | None) -> None:
+    """This slot's current stream to the slots log (best effort; never raises)."""
+    log = _slots_log(session_dir)
+    if log is None or not url:
+        return
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a") as fh:
+            fh.write(json.dumps({"event": "stream", "slot": os.environ["LVDC_SLOT_TAG"], "session": Path(session_dir).name,
+                                 "platform": platform, "url": _norm_room(url), "run": os.environ["LVDC_TRIO_RUN"],
+                                 "t": time.time()}) + "\n")
+    except Exception:
+        pass
+
+
+def sibling_streams(session_dir: Path | None, platform: str, log: Path | None = None) -> list[str]:
+    """The streams (normalised URLs) of `platform` that this run's other slots hold now: each slot's latest session
+    (a start without a later end / exit for that slot) and its latest stream event."""
+    log = log or _slots_log(session_dir)
+    if log is None or not log.exists():
+        return []
+    run, me = os.environ.get("LVDC_TRIO_RUN"), os.environ.get("LVDC_SLOT_TAG")
+    cur: dict = {}                       # slot -> [session, platform, url] while running
+    for line in log.read_text().splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        s = e.get("slot")
+        if e.get("event") == "start" and e.get("run") == run:
+            cur[s] = [e.get("session"), e.get("platform"), None]
+        elif e.get("event") in ("end", "exit"):
+            cur.pop(s, None)
+        elif e.get("event") == "stream" and e.get("run") == run and s in cur and cur[s][0] == e.get("session"):
+            cur[s][2] = e.get("url")
+    return sorted({u for s, (_, pl, u) in cur.items() if s != me and pl == platform and u})
+
+
 def recent_tt_rooms(session_dir: Path | None, n: int = TT_RECENT_ROOMS_N) -> list[str]:
     """Rooms of the last n tt sessions (by meta.json start time), normalised, over both roots: single mode's
     (data/tiktok, data/_failed/tiktok) and the trio's (data/_trio/...), whichever root the session is in (t56,
@@ -2689,13 +2736,16 @@ class BrowserSession:
             self.list_url = self._tt_choose_room()
         elif self.platform == "twitch":
             self._master = MasterListener(self._ws_url).start()
-            self.tw_pick = {}
+            sib = sibling_streams(self._session_dir, "twitch")
+            self.tw_pick = {"sibling_excluded": sib} if sib else {}
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
-                                              exclude=recent_tw_channels(self._session_dir), record=self.tw_pick)
+                                              exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib)),
+                                              record=self.tw_pick)
         else:
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
         if not self.list_url:
             raise RuntimeError(f"Failed to navigate to a live {self.platform} stream")
+        publish_stream(self._session_dir, self.platform, self._page.eval("location.href") or self.list_url)
 
         self._t_entry = time.time()   # the stream entry: Q am. 10's 60 s for an ad-free pick count from here
         try:
@@ -2852,9 +2902,10 @@ class BrowserSession:
     def _tt_choose_room(self) -> str | None:
         """tt: pick a live, playing room that no recent session used (see TT_* above); returns the list URL or None."""
         page = self._page
-        recent = recent_tt_rooms(self._session_dir)
+        sib = sibling_streams(self._session_dir, "tiktok")      # t56: a running sibling's room is never taken
+        recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(sib))
         rec: dict = {"n_recent_sessions": TT_RECENT_ROOMS_N, "recent_excluded": recent, "min_viewers": TT_MIN_VIEWERS,
-                     "candidates": [], "tries": [], "choice": None}
+                     "candidates": [], "tries": [], "choice": None, "sibling_excluded": sib}
         self.tt_room_choice = rec
         page.navigate(ROOM_ROTATION_LIVE_URL)
         _wait_for_load(page, timeout=15)
@@ -3035,7 +3086,8 @@ class BrowserSession:
             rec: dict = {"t_nav": time.time()}
             self._room_grace_until = time.time() + 120     # the dead-room watcher sits out the move
             try:
-                visited = [r.get("room") or "" for r in self.room_rotation["rooms"]] + recent_tt_rooms(self._session_dir)
+                visited = ([r.get("room") or "" for r in self.room_rotation["rooms"]] + recent_tt_rooms(self._session_dir)
+                           + sibling_streams(self._session_dir, "tiktok"))
                 self._page.navigate(ROOM_ROTATION_LIVE_URL)
                 _wait_for_load(self._page, timeout=15)
                 deadline = time.time() + 15
@@ -3052,6 +3104,7 @@ class BrowserSession:
                         break
                     time.sleep(1)
                 rec.update(t_playing=time.time() if ok else None, room=self._page.eval("location.href"), ok=ok)
+                publish_stream(self._session_dir, "tiktok", rec["room"])
             except Exception as exc:
                 rec.update(ok=False, error=repr(exc))
             try:

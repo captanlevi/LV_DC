@@ -361,7 +361,7 @@ def _summary() -> None:
 
 
 def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool, exclude_modes: tuple = (),
-          root: Path | None = None) -> tuple:
+          root: Path | None = None, siblings: set | frozenset = frozenset(), probe=None) -> tuple:
     """The session's channel (yt), category (twitch) and geometry draw, and the skip records they leave (run_batch and,
     per slot, run_trio). root (the trio's data root): its skip records go there, the rotation counts its sessions only
     (the sessions of record; levi 00265), and Addendum P's leave rule, single mode's list upkeep, does not run (every
@@ -380,12 +380,29 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
         print(f"  skip {h}: {why}")
     channel = None
     if p == "youtube":
-        # pre-session liveness probe (between sessions, outside capture; fail open; not a strike)
-        channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips), select=select)
+        probe = probe or yt_channels.yt_live_state
+        # t56 (levi): a primary pre-checked not live for >= 6 h is unavailable for the least-collected tie, recorded;
+        # each pick re-probes up to REENTRY_PROBES_PER_PICK of them, and one read live re-enters at once
+        unavail = yt_channels.long_not_live([_RUNS_DIR] + ([root] if root else []), now)
+        for h in sorted(unavail, key=lambda x: unavail[x]["last"])[:yt_channels.REENTRY_PROBES_PER_PICK]:
+            c = yt_channels.by_handle(h) or {}
+            state = probe(h)
+            (out / "_summaries").mkdir(parents=True, exist_ok=True)
+            with open(out / yt_channels.PRECHECK_SKIPS_FILE, "a") as fh:
+                fh.write(json.dumps({"ts": time.time(), "handle": h, "type": c.get("type"), "role": c.get("role"),
+                                     "state": state, "reentry_probe": True}) + "\n")
+            if state == "live":
+                unavail.pop(h)
+        # pre-session liveness probe (between sessions, outside capture; fail open; not a strike); a running sibling's
+        # channel is never taken (t56, levi: siblings never play the same stream at once)
+        channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips) | set(siblings) | set(unavail),
+                                                           select=select, probe=probe)
         try:                                       # the rotation's view at the pick (no immediate repeat)
             (out / "_summaries").mkdir(parents=True, exist_ok=True)
             with open(out / yt_channels.PICKS_FILE, "a") as fh:
-                fh.write(json.dumps(yt_channels.pick_record(out, channel, select)) + "\n")
+                fh.write(json.dumps({**yt_channels.pick_record(out, channel, select),
+                                     **({"sibling_excluded": sorted(siblings)} if siblings else {}),
+                                     **({"unavailable_not_live_6h": unavail} if unavail else {})}) + "\n")
         except Exception as e:
             print(f"  (pick record failed: {e!r})")
         if pre_skips:
@@ -588,7 +605,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     before, now = accepted_sessions(p, troot), time.time()
     # the pick and the coverage rule count the trio's own sessions (data/_trio: the sessions of record, levi 00265); trio v1
     # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
-    channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot)
+    sib = {(r.get("channel") or {}).get("handle") for t2, r in running.items() if t2 != tag and r.get("channel")} - {None}
+    channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot, siblings=sib)
     import record
     reserved = _reserved(tag, T, running)
     yt_fs = p == "youtube" and TRIO_YT_FULLSCREEN

@@ -8,8 +8,10 @@ composition, collector sha). The trio's composition reproduces the trio's comman
     python3 test_nslot.py        (exit 0 = pass)
 """
 import json
+import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -107,3 +109,85 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_sibling_streams():
+    """levi (t56): a slot's landed stream goes to the run's slots log; a refill's choice sees its running siblings'
+    streams of the same platform (not its own, not an ended slot's, not another run's)."""
+    try:
+        import websocket  # noqa: F401
+    except ImportError:                                    # no browser needed: websocket stubbed when absent
+        sys.modules["websocket"] = types.ModuleType("websocket")
+    import browser as B
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "_trio"
+        sd = root / "tiktok" / "ti_100010"
+        sd.mkdir(parents=True)
+        log = root / "_summaries" / "trio_slots.jsonl"
+        log.parent.mkdir(parents=True)
+        ev = [{"event": "start", "slot": "tt1", "session": "ti_100008", "platform": "tiktok", "run": "R"},
+              {"event": "start", "slot": "tt3", "session": "ti_100009", "platform": "tiktok", "run": "R"},
+              {"event": "start", "slot": "tt9", "session": "ti_000001", "platform": "tiktok", "run": "OLD"},
+              {"event": "stream", "slot": "tt9", "session": "ti_000001", "platform": "tiktok", "url": "https://www.tiktok.com/@old/live", "run": "OLD"},
+              {"event": "start", "slot": "yt1", "session": "yt_100011", "platform": "youtube", "run": "R"}]
+        log.write_text("".join(json.dumps(e) + "\n" for e in ev))
+        env = {k: os.environ.get(k) for k in ("LVDC_TRIO_RUN", "LVDC_SLOT_TAG")}
+        try:
+            os.environ.update(LVDC_TRIO_RUN="R", LVDC_SLOT_TAG="tt1")
+            B.publish_stream(root / "tiktok" / "ti_100008", "tiktok", "https://www.tiktok.com/@Mine/live?x=1")
+            os.environ["LVDC_SLOT_TAG"] = "tt3"
+            B.publish_stream(root / "tiktok" / "ti_100009", "tiktok", "https://www.tiktok.com/@jakeytv/live")
+            os.environ["LVDC_SLOT_TAG"] = "yt1"
+            B.publish_stream(root / "youtube" / "yt_100011", "youtube", "https://www.youtube.com/@x/live")
+            os.environ["LVDC_SLOT_TAG"] = "tt2"
+            assert B.sibling_streams(sd, "tiktok") == ["https://www.tiktok.com/@jakeytv/live",
+                                                       "https://www.tiktok.com/@mine/live"], B.sibling_streams(sd, "tiktok")
+            with open(log, "a") as fh:
+                fh.write(json.dumps({"event": "end", "slot": "tt3", "session": "ti_100009"}) + "\n")
+            assert B.sibling_streams(sd, "tiktok") == ["https://www.tiktok.com/@mine/live"]
+            os.environ["LVDC_SLOT_TAG"] = "tt1"
+            assert B.sibling_streams(sd, "tiktok") == []                                   # its own stream: not a sibling's
+            os.environ.pop("LVDC_TRIO_RUN")
+            assert B.sibling_streams(sd, "tiktok") == [] and B._slots_log(sd) is None      # single mode: nothing
+        finally:
+            for k, v in env.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
+def test_yt_sibling_exclusion_and_long_not_live():
+    """A yt refill excludes its running siblings' channels (recorded); a primary pre-checked not live for >= 6 h is
+    unavailable for the tie (recorded) until a re-entry probe reads it live."""
+    import yt_channels as Y
+    prim = [c["handle"] for c in Y.YT_CHANNELS if c["role"] == "primary"]
+    a, b = prim[0], prim[1]
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        f = root / Y.PRECHECK_SKIPS_FILE
+        f.parent.mkdir(parents=True)
+        now = 100_000.0
+        f.write_text("".join(json.dumps({"ts": now - h * 3600, "handle": a, "state": "not_live"}) + "\n" for h in (7, 4, 1)))
+        assert list(Y.long_not_live([root], now)) == [a] and Y.long_not_live([root], now)[a]["n"] == 3
+        assert Y.long_not_live([root], now - 2 * 3600) == {}                              # the span was under 6 h then
+        with open(f, "a") as fh:
+            fh.write(json.dumps({"ts": now - 0.5 * 3600, "handle": a, "state": "live"}) + "\n")
+        assert Y.long_not_live([root], now) == {}                                         # seen live: re-entered
+        f.write_text("".join(json.dumps({"ts": now - h * 3600, "handle": a, "state": "not_live"}) + "\n" for h in (7, 4, 1)))
+        saved = O._RUNS_DIR
+        try:
+            O._RUNS_DIR = root
+            trio = root / "_trio"
+            trio.mkdir()
+            probed = []
+
+            def probe(h):
+                probed.append(h)
+                return "not_live" if h == a else "live"
+            ch, _, _ = O._pick("youtube", {}, now, False, (), trio, siblings={b}, probe=probe)
+            rec = json.loads((trio / Y.PICKS_FILE).read_text().splitlines()[-1])
+            assert ch["handle"] not in (a, b) and rec["sibling_excluded"] == [b] and a in rec["unavailable_not_live_6h"], rec
+            assert probed[0] == a                                                          # the re-entry probe first
+            ch, _, _ = O._pick("youtube", {}, now, False, (), trio, probe=lambda h: "live")   # read live: back at once
+            rec = json.loads((trio / Y.PICKS_FILE).read_text().splitlines()[-1])
+            assert "unavailable_not_live_6h" not in rec and ch["handle"] == a, (ch, rec)
+        finally:
+            O._RUNS_DIR = saved
