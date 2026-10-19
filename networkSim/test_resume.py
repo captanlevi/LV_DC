@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""The collector presses play on a player that paused itself (levi 2026-10-17, chaos tw_10 / tw_12): no human ever pauses
-these players, so every pause is a self-pause. browser.SelfPauseResumer decides (not an ad, paused, not ended,
-readyState >= 3; after a stall at once, otherwise held for more than 3 s); _PLAYER_STATE_JS and _PLAY_JS run under node
-with a stub DOM.
+"""The collector presses play on a player that paused itself (levi 2026-10-17, chaos tw_10 / tw_12), and since levi's
+ruling 00130 (2026-10-20, the twitch stall loops) only then: never in a stall, only on a self-pause with the buffer ahead
+>= SELF_PAUSE_MIN_BUFFER_S held for SELF_PAUSE_HOLD_S, and RESUME_BACKOFF_S after the last restart.
+browser.SelfPauseResumer decides; _PLAYER_STATE_JS and _PLAY_JS run under node with a stub DOM; tw_100010's replay
+(fixtures/tw_100010_replay.json): none of the presses fall in its stall loops.
 
     python3 test_resume.py        (exit 0 = pass)
 """
@@ -22,11 +23,12 @@ except ImportError:
 import browser as B  # noqa: E402
 
 STUB = r"""
-const [stall, ad, paused, rs, ended] = JSON.parse(process.argv[2]);
+const [stall, ad, paused, rs, ended, bufEnd] = JSON.parse(process.argv[2]);
 let played = 0;
 const small = {paused: false, readyState: 4, ended: false, clientWidth: 160, clientHeight: 90, getClientRects: () => [1],
-               play() { throw new Error('pressed the small video'); }};
+               currentTime: 0, buffered: {length: 0}, play() { throw new Error('pressed the small video'); }};
 const v = {paused, readyState: rs, ended, clientWidth: 800, clientHeight: 450, getClientRects: () => [1],
+           currentTime: 100, buffered: {length: 2, start: (i) => [50, 99.5][i], end: (i) => [60, bufEnd][i]},
            play() { played++; return Promise.resolve(); }};
 global.document = {documentElement: {dataset: {lvqoeStall: stall ? '1' : '0', lvqoeAd: ad ? '1' : '0'}},
                    querySelectorAll: () => [small, v]};
@@ -35,50 +37,57 @@ console.log(JSON.stringify({r, played}));
 """
 
 
-def js(src, stall=False, ad=False, paused=True, rs=4, ended=False):
-    out = subprocess.run([shutil.which("node"), "-e", STUB, src, json.dumps([stall, ad, paused, rs, ended])],
+def js(src, stall=False, ad=False, paused=True, rs=4, ended=False, buf_end=102.0):
+    out = subprocess.run([shutil.which("node"), "-e", STUB, src, json.dumps([stall, ad, paused, rs, ended, buf_end])],
                          capture_output=True, text=True, check=True)
     return json.loads(out.stdout)
 
 
-def presses(states, hold_s=B.SELF_PAUSE_HOLD_S):
+def presses(states, r=None):
     """Run the resumer over (t, state) at the watcher's 1 Hz; the presses it makes."""
-    r = B.SelfPauseResumer(hold_s)
+    r = r or B.SelfPauseResumer()
     return [(t, p) for t, st in states if (p := r.step(st, t))]
 
 
-def S(paused=True, rs=4, stall=False, ad=False, ended=False):
-    return {"paused": paused, "rs": rs, "stall": stall, "ad": ad, "ended": ended}
+def S(paused=True, rs=4, stall=False, ad=False, ended=False, buf=2.0):
+    return {"paused": paused, "rs": rs, "stall": stall, "ad": ad, "ended": ended, "buf": buf}
 
 
 def test_decision():
-    # no_stall: held > 3 s, so the first press is at the 4th second of the hold, and the pause duration is recorded
-    p = presses([(t, S()) for t in range(10, 15)])
-    assert p == [(14, {"action": "resume_after_self_pause", "reason": "no_stall", "paused_s": 4})], p
-    assert presses([(t, S()) for t in range(10, 14)]) == []                      # exactly 3 s: not yet
-    # after_stall: the player paused in a stall (readyState < 3), refilled -> pressed at once
-    p = presses([(10, S(rs=2, stall=True)), (11, S(rs=2, stall=True)), (12, S(stall=True))])
-    assert p == [(12, {"action": "resume_after_self_pause", "reason": "after_stall", "paused_s": 2})], p
-    # a stall label seen earlier in the same pause keeps the reason after_stall
-    p = presses([(10, S(rs=2, stall=True))] + [(t, S()) for t in range(11, 16)])
-    assert [x["reason"] for _, x in p] == ["after_stall"], p
+    assert (B.SELF_PAUSE_HOLD_S, B.SELF_PAUSE_MIN_BUFFER_S, B.RESUME_BACKOFF_S) == (2.0, 1.5, 10.0)
+    # a self-pause with the buffer: eligible from 10, held 2 s, pressed at 12, its buffer and the pause duration logged
+    p = presses([(t, S()) for t in range(10, 13)])
+    assert p == [(12, {"action": "resume_after_self_pause", "reason": "self_pause", "buffer_s": 2.0, "paused_s": 2})], p
+    assert presses([(t, S()) for t in range(10, 12)]) == []                      # 1 s: not yet
+    # never in a stall, whatever the buffer (levi 00130: the after_stall press is gone), nor under the floor
+    for st in (S(stall=True, buf=8.0), S(rs=2, stall=True), S(buf=1.4), S(buf=None)):
+        assert presses([(t, st) for t in range(10, 60)]) == [], st
+    # the floor reached and held: pressed 2 s after it
+    seq = [(10, S(buf=0.5)), (11, S(buf=1.0)), (12, S(buf=1.6)), (13, S(buf=1.7)), (14, S(buf=1.8))]
+    assert [t for t, _ in presses(seq)] == [14]
     # never: an ad, ended, no data, playing, no element
     for st in (S(ad=True), S(ended=True), S(rs=2), S(paused=False), None):
         assert presses([(t, st) for t in range(10, 30)]) == [], st
-    # an ad in the middle of the hold restarts it
-    seq = [(10, S()), (11, S()), (12, S(ad=True)), (13, S()), (14, S()), (15, S()), (16, S()), (17, S())]
-    assert [t for t, _ in presses(seq)] == [17]
+    # a stall label in the middle of the hold restarts it
+    seq = [(10, S()), (11, S(stall=True)), (12, S()), (13, S()), (14, S())]
+    assert [t for t, _ in presses(seq)] == [14]
     # a press that does not take is retried only after another hold; paused_s keeps counting
-    p = presses([(t, S()) for t in range(10, 23)])
-    assert [(t, x["paused_s"]) for t, x in p] == [(14, 4), (18, 8), (22, 12)], p
-    # playback resuming ends the pause: a new pause starts its own hold and duration
-    seq = [(t, S()) for t in range(10, 15)] + [(15, S(paused=False))] + [(t, S()) for t in range(16, 21)]
-    assert [(t, x["paused_s"]) for t, x in presses(seq)] == [(14, 4), (20, 4)]
+    p = presses([(t, S()) for t in range(10, 17)])
+    assert [(t, x["paused_s"]) for t, x in p] == [(12, 2), (14, 4), (16, 6)], p
+    # the back-off: a restart (paused -> playing, anyone's) holds the next press 10 s
+    seq = [(10, S(paused=False)), (11, S())] + [(t, S()) for t in range(12, 30)]
+    r = B.SelfPauseResumer()
+    seq = [(5, S())] + [(10, S(paused=False))] + [(t, S()) for t in range(11, 30)]
+    p = presses(seq, r)
+    assert p[0][0] == 22 and all(t >= 20 for t, _ in p), p          # restart at 10: eligible from 20, pressed at 22
+    rec = r.record()
+    assert rec["presses"] == len(p) and rec["held_polls"]["backoff"] == 9 and rec["rule"] == B.RESUME_RULE, rec
 
 
 def test_js():
     st = js(B._PLAYER_STATE_JS, stall=True, ad=True, paused=True, rs=3)
-    assert json.loads(st["r"]) == {"paused": True, "rs": 3, "ended": False, "ad": True, "stall": True}, st
+    assert json.loads(st["r"]) == {"paused": True, "rs": 3, "ended": False, "ad": True, "stall": True, "buf": 2.0}, st
+    assert json.loads(js(B._PLAYER_STATE_JS, buf_end=100.4)["r"])["buf"] == 0.4      # the playhead's own range
     assert js(B._PLAY_JS) == {"r": "pressed", "played": 1}                         # the largest visible video
     assert js(B._PLAY_JS, paused=False) == {"r": None, "played": 0}
 
@@ -86,20 +95,40 @@ def test_js():
 def test_real_twitch_self_pause_fixture():
     """shagun's capture on chaos tw_12 (2026-10-17): the real player DOM has one <video> (the one the resume JS picks),
     and twitch paused it with readyState 4, no ad, the stall label off and its own button still reading "playing".
-    That is the no_stall class: under the old stall-only rule it was resumed 0 times; now once, after the 3 s hold."""
+    That is the self-pause class: pressed once, after the 2 s hold (its buffer here set at the floor's side)."""
     html = (HERE / "fixtures" / "tw_player_dom_self_pause_2026-10-17.html").read_text()
     assert html.count("<video") == 1 and 'aria-label="Twitch video player"' in html
     fx = json.loads((HERE / "fixtures" / "tw_player_state_self_pause_2026-10-17.json").read_text())
     stall = str((fx.get("lvqoe") or {}).get("lvqoeStall", "0")) == "1"
     st = json.loads(js(B._PLAYER_STATE_JS, stall=stall, ad=bool(fx["ad"]), paused=bool(fx["paused"]), rs=int(fx["rs"]),
                        ended=bool(fx.get("ended")))["r"])
-    assert st == {"paused": True, "rs": 4, "ended": False, "ad": False, "stall": False}, st
+    assert st == {"paused": True, "rs": 4, "ended": False, "ad": False, "stall": False, "buf": 2.0}, st
     r, made = B.SelfPauseResumer(), []
     for t in range(60):                               # the element plays once pressed
         if (p := r.step(st, 1000.0 + t)):
             made.append(p)
             st = dict(st, paused=False)
-    assert made == [{"action": "resume_after_self_pause", "reason": "no_stall", "paused_s": 4.0}], made
+    assert made == [{"action": "resume_after_self_pause", "reason": "self_pause", "buffer_s": 2.0, "paused_s": 2.0}], made
+
+
+def test_tw_100010_replay_no_press_in_the_loops():
+    """levi 00130: on tw_100010's recorded element states (1 Hz ticks), the new rule presses nowhere in the stall loops;
+    the old rule pressed 116 times, 114 after_stall, nearly all inside them."""
+    fx = json.loads((HERE / "fixtures" / "tw_100010_replay.json").read_text())
+    inside = lambda t: any(a <= t <= b for a, b in fx["loop_spans"])
+    old = fx["presses_recorded"]
+    # 116 recorded presses, 114 after_stall; 112 inside the spans as rounded in the fixture (0.1 s; 114 unrounded)
+    assert len(old) == 116 and sum(1 for t, why in old if why == "after_stall") == 114
+    assert sum(1 for t, _ in old if inside(t)) == 112
+    r = B.SelfPauseResumer()
+    made = []
+    for t, paused, rs, buf, ad, stall in fx["ticks"]:
+        p = r.step({"paused": bool(paused), "rs": rs, "buf": buf, "ad": bool(ad), "stall": bool(stall), "ended": False}, t)
+        if p:
+            made.append((t, p))
+    assert not [t for t, _ in made if inside(t)], made
+    assert all(p["buffer_s"] >= B.SELF_PAUSE_MIN_BUFFER_S for _, p in made), made
+    assert r.record()["held_polls"].get("stall", 0) > 0                       # the old after_stall moments, held
 
 
 class TwPage:
@@ -136,7 +165,7 @@ def test_twitch_resume_through_the_button():
     Twitch's play button (a click when it says paused, a pause / play cycle when it says playing over the paused
     element); after TW_BUTTON_MAX_FAILS presses that leave it paused the collector stops pressing that pause (the frozen
     watchdog's re-entry is the fallback); every press and its outcome are in the record. yt / tt: video.play() only."""
-    press = {"action": "resume_after_self_pause", "reason": "after_stall", "paused_s": 1.0}
+    press = {"action": "resume_after_self_pause", "reason": "self_pause", "buffer_s": 2.0, "paused_s": 2.0}
     waits = []
     r = B.resume_press(TwPage(), "youtube", B.SelfPauseResumer(), press, waits.append)
     assert r == {**press, "via": "video_play"} and waits == [], r
@@ -151,7 +180,7 @@ def test_twitch_resume_through_the_button():
     assert r["button"]["state"] == "playing" and r["button_cycle"]["state"] == "paused" and r["button_outcome"] == "playing", r
     assert pg.clicks == 2 and B.TW_BUTTON_CYCLE_GAP_S in waits
     res, pg = B.SelfPauseResumer(hold_s=0.0), TwPage(plays_after_clicks=None)   # never plays: give up after the max
-    st = {"paused": True, "rs": 4, "ended": False, "ad": False, "stall": True}
+    st = {"paused": True, "rs": 4, "ended": False, "ad": False, "stall": False, "buf": 2.0}
     recs = []
     for k in range(10):
         p = res.step(st, 1000.0 + 2 * k)
@@ -176,6 +205,7 @@ def test_button_js_on_the_fixture():
 
 def main() -> int:
     test_decision()
+    test_tw_100010_replay_no_press_in_the_loops()
     test_twitch_resume_through_the_button()
     test_button_js_on_the_fixture()
     if not shutil.which("node"):

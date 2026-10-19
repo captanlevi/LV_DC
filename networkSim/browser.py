@@ -15,6 +15,7 @@ Usage from exp.py:
     session.stop()           # stops ad-watcher, leaves browser open for PCAP
 """
 
+import collections
 import json
 import os
 import re
@@ -1679,8 +1680,13 @@ _PLAYER_STATE_JS = """
     const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
     if (!v) return null;
     const d = document.documentElement.dataset;
+    // the buffer ahead of the playhead in its own buffered range (the self-pause press's floor, levi 00130)
+    let buf = 0;
+    for (let i = 0; i < v.buffered.length; i++) {
+        if (v.buffered.start(i) <= v.currentTime + 0.05 && v.currentTime <= v.buffered.end(i)) buf = v.buffered.end(i) - v.currentTime;
+    }
     return JSON.stringify({paused: v.paused, rs: v.readyState, ended: v.ended, ad: d.lvqoeAd === '1',
-                           stall: d.lvqoeStall === '1'});
+                           stall: d.lvqoeStall === '1', buf: Math.round(buf * 1000) / 1000});
 })()
 """
 _PLAY_JS = """
@@ -1693,7 +1699,18 @@ _PLAY_JS = """
     return 'pressed';
 })()
 """
-SELF_PAUSE_HOLD_S = 3.0
+# t56 stall loops (levi's ruling 00130, at the N_collect boundary): the after_stall press (b370999, 2026-10-17: play at
+# once when the stall label was on and readyState >= 3) is gone. It pressed at a buffer p50 of ~0.5 s and led most trio
+# twitch stall-loop restarts (peter 00215); a viewer waits through a stall. The press stays only for a self-pause (tw_45):
+# the element paused, not stalled (stall label off), not waiting (readyState >= 3), not an ad, not ended, its buffer
+# ahead >= SELF_PAUSE_MIN_BUFFER_S held for SELF_PAUSE_HOLD_S, and RESUME_BACKOFF_S since the last restart (any paused ->
+# playing, the collector's or the player's own). Every press logs its reason and buffer; the polls held back, by reason,
+# go to meta.json self_pause_resume.
+SELF_PAUSE_HOLD_S = 2.0
+SELF_PAUSE_MIN_BUFFER_S = 1.5
+RESUME_BACKOFF_S = 10.0
+RESUME_RULE = ("levi 00130 (2026-10-20): no press in a stall; a self-pause pressed at buffer >= 1.5 s held 2 s, "
+               "10 s after the last restart")
 # t53 (supervisor, peter's tw_100005 / tw_100006 read): after a state-1 underrun Twitch's own controller stays "paused" and
 # undoes a video.play() at once (start re-paused in the same ms, every press). On twitch a press re-paused within
 # RESUME_CHECK_S is retried through Twitch's play button (a click, or a pause / play cycle when the button says
@@ -1722,48 +1739,60 @@ TW_BUTTON_CYCLE_GAP_S = 0.5     # the controller says playing over a paused elem
 
 
 class SelfPauseResumer:
-    """When to press play (levi 2026-10-17). Eligible = not an ad, paused, not ended, readyState >= 3.
-    - after_stall: the stall label is on (the player paused itself in a stall and has data again) -> press at once,
-      so the stall ends at the element's own playing -> start, as before;
-    - no_stall: eligible without a stall label for more than SELF_PAUSE_HOLD_S (clear of tick jitter and of the stall
-      path) -> press.
-    A press that does not take is retried only after another SELF_PAUSE_HOLD_S. Each press returns a log record with
-    the reason and paused_s, the time since the element was first seen paused."""
+    """When to press play (RESUME_RULE, the comment above). A press that does not take is retried only after another
+    SELF_PAUSE_HOLD_S of eligibility. Each press returns a log record with its reason, buffer and paused_s (the time
+    since the element was first seen paused); record() is meta.json's self_pause_resume."""
 
-    def __init__(self, hold_s: float = SELF_PAUSE_HOLD_S):
-        self.hold_s = hold_s
+    def __init__(self, hold_s: float = SELF_PAUSE_HOLD_S, min_buffer_s: float = SELF_PAUSE_MIN_BUFFER_S,
+                 backoff_s: float = RESUME_BACKOFF_S):
+        self.hold_s, self.min_buffer_s, self.backoff_s = hold_s, min_buffer_s, backoff_s
         self.paused_since = None      # first observation of the current pause
         self.eligible_since = None    # start of the current eligible run (or of the wait after a press)
-        self.stall_seen = False       # stall label on at any observation of the current pause
         self.button_fails = 0         # twitch: button presses that left the current pause paused
         self.gave_up = False          # twitch: TW_BUTTON_MAX_FAILS reached; the frozen watchdog takes over
+        self.was_paused = None        # the last observation's paused, for the restarts
+        self.restart_at = None        # the last paused -> playing transition observed
+        self.presses = 0
+        self.held: collections.Counter = collections.Counter()   # paused polls not pressed, by reason
+
+    def record(self) -> dict:
+        return {"rule": RESUME_RULE, "hold_s": self.hold_s, "min_buffer_s": self.min_buffer_s,
+                "backoff_s": self.backoff_s, "presses": self.presses, "held_polls": dict(sorted(self.held.items()))}
 
     def note_button_fail(self) -> None:
         self.button_fails += 1
         self.gave_up = self.button_fails >= TW_BUTTON_MAX_FAILS
 
     def step(self, state: dict | None, now: float) -> dict | None:
-        if not state or not state.get("paused"):
+        paused = bool(state and state.get("paused"))
+        if state is not None:
+            if self.was_paused and not paused:
+                self.restart_at = now
+            self.was_paused = paused
+        if not paused:
             self.paused_since = self.eligible_since = None
-            self.stall_seen = False
             self.button_fails, self.gave_up = 0, False
             return None
         if self.gave_up:
             return None
         if self.paused_since is None:
             self.paused_since = now
-        self.stall_seen = self.stall_seen or bool(state.get("stall"))
-        if state.get("ad") or state.get("ended") or (state.get("rs") or 0) < 3:
+        buf = state.get("buf")
+        why = ("ad" if state.get("ad") else "ended" if state.get("ended") else "stall" if state.get("stall")
+               else "waiting" if (state.get("rs") or 0) < 3
+               else "buffer" if buf is None or buf < self.min_buffer_s
+               else "backoff" if self.restart_at is not None and now - self.restart_at < self.backoff_s else None)
+        if why is not None:
+            self.held[why] += 1
             self.eligible_since = None
             return None
         if self.eligible_since is None:
             self.eligible_since = now
-            if not state.get("stall"):                   # after_stall presses at once; no_stall starts its hold
-                return None
-        elif now - self.eligible_since <= self.hold_s:
+        if now - self.eligible_since < self.hold_s:
             return None
         self.eligible_since = now                        # retry only after another hold
-        return {"action": "resume_after_self_pause", "reason": "after_stall" if self.stall_seen else "no_stall",
+        self.presses += 1
+        return {"action": "resume_after_self_pause", "reason": "self_pause", "buffer_s": buf,
                 "paused_s": round(now - self.paused_since, 3)}
 
 
@@ -2150,7 +2179,7 @@ class PlayerErrorWatch:
 
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
                      on_wall=None, on_frozen=None, on_stuck=None, on_player_error=None,
-                     error_watch: PlayerErrorWatch | None = None) -> None:
+                     error_watch: PlayerErrorWatch | None = None, resumer: "SelfPauseResumer | None" = None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
     Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
     calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table); passes the
@@ -2160,7 +2189,7 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
     walled = False
     frozen_max_s = FROZEN_PLAYHEAD_MAX_S.get(platform)
     froze = False
-    resumer = SelfPauseResumer()
+    resumer = resumer if resumer is not None else SelfPauseResumer()
     n = 0
     while not stop.wait(timeout=1):
         n += 1
@@ -2825,6 +2854,7 @@ class BrowserSession:
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
         self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
+        self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
         self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
@@ -3083,7 +3113,8 @@ class BrowserSession:
             target=_ad_watcher_loop,
             args=(self._page, self.platform, self._stop, log_path, self._on_wall, self._on_frozen,
                   self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
-                  self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch),
+                  self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch,
+                  self.resumer),
             daemon=True,
             name="ad-watcher",
         )
