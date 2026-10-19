@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import coverage_report as C  # noqa: E402
 import orchestrate as O  # noqa: E402
 from utils.shaping import PLATFORM_MATRICES  # noqa: E402
+# the base matrices: Q am. 17's schedule families ("<m>@slow|fast") have their own tests (test_schedule_families.py)
+BASE = {p: {m: v for m, v in t.items() if "@" not in m} for p, t in PLATFORM_MATRICES.items()}
 
 COLS = ["ts", "type", "video_w", "video_h", "buffered_ahead_s", "is_ad"]
 RES = {"Q_144p": (256, 144), "Q_240p": (426, 240), "Q_360p": (640, 360), "Q_480p": (854, 480), "Q_720p": (1280, 720),
@@ -203,20 +205,20 @@ def main():
         snap = C.snapshot(d, "youtube")
         defs = C.deficits(snap)
         assert defs[0]["key"] == "Q_1080p" and defs[0]["deficit"] == 5, defs
-        r = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"], ["A", "B", "current"])
+        r = C.pick_matrix(snap, BASE["youtube"], ["A", "B", "current"])
         # Q am. 15 (3): of A / B / current only "current" puts >= 2/21 of its mass in Q_1080p's band (9-10); the target
         # couples fullscreen
         assert r["matrix"] == "current" and r["why"].startswith("explore"), r
         assert r["bands"]["Q_1080p"]["qualifies"] == ["current"] and r["geometry_forced"] == "fullscreen:1920x1080", r
         assert "geometry_excluded" not in r                                          # single mode: no new key
         # t53 trio v1 (supervisor 2026-10-19): no fullscreen -> Q_1080p unreachable, recorded; the next deficit drives
-        rt = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"], excluded_geometries=("fullscreen",))
+        rt = C.pick_matrix(snap, BASE["youtube"], excluded_geometries=("fullscreen",))
         assert "Q_1080p" in rt["unreachable_targets"] and rt["geometry_forced"] is None, rt
         assert rt["geometry_excluded"] == {"modes": ["fullscreen"], "unreachable_by_geometry": ["Q_1080p"]}, rt
         assert (rt["target"] or {}).get("key") != "Q_1080p"
         # am. 15 (6): with yt-H defined it qualifies too; without sessions on either, the explore draws between them
         # (t53 2026-10-19: no attempts on either, a draw seeded by the platform's record attempts, 5, recorded)
-        r = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"])
+        r = C.pick_matrix(snap, BASE["youtube"])
         import random
         assert r["bands"]["Q_1080p"]["qualifies"] == ["H", "current"], r
         assert (r["explore"]["tied"], r["explore"]["seed"]) == (["H", "current"], 5), r["explore"]
@@ -234,20 +236,20 @@ def main():
         assert json.dumps(r, sort_keys=True) == json.dumps(r2, sort_keys=True)      # deterministic
         tie = dict(snap, per_matrix={m: {"sessions": 3, "tier_sessions": 3, "stall_share": 0.1, "stall_onsets_mean": 2.0,
                                           "class_minutes_mean": dict.fromkeys(C.CLASSES["youtube"], 1.0)} for m in ("A", "B", "current")})
-        assert C.pick_matrix(tie, PLATFORM_MATRICES["youtube"], ["A", "B", "current"])["matrix"] == "current"   # the only one reaching 1080p
+        assert C.pick_matrix(tie, BASE["youtube"], ["A", "B", "current"])["matrix"] == "current"   # the only one reaching 1080p
         # am. 15 (6): yt-H is drawn only for Q_1080p: never for another class (not even to explore), never by rotation
         tie_h = dict(tie, per_matrix={**tie["per_matrix"], "H": dict(tie["per_matrix"]["A"])})
-        assert C.pick_matrix(tie_h, PLATFORM_MATRICES["youtube"])["matrix"] in ("H", "current")
+        assert C.pick_matrix(tie_h, BASE["youtube"])["matrix"] in ("H", "current")
         q720 = dict(snap, classes={**{c: {"sessions_ge_min": 5, "minutes": 50} for c in snap["classes"]},
                                    "Q_720p": {"sessions_ge_min": 0, "minutes": 0}})
-        r = C.pick_matrix(q720, PLATFORM_MATRICES["youtube"])
+        r = C.pick_matrix(q720, BASE["youtube"])
         assert r["target"]["key"] == "Q_720p" and r["bands"]["Q_720p"]["qualifies"] == ["A", "current"], r
         assert r["matrix"] != "H" and r["bands"]["Q_720p"]["mass"]["H"] > 0.5, r       # it reaches the band, not drawn
         full = dict(snap, classes={c: {"sessions_ge_min": 5, "minutes": 50} for c in snap["classes"]})
-        r = C.pick_matrix(full, PLATFORM_MATRICES["youtube"])
+        r = C.pick_matrix(full, BASE["youtube"])
         assert r["default_rotation"] and r["matrix"] != "H", r                       # H has the fewest sessions (0)
         stall = dict(full, classes={**full["classes"], "STALL": {"sessions_ge_min": 0, "minutes": 0}})
-        assert C.pick_matrix(stall, PLATFORM_MATRICES["youtube"])["matrix"] != "H"
+        assert C.pick_matrix(stall, BASE["youtube"])["matrix"] != "H"
         assert C.drawable("youtube", "H", "Q_1080p") and not C.drawable("youtube", "H", None)
         assert C.drawable("youtube", "A", None) and C.drawable("twitch", "TW-M", "STALL")
 
@@ -263,23 +265,23 @@ def main():
         assert snap["stall_share_pooled"] > C.STALL_BAND["twitch"][1] and snap["classes"]["STALL"]["sessions_ge_min"] == 0
         assert snap["stall_onsets_pooled"] == 9 and snap["stall_run_s"]["n"] == 9, snap
         assert [d_["key"] for d_ in C.deficits(snap)] == ["STALL"]                   # the band is not a target
-        r = C.pick_matrix(snap, PLATFORM_MATRICES["twitch"])
+        r = C.pick_matrix(snap, BASE["twitch"])
         assert r["target"]["key"] == "STALL" and r["matrix"] == "TW-L" and r["why"].startswith("explore"), r
-        r = C.pick_matrix(snap, PLATFORM_MATRICES["twitch"], ["TW-M", "current"])
+        r = C.pick_matrix(snap, BASE["twitch"], ["TW-M", "current"])
         assert r["matrix"] == "current" and r["yields"] == {"TW-M": 1.0, "current": 2.0}, r     # more onsets per session
         ok = dict(snap, classes={c: {"sessions_ge_min": 5, "minutes": 50, "criterion": ""} for c in snap["classes"]})
-        r = C.pick_matrix(ok, PLATFORM_MATRICES["twitch"])          # Q am. 15 (2): no deficit -> the least-collected
+        r = C.pick_matrix(ok, BASE["twitch"])          # Q am. 15 (2): no deficit -> the least-collected
         assert (r["matrix"], r["default_rotation"], r["target"]) == ("TW-L", True, None), r      # TW-L 0, others 3
         # Q am. 15 (3): twitch Q_1080p (1.1 x 7066 kbit/s) is above every state's midpoint: never drawn, reported;
         # the next deficit is the target
         q = dict(ok, classes={**ok["classes"], "Q_1080p": {"sessions_ge_min": 0, "minutes": 0, "criterion": ""},
                               "Q_480p": {"sessions_ge_min": 3, "minutes": 9, "criterion": ""}})
-        r = C.pick_matrix(q, PLATFORM_MATRICES["twitch"])
+        r = C.pick_matrix(q, BASE["twitch"])
         assert r["unreachable_targets"] == ["Q_1080p"] and r["target"]["key"] == "Q_480p", r
         assert set(r["bands"]["Q_480p"]["qualifies"]) == {"current", "TW-M"} and r["matrix"] in ("current", "TW-M"), r
         assert r["geometry_forced"] is None and r["bands"]["Q_1080p"]["band"] == []
         only = dict(ok, classes={**ok["classes"], "Q_1080p": {"sessions_ge_min": 0, "minutes": 0, "criterion": ""}})
-        r = C.pick_matrix(only, PLATFORM_MATRICES["twitch"])     # every deficit unreachable -> rotation, reported
+        r = C.pick_matrix(only, BASE["twitch"])     # every deficit unreachable -> rotation, reported
         assert r["default_rotation"] and r["unreachable_targets"] == ["Q_1080p"] and "unreachable" in r["why"], r
 
     # tt: tier floors count HEVC sessions only; stall and entry states count every accepted session
@@ -302,7 +304,7 @@ def main():
         assert snap["tt_entries_by_state"][states[0]] == 12 and snap["tt_entries_by_state"][states[1]] == 11, snap
         assert all(snap["tt_entries_by_state"][s] == 10 for s in states[2:]), snap
         assert snap["tt_codec_sessions"] == {"h264": 5}
-        r = C.pick_matrix(snap, PLATFORM_MATRICES["tiktok"])
+        r = C.pick_matrix(snap, BASE["tiktok"])
         assert r["target"]["key"] == "Q_360p" and r["why"].startswith("explore"), r  # no HEVC sessions on any matrix
         session(d, "tiktok", "v0", allc, matrix="TT-M", codec="hevc")
         snap = C.snapshot(d, "tiktok")
@@ -310,8 +312,9 @@ def main():
         assert snap["per_matrix"]["TT-M"]["tier_sessions"] == 1 and snap["per_matrix"]["TT-M"]["sessions"] == 6
         few = dict(snap, classes={c: {"sessions_ge_min": 5, "minutes": 50} for c in snap["classes"]},
                    stall_share_pooled=0.08, tt_entries_by_state={s: (2 if s == states[0] else 9) for s in states})
-        r = C.pick_matrix(few, PLATFORM_MATRICES["tiktok"])
-        assert r["target"] == {"kind": "entry_state", "key": states[0], "deficit": 3.0, "order": 100 + int(states[0])}, r
+        r = C.pick_matrix(few, BASE["tiktok"])
+        assert r["target"] == {"kind": "entry_state", "key": states[0], "deficit": 3.0, "floor": 5, "share": 0.6,
+                               "order": 100 + int(states[0])}, r
         pi = {m: C.stationary_distribution(PLATFORM_MATRICES["tiktok"][m][0]).get(states[0], 0) for m in ("TT-M", "current")}
         assert r["matrix"] == max(pi, key=lambda m: (pi[m], m == "TT-M")), (r, pi)
 

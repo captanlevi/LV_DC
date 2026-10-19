@@ -22,8 +22,9 @@ first shaped state after it, a re-entry at the state in force; per matrix: accep
 mean stall onsets, pooled stall share.
 
 The matrix rule (RULE_VERSION, deterministic):
-  1. target = the largest deficit to its floor: a class (STALL included), FLOOR_SESSIONS - its sessions; a tt entry
-     state, TT_ENTRY_FLOOR - its entries. Ties: class order, then states.
+  1. target = the largest deficit share (missing / floor; Q am. 17): a class (STALL included), FLOOR_SESSIONS - its
+     sessions; a tt entry state, TT_ENTRY_FLOOR - its entries; a schedule family (am. 17), FAMILY_FLOOR - its accepted
+     sessions, met by drawing the family itself. Ties: class order, then states, then families.
   2. matrix = of the allowed matrices, one with fewer than EXPLORE_MIN accepted sessions first (class targets: every
      matrix gets a yield before the yields decide; among several, EXPLORE_RULE: the fewest record attempts, ties by a
      seeded draw, a matrix failing EXPLORE_REPEAT_CAP times in a row passed over; coverage.explore records the pick);
@@ -46,6 +47,9 @@ rule; orchestrate passes it as --initial-state); every other session keeps its m
 low_yield: a tier class whose best qualifying matrix, among those with >= LOW_YIELD_MIN_SESSIONS accepted sessions,
 yields < LOW_YIELD_MIN_PER_SESSION minutes per session is listed in the coverage report (low_yield), with the qualifying
 matrices not yet at that many sessions.
+Q am. 17: a schedule family ("<m>@slow|fast", utils/shaping.SCHEDULES) qualifies for a tier class on its own occupancy
+(schedule_occupancy.py: a seeded simulation of its exact schedule, committed with its sha256), against FLOOR_MINUTES /
+its session's minutes; a young family is explored like any young matrix.
 orchestrate writes the record (snapshot, deficits, yields, choice, rule) to data/_summaries/coverage_last.json and
 LVDC_COVERAGE_JSON; exp.py puts it in meta.json coverage, marked applied iff its platform and matrix are the session's.
 
@@ -63,7 +67,7 @@ from pathlib import Path
 
 import numpy as np
 
-from utils.shaping import PLATFORM_MATRICES, SCENARIOS, stationary_distribution
+from utils.shaping import PLATFORM_MATRICES, SCENARIOS, schedule_of, session_episodes, stationary_distribution
 
 from data_root import DATA_ROOT as DATA_DIR  # noqa: E402  (one setting: data_root.py)
 RULE_VERSION = "coverage-v2 (2026-10-18; Addendum Q am. 5: stall events)"
@@ -116,6 +120,12 @@ INITIAL_STATE_RULE = ("Q am. 15 (5): a tier-class target starts in its band, dra
                       "distribution restricted to the band")
 LOW_YIELD_MIN_PER_SESSION, LOW_YIELD_MIN_SESSIONS = 0.5, 5   # Q am. 15 (6): minutes per session, over >= 5 sessions
 MATRIX_TARGETS = {("youtube", "H"): ("Q_1080p",)}   # Q am. 15 (6): yt-H is drawn only for the Q_1080p target
+# Q am. 17 (2026-10-20): the schedule families ("<m>@slow|fast", utils/shaping.SCHEDULES) each carry a floor of accepted
+# sessions of record (a schedule-diversity floor, not a readable stratum); every deficit (class, entry state, family) is
+# ranked on one scale, its share = missing / its floor; a family qualifies for a tier class on its own simulated
+# occupancy (schedule_occupancy.py), never on the base matrix's stationary mass
+FAMILY_FLOOR = 5
+DEFICIT_RANK = "Q am. 17: deficit share = missing / floor, classes, entry states and families alike"
 
 
 def drawable(platform: str, matrix_id: str, target_key: str | None) -> bool:
@@ -383,35 +393,68 @@ def class_band(platform: str, cls: str) -> dict | None:
             **({"regime": TT_RUNG_REGIME} if platform == "tiktok" else {})}
 
 
+def state_mass(platform: str, matrices: dict, matrix_id: str) -> dict[str, float]:
+    """The per-state mass a matrix qualifies on: a base matrix's stationary distribution; a schedule family's own
+    simulated occupancy (Q am. 17, schedule_occupancy.py's committed table)."""
+    if "@" in matrix_id:
+        import schedule_occupancy
+        return schedule_occupancy.occupancy(platform, matrix_id)
+    return stationary_distribution(matrices[matrix_id][0])
+
+
+def session_minutes(platform: str, matrix_id: str) -> float:
+    """A session's shaped minutes under the matrix's schedule (the base: SESSION_EPISODES of 60 s)."""
+    sc = schedule_of(matrix_id)
+    return session_episodes(SESSION_EPISODES[platform], matrix_id) * sc["episode_s"] / 60.0
+
+
 def band_map(platform: str, matrices: dict, ids: list[str]) -> dict:
-    """Per tier class: its band and each allowed matrix's stationary mass in it, and the matrices that qualify (mass
-    >= FLOOR_MINUTES / the session's episodes, and drawable for the class: MATRIX_TARGETS)."""
+    """Per tier class: its band and each allowed matrix's mass in it (state_mass), and the matrices that qualify (mass
+    >= FLOOR_MINUTES / the session's minutes under the matrix's schedule, and drawable for the class: MATRIX_TARGETS)."""
     thr = FLOOR_MINUTES / float(SESSION_EPISODES[platform])
+    fam = {m: FLOOR_MINUTES / session_minutes(platform, m) for m in ids if "@" in m}
+    masses = {m: state_mass(platform, matrices, m) for m in ids}
     out = {}
     for cls in CLASSES[platform]:
         b = class_band(platform, cls)
         if b is None:
             continue
-        mass = {m: round(sum(p for s, p in stationary_distribution(matrices[m][0]).items() if s in b["band"]), 4)
-                for m in ids}
+        mass = {m: round(sum(p for s, p in masses[m].items() if s in b["band"]), 4) for m in ids}
         out[cls] = {**b, "mass": mass, "min_mass": round(thr, 4),
-                    "qualifies": [m for m in ids if mass[m] >= thr and drawable(platform, m, cls)]}
+                    "qualifies": [m for m in ids if mass[m] >= fam.get(m, thr) and drawable(platform, m, cls)]}
+        if fam:
+            out[cls]["min_mass_family"] = {m: round(v, 4) for m, v in sorted(fam.items())}
     return out
 
 
-def deficits(snap: dict, states: list[str] = ()) -> list[dict]:
-    """The floors' shortfalls, largest first (ties: class order, the stall band, states)."""
+def _ranked(defs: list[dict]) -> list[dict]:
+    """DEFICIT_RANK: the largest share first (ties: class order, states, families)."""
+    for d in defs:
+        d["share"] = round(d["deficit"] / d["floor"], 6)
+    return sorted(defs, key=lambda d: (-d["share"], d["order"]))
+
+
+def deficits(snap: dict, states: list[str] = (), families: list[str] = ()) -> list[dict]:
+    """The floors' shortfalls, ranked by share (DEFICIT_RANK). families: the schedule family ids whose FAMILY_FLOOR
+    counts (accepted sessions of record per family id)."""
     out = []
     for i, (c, v) in enumerate(snap["classes"].items()):
         if v["sessions_ge_min"] < FLOOR_SESSIONS:
-            out.append({"kind": "class", "key": c, "deficit": float(FLOOR_SESSIONS - v["sessions_ge_min"]), "order": i})
+            out.append({"kind": "class", "key": c, "deficit": float(FLOOR_SESSIONS - v["sessions_ge_min"]),
+                        "floor": FLOOR_SESSIONS, "order": i})
     # am. 5: the stall-share band is retired as a target (reported in the snapshot only)
     if "tt_entries_by_state" in snap:
         for st in sorted(states, key=int):
             n = snap["tt_entries_by_state"].get(st, 0)
             if n < TT_ENTRY_FLOOR:
-                out.append({"kind": "entry_state", "key": st, "deficit": float(TT_ENTRY_FLOOR - n), "order": 100 + int(st)})
-    return sorted(out, key=lambda d: (-d["deficit"], d["order"]))
+                out.append({"kind": "entry_state", "key": st, "deficit": float(TT_ENTRY_FLOOR - n),
+                            "floor": TT_ENTRY_FLOOR, "order": 100 + int(st)})
+    for j, m in enumerate(sorted(families)):
+        n = (snap["per_matrix"].get(m) or {}).get("sessions", 0)
+        if n < FAMILY_FLOOR:
+            out.append({"kind": "schedule", "key": m, "deficit": float(FAMILY_FLOOR - n), "floor": FAMILY_FLOOR,
+                        "order": 200 + j})
+    return _ranked(out)
 
 
 def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, excluded_geometries: tuple = (),
@@ -422,12 +465,12 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
     platform = snap["platform"]
     ids = sorted(allowed or matrices)
     states = sorted({s for m in ids for s in matrices[m][0]}, key=int) if platform == "tiktok" else []
-    defs = deficits(snap, states)
-    if reserved:   # t56: a class a running sibling slot already holds is that much nearer its floor (siblings spread)
+    defs = deficits(snap, states, [m for m in ids if "@" in m])
+    if reserved:   # t56: a class (am. 17: or a family) a running sibling slot already holds is that much nearer its floor
         for d in defs:
-            if d["kind"] == "class" and reserved.get(d["key"]):
+            if d["kind"] in ("class", "schedule") and reserved.get(d["key"]):
                 d["deficit"] = float(d["deficit"]) - reserved[d["key"]]
-        defs = sorted((d for d in defs if d["deficit"] > 0), key=lambda d: (-d["deficit"], d["order"]))
+        defs = _ranked([d for d in defs if d["deficit"] > 0])
     bands = band_map(platform, matrices, ids)
     # am. 15 (3): a tier class no allowed matrix can reach is not drawn; the next deficit is the target
     unreachable = [d["key"] for d in defs if d["kind"] == "class" and d["key"] in bands and not bands[d["key"]]["qualifies"]]
@@ -435,7 +478,8 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
                and (GEOMETRY_FOR_CLASS.get((platform, d["key"])) or "").split(":")[0] in excluded_geometries]
     unreachable += no_geom
     live = [d for d in defs if d["key"] not in unreachable]
-    rec = {"platform": platform, "rule": RULE_VERSION, "steering_rule": STEERING_RULE, "allowed": ids, "deficits": defs,
+    rec = {"platform": platform, "rule": RULE_VERSION, "steering_rule": STEERING_RULE, "deficit_rank": DEFICIT_RANK,
+           "allowed": ids, "deficits": defs,
            "snapshot": snap, "bands": bands, "unreachable_targets": unreachable, "default_rotation": False, "geometry_forced": None}
     if excluded_geometries:
         rec["geometry_excluded"] = {"modes": list(excluded_geometries), "unreachable_by_geometry": no_geom}
@@ -449,6 +493,8 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
         return {**rec, "matrix": m, "target": None, "yields": {}, "default_rotation": True,
                 "why": "no deficit: rotation, least-collected matrix" + (" (every deficit unreachable)" if defs else "")}
     tgt = live[0]
+    if tgt["kind"] == "schedule":                          # am. 17: a family's floor is met by the family itself
+        return {**rec, "matrix": tgt["key"], "target": tgt, "yields": {}, "why": f"schedule floor {FAMILY_FLOOR}"}
     if tgt["kind"] == "class" and tgt["key"] in bands:     # only matrices that reach the class's band
         ids = bands[tgt["key"]]["qualifies"]
         rec["geometry_forced"] = GEOMETRY_FOR_CLASS.get((platform, tgt["key"]))
@@ -597,7 +643,8 @@ def report(data_dir: Path, platforms=("youtube", "twitch", "tiktok")) -> dict:
         med = [r["buffer_s"]["median"] for r in rows if r["buffer_s"]]
         lat = [r["twitch_latency"]["latency_s"]["median"] for r in rows if (r.get("twitch_latency") or {}).get("latency_s")]
         out["platforms"][p] = {"snapshot": snap,
-                               "deficits": deficits(snap, sorted(snap.get("tt_entries_by_state", {}), key=int)),
+                               "deficits": deficits(snap, sorted(snap.get("tt_entries_by_state", {}), key=int),
+                                                    [m for m in PLATFORM_MATRICES[p] if "@" in m]),
                                "low_yield": low_yield(snap, PLATFORM_MATRICES[p]),
                                "flags": coverage_flags(snap) + regime_flags(data_dir, p),
                                "buffer_median_s_over_sessions": _q(med), "twitch_latency_median_s_over_sessions": _q(lat),

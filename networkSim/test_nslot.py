@@ -62,6 +62,7 @@ def test_reservation_and_fullscreen_token():
 def test_pick_matrix_reserved():
     import coverage_report as C
     from utils.shaping import PLATFORM_MATRICES
+    PLATFORM_MATRICES = {"twitch": {m: v for m, v in PLATFORM_MATRICES["twitch"].items() if "@" not in m}}  # base only
     snap = {"platform": "twitch", "classes": {c: {"sessions_ge_min": 5, "minutes": 50} for c in C.CLASSES["twitch"]},
             "per_matrix": {}, "stall_share_pooled": 0.1}
     snap["classes"]["Q_480p"] = {"sessions_ge_min": 4, "minutes": 9}                # one short

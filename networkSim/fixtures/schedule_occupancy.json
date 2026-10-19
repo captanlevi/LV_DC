@@ -1,0 +1,251 @@
+{
+ "families": {
+  "tiktok": {
+   "TT-M@fast": {
+    "changes_per_session": {
+     "max": 81,
+     "mean": 60.63,
+     "median": 61,
+     "min": 39,
+     "p10": 53,
+     "p90": 68
+    },
+    "occupancy": {
+     "1": 0.042787,
+     "10": 0.064174,
+     "2": 0.052665,
+     "3": 0.11063,
+     "4": 0.15773,
+     "5": 0.162283,
+     "6": 0.103904,
+     "7": 0.100891,
+     "8": 0.101617,
+     "9": 0.103317
+    },
+    "schedule": {
+     "base_matrix": "TT-M",
+     "episode_s": 12,
+     "episodes": 115,
+     "low_cap_s": 240,
+     "redraw_s": [
+      2.4,
+      6.0
+     ],
+     "schedule": "fast",
+     "self_loops": true,
+     "start_rule": "stationary"
+    },
+    "seed": "0:tiktok:TT-M@fast",
+    "sessions": 2000
+   },
+   "TT-M@slow": {
+    "changes_per_session": {
+     "max": 9,
+     "mean": 4.84,
+     "median": 4,
+     "min": 4,
+     "p10": 4,
+     "p90": 7
+    },
+    "occupancy": {
+     "1": 0.00752,
+     "10": 0.0594,
+     "2": 0.02664,
+     "3": 0.10016,
+     "4": 0.15138,
+     "5": 0.1925,
+     "6": 0.1436,
+     "7": 0.1112,
+     "8": 0.1085,
+     "9": 0.0991
+    },
+    "schedule": {
+     "base_matrix": "TT-M",
+     "episode_s": 300,
+     "episodes": 5,
+     "low_cap_s": 240,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "slow",
+     "self_loops": false,
+     "start_rule": "stationary"
+    },
+    "seed": "0:tiktok:TT-M@slow",
+    "sessions": 2000
+   }
+  },
+  "twitch": {
+   "TW-M@fast": {
+    "changes_per_session": {
+     "max": 81,
+     "mean": 64.11,
+     "median": 64,
+     "min": 47,
+     "p10": 57,
+     "p90": 71
+    },
+    "occupancy": {
+     "1": 0.037687,
+     "10": 0.092957,
+     "2": 0.072378,
+     "3": 0.080548,
+     "4": 0.153165,
+     "5": 0.148743,
+     "6": 0.093835,
+     "7": 0.086539,
+     "8": 0.093504,
+     "9": 0.140643
+    },
+    "schedule": {
+     "base_matrix": "TW-M",
+     "episode_s": 12,
+     "episodes": 115,
+     "low_cap_s": 120,
+     "redraw_s": [
+      2.4,
+      6.0
+     ],
+     "schedule": "fast",
+     "self_loops": true,
+     "start_rule": "stationary"
+    },
+    "seed": "0:twitch:TW-M@fast",
+    "sessions": 2000
+   },
+   "TW-M@slow": {
+    "changes_per_session": {
+     "max": 9,
+     "mean": 4.68,
+     "median": 4,
+     "min": 4,
+     "p10": 4,
+     "p90": 6
+    },
+    "occupancy": {
+     "1": 0.00404,
+     "10": 0.0902,
+     "2": 0.01528,
+     "3": 0.03532,
+     "4": 0.21546,
+     "5": 0.1925,
+     "6": 0.1187,
+     "7": 0.1026,
+     "8": 0.1031,
+     "9": 0.1228
+    },
+    "schedule": {
+     "base_matrix": "TW-M",
+     "episode_s": 300,
+     "episodes": 5,
+     "low_cap_s": 120,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "slow",
+     "self_loops": false,
+     "start_rule": "stationary"
+    },
+    "seed": "0:twitch:TW-M@slow",
+    "sessions": 2000
+   }
+  },
+  "youtube": {
+   "A@fast": {
+    "changes_per_session": {
+     "max": 78,
+     "mean": 48.22,
+     "median": 48,
+     "min": 26,
+     "p10": 38,
+     "p90": 59
+    },
+    "occupancy": {
+     "1": 0.111762,
+     "10": 0.0308,
+     "2": 0.231281,
+     "3": 0.22391,
+     "4": 0.147671,
+     "5": 0.047586,
+     "6": 0.053386,
+     "7": 0.052433,
+     "8": 0.051129,
+     "9": 0.050043
+    },
+    "schedule": {
+     "base_matrix": "A",
+     "episode_s": 12,
+     "episodes": 105,
+     "low_cap_s": 360,
+     "redraw_s": [
+      2.4,
+      6.0
+     ],
+     "schedule": "fast",
+     "self_loops": true,
+     "start_rule": "stationary"
+    },
+    "seed": "0:youtube:A@fast",
+    "sessions": 2000
+   },
+   "A@slow": {
+    "changes_per_session": {
+     "max": 5,
+     "mean": 3.78,
+     "median": 4,
+     "min": 3,
+     "p10": 3,
+     "p90": 5
+    },
+    "occupancy": {
+     "1": 0.042375,
+     "10": 0.031,
+     "2": 0.121375,
+     "3": 0.1679,
+     "4": 0.2936,
+     "5": 0.087875,
+     "6": 0.08,
+     "7": 0.0655,
+     "8": 0.058125,
+     "9": 0.05225
+    },
+    "schedule": {
+     "base_matrix": "A",
+     "episode_s": 300,
+     "episodes": 4,
+     "low_cap_s": 360,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "slow",
+     "self_loops": false,
+     "start_rule": "stationary"
+    },
+    "seed": "0:youtube:A@slow",
+    "sessions": 2000
+   }
+  }
+ },
+ "rule": "LVQoE prereg Addendum Q am. 17: occupancy from a seeded simulation of the family's exact schedule",
+ "schedules": {
+  "fast": {
+   "episode_s": 12,
+   "redraw_s": [
+    2.4,
+    6.0
+   ],
+   "self_loops": true
+  },
+  "slow": {
+   "episode_s": 300,
+   "redraw_s": [
+    12.0,
+    30.0
+   ],
+   "self_loops": false
+  }
+ }
+}

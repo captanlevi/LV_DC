@@ -60,6 +60,7 @@ EXIT_PREFLIGHT = 8    # orchestrate.py's own exit code when the per-session pref
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
+from utils.shaping import session_episodes  # noqa: E402  (Q am. 17: a schedule family holds the session time)
 
 # --batch (t37, week-long run): stop before a session when the data volume has less than this share free; pause a
 # platform after this many consecutive sessions without a PASS; a yt channel that failed to start is skipped this long
@@ -581,8 +582,8 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             print(f"  initial state {fi['state']} (coupled to the coverage target {fi['class']}: band {fi['band']})")
         try:
             rc = _run_collection(p, initial_state=fi["state"] if fi else most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
-                                 episodes=EPISODES_V2.get(p, 5), auto=auto, yt_matrix=yt_matrix, channel=channel,
-                                 geom=geom, tw_category=category, matrix=mid)
+                                 episodes=session_episodes(EPISODES_V2.get(p, 5), mid), auto=auto, yt_matrix=yt_matrix,
+                                 channel=channel, geom=geom, tw_category=category, matrix=mid)
         except Exception as e:
             print(f"  exp.py could not run: {e!r}")
             rc = -1
@@ -712,10 +713,13 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         init = pin.get("state") or init
         geom, pin = pin_geometry(pin, geom, running, tag)
         print(f"  PINNED {tag}: {json.dumps(pin)}")
-    cmd = _collection_cmd(p, initial_state=init, episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix,
+    hold = TRIO_STRESS and (pin or {}).get("state")      # decode_stress: the pinned state held for the whole session
+    # Q am. 17: a family's episodes hold the session time; a held state runs base episodes (exp.py: hold is base)
+    eps = EPISODES_V2.get(p, 5) if hold else session_episodes(EPISODES_V2.get(p, 5), mid)
+    cmd = _collection_cmd(p, initial_state=init, episodes=eps, auto=True, yt_matrix=yt_matrix,
                           channel=channel, geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
-    if TRIO_STRESS and (pin or {}).get("state"):         # decode_stress: the pinned state held for the whole session
+    if hold:
         cmd += ["--hold-state", pin["state"]]
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
     # window's own XComposite pixmap in the "composite" layout (pilot-1, probe v3)

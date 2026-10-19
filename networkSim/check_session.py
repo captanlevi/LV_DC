@@ -858,6 +858,7 @@ def traffic_checks(sd: Path, platform: str) -> dict:
         "dwell_episodes_per_state": {k: v for k, v in sorted(dwell.items(), key=lambda kv: int(kv[0]))},
         "dwell_s_per_state": {k: [round(x) for x in v] for k, v in sorted(dwell_s.items(), key=lambda kv: int(kv[0]))},
         "low_run_max_episodes": round(max(low_runs) / 60.0, 1) if low_runs else 0.0,
+        "low_run_max_s": round(max(low_runs), 1) if low_runs else 0.0,     # Q am. 17: the low run in seconds
         # IPv6 (levi / supervisor, t37): old data is IPv4-only; a selected media flow over IPv6 FAILs (ipv6_media)
         "ipv6_media_share": (v6_media / win_media) if win_media else None,
         "ipv6_downstream_share": (v6_all / win_total) if win_total else None,
@@ -891,6 +892,15 @@ def meta_check(sd: Path) -> tuple[dict, list[str]]:
         # G5 (levi R2): the channel handle / type from the list
         missing += [k for k in ("channel_handle", "channel_type") if m.get(k) in (None, "")]
     return m, missing
+
+
+def low_cap_s(shaper: dict) -> float | None:
+    """Q am. 17: the low-state cap in seconds: shaper.low_cap_s, else (before am. 17) low_state_cap x episode_s."""
+    if shaper.get("low_cap_s") is not None:
+        return shaper["low_cap_s"]
+    if shaper.get("low_state_cap") is not None and shaper.get("episode_s"):
+        return shaper["low_state_cap"] * shaper["episode_s"]
+    return None
 
 
 MENU_OVERLAY_S = 3.0   # a cadence shot this close to a twitch ladder probe may show the settings menu (levi 2026-10-18)
@@ -1075,6 +1085,7 @@ def main() -> int:
            "max_background_share": a.max_background_share, "labels": lab, "traffic": net, "shots": shots,
            "ad_actions": dict(acts), "player_pin": pin, "meta_missing": meta_missing, "player_stats": player_stats, "motion": motion_s,
            "matrix": (meta.get("shaper") or {}).get("matrix_id"), "low_state_cap": (meta.get("shaper") or {}).get("low_state_cap"),
+           "schedule": (meta.get("shaper") or {}).get("schedule"), "low_cap_s": low_cap_s(meta.get("shaper") or {}),
            "stream_regime": sreg["regime"], "suspicious": sreg["suspicious"],
            "censored": meta.get("censored"), "lowest_rung": meta.get("lowest_rung"), "decode_path": meta.get("decode_path"),
            "decode_hevc": dp_hevc, "template_note": meta.get("template_note"), "entry_quality": eq}
@@ -1114,9 +1125,9 @@ def main() -> int:
           f"| 60 s windows with exogenous > 0.25 x their downstream (reported; addenda G / I) | {net.get('background_heavy_windows')} |",
           f"| shaper binds (share of episodes; reported QA only, addendum G) | {net.get('shaper_bind_share')} |",
           f"| Addendum C (QA): dwell per state, episodes (seconds / 60) | {net.get('dwell_episodes_per_state')} |",
-          f"| longest low-state run, episodes / low-state cap | {net.get('low_run_max_episodes')} / {out['low_state_cap']} |",
+          f"| longest low-state run, s / low-state cap, s (Q am. 17) | {net.get('low_run_max_s')} / {out['low_cap_s']} |",
           f"| IPv6 share of media bytes (FAIL > 0) / of all downstream; IPv6 sysctl at start | {net.get('ipv6_media_share')} / {net.get('ipv6_downstream_share')}; {meta.get('ipv6_sysctl')} |",
-          f"| matrix / low-state cap | {out['matrix']} / {out['low_state_cap']} |",
+          f"| matrix / schedule / low-state cap | {out['matrix']} / {out['schedule']} / {out['low_state_cap']} |",
           f"| login state / room rotation (addendum M) | {meta.get('login_state')} / {(meta.get('room_rotation') or {}).get('active')} ({len((meta.get('room_rotation') or {}).get('rooms') or [])} rooms) |",
           f"| channel (handle / type) | {meta.get('channel_handle')} / {meta.get('channel_type')} |",
           f"| login wall: ticks flagged / text-only ticks / abort | {lab.get('login_wall_ticks')} / {lab.get('login_wall_text_ticks')} / {meta.get('abort_reason')} |",

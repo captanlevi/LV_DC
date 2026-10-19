@@ -20,7 +20,8 @@ import coverage_report as C  # noqa: E402
 from test_coverage import session  # noqa: E402
 from utils.shaping import PLATFORM_MATRICES  # noqa: E402
 
-TW = PLATFORM_MATRICES["twitch"]
+TW = {m: v for m, v in PLATFORM_MATRICES["twitch"].items() if "@" not in m}   # the base matrices (am. 17's
+# schedule families: test_schedule_families.py)
 ALL = [(c, 150) for c in C.CLASSES["twitch"] if c != "STALL"]
 
 

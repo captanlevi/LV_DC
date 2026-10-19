@@ -30,6 +30,7 @@ import entries as E  # noqa: E402
 import geometry as GEO  # noqa: E402
 import offloads as OFF  # noqa: E402
 import record as REC  # noqa: E402
+import schedule_occupancy as SO  # noqa: E402
 import orchestrate as O  # noqa: E402
 import stuck as S  # noqa: E402
 from utils import netStat as NS, shaping as SH  # noqa: E402
@@ -47,7 +48,9 @@ def _matrices(m: dict) -> dict:
 
 
 def current() -> dict:
-    episode_s = int(re.search(r"episode_time_in_seconds=(\d+)", (HERE / "exp.py").read_text()).group(1))
+    # Q am. 17: exp.py runs the matrix's schedule (shaping.schedule_of): the base episode is shaping.BASE_EPISODE_S
+    assert 'episode_time_in_seconds=SCHEDULE["episode_s"]' in (HERE / "exp.py").read_text()
+    episode_s = SH.BASE_EPISODE_S
     return json.loads(json.dumps({
         "t_table": {"FROZEN_PLAYHEAD_MAX_S": CS.FROZEN_PLAYHEAD_MAX_S, "PLAYER_DEAD_MAX_S": CS.PLAYER_DEAD_MAX_S,
                     "FROZEN_PLAYHEAD_TOL_S": CS.FROZEN_PLAYHEAD_TOL_S},
@@ -79,6 +82,9 @@ def current() -> dict:
         "low_state": {"_LOW_STATE_THRESHOLD": NS._LOW_STATE_THRESHOLD, "_MAX_CONSECUTIVE_LOW": NS._MAX_CONSECUTIVE_LOW,
                       "_MIN_RECOVERY_STATE": NS._MIN_RECOVERY_STATE},
         "episodes": {"EPISODES_V2": O.EPISODES_V2, "episode_s": episode_s},
+        "schedules": {"SCHEDULES": {k: {**v, "redraw_s": list(v["redraw_s"])} for k, v in SH.SCHEDULES.items()},
+                      "FAMILY_BASE": SH.FAMILY_BASE, "FAMILY_FLOOR": CR.FAMILY_FLOOR, "DEFICIT_RANK": CR.DEFICIT_RANK,
+                      "OCCUPANCY_SHA256": SO.OCCUPANCY_SHA256, "SIM_SEED": SO.SIM_SEED, "SIM_SESSIONS": SO.SIM_SESSIONS},
         "coverage": {"MATRIX_RULE": O.MATRIX_RULE, "MATRIX_IDS": O.MATRIX_IDS, "COVERAGE_ALLOWED": O.COVERAGE_ALLOWED,
                      "RULE_VERSION": CR.RULE_VERSION, "FLOOR_SESSIONS": CR.FLOOR_SESSIONS,
                      "FLOOR_MINUTES": CR.FLOOR_MINUTES, "STALL_FLOOR_ONSETS": CR.STALL_FLOOR_ONSETS,

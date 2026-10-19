@@ -25,10 +25,10 @@ import threading
 import argparse
 import asyncio
 
-from utils.netStat import net_episode_generator
+from utils.netStat import net_episode_generator, family_episode_generator
 from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
-                           get_higher_state, get_lower_state)
+                           get_higher_state, get_lower_state, schedule_of)
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession
 import session_meta
@@ -306,6 +306,7 @@ def _apply_net_stat(net_stat : NetStat):
 
 
 SHAPER_OPTS: dict = {}     # v2 (t38): low-state cap and initial-state rule of the active config, set in __main__
+SHAPER_GEN = net_episode_generator   # Q am. 17: a schedule family's session runs utils/netStat.family_episode_generator
 
 
 async def _ossilate(
@@ -318,7 +319,7 @@ async def _ossilate(
     
 )-> bool:
     # returns True if the for loop ends
-    for net_stat in net_episode_generator(
+    for net_stat in SHAPER_GEN(
         episode_length=episode_time_in_seconds,
         transition_dict=transition_dct,
         forced_initial_state=forced_initial_state,
@@ -683,6 +684,13 @@ if __name__ == "__main__":
         transition, matrix_id = {args.hold_state: {args.hold_state: 1.0}}, f"hold:{args.hold_state}"
         args.initial_state = args.hold_state
         SHAPER_OPTS.update(initial_state_fn=None)
+    # Q am. 17: the matrix id's schedule (base, or a "<m>@slow|fast" family: its episode length, self-loop rule, re-draw
+    # and low-state cap in seconds, the base matrix's cap x 60 s); recorded in meta.json shaper
+    SCHEDULE = schedule_of(matrix_id, low_cap)
+    if SCHEDULE["schedule"] != "base":
+        SHAPER_GEN = family_episode_generator
+        SHAPER_OPTS = {"initial_state_fn": SHAPER_OPTS.get("initial_state_fn"), "redraw_s": tuple(SCHEDULE["redraw_s"]),
+                       "low_cap_s": SCHEDULE["low_cap_s"], "self_loops": SCHEDULE["self_loops"]}
 
     is_capture: bool = True
 
@@ -701,7 +709,8 @@ if __name__ == "__main__":
     from profile_clone import template_note_of
     template_note = template_note_of(template)
     configure_chrome_download_dir(session_dir, chrome_profile)
-    session_meta.start(session_dir, platform, transition, episode_s=60, argv=sys.argv, chrome_profile=chrome_profile,
+    session_meta.start(session_dir, platform, transition, episode_s=SCHEDULE["episode_s"], argv=sys.argv,
+                       chrome_profile=chrome_profile, schedule={**SCHEDULE, "episodes": args.episodes},
                        matrix_id=matrix_id, low_state_cap=low_cap, initial_state_rule=init_rule,
                        forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
                        channel_type=args.channel_type, channel_handle=args.channel_handle,
@@ -855,7 +864,7 @@ if __name__ == "__main__":
             input()
 
         abort_reason = asyncio.run(experiment(
-            episode_time_in_seconds=60,
+            episode_time_in_seconds=SCHEDULE["episode_s"],
             net_labels=net_labels,
             transition_dct=transition,
             forced_initial_state=args.initial_state,
