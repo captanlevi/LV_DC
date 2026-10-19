@@ -164,58 +164,71 @@ def ad_spans(meta: list[dict], signal_set=SPAN_TYPE_SIGNALS) -> tuple[list[list[
     return [[lo - AD_PAD_S, hi + AD_PAD_S] for lo, hi in spans], swap_only
 
 
-FROZEN_ADVANCE_TICKS = 10                 # a real advance: this many consecutive advancing ticks (content.js twin)
-FROZEN_ADV_STEP_S = (0.2, 3.0)            # an advancing tick moves the playhead by more than / at most this
-
-
 def frozen_runs(rows: list[dict]) -> list[tuple[float, float]]:
-    """Frozen-playhead runs (first tick, end, s), addendum N as fixed 2026-10-18 (supervisor, chaos tw_27: resume
-    presses, element re-attaches and a second element's 2-5 s play bursts split an 18-min freeze below T). After the
-    playhead has first moved more than FROZEN_PLAYHEAD_TOL_S, a run opens at the first non-ad res_meta tick whose
-    playhead did not advance (paused or playing, whatever the label) and ends only at a real advance:
-    FROZEN_ADVANCE_TICKS consecutive ticks each advancing by FROZEN_ADV_STEP_S, the run ending where that advance began;
-    an ad tick ends it at its last tick; a tick without a parseable current_time keeps an open run going. content.js
-    publishes the same measure live (the length held at a streak's start while it is under way)."""
-    lo, hi = FROZEN_ADV_STEP_S
-    runs, t0, last, first_ct, played, prev, adv, adv_t = [], None, None, None, False, None, 0, None
+    """Frozen-playhead runs (first tick, last tick, s): addendum N's stall-only run as written (levi 2026-10-19, after
+    counted round 1's tw_100007: the 2026-10-18 measure, which ended a run only at 10 consecutive advancing ticks, read
+    a Twitch reset-and-play loop of ~2 s plays as one 90 s frozen run and aborted a heavy-stall session; reverted).
+    Over res_meta ticks with the stall label on (stall ... start / video_start), not an ad tick and with a parseable
+    current_time, a run starts when there is none open or the playhead has moved more than FROZEN_PLAYHEAD_TOL_S from
+    the run's first tick; any other tick ends it. content.js publishes the same run live (<html data-lvqoe-frozen-s>),
+    browser.py's watchdog and the stuck-player rule read it."""
+    stall, t0, ct0, last, runs = False, None, None, None, []
 
     def close():
-        runs.append((t0 / 1000.0, (adv_t if adv else last) / 1000.0))
+        if t0 is not None:
+            runs.append((t0 / 1000.0, last / 1000.0))
     for r in rows:
-        if r.get("type") != "res_meta":
+        ty = r.get("type")
+        if ty == "stall":
+            stall = True
+        elif ty in ("start", "video_start"):
+            stall = False
+        if ty != "res_meta":
             continue
         t, ct = _f(r.get("ts")), _f(r.get("current_time"))
-        if _true(r.get("is_ad")):
-            if t0 is not None:
-                close()
-            t0, adv, adv_t, prev = None, 0, None, None
+        if not stall or _true(r.get("is_ad")) or t is None or ct is None:
+            close()
+            t0 = None
             continue
-        if t is None or ct is None:
-            if t is not None and t0 is not None and not adv:
-                last = t                              # time passes on an open run (content.js publishes ts - T0)
-            continue
-        first_ct = ct if first_ct is None else first_ct
-        played = played or abs(ct - first_ct) > FROZEN_PLAYHEAD_TOL_S
-        step = None if prev is None else ct - prev
-        prev = ct
-        if not played:
-            t0, adv, adv_t = None, 0, None
-            continue
-        if step is not None and lo < step <= hi:
-            if not adv:
-                adv_t = t
-            adv += 1
-            if t0 is not None and adv >= FROZEN_ADVANCE_TICKS:
-                close()
-                t0 = None
-            continue
-        adv, adv_t = 0, None
-        if t0 is None:
-            t0 = t
+        if t0 is None or abs(ct - ct0) > FROZEN_PLAYHEAD_TOL_S:
+            close()
+            t0, ct0 = t, ct
         last = t
-    if t0 is not None:
-        close()
+    close()
     return runs
+
+
+STALL_LOOP_PLAY_MAX_S = 10.0     # levi (t53, tw_100007): a play shorter than this between two stalls keeps a loop going
+
+
+def stall_loop_s(rows: list[dict]) -> dict:
+    """levi's covariate (tw_100007's reset-and-play loop): seconds inside stall / play alternations whose plays are all
+    < STALL_LOOP_PLAY_MAX_S. On the label timeline (stall ... start / video_start ... stall, end), a loop is a maximal
+    run of >= 2 stalls separated only by such short plays; its span runs from its first stall's start to its last
+    stall's end. {stall_loop_s, stall_loops}."""
+    ev = []
+    for r in rows:
+        ty, t = r.get("type"), _f(r.get("ts"))
+        if t is not None and ty in ("stall", "start", "video_start", "end"):
+            ev.append((t / 1000.0, "S" if ty == "stall" else "P"))
+    segs, cur = [], None                     # (kind, t0, t1) of the alternating stall / play segments
+    for t, k in ev:
+        if cur is None or k != cur[0]:
+            if cur is not None:
+                segs.append((cur[0], cur[1], t))
+            cur = (k, t)
+    total, loops, i = 0.0, 0, 0
+    stalls = [n for n, s in enumerate(segs) if s[0] == "S"]
+    while i < len(stalls):
+        j = i
+        while j + 1 < len(stalls) and all(segs[m][0] != "P" or segs[m][2] - segs[m][1] < STALL_LOOP_PLAY_MAX_S
+                                           for m in range(stalls[j] + 1, stalls[j + 1])):
+            j += 1
+        if j > i:
+            total += segs[stalls[j]][2] - segs[stalls[i]][1]
+            loops += 1
+        i = j + 1
+    return {"stall_loop_s": round(total, 1), "stall_loops": loops}
 
 
 def frozen_playhead_run(rows: list[dict]) -> float:
@@ -466,6 +479,7 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
         "frozen_playhead_max_s": fp["max_s"], "frozen_playhead_max_all_s": fp["max_all_s"],
         "recovered_frozen": fp["recovered"],
         "paused_while_playing_share": paused_while_playing_share(rows),
+        **stall_loop_s(rows),                                  # levi: a covariate, the seconds in short-play stall loops
         "frozen_playhead_T_s": FROZEN_PLAYHEAD_MAX_S.get(platform),
         "dead_player_max_s": dp["max_s"], "dead_player_max_all_s": dp["max_all_s"],
         "recovered_dead": dp["recovered"], "recovered_dead_runs": dp["recovered_runs"],
@@ -1086,7 +1100,8 @@ def main() -> int:
           f"| Addendum D: swap-only ad spans (must be 0) | {lab.get('swap_only_ad_spans')} |",
           f"| Addendum D: tier changes with src_changed within ± 2 s | {lab.get('tier_changes_with_swap_within_2s_share')} (of {lab.get('tier_changes')}) |",
           f"| stall share | {lab.get('stall_share')} |",
-          f"| longest frozen-playhead run (paused or playing; only a playhead advance ends it), s / T (FAIL above; addendum N, fixed 2026-10-18) | {lab.get('frozen_playhead_max_s')} / {lab.get('frozen_playhead_T_s')} |",
+          f"| longest stall-only frozen-playhead run (stall label on, non-ad, playhead within 1 s of its first tick), s / T (FAIL above; addendum N) | {lab.get('frozen_playhead_max_s')} / {lab.get('frozen_playhead_T_s')} |",
+          f"| stall loops (stall / play alternations, plays < {STALL_LOOP_PLAY_MAX_S:.0f} s): n / s (covariate) | {lab.get('stall_loops')} / {lab.get('stall_loop_s')} |",
           f"| paused while labelled playing (share of playing ticks; suspicious > {PAUSED_WHILE_PLAYING_MAX}) | {lab.get('paused_while_playing_share')} |",
           f"| I10: stall ticks with the playhead advancing (FAIL > {STALL_ADVANCING_SHARE_MAX}; >= {I10_MIN_STALL_TICKS} stall ticks) | {lab.get('stall_advancing_share')} |",
           f"| tier mix (quality time, ads masked) | {lab.get('tier_mix_quality_time')} |",

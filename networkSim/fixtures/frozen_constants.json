@@ -222,18 +222,12 @@
  "frozen_measure": {
   "content_js": {
    "AD_MAX_DURATION_S": 600,
-   "FROZEN_ADVANCE_TICKS": 10,
-   "FROZEN_ADV_MAX_S": 3.0,
-   "FROZEN_ADV_MIN_S": 0.2,
    "FROZEN_TOL_S": 1.0,
    "RESOLUTION_POLL_INTERVAL_MS": 1000
   },
   "python": {
-   "FROZEN_ADVANCE_TICKS": 10,
-   "FROZEN_ADV_STEP_S": [
-    0.2,
-    3.0
-   ]
+   "STALL_LOOP_PLAY_MAX_S": 10.0,
+   "definition": "addendum N stall-only run"
   }
  },
  "geometry": {

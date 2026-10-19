@@ -84,13 +84,15 @@ def _replay(rows, labels, rung):
 
 
 def test_tw1_tw27():
-    """chaos tw_27 (TW-L): frozen ~20 min at 160p; resume presses, re-attaches and a second element's play bursts split
-    it under the old stall-only measure (longest 440 s < T 660, the watchdog never fired, check read PASS). The fixed
-    measure reads one run past T, and T2 fires once the shaper has been above the 160p rung for 90 s of it."""
+    """chaos tw_27 (TW-L): ~20 min at 160p of stalls split by 2-5 s play bursts (resume presses, re-attaches). Under
+    addendum N's stall-only run (the 2026-10-18 measure reverted, levi 2026-10-19) the bursts restart the run: longest
+    440 s < T 660, a heavy-stall session kept and labelled, not a dead player (levi). T2 still fires once the shaper has
+    been above the 160p rung for 90 s of a run."""
     d, rows = _fx("tw27_frozen_2026-10-18.json")
     runs = CS.frozen_runs(rows)
     longest = max(b - a for a, b in runs)
-    assert longest > CS.FROZEN_PLAYHEAD_MAX_S["twitch"], longest
+    assert 400 < longest < CS.FROZEN_PLAYHEAD_MAX_S["twitch"], longest
+    assert sum(1 for a, b in runs if b - a >= S.T2_S) == 3, runs
     rung = min(x for x in (S.rung_from_master("\n".join(m)) for m in d["master_stream_inf"]) if x)
     assert rung == 230.0
     hit = _replay(rows, d["net_labels"], rung)
@@ -108,8 +110,10 @@ def test_check_recovered_and_censored():
     a, b = max(CS.frozen_runs(rows), key=lambda r: r[1] - r[0])
     # a continue re-entry at T2 inside the long run: excluded from player_frozen, reported with the post-recovery part
     cut = [r for r in rows if float(r["ts"]) / 1000 <= a + 95]
-    tail = [dict(r, ts=str(float(r["ts"]) + 20_000), current_time=str(10 + i)) for i, r in
-            enumerate([r for r in rows if r["type"] == "res_meta" and float(r["ts"]) / 1000 > b - 400][:300])]
+    # after the re-entry's reload: playback resumes (a start, then 300 advancing ticks), after the cut
+    tail = [{"type": "start", "ts": str((a + 99) * 1000), "current_time": "10", "is_ad": "False"}] + [
+        {"type": "res_meta", "ts": str((a + 100 + i) * 1000), "current_time": str(10 + i), "is_ad": "False",
+         "video_w": "284", "video_h": "160"} for i in range(300)]
     rec = [{"t_nav": a + 92, "outcome": "continue", "t_playing": a + 110, "t2_window": [a + 2, a + 92],
             "rung": {"kbit": 230.0}, "shaper": {"state": "4"}}]
     fp = CS.recovered_frozen(cut + tail, rec)
