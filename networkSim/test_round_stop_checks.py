@@ -48,6 +48,15 @@ def test_stop_rule():
         res = R.check(g, {"clean": False, "checks": {"x": {"ok": False}}}, [a])
         assert len(res["gating"]) == 3 and res["gating"][0].startswith("run teardown"), res
         assert R.check({"sessions": []}, None, [a])["gating"] == ["tw_100005: not in the reader's output"]
+        # levi: a session in _failed for inventory-only reasons (tw_100005's player_frozen) is reported, not a stop
+        f = root / "_failed" / "twitch" / "tw_100007"
+        f.parent.mkdir(parents=True)
+        _sess(root, "tw_100007").rename(f)
+        res = R.check({"sessions": [_row("tw_100007")]}, None, [f])
+        assert res["ok"] and res["report"]["tw_100007"]["reported"][0].startswith("in _failed"), res
+        bad2 = _row("tw_100007", items1_2={"2": {"ok": False, "reading": "gates: class:new_thing"}})
+        assert not R.check({"sessions": [bad2]}, None, [f])["ok"]
+        assert R.check({"sessions": []}, None, [root / "gone"])["gating"] == ["gone: session dir missing"]
         (a / "box_record.jsonl").unlink()
         assert any("no box_record" in x for x in R.check({"sessions": [_row("tw_100005")]}, None, [a])["gating"])
         (root / "g.json").write_text(json.dumps({"sessions": [_row("tw_100005")]}))

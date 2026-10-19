@@ -7,7 +7,9 @@ Read only. Stop (exit 1, "BAD ...") on:
     or a missing verify / check), 4a's visibility, 7, 9 (capture drops), 11 (a payload split or shared flow outside the
     link-local multicast exception, or one undecided), 12-14, the per-session teardown. The reader decides what gates:
     reported items (4a's rendered fps / device_limited, 5, 8, fullscreen) carry ok None and never stop;
-  - a session missing from the reader's output, in _failed, or with a reader error;
+  - a session dir missing, a session missing from the reader's output, or a reader error. A session in _failed stops
+    only through the reader (levi): its reasons read through the same inventory rule, so a session failed for reasons
+    single mode also produced (e.g. check class player_frozen) is reported, a new kind stops;
   - the run's teardown.json not clean;
   - a session's device record (gpu_record --stamp: <session>/box_record.jsonl) missing or covering < 0.95 of its
     seconds (Addendum T, D1); a covered second holds a data line (has gpu_busy_pct).
@@ -70,8 +72,8 @@ def check(gate2: dict, teardown: dict | None, sessions: list[Path]) -> dict:
     for sd in sessions:
         sd = Path(sd)
         name = sd.name
-        if "_failed" in sd.parts or not sd.exists():
-            bad.append(f"{name}: in _failed or missing")
+        if not sd.exists():
+            bad.append(f"{name}: session dir missing")
             continue
         r = rows.get(name)
         if r is None:
@@ -81,6 +83,8 @@ def check(gate2: dict, teardown: dict | None, sessions: list[Path]) -> dict:
         cov = coverage(sd)
         if not cov["ok"]:
             b.append(f"device record: {cov.get('why') or cov.get('covered_share')}")
+        if "_failed" in sd.parts:
+            n.insert(0, "in _failed (stops only on the reader's gating items)")
         bad += [f"{name} {x}" for x in b]
         report[name] = {"reported": n, "device_record": cov}
     return {"ok": not bad, "gating": bad, "report": report}
