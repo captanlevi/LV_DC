@@ -382,10 +382,25 @@ def run(a) -> dict:
         for s in SESSIONS:
             for c in rate_cmds(a.iface, s, state_params(states[s][0])):
                 sh(c)
+        up = None
+        if a.upload and not NO_IFB:   # t55 B2 / P3: an upstream load per slot, and each lvo_* captured (snaplen 96)
+            upf = out / "upload_4MiB.bin"
+            upf.write_bytes(os.urandom(UPLOAD_FILE_BYTES))
+            sink = a.udp_sink or default_gateway()
+            up = {"url": a.upload_url, "udp_sink": sink, "captures": {}}
+            for s in SESSIONS:
+                cap = out / f"lvo_{s}.pcap"
+                procs.append(start(f"tcpdump -i lvo_{s} -s 96 -nn -U -w {cap}", out / f"tcpdump_lvo_{s}.err"))
+                up["captures"][s] = str(cap)
         for s in SESSIONS:
+            secs = a.state_s * len(states[s]) - 1
             for i in range(a.bulk_streams):
-                procs.append(start(in_cgroup(s, bulk_cmd(a.url, a.state_s * len(states[s]) - 1)), out / f"curl_{s}_{i}.log"))
+                procs.append(start(in_cgroup(s, bulk_cmd(a.url, secs)), out / f"curl_{s}_{i}.log"))
             procs.append(start(in_cgroup(s, f"ping -n -i {a.ping_interval} {a.ping_host}"), out / f"ping_{s}.log"))
+            if up is not None:
+                procs.append(start(in_cgroup(s, upload_cmd(a.upload_url, out / "upload_4MiB.bin", secs)), out / f"upload_{s}.log"))
+                if up["udp_sink"]:
+                    procs.append(start(in_cgroup(s, udpgso_cmd(up["udp_sink"], secs)), out / f"udpgso_{s}.log"))
         samples, timeline = [], []
         t0 = time.time()
         rep["t0_epoch"] = t0          # the bulk schedule's start (brad / levi: C4 / C6 align on it, not by correlation)
@@ -409,6 +424,14 @@ def run(a) -> dict:
                 time.sleep(1.0)
         stop(procs)
         procs = []
+        if up is not None:          # C2's oversize line per slot (0 = the capture IFB showed wire packets only)
+            time.sleep(1.0)
+            up["oversize"] = {s: oversize(Path(c)) for s, c in up["captures"].items()}
+            up["kernel_drops"] = {s: (re.findall(r"(\d+) packets? dropped by kernel",
+                                                 (out / f"tcpdump_lvo_{s}.err").read_text()) or [None])[-1]
+                                  for s in SESSIONS if (out / f"tcpdump_lvo_{s}.err").exists()}
+            up["pass"] = all(v["ip_over_1500"] == 0 and v["frames"] > 0 for v in up["oversize"].values())
+            rep["upstream_load"] = up
         with open(out / "samples.jsonl", "w") as fh:
             for x in samples:
                 fh.write(json.dumps(x) + "\n")
@@ -573,6 +596,48 @@ def bulk_cmd(url: str, seconds: float) -> str:
     return "sh -c " + shlex.quote(loop)
 
 
+UPLOAD_URL = "https://speed.cloudflare.com/__up"     # accepts large POSTs (t55 B2 upstream load)
+UPLOAD_FILE_BYTES = 4 * 2 ** 20
+_UDPGSO_PY = ("import socket, sys, time\n"
+              "end, sink = time.time() + float(sys.argv[1]), sys.argv[2]\n"
+              "u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.setsockopt(17, 103, 1200)\n"
+              "n = e = 0\n"
+              "while time.time() < end:\n"
+              "    try:\n        u.sendto(b'q' * 4800, (sink, 9)); n += 1\n"
+              "    except OSError:\n        e += 1\n"
+              "    time.sleep(0.05)\n"
+              "print('udp_gso sends', n, 'errors', e, flush=True)\n")
+
+
+def upload_cmd(url: str, path: Path, seconds: float) -> str:
+    """t55 B2 / P3 (levi 00120): Chrome-like upstream, 4 MiB HTTPS POSTs back to back for `seconds` (a bulk download
+    writes one MSS upstream at most, so it cannot show a sender's > MSS skbs); each POST's bytes on its own line."""
+    loop = (f'end=$(( $(date +%s) + {int(seconds)} )); while :; do rem=$(( end - $(date +%s) )); '
+            f'[ "$rem" -gt 0 ] || break; curl -s -o /dev/null -w "%{{size_upload}} %{{http_code}}\\n" --max-time "$rem" '
+            f'--data-binary @{shlex.quote(str(path))} {shlex.quote(url)}; done')
+    return "sh -c " + shlex.quote(loop)
+
+
+def udpgso_cmd(sink: str, seconds: float) -> str:
+    """QUIC-like UDP GSO upstream: one UDP_SEGMENT 1200 send of 4800 B (4 datagrams) every 50 ms to sink:9 (discard)."""
+    return "python3 -c " + shlex.quote(_UDPGSO_PY) + f" {int(seconds)} {shlex.quote(sink)}"
+
+
+def default_gateway() -> str | None:
+    m = re.search(r"default via (\S+)", sh("ip route show default", check=False, capture=True) or "")
+    return m.group(1) if m else None
+
+
+def oversize(pcap: Path) -> dict:
+    """An upstream capture's frames and those whose IP packet exceeds 1500 B (C2's oversize line; tshark)."""
+    def count(flt):
+        out = sh(f"tshark -r {shlex.quote(str(pcap))} -Y {shlex.quote(flt)} -T fields -e frame.number 2>/dev/null",
+                 check=False, capture=True)
+        return len([x for x in (out or "").splitlines() if x.strip()])
+    return {"frames": count("ip || ipv6"), "ip_over_1500": count("ip.len > 1500 || ipv6.plen > 1460"),
+            "udp_over_1500": count("udp && ip.len > 1500")}
+
+
 def logged_bytes(paths) -> int | None:
     """The bytes the bulk streams' logs record (one integer per finished transfer)."""
     tot, seen = 0, False
@@ -703,6 +768,10 @@ def main(argv=None) -> int:
     ap.add_argument("--ping-s", type=float, default=20.0, help="seconds per idle ping (no bulk)")
     ap.add_argument("--ref-state-s", type=float, default=60.0, help="seconds per state in the single-mode reference")
     ap.add_argument("--no-single-reference", action="store_true", help="skip the single-mode tree reference phase")
+    ap.add_argument("--no-upload", dest="upload", action="store_false",
+                    help="skip the per-slot upstream load (4 MiB HTTPS POSTs + a UDP_SEGMENT sender) and the lvo_* captures")
+    ap.add_argument("--upload-url", default=UPLOAD_URL)
+    ap.add_argument("--udp-sink", default=None, help="the UDP GSO sender's sink (default: the default gateway, port 9)")
     ap.add_argument("--data", type=Path, default=None, help="the data dir: single-mode check.json ratios per state")
     ap.add_argument("--page-url", default="https://www.wikipedia.org/", help="the cross-class page fetch")
     ap.add_argument("--streams", type=int, default=6)

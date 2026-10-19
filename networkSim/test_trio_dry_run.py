@@ -18,15 +18,15 @@ spec.loader.exec_module(T)
 def main() -> int:
     up = T.tree_up_cmds("wlp0s20f3")
     j = "\n".join(up)
-    assert 'socket cgroupv2 level 2 "lvdc.slice/yt" meta mark set 0x11 ct mark set meta mark' in j
+    assert 'socket cgroupv2 level 2 "lvdc.slice/yt1" meta mark set 0x11 ct mark set meta mark' in j
     first_ingress = next(i for i, c in enumerate(up) if "parent ffff:" in c and "filter" in c)
     assert "sport 41641" in up[first_ingress] and "action ok" in up[first_ingress]      # management bypass first
     assert any("matchall action connmark continue" in c for c in up)
-    assert any("handle 0x12 fw action mirred egress redirect dev lvi_tw" in c for c in up)
+    assert any("handle 0x12 fw action mirred egress redirect dev lvi_tw1" in c for c in up)
     assert any("classid 1:20 htb rate 1000mbit" in c for c in up) and any("htb default 30" in c for c in up)
-    assert any("handle 0x13 fw flowid 1:13 action mirred egress mirror dev lvo_tt" in c for c in up)
-    r = T.rate_cmds("wlp0s20f3", "yt", T.state_params("5"))
-    assert r[0].startswith("tc class replace dev lvi_yt parent 1: classid 1:10 htb rate ") and "netem delay" in r[1]
+    assert any("handle 0x13 fw flowid 1:13 action mirred egress mirror dev lvo_tt1" in c for c in up)
+    r = T.rate_cmds("wlp0s20f3", "yt1", T.state_params("5"))
+    assert r[0].startswith("tc class replace dev lvi_yt1 parent 1: classid 1:10 htb rate ") and "netem delay" in r[1]
     assert "parent 1: classid 1:11 htb rate" in r[2] and "parent 1:11 handle 110: netem" in r[3]
     down = T.tree_down_cmds("wlp0s20f3")
     assert down[0] == "tc qdisc del dev wlp0s20f3 root" and "nft delete table inet lvdc_trio" in down
@@ -58,9 +58,9 @@ def main() -> int:
                                             ("FAIL", [{"state": "3", "ratio": 0.1}]))):
             (d / "youtube" / f"yt_{i}").mkdir(parents=True)
             (d / "youtube" / f"yt_{i}" / "check.json").write_text(json.dumps({"verdict": verdict, "traffic": {"episodes": eps}}))
-        ref = T.check_session_reference(d, {"yt": ["3", "7"], "tw": ["5"]})["per_session_state"]
-        assert ref["yt"]["3"] == {"n_sessions": 2, "n_episodes": 3, "min": 0.7, "max": 0.95, "median": 0.9, "enough": False}
-        assert ref["yt"]["7"]["n_episodes"] == 1 and ref["tw"]["5"]["n_sessions"] == 0
+        ref = T.check_session_reference(d, {"yt1": ["3", "7"], "tw1": ["5"]})["per_session_state"]
+        assert ref["yt1"]["3"] == {"n_sessions": 2, "n_episodes": 3, "min": 0.7, "max": 0.95, "median": 0.9, "enough": False}
+        assert ref["yt1"]["7"]["n_episodes"] == 1 and ref["tw1"]["5"]["n_sessions"] == 0
     r = T.per_second_ratio([(0.0, 0), (1.0, 25000), (2.0, 50000), (3.0, 100000)], 200.0)   # 200 kbit = 25 kB/s
     assert (r["n"], r["p50"], r["max"], r["mean"]) == (3, 1.0, 2.0, 1.333), r
     assert T.per_second_ratio([(0.0, 0)], 200.0) == {"n": 0}
@@ -73,8 +73,26 @@ def main() -> int:
         (Path(d) / "a.log").write_text("1000\n2000\n")
         (Path(d) / "b.log").write_text("")
         assert T.logged_bytes([Path(d) / "a.log", Path(d) / "b.log"]) == 3000 and T.logged_bytes([Path(d) / "b.log"]) is None
+    # t55 B2 / P3 (levi 00120): the per-slot upstream load: 4 MiB HTTPS POSTs and a UDP_SEGMENT sender to the sink
+    up = T.upload_cmd(T.UPLOAD_URL, Path("/o/upload_4MiB.bin"), 359)
+    assert up.startswith("sh -c ") and "--data-binary @/o/upload_4MiB.bin" in up and T.UPLOAD_URL in up and "359" in up
+    u = T.udpgso_cmd("192.168.4.1", 359)
+    assert "setsockopt(17, 103, 1200)" in u and "4800" in u and u.endswith("359 192.168.4.1"), u
+    calls = []
+    saved = T.sh
+    try:
+        T.sh = lambda cmd, check=True, capture=False, print_only=False: calls.append(cmd) or ("1\n2\n" if "ip.len > 1500" not in cmd else "")
+        assert T.oversize(Path("/o/lvo_yt1.pcap")) == {"frames": 2, "ip_over_1500": 0, "udp_over_1500": 0}
+        T.sh = lambda cmd, check=True, capture=False, print_only=False: "default via 192.168.4.1 dev wlp0s20f3 proto dhcp\n"
+        assert T.default_gateway() == "192.168.4.1"
+    finally:
+        T.sh = saved
     print("test_trio_dry_run: ok")
     return 0
+
+
+def test_trio_dry_run():
+    assert main() == 0
 
 
 if __name__ == "__main__":
