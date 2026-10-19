@@ -98,9 +98,10 @@ def _tc(sd, seconds, rate=400.0, ratio=1.0, backlog=True, state="3", t0=1000.0):
 
 
 def test_item5_byte_total_ratio():
-    """levi (gate-2 call on pilot-1): per state over shaper-bound seconds, sum(bytes) x 8 / sum(rate x s) in [0.9, 1.15]."""
-    for ratio, secs, backlog, want in ((1.0, 30, True, ("PASS", True)), (0.8, 30, True, ("FAIL (starvation while queued)", False)),
-                                       (1.3, 30, True, ("above (reported)", True)), (1.0, 5, True, ("not shaper-bound", None)),
+    """levi (gate-2 call on pilot-1): per state over shaper-bound seconds, sum(bytes) x 8 / sum(rate x s) against
+    [0.9, 1.15]; since round 1 reported only (ok None everywhere, the readings and within_band kept)."""
+    for ratio, secs, backlog, want in ((1.0, 30, True, ("within the band", True)), (0.8, 30, True, ("below the band", False)),
+                                       (1.3, 30, True, ("above the band", False)), (1.0, 5, True, ("not shaper-bound", None)),
                                        (0.5, 30, False, (None, None))):
         with tempfile.TemporaryDirectory() as d:
             _tc(d, secs, ratio=ratio, backlog=backlog)
@@ -109,7 +110,8 @@ def test_item5_byte_total_ratio():
                 assert r["per_state"] == {} and r["ok"] is None, r
                 continue
             s = r["per_state"]["3"]
-            assert (s["reading"], s["ok"]) == want and s["ratio"] == round(ratio, 3), (ratio, r)
+            assert (s["reading"], s.get("within_band")) == want and s["ratio"] == round(ratio, 3), (ratio, r)
+            assert s["ok"] is None and r["ok"] is None and "never gating" in r["role"], r
     with tempfile.TemporaryDirectory() as d:                          # 0.5 s samples: 30 intervals are 15 s, read
         rows, b = [], 0
         for i in range(31):
@@ -118,21 +120,21 @@ def test_item5_byte_total_ratio():
         (Path(d) / "tc_stats.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
         (Path(d) / "net_labels.txt").write_text(json.dumps({"timestamp": 999.0, "state": "3", "speed": 400.0}) + "\n")
         s = G.item5(Path(d))["per_state"]["3"]
-        assert (s["bound_s"], s["ratio"], s["reading"]) == (15.0, 1.0, "PASS"), s
+        assert (s["bound_s"], s["ratio"], s["reading"]) == (15.0, 1.0, "within the band"), s
     with tempfile.TemporaryDirectory() as d:                          # a failed class read: the rate only, skipped
         _tc(d, 30)
         rows = (Path(d) / "tc_stats.jsonl").read_text().splitlines()
         rows[10] = json.dumps({"ts": json.loads(rows[10])["ts"], "in": {"rate_kbit": 400.0}})
         (Path(d) / "tc_stats.jsonl").write_text("\n".join(rows) + "\n")
         r = G.item5(Path(d))
-        assert r["samples_partial_skipped"] == 1 and r["per_state"]["3"]["reading"] == "PASS", r
+        assert r["samples_partial_skipped"] == 1 and r["per_state"]["3"]["reading"] == "within the band", r
         for i in range(2, 30, 3):                                       # more than 0.1 partial: incomplete, a FAIL
             rows[i] = json.dumps({"ts": json.loads(rows[i])["ts"], "in": {"rate_kbit": 400.0}})
         (Path(d) / "tc_stats.jsonl").write_text("\n".join(rows) + "\n")
         r = G.item5(Path(d))
-        assert r["ok"] is False and r["reading"] == "tc recording incomplete", r
+        assert r["ok"] is None and r["reading"] == "tc recording incomplete", r
     with tempfile.TemporaryDirectory() as d:
-        assert G.item5(Path(d)) == {"recorded": False, "ok": False}
+        assert G.item5(Path(d)) == {"recorded": False, "role": G.ITEM5_ROLE, "ok": None}
 
 
 def test_items1_2_content_bands():
@@ -198,6 +200,21 @@ def test_concurrency_and_overlap_items():
     fo["pairs"][0]["shared_link_local_multicast"][0]["packets_in_both"] = 0
     fo["split_detail"]["twitch/tw_1"]["rows"].append({"payload_packets": 2})       # a payload-carrying split: gates
     assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is False
+    fo["split_detail"]["twitch/tw_1"]["rows"].pop()
+    # levi (round 1): a link-local multicast split (avahi's mDNS) is reported, not counted, when packet-disjoint
+    av = {"flow": ["udp", ["192.168.4.50", 5353], ["224.0.0.251", 5353]], "payload_packets": 1, "default_packets": 1,
+          "class": "after_idle"}
+    fo["split_detail"]["twitch/tw_1"]["rows"].append(dict(av, link_local_multicast=True, packets_in_both=0))
+    r = G.overlap_items("twitch/tw_1", fo)["item11"]
+    assert r["ok"] is True and r["default_split_flows_payload"] == 0, r
+    assert r["default_split_link_local_multicast"][0]["disjoint"] is True, r
+    fo["split_detail"]["twitch/tw_1"]["rows"][-1]["packets_in_both"] = 1                 # the same packet: counted, a FAIL
+    assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is False
+    fo["split_detail"]["twitch/tw_1"]["rows"][-1] = dict(av)                              # an older output, no field:
+    r = G.overlap_items("twitch/tw_1", fo)["item11"]                                      # inside the span, undecided
+    assert r["ok"] is False and r["default_split_link_local_multicast"][0]["disjoint"] is None and "note_multicast" in r, r
+    fo["split_detail"]["twitch/tw_1"]["rows"][-1] = dict(av, **{"class": "after_last"})   # outside the span: disjoint
+    assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is True
     del fo["split_detail"]                                                          # no --detail: not recorded, a FAIL
     r = G.overlap_items("twitch/tw_1", fo)["item11"]
     assert r["ok"] is False and r["recorded"] is False and "--detail" in r["note"], r
@@ -222,7 +239,7 @@ def test_cli():
         G.main([str(sd), "--rendition-fps", str(Path(d) / "fps.json"), "--out", str(Path(d) / "o.json")])
         r = json.loads((Path(d) / "o.json").read_text())["sessions"][0]
         assert r["item4a"]["rendered_fps"]["Q_720p"]["delivered_fps"] == 60.0 and r["item4a"]["ok"] is False, r
-        assert r["items1_2"]["1"]["reading"] == "verify.json missing" and r["item5"] == {"recorded": False, "ok": False}
+        assert r["items1_2"]["1"]["reading"] == "verify.json missing" and r["item5"]["ok"] is None
 
 
 def main() -> int:

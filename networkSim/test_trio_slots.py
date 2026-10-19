@@ -380,6 +380,15 @@ def test_split_detail():
     assert det["default_packets_by_direction"] == {"up": 2, "down": 2}
     rows = {r["flow"][1][1] if r["flow"][1][0] == me else r["flow"][2][1]: r for r in det["rows"]}
     assert rows[50002]["max_gap_before_s"] == 75.0 and rows[50003]["tcp_flags"] == {"·······A····": 1}
+    # levi (round 1): a link-local multicast flow (mDNS 5353 -> 224.0.0.251:5353, a host-wide 5-tuple) carries
+    # packets_in_both: its default packets matching a session packet by (time, length); avahi's own query matches none
+    mrow = [_pkt(t, me, "224.0.0.251", "udp", 5353, 5353, 82) for t in (100.0, 101.0)]
+    dm = [_pkt(150.0, me, "224.0.0.251", "udp", 5353, 5353, 87), _pkt(101.0, me, "224.0.0.251", "udp", 5353, 5353, 82)]
+    dflt = F.summarise(dm, keep_udp=True, keep_pkts=True)
+    sm = F.summarise(mrow, keep_pkts=set(dflt["flows"]))
+    r = F.split_detail(sm, dflt, "youtube")["rows"][0]
+    assert r["link_local_multicast"] is True and r["packets_in_both"] == 1 and r["default_packets"] == 2, r
+    assert "link_local_multicast" not in F.split_detail(s, default, "youtube")["rows"][0]
 
 
 def test_check_session_reads_dns_answers():

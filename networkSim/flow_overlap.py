@@ -185,6 +185,11 @@ def split_detail(s: dict, default: dict, platform: str) -> dict:
                      "tcp_flags": dict(collections.Counter(p[3] for p in dp if p[3])),
                      "quic_forms": dict(collections.Counter(p[4] for p in dp if p[4])),
                      "max_gap_before_s": round(max(gaps), 2) if gaps else None,
+                     # levi (round 1, avahi's mDNS): a link-local multicast flow is a host-wide 5-tuple; its default
+                     # packets are another sender's when packet-disjoint (no (time, length) also in the session pcap)
+                     **({"link_local_multicast": True, "packets_in_both": len(
+                         {(round(p[0], 6), p[2]) for p in dp} & {(round(p[0], 6), p[2]) for p in s["pkts"].get(k, [])})}
+                        if link_local_multicast(k) else {}),
                      "session_span": [round(mine[0], 3), round(mine[-1], 3)],
                      "default_span": [round(dp[0][0], 3), round(dp[-1][0], 3)]})
     return {"flows": len(rows), "by_class": dict(classes),

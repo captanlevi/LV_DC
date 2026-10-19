@@ -176,12 +176,18 @@ def item4a(tk: list[dict], iv: list[dict], rendition_fps: dict | None = None) ->
             "fps60_covered": fps60, "ok": False if any(o is False for o in oks) else (None if any(o is None for o in oks) else True)}
 
 
+ITEM5_ROLE = ("reported, never gating (levi, round 1: 'bound' = backlog or drops, which netem's delay line and loss "
+              "fill whenever traffic is present; per-second counters cannot tell saturated seconds for a demand-limited "
+              "player; shaper fidelity gates in the bulk dry run's C5)")
+
+
 def item5(sd: Path) -> dict:
-    """Item 5, reference-free (module docstring): per shaper state over the slot class's shaper-bound seconds."""
+    """Item 5, reference-free (module docstring): per shaper state over the slot class's shaper-bound seconds. Reported
+    only since round 1 (ITEM5_ROLE): ok is None, the readings kept (within_band per state)."""
     import bisect
     p = Path(sd) / "tc_stats.jsonl"
     if not p.exists():
-        return {"recorded": False, "ok": False}
+        return {"recorded": False, "role": ITEM5_ROLE, "ok": None}
     # a sample whose class read failed holds the rate only (round 1: 15 / 1246 on yt_100004): skipped, counted
     allrows = [r for r in (json.loads(line) for line in p.read_text().splitlines() if line.strip()) if r.get("in")]
     rows = [r for r in allrows if all(k in r["in"] for k in ("bytes", "drops", "backlog", "rate_kbit"))]
@@ -212,15 +218,15 @@ def item5(sd: Path) -> dict:
             out[st] = {"bound_s": round(n, 1), "ratio": r, "reading": "not shaper-bound", "ok": None}
             continue
         ok = r >= ITEM5_LO
-        out[st] = {"bound_s": round(n, 1), "ratio": r, "ok": ok,
-                   "reading": "FAIL (starvation while queued)" if not ok else ("above (reported)" if r > ITEM5_HI else "PASS")}
+        out[st] = {"bound_s": round(n, 1), "ratio": r, "within_band": ok and r <= ITEM5_HI, "ok": None,
+                   "reading": "below the band" if not ok else ("above the band" if r > ITEM5_HI else "within the band")}
         oks.append(ok)
     partial = len(allrows) - len(rows)
     incomplete = bool(allrows) and partial / len(allrows) > TC_PARTIAL_MAX_SHARE      # levi: then not read, a FAIL
     return {"recorded": True, "per_state": out, "band": [ITEM5_LO, ITEM5_HI], "min_bound_s": MIN_SUPPORT_S,
             "samples": len(allrows), "samples_partial_skipped": partial,
             **({"reading": "tc recording incomplete"} if incomplete else {}),
-            "ok": False if incomplete else (all(oks) if oks else None)}
+            "all_states_at_or_above_band": None if incomplete or not oks else all(oks), "role": ITEM5_ROLE, "ok": None}
 
 
 LINK_FLAG_MAX_SHARE = 0.05     # item 7: flagged link seconds <= 5 % of the session
@@ -244,6 +250,15 @@ def concurrency_items(meta: dict) -> dict:
                          "ok": not c.get("staging_left") and not bad}}
 
 
+def _link_local_row(r: dict) -> bool:
+    """A split_detail row on a link-local multicast flow (224.0.0.0/24, ff02::/16), by its field or its addresses."""
+    if r.get("link_local_multicast"):
+        return True
+    f = r.get("flow") or []
+    return any(isinstance(e, (list, tuple)) and (str(e[0]).startswith("224.0.0.") or str(e[0]).lower().startswith("ff02:"))
+               for e in f[1:])
+
+
 def overlap_items(name: str, fo: dict | None) -> dict:
     """Items 11-14 for session `name` ("<platform>/<session>") from flow_overlap.py's run json; {} without it."""
     if not fo or name not in (fo.get("sessions") or {}):
@@ -255,15 +270,28 @@ def overlap_items(name: str, fo: dict | None) -> dict:
     cids = sum(x.get("shared_quic_cids", 0) for x in pairs)
     mc = [m for x in pairs for m in x.get("shared_link_local_multicast") or []]
     mc_both = sum(m.get("packets_in_both", 0) for m in mc)
-    payload = None if sd is None else sum(1 for r in sd.get("rows") or [] if r.get("payload_packets", 0) > 0)
-    control = None if sd is None else sum(1 for r in sd.get("rows") or [] if not r.get("payload_packets"))
-    fail11 = bool(unicast or cids or mc_both or payload)
+    rows = (sd or {}).get("rows") or []
+    mc_rows = [r for r in rows if _link_local_row(r)]
+    payload = None if sd is None else sum(1 for r in rows if r.get("payload_packets", 0) > 0 and not _link_local_row(r))
+    control = None if sd is None else sum(1 for r in rows if not r.get("payload_packets") and not _link_local_row(r))
+    # levi (round 1, avahi's printer browse on 224.0.0.251:5353): a link-local multicast split is reported, not counted,
+    # when packet-disjoint: packets_in_both 0, or (outputs before it was recorded) every default packet outside the
+    # session flow's span (before_first / after_last), where none can be a session packet; else undecided, a FAIL
+    mc_split = [{"flow": r.get("flow"), "default_packets": r.get("default_packets"), "class": r.get("class"),
+                 "packets_in_both": r.get("packets_in_both"),
+                 "disjoint": (r["packets_in_both"] == 0) if "packets_in_both" in r else
+                             (True if r.get("class") in ("before_first", "after_last") else None)} for r in mc_rows]
+    mc_bad = [m for m in mc_split if m["disjoint"] is not True]
+    fail11 = bool(unicast or cids or mc_both or payload or mc_bad)
     unread = sd is None and bool(rec.get("flows_also_in_default"))   # not recorded: a FAIL (levi)
     ok11 = not fail11 and not unread
     item11 = {"shared_unicast_flows": unicast, "shared_quic_cids": cids, "link_local_multicast_flows": len(mc),
               "multicast_packets_in_both": mc_both, "default_split_flows_payload": payload,
-              "default_split_flows_control_only": control, "recorded": not unread, "ok": ok11,
-              **({"note": "flows also in the default class, not read: run flow_overlap --detail"} if unread else {})}
+              "default_split_flows_control_only": control, "default_split_link_local_multicast": mc_split,
+              "recorded": not unread, "ok": ok11,
+              **({"note": "flows also in the default class, not read: run flow_overlap --detail"} if unread else {}),
+              **({"note_multicast": "a link-local multicast split not shown packet-disjoint: rerun flow_overlap --detail "
+                                    "(packets_in_both)"} if any(m["disjoint"] is None for m in mc_split) else {})}
     fam = rec.get("sibling_family_snis") or {}
     dm, du = rec.get("default_media_snis_in_window") or [], (rec.get("default_udp_from_media_addresses") or {}).get("packets", 0)
     dj = rec.get("dns_answers_json") or {}
