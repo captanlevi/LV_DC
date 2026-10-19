@@ -98,11 +98,25 @@ def _reading():
     return R
 
 
-def _samples(backlogs, rate_bps_bytes=200_000, dev="lvi_tw1"):
+def _samples(backlogs, rate_bps_bytes=200_000, dev="lvi_tw1", tokens=-5):
     out, b = [], 0
     for i, bl in enumerate(backlogs):
-        out.append({"t": float(i), "classes": {dev: {"1:10": {"bytes": b, "backlog": bl}}}})
+        out.append({"t": float(i), "classes": {dev: {"1:10": {"bytes": b, "backlog": bl, "tokens": tokens}}}})
         b += rate_bps_bytes
+    return out
+
+
+def _fast(seconds, busy_of_10=10, rate_bytes=200_000, dev="lvi_tw1", t0=0.0, flat=()):
+    """10 Hz token samples: in each second the first busy_of_10 samples have tokens <= 0 and bytes moving; seconds in
+    `flat` are a netem-held burst (tokens refilling, no bytes)."""
+    out, b = [], 0
+    for k in range(int(seconds * 10)):
+        t = t0 + k / 10
+        sec = int(k // 10)
+        busy = sec not in flat and (k % 10) < busy_of_10
+        if busy:
+            b += rate_bytes // 10
+        out.append({"t": round(t, 3), dev: {"bytes": b, "tokens": -3 if busy else 4000}})
     return out
 
 
@@ -183,6 +197,75 @@ def test_the_dry_run_phase_reading_and_command(tmp_path=None):
         T.SESSIONS = saved
 
 
+def test_option_a_the_rate_stage_busy():
+    """levi's ruling (00132, option A): a second qualifies when >= 9 of its 10 token samples have tokens <= 0 and bytes
+    moving; a netem-held burst (tokens refilling, nothing sent) never does; at 1 Hz (weaker) tokens <= 0 at both bounding
+    samples; validated on the bulk: >= 0.9 of the seconds and the ratio within 0.02 of the bulk's own."""
+    R = _reading()
+    q, n = R.rate_stage_seconds_10hz(_fast(30), "lvi_tw1", 0.0, 30.0)
+    assert n == 30 and len(q) == 30, (len(q), n)                     # every second: 9-10 busy transitions
+    g = R.rate_stage_gate(_fast(30), [], "lvi_tw1", 0.0, 30.0, 1600.0)
+    assert g["ratio"] == 1.0 and g["gate"] == "pass" and g["mode"].startswith("10 Hz"), g
+    assert R.rate_stage_seconds_10hz(_fast(30, busy_of_10=8), "lvi_tw1", 0.0, 30.0)[0] == []   # 8 of 10: no
+    q, _ = R.rate_stage_seconds_10hz(_fast(30, flat=set(range(10, 20))), "lvi_tw1", 0.0, 30.0)
+    assert len(q) == 20, len(q)                                       # the 10 held seconds out, the rest in
+    g1 = R.rate_stage_gate(None, _samples([0] * 30), "lvi_tw1", 0.0, 29.0, 1600.0)
+    assert g1["mode"].startswith("1 Hz (weaker)") and g1["gate"] == "pass" and g1["ratio"] == 1.0, g1
+    assert R.rate_stage_gate(None, _samples([0] * 30, tokens=900), "lvi_tw1", 0.0, 29.0, 1600.0)["gate"] == "insufficient"
+    ok = R.validate_on_bulk({"qualifying_share": 0.95, "ratio": 0.99}, 0.995)
+    assert ok["ok"] and not R.validate_on_bulk({"qualifying_share": 0.95, "ratio": 0.96}, 0.99)["ok"]
+    assert not R.validate_on_bulk({"qualifying_share": 0.8, "ratio": 0.99}, 0.99)["ok"]
+    # option B, reported: (size / rate + RTT) / actual for fetches >= 4 x BDP
+    segs = [{"ok": True, "bytes": 400_000, "t0": 0.0, "t1": 2.1}, {"ok": True, "bytes": 1000, "t0": 0.0, "t1": 1.0}]
+    b = R.fetch_delivery(segs, 1600.0, 0.1)                           # 2.0 s at the rate + 0.1 RTT = 2.1: 1.0
+    assert b["n"] == 1 and b["p50"] == 1.0 and b["share_in_band"] == 1.0, b
+    # the sampler: TOKENS_HZ rows of bytes and tokens per device, on its own thread
+    sp = importlib.util.spec_from_file_location("trio_dry_run", HERE.parent / "ops" / "diag" / "trio_dry_run.py")
+    T = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(T)
+    import time as _t
+    ts = T.TokenSampler(["lvi_tw1"], _t.time(), hz=100, read=lambda d: {"bytes": 7, "tokens": -1}).start()
+    _t.sleep(0.15)
+    rows = ts.stop()
+    assert rows and rows[0]["lvi_tw1"] == {"bytes": 7, "tokens": -1} and "t" in rows[0], rows[:2]
+    txt = ("class htb 1:10 root leaf 10: prio 0 rate 1600Kbit ceil 1600Kbit burst 1600b cburst 1600b \n"
+           " Sent 1234 bytes 10 pkt (dropped 0, overlimits 3 requeues 0) \n backlog 3000b 2p requeues 0\n"
+           " lended: 10 borrowed: 0 giants: 0\n tokens: -2500 ctokens: -2500\n")
+    assert T.parse_class_stats(txt)["1:10"]["tokens"] == -2500
+
+
+def test_the_bulk_validates_option_a_and_the_rerun_mode():
+    """summarise reads option A on every bulk slot-state beside the bulk's own ratio (levi: >= 0.9 of the seconds,
+    within 0.02), reported as results.rate_stage_validation; --player-rerun runs the tree, the bulk and the player phase
+    only."""
+    import tempfile
+    import types
+    sp = importlib.util.spec_from_file_location("trio_dry_run", HERE.parent / "ops" / "diag" / "trio_dry_run.py")
+    T = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(T)
+    saved = T.SESSIONS
+    try:
+        T.SESSIONS = {"tw1": 0x11}
+        p = T.state_params("5")
+        per_s = int(p["rate_kbit"] * 1000 / 8)
+        d = Path(tempfile.mkdtemp())
+        (d / "ping_tw1.log").write_text("")
+        samples = [{"t": float(i), "classes": {"lvi_tw1": {"1:10": {"bytes": i * per_s, "backlog": 20000, "tokens": -5}}},
+                    "netem": {}, "ingress_by_mark": {}, "links": {}} for i in range(65)]
+        a = types.SimpleNamespace(state_s=60.0, iface="wlp0s20f3")
+        res = T.summarise(samples, [], {"tw1": ["5"]}, a, d, fast=_fast(65, rate_bytes=per_s))
+        v = res["tw1"]["per_state"][0]["rate_stage_validation"]
+        assert res["rate_stage_validation"]["ok"] and v["qualifying_share"] >= 0.9 and abs(v["ratio_a"] - v["bulk_ratio"]) <= 0.02, v
+        held = _fast(65, rate_bytes=per_s, flat=set(range(10, 40)))       # the rate stage idle half the window
+        assert not T.summarise(samples, [], {"tw1": ["5"]}, a, d, fast=held)["rate_stage_validation"]["ok"]
+    finally:
+        T.SESSIONS = saved
+    src = (HERE.parent / "ops" / "diag" / "trio_dry_run.py").read_text()
+    for skipped in ("if not rerun:", "if not a.no_single_reference and not rerun:", "and not NO_IFB and not rerun:",
+                    "if a.player_load or rerun:"):
+        assert skipped in src, skipped
+
+
 def test_h3_failure_causes_and_the_probe():
     """levi on the 5ba0b94 dry run (0 h3 segments, every attempt an error): speed.cloudflare.com serves no HTTP/3 (its
     QUIC handshake ends in TLS alert 40); the endpoint is h3.speed.cloudflare.com; every failed attempt carries its
@@ -230,6 +313,8 @@ def main() -> int:
     test_tt_reconnects_every_20_s()
     test_errors_are_counted_not_fatal()
     test_h3_failure_causes_and_the_probe()
+    test_option_a_the_rate_stage_busy()
+    test_the_bulk_validates_option_a_and_the_rerun_mode()
     print("test_player_load: ok")
     return 0
 
