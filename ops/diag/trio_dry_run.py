@@ -355,6 +355,7 @@ def run(a) -> dict:
             procs.append(start(in_cgroup(s, f"ping -n -i {a.ping_interval} {a.ping_host}"), out / f"ping_{s}.log"))
         samples, timeline = [], []
         t0 = time.time()
+        rep["t0_epoch"] = t0          # the bulk schedule's start (brad / levi: C4 / C6 align on it, not by correlation)
         devs = ([] if NO_IFB else [f"lvi_{s}" for s in SESSIONS]) + [a.iface]
         for k in range(max(len(v) for v in states.values())):
             for s in SESSIONS:
