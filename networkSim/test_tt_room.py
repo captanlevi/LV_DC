@@ -53,6 +53,17 @@ def test_recent_rooms():
         got = B.recent_tt_rooms(cur, n=2)
         check(got == ["https://www.tiktok.com/@other/live", "https://www.tiktok.com/@third/live"], f"last 2: {got}")
         check("https://www.tiktok.com/@tape05.tv/live" in B.recent_tt_rooms(cur, n=10), "query string normalised")
+        # t56: both roots, whichever the session is in (every repeat so far crossed modes); the last n over both
+        tr = root / "_trio" / "tiktok" / "ti_100001"
+        tr.mkdir(parents=True)
+        (tr / "meta.json").write_text(json.dumps({"channel_url": "https://www.tiktok.com/@jakeytv/live", "started_at": 1010}))
+        got = B.recent_tt_rooms(cur, n=2)
+        check(got == ["https://www.tiktok.com/@jakeytv/live", "https://www.tiktok.com/@third/live"], f"single sees trio: {got}")
+        cur_t = root / "_trio" / "tiktok" / "ti_100002"
+        cur_t.mkdir(parents=True)
+        got = B.recent_tt_rooms(cur_t, n=10)
+        check("https://www.tiktok.com/@tape05.tv/live" in got and "https://www.tiktok.com/@jakeytv/live" in got,
+              f"trio sees single: {got}")
 
 
 def run(samples, dt=1.0, state=None, rx=None):

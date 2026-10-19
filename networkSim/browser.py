@@ -478,12 +478,15 @@ def _pick_twitch_js(exclude: list[str]) -> str:
 
 
 def recent_tt_rooms(session_dir: Path | None, n: int = TT_RECENT_ROOMS_N) -> list[str]:
-    """Rooms of the last n tt sessions (data/tiktok and data/_failed/tiktok, by meta.json start time), normalised."""
+    """Rooms of the last n tt sessions (by meta.json start time), normalised, over both roots: single mode's
+    (data/tiktok, data/_failed/tiktok) and the trio's (data/_trio/...), whichever root the session is in (t56,
+    supervisor 2026-10-19: every tt room repeat so far crossed modes, each mode having read only its own root)."""
     if session_dir is None:
         return []
     root = Path(session_dir).resolve().parent.parent
+    data = root.parent if root.name.startswith("_trio") else root
     metas = []
-    for d in list((root / "tiktok").glob("*")) + list((root / "_failed" / "tiktok").glob("*")):
+    for d in [x for r in (data, data / "_trio") for x in list((r / "tiktok").glob("*")) + list((r / "_failed" / "tiktok").glob("*"))]:
         m = d / "meta.json"
         if d.resolve() == Path(session_dir).resolve() or not m.exists():
             continue
