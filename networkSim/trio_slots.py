@@ -40,7 +40,12 @@ CURRENT_DATA = Path(__file__).resolve().parent.parent / "current_data"
 STAGING = CURRENT_DATA / "trio_staging"
 # supervisor 2026-10-19: trio sessions have their own data root, data/_trio/<platform>/ (single mode's accepted counts,
 # coverage snapshot, checkpoint list and verify loop never see them: am. 13's "never pooled silently", mechanically)
-TRIO_DIR = "_trio"                                  # under the data dir
+# t56 decode_stress (design v4 §9 (5)): uncounted real sessions under their own root, data/_trio_stress, never data/_trio
+# (orchestrate --trio-stress sets LVDC_TRIO_DIR for the run and every slot's exp.py); nothing else is accepted
+STRESS_DIR = "_trio_stress"
+TRIO_DIR = os.environ.get("LVDC_TRIO_DIR") or "_trio"   # under the data dir
+if TRIO_DIR not in ("_trio", STRESS_DIR):
+    raise SystemExit(f"LVDC_TRIO_DIR={TRIO_DIR!r}: only _trio or {STRESS_DIR}")
 SLOTS_LOG = "_summaries/trio_slots.jsonl"           # under the trio root
 # a trio session's own extra files (its default-class DNS capture, tcpdump's counters) sit in <session>/trio/, so the
 # session dir holds one pcap, in single mode's form (pilot-0, levi 3: LVQoE's pcap finder ignores a dir with two)
@@ -48,7 +53,7 @@ SESSION_TRIO_DIR = "trio"
 DEFAULT_CAPTURE = "_default"                        # under the trio root: the unmarked remainder, one per trio run
 # every trio write goes under the trio root, its session counter too (supervisor 2026-10-19): trio names start above
 # TRIO_NAME_FLOOR (yt_100001, ...), so they never meet single mode's, whose counter the trio never reads or writes
-TRIO_NAME_FLOOR = 100000
+TRIO_NAME_FLOOR = 100000 if TRIO_DIR == "_trio" else 900000      # stress names (yt_900001 ...) never meet the trio's
 # trio v1 (supervisor 2026-10-19): no fullscreen geometry (one screen, three windows); yt Q_1080p is then unreachable
 EXCLUDED_GEOMETRIES = ("fullscreen",)
 TC_SAMPLE_S = 1.0

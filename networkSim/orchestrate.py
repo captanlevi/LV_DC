@@ -249,6 +249,9 @@ TRIO_RECORD = False      # --trio-record: this run's sessions are of record (cou
 # t53 (a), default off: the yt slot may go fullscreen when its coverage target couples it (Q_1080p, am. 15 (3)); the
 # geometry rotation still never draws it; the slot's process then runs single mode's fullscreen path with a focus keeper
 TRIO_YT_FULLSCREEN = False
+# t56 decode_stress (--trio-stress): the run's sessions go under data/_trio_stress (LVDC_TRIO_DIR), never counted, and a
+# pinned state is held for the whole session (exp.py --hold-state)
+TRIO_STRESS = False
 
 
 def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
@@ -614,6 +617,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     cmd = _collection_cmd(p, initial_state=init, episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix,
                           channel=channel, geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
+    if TRIO_STRESS and (pin or {}).get("state"):         # decode_stress: the pinned state held for the whole session
+        cmd += ["--hold-state", pin["state"]]
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
     # window's own XComposite pixmap in the "composite" layout (pilot-1, probe v3)
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
@@ -934,6 +939,9 @@ if __name__ == "__main__":
     parser.add_argument("--trio-record", action="store_true",
                         help="--concurrent: a counted run: its sessions are of record (meta concurrency.record, era "
                              "record.ERA); steering counts only such sessions. Pilots and re-runs: leave it off.")
+    parser.add_argument("--trio-stress", action="store_true",
+                        help="--concurrent, t56 decode_stress: sessions under data/_trio_stress (never counted; not with "
+                             "--trio-record); a --trio-pin state is held for the whole session (exp.py --hold-state).")
     parser.add_argument("--trio-yt-fullscreen", action="store_true",
                         help="--concurrent (t53 (a); default off): the yt slot goes fullscreen when its coverage target "
                              "couples it (Q_1080p), with a focus keeper and on-top-gated root grabs (browser.py).")
@@ -966,6 +974,13 @@ if __name__ == "__main__":
             sys.exit(f"unknown platform / matrix in --coverage-allowed: {bad}")
     if args.concurrent and not args.batch:
         sys.exit("--concurrent needs --batch")
+    if args.trio_stress:                                   # before any trio_slots import: the stress root, not data/_trio
+        if not args.concurrent or args.trio_record:
+            sys.exit("--trio-stress needs --concurrent and never --trio-record")
+        os.environ["LVDC_TRIO_DIR"] = "_trio_stress"
+        import trio_slots
+        trio_slots.TRIO_DIR, trio_slots.TRIO_NAME_FLOOR = trio_slots.STRESS_DIR, 900000
+        TRIO_STRESS = True
     if args.batch:
         targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
@@ -982,8 +997,10 @@ if __name__ == "__main__":
             except ValueError as e:
                 sys.exit(str(e))
             import trio_slots
-            if (pin.get("geometry") or "").split(":")[0] in trio_slots.EXCLUDED_GEOMETRIES:
-                sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1")
+            mode = (pin.get("geometry") or "").split(":")[0]
+            yt_key = plat == "youtube" or plat.startswith("yt")
+            if mode in trio_slots.EXCLUDED_GEOMETRIES and not (mode == "fullscreen" and yt_key and args.trio_yt_fullscreen):
+                sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1 (yt fullscreen needs --trio-yt-fullscreen)")
             TRIO_PINS[plat] = pin
         if args.trio_yt_fullscreen and not args.concurrent:
             sys.exit("--trio-yt-fullscreen needs --concurrent")

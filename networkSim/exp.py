@@ -605,6 +605,12 @@ if __name__ == "__main__":
         help="Start from an empty profile instead of the template (a deviation, recorded in meta.json).",
     )
     parser.add_argument(
+        "--hold-state",
+        default=None,
+        help="t56 decode_stress only (the session's root must be data/_trio_stress): hold this shaper state for the whole "
+             "session (initial state, every transition back to it); recorded in meta.json hold_state.",
+    )
+    parser.add_argument(
         "--slot",
         choices=["yt", "tw", "tt"],
         default=None,
@@ -659,6 +665,16 @@ if __name__ == "__main__":
         transition, low_cap, init_rule = chosen[0][matrix_id]
     SHAPER_OPTS.update(max_consecutive_low=low_cap,
                        initial_state_fn=initial_state_stationary if init_rule == "stationary" else None)
+    if args.hold_state is not None:      # t56 decode_stress: one state held, never in a dataset root
+        import trio_slots as _ts
+        if not args.slot or _ts.TRIO_DIR != _ts.STRESS_DIR:
+            sys.exit("--hold-state is decode_stress only: it needs --slot and LVDC_TRIO_DIR=_trio_stress")
+        from utils.shaping import SCENARIOS
+        if args.hold_state not in SCENARIOS:
+            sys.exit(f"--hold-state {args.hold_state!r}: no such shaper state")
+        transition, matrix_id = {args.hold_state: {args.hold_state: 1.0}}, f"hold:{args.hold_state}"
+        args.initial_state = args.hold_state
+        SHAPER_OPTS.update(initial_state_fn=None)
 
     is_capture: bool = True
 
@@ -682,6 +698,8 @@ if __name__ == "__main__":
                        forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
                        channel_type=args.channel_type, channel_handle=args.channel_handle,
                        profile_template=profile_template)
+    if args.hold_state is not None:
+        session_meta.write(session_dir, hold_state=args.hold_state)
     if SLOT is None:
         session_meta.write(session_dir, concurrency={"mode": "single"})
     else:
