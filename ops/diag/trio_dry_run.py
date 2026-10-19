@@ -693,7 +693,14 @@ def main(argv=None) -> int:
         return 0
     if a.state_s < 60 or a.goodput_s < 60:
         print("note: levi's gate-1 condition is >= 60 s per state and for the goodput run", file=sys.stderr)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "networkSim"))
+    import offloads                                  # t55: the dry runs measure under the collection's offload setting
+    off = offloads.ensure_off(a.iface)
+    if not off["ok"]:
+        print(f"t55: the capture offloads could not be switched off on {a.iface}: {json.dumps(off)}", file=sys.stderr)
+        return 3
     rep = run(a)
+    rep["capture_offloads"] = off
     if a.data:
         rep["check_session_reference"] = check_session_reference(a.data, rep.get("states") or {})
     Path(a.out, "report.json").write_text(json.dumps(rep, indent=1, default=str))

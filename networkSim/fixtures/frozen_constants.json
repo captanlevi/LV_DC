@@ -1,4 +1,13 @@
 {
+ "capture_offloads": {
+  "OFF": {
+   "gro": "generic-receive-offload",
+   "gso": "generic-segmentation-offload",
+   "rx-gro-list": "rx-gro-list",
+   "rx-udp-gro-forwarding": "rx-udp-gro-forwarding",
+   "tso": "tcp-segmentation-offload"
+  }
+ },
  "classes": {
   "CLASS_PRECEDENCE": [
    "not_live",

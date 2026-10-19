@@ -400,7 +400,7 @@ class FakeProc:
 
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
-          xrandr=None, trio_pf=None, disk_gb=1000.0):
+          xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry", "free_gb")}
@@ -434,7 +434,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
                         spawn=spawn, apply=lambda cmds, check=True: calls.append(("apply", cmds[0], check)) or
                         [{"cmd": c, "rc": 0} for c in cmds],
                         make=lambda args: calls.append(("make", args[0])) or 0, sleep=sleep, layout=layout,
-                        xrandr=xrandr)
+                        xrandr=xrandr, offloads=offloads or (lambda iface: {"iface": iface, "ok": True, "after": {}, "calls": []}))
     finally:
         for k, v in saved.items():
             setattr(O, k, v)
@@ -488,6 +488,13 @@ def test_run_trio():
         assert rc == 0 and len(spawned) >= 2 and all("--slot" in c for c, _, _ in spawned)
         assert not (tmp / T.TRIO_DIR / O.TRIO_DRAIN_FILE).exists()
         assert list((tmp / T.TRIO_DIR / "_summaries").glob("trio_drain.done_*"))
+
+        # t55: the capture offloads refused: nothing starts, EXIT_OFFLOADS, before any tree command
+        spawned.clear()
+        rc, calls = _trio(tmp, {"youtube": 5}, spawn,
+                          offloads=lambda iface: {"iface": iface, "ok": False, "after": {"generic-receive-offload": {"on": True}},
+                                                  "calls": [{"feature": "gro", "rc": 1}]})
+        assert rc == O.EXIT_OFFLOADS and not spawned and not [c for c in calls if c[0] == "apply"], calls
 
         # low disk: nothing starts, the trio ends with EXIT_LOW_DISK, the tree still comes down
         spawned.clear()

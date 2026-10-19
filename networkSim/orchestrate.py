@@ -55,6 +55,7 @@ NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_end
 
 TRIO_SHOT_SOURCE = {"cdp": "cdp", "fb": "x11", "composite": "composite"}   # trio layout -> LVQOE_SHOT_SOURCE
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume has less than MIN_FREE_GB free
+EXIT_OFFLOADS = 9    # orchestrate.py's own exit code when the capture offloads cannot be switched off (t55)
 EXIT_PREFLIGHT = 8    # orchestrate.py's own exit code when the per-session preflight fails (preflight.py)
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
@@ -417,11 +418,24 @@ def _account(p: str, rc: int, before: int, channel: dict | None, category: dict 
         print(f"  PAUSED {p}: {paused[p]}")
 
 
+def _offloads_or_exit(iface: str | None = None, ensure=None) -> dict:
+    """t55: the capture interface's offloads off before the first session (each session also ensures and records
+    them); refused: a loud stop, no session started."""
+    import offloads
+    rec = (ensure or offloads.ensure_off)(iface or offloads.IFACE_DEFAULT)
+    print(f"  capture offloads on {rec['iface']}: {'off' if rec['ok'] else 'NOT OFF'} {json.dumps(rec['after'])}")
+    if not rec["ok"]:
+        print(f"\n  t55: the capture offloads could not be switched off ({json.dumps(rec['calls'])}): not starting.")
+        sys.exit(EXIT_OFFLOADS)
+    return rec
+
+
 def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geometry: bool = True) -> None:
     """Collect until every platform has its target of PASS sessions. Next platform = next_platform(): the one furthest
     behind its target (accepted / target; BATCH_ORDER breaks ties), at most MAX_CONSECUTIVE_SAME_PLATFORM in a row, so
     platforms advance together over the week. Nothing here
     changes what a session collects; it only sequences exp.py runs and recovers from failures."""
+    _offloads_or_exit()
     paused: dict[str, str] = {}
     fails = {p: 0 for p in targets}
     frozen = {p: 0 for p in targets}
@@ -600,7 +614,7 @@ def _xrandr(fb: str | None):
 def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = True, iface: str = "wlp0s20f3",
              capacity_kbit: float | None = None, max_per_slot: int | None = None,
              stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S, layout: str = "cdp",
-             spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None) -> int:
+             spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None, offloads=None) -> int:
     """One slot per platform (trio_slots.SLOTS), each refilled when its session ends (A1), until every platform has its
     target of PASS trio sessions (counted in the trio's own data root, data/_trio/<platform>: single mode never sees
     them), or `max_per_slot` sessions started per slot (the pilot: 1). Trio v1 draws no fullscreen geometry, and a
@@ -614,10 +628,16 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     layout: "cdp" (pilot-0: windows at the origin, CDP shots) or "fb" (design §4: the X framebuffer enlarged to three
     monitor widths for the run, restored at its end; slot k's window at k x the width; X11 shots) or "composite"
     (pilot-1: windows at the origin as cdp, each shot a crop of the window's own XComposite pixmap).
-    Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT when that ended it."""
+    t55: the capture offloads off on iface before anything starts (offloads: the ensure function, tests).
+    Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT / EXIT_OFFLOADS when that ended it."""
     import signal
     import trio_slots as T
     apply = apply or T.apply
+    try:
+        _offloads_or_exit(iface, offloads)
+    except SystemExit:
+        return EXIT_OFFLOADS
+    os.environ["LVDC_CAPTURE_IFACE"] = iface              # each slot's exp.py ensures and records them on the same one
     run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     if not _RUNS_DIR.is_dir():           # never create data/ on the root filesystem (a missing data link)
         print(f"\n  TRIO: the data dir {_RUNS_DIR} does not exist: not starting the trio.")
