@@ -127,11 +127,48 @@ def test_x_structs():
         return                                                         # chaos: LP64 Linux
     assert ctypes.sizeof(X._XWindowAttributes) == 136 and X._XErrorEvent.error_code.offset == 32
     assert X._XImage.bits_per_pixel.offset == 48 and X._XImage.data.offset == 16
+    assert ctypes.sizeof(X._XClientMessageEvent) == 96 and X._XClientMessageEvent.l.offset == 56 and ctypes.sizeof(X._XEvent) == 192
+
+
+def test_fullscreen_keeper():
+    """t53 (a): the keeper finds another window on top at the screen's centre, activates its own and records it; on top,
+    it does nothing; the window comes from the browser pid."""
+    import time as _t
+    seq = ["0x2000003", "0x5000001", "0x5000001", "0x2000003"]       # ours, a sibling's new window twice, ours again
+    sent = []
+    saved = (X.window_at, X.activate, B.FS_KEEPER_S)
+    try:
+        X.window_at = lambda x, y: seq.pop(0) if seq else "0x2000003"
+        X.activate = lambda c: sent.append(c) or True
+        B.FS_KEEPER_S = 0.01
+        k = B.FullscreenKeeper("0x2000003", "0x2000003", (960, 540)).start()
+        for _ in range(200):
+            if k.checks >= 6:
+                break
+            _t.sleep(0.01)
+        k.stop()
+        r = k.record()
+        assert r["not_on_top"] == 2 and r["raises"] == 2 and sent == ["0x2000003", "0x2000003"], (r, sent)
+        assert [e["top_was"] for e in r["events"]] == ["0x5000001", "0x5000001"] and r["centre"] == [960, 540], r
+        assert k.on_top() == (True, "0x2000003")
+    finally:
+        X.window_at, X.activate, B.FS_KEEPER_S = saved
+    saved = _stub(_frame(_page_pixels(1)))
+    real_wa = X.window_at
+    try:
+        X.window_at = lambda x, y: "0x600003"
+        rec = B._start_fullscreen_keeper(_Page(_page_pixels(1)))
+        assert rec["started"] and rec["frame"] == "0x600003" and rec["centre"] == [960, 540] and rec["pid"] == 4242, rec
+        B.FS_KEEP.pop("keeper").stop()
+    finally:
+        X.window_at = real_wa
+        _restore(saved)
 
 
 def main() -> int:
     test_calibration()
     test_shot_crop_and_staleness()
+    test_fullscreen_keeper()
     test_x_structs()
     print("test_composite_shots: ok")
     return 0

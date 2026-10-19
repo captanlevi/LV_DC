@@ -246,6 +246,9 @@ LAST_COVERAGE: dict[str, dict] = {}       # platform -> the latest coverage reco
 # geometry, reason}; the slot's pick is overridden where given and the session's meta.json records pick_pinned
 TRIO_PINS: dict[str, dict] = {}
 TRIO_RECORD = False      # --trio-record: this run's sessions are of record (counted; record.ERA), steering counts only those
+# t53 (a), default off: the yt slot may go fullscreen when its coverage target couples it (Q_1080p, am. 15 (3)); the
+# geometry rotation still never draws it; the slot's process then runs single mode's fullscreen path with a focus keeper
+TRIO_YT_FULLSCREEN = False
 
 
 def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
@@ -585,13 +588,15 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot)
     import record
     reserved = _reserved(tag, T, running)
-    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json", T.EXCLUDED_GEOMETRIES, data_dir=troot,
-                         select=record.is_record, reserved=reserved or None, key=tag)
+    yt_fs = p == "youtube" and TRIO_YT_FULLSCREEN
+    mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json",
+                         () if yt_fs else T.EXCLUDED_GEOMETRIES, data_dir=troot, select=record.is_record,
+                         reserved=reserved or None, key=tag)
     forced = coupled_geometry(tag, geom) if rotate_geometry else geom
     if forced and forced.startswith("fullscreen") and any(str(r.get("geom") or "").startswith("fullscreen")
                                                            for t2, r in running.items() if t2 != tag):
         forced = geom                                     # the fullscreen token is held (design v4: one at a time)
-    if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES:
+    if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES and not yt_fs:
         forced = geom
     if forced != geom:
         print(f"  geometry {forced} (coupled to the coverage target; rotation drew {geom})")
@@ -616,6 +621,9 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
            "LVQOE_SHOT_SOURCE": TRIO_SHOT_SOURCE.get(os.environ.get("LVDC_TRIO_LAYOUT") or "cdp", "cdp")}
     env.pop("LVDC_PICK_PINNED", None)
     env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
+    env.pop("LVDC_TRIO_YT_FULLSCREEN", None)
+    if yt_fs:
+        env["LVDC_TRIO_YT_FULLSCREEN"] = "1"
     if pin:
         env["LVDC_PICK_PINNED"] = json.dumps({**pin, "initial_state": init, "geometry_used": geom,
                                               "category_used": (category or {}).get("name")})
@@ -926,6 +934,9 @@ if __name__ == "__main__":
     parser.add_argument("--trio-record", action="store_true",
                         help="--concurrent: a counted run: its sessions are of record (meta concurrency.record, era "
                              "record.ERA); steering counts only such sessions. Pilots and re-runs: leave it off.")
+    parser.add_argument("--trio-yt-fullscreen", action="store_true",
+                        help="--concurrent (t53 (a); default off): the yt slot goes fullscreen when its coverage target "
+                             "couples it (Q_1080p), with a focus keeper and on-top-gated root grabs (browser.py).")
     parser.add_argument("--trio-layout", choices=sorted(TRIO_SHOT_SOURCE), default="cdp",
                         help="--concurrent: cdp = windows at the origin, CDP shots (pilot-0); fb = the X framebuffer "
                              "enlarged to three monitor widths, one window per width, X11 shots (design §4; probe v1-v3: "
@@ -974,6 +985,9 @@ if __name__ == "__main__":
             if (pin.get("geometry") or "").split(":")[0] in trio_slots.EXCLUDED_GEOMETRIES:
                 sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1")
             TRIO_PINS[plat] = pin
+        if args.trio_yt_fullscreen and not args.concurrent:
+            sys.exit("--trio-yt-fullscreen needs --concurrent")
+        TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
         if args.concurrent:
             import trio_slots
             try:
