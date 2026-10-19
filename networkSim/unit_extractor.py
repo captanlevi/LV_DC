@@ -18,6 +18,20 @@ def _merge_into(ft_to_stream_to_units, master_dict):
     return master_dict
 
 
+
+def parse_pdml_zst(path: str, http_version: int) -> dict:
+    """A zstd-compressed PDML (h2_raw.pdml.zst / h3_raw.pdml.zst) parsed as the plain file is: zstd -dc's stdout is
+    the parser's byte stream (network_core's parse_pdml_http reads a binary stream the same way)."""
+    import subprocess
+    from network_core.http.httpExtract.pdml_parser import _parse_pdml_stream
+    proc = subprocess.Popen(["zstd", "-dc", path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        return _parse_pdml_stream(proc.stdout, http_version)
+    finally:
+        proc.stdout.close()
+        if proc.wait() != 0:
+            raise RuntimeError(f"zstd -dc {path} failed (rc {proc.returncode})")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parse tshark http logs")
     parser.add_argument("--path",      type=str, help="Directory containing capture files")
@@ -56,12 +70,15 @@ if __name__ == "__main__":
                 _merge_into(parse_pdml_http_from_pcap(args.pcap, args.ssl_keys, http_version=2, tshark_bin=TSHARK), master_dict)
                 _merge_into(parse_pdml_http_from_pcap(args.pcap, args.ssl_keys, http_version=3, tshark_bin=TSHARK), master_dict)
         else:
-            # File mode: read pre-generated PDML files
+            # File mode: read pre-generated PDML files; a .pdml.zst (ops/compress_raw_pdml.py compresses them in place
+            # after the derived outputs exist, supervisor 2026-10-19) is read through `zstd -dc`, the same bytes
             for ver, fname in [(2, "h2_raw.pdml"), (3, "h3_raw.pdml")]:
                 p = os.path.join(args.path, fname)
                 if os.path.exists(p):
                     from network_core.http.httpExtract.pdml_parser import parse_pdml_http
                     _merge_into(parse_pdml_http(p, http_version=ver), master_dict)
+                elif os.path.exists(p + ".zst"):
+                    _merge_into(parse_pdml_zst(p + ".zst", ver), master_dict)
 
     except Exception as e:
         import traceback
