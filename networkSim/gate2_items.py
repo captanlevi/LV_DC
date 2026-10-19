@@ -438,16 +438,26 @@ def item3(sd: Path, coverage: dict | None, table: dict | None) -> dict:
     scripts/audit/frames_coverage.py's json, --frames-coverage) >= the floor min(single mode's min for the platform,
     ITEM3_FLOOR_CAP) (brad's frozen table, --single-table; a single min above 1 is the log's undercount, never a gate).
     Not read (an input missing, the session absent from the coverage json, or the coverage json's definition not the
-    table's): recorded False, ok False (an item not recorded is a FAIL). Both code stamps recorded."""
+    table's): recorded False, ok False (an item not recorded is a FAIL). Both code stamps recorded.
+    levi 2026-10-20 (single-ref coverage block read): coverage None with >= 1 recovered body is "not applicable: no
+    sized media response (bodies recovered)", recorded, ok True, applicable False (counted per round): the extractor
+    recovered media but the log has no denominator (twitch as-produced segments are logged unsized; tw_7 / tw_9 among
+    the refs). Coverage None with 0 / no bodies, no frames summary or no coverage record stays a FAIL."""
     plat = Path(sd).parent.name
     rec = ((coverage or {}).get("sessions") or {}).get(Path(sd).name)
     if table is not None and coverage is not None and coverage.get("definition") != table.get("definition"):
         return {"recorded": False, "ok": False, "reading": "not read: definition mismatch",
                 "coverage_definition": coverage.get("definition"), "table_definition": table.get("definition"),
                 "coverage_code": coverage.get("code"), "table_code": table.get("code")}
+    if table is not None and rec is not None and rec.get("coverage") is None and (rec.get("bodies") or 0) >= 1:
+        return {"recorded": True, "ok": True, "applicable": False,
+                "reading": "not applicable: no sized media response (bodies recovered)", "bodies": rec.get("bodies"),
+                "responses": rec.get("responses"), "frames_schema": rec.get("frames_schema"),
+                "table_sha": table["sha"][:12], "definition": coverage.get("definition"),
+                "coverage_code": coverage.get("code"), "table_code": table.get("code")}
     if table is None or rec is None or rec.get("coverage") is None or plat not in table["min_by_platform"]:
         why = ("no --single-table" if table is None else "no coverage record for the session" if rec is None
-               else "no sized media response or no frames summary" if rec.get("coverage") is None
+               else "no sized media response and no recovered body, or no frames summary" if rec.get("coverage") is None
                else f"no single-mode min for {plat}")
         return {"recorded": False, "ok": False, "reading": f"not read: {why}"}
     single_min = float(table["min_by_platform"][plat])
@@ -457,6 +467,12 @@ def item3(sd: Path, coverage: dict | None, table: dict | None) -> dict:
             "table_sha": table["sha"][:12], "definition": coverage.get("definition"),
             "coverage_code": coverage.get("code"), "table_code": table.get("code"), "ok": rec["coverage"] >= floor}
 
+
+
+def item3_not_applicable(rows: list[dict]) -> dict:
+    """The round's count of item 3 "not applicable" sessions (levi 2026-10-20: counted per round)."""
+    na = [r["session"] for r in rows if (r.get("item3") or {}).get("applicable") is False]
+    return {"n": len(na), "sessions": na}
 
 
 def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dict | None = None,
@@ -515,7 +531,7 @@ def main(argv=None) -> int:
             rows.append({"session": str(sd), "error": repr(e)[:300]})
         print(json.dumps(rows[-1]), flush=True)
     if a.out:
-        a.out.write_text(json.dumps({"sessions": rows}, indent=1))
+        a.out.write_text(json.dumps({"sessions": rows, "item3_not_applicable": item3_not_applicable(rows)}, indent=1))
     return 0
 
 

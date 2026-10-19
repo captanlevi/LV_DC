@@ -320,12 +320,26 @@ def test_item3_frames_coverage_against_the_single_min():
             assert r["recorded"] is False and r["ok"] is False and why in r["reading"], r
         t2 = {**t, "min_by_platform": {"youtube": 1.0}}
         assert "no single-mode min for twitch" in G.item3(d / "twitch" / "tw_100001", cov, t2)["reading"]
+        # levi 2026-10-20: no sized media response but bodies recovered (twitch as-produced, the refs' tw_7 / tw_9): not
+        # applicable, recorded, ok, reported per round; 0 bodies stays a FAIL
+        cov["sessions"]["tw_100007"] = {"coverage": None, "bodies": 1539, "responses": 0, "frames_schema": 6}
+        cov["sessions"]["tw_100008"] = {"coverage": None, "bodies": 0, "responses": 0, "frames_schema": 6}
+        na = G.item3(d / "twitch" / "tw_100007", cov, t)
+        assert na["ok"] is True and na["recorded"] is True and na["applicable"] is False, na
+        assert na["reading"] == "not applicable: no sized media response (bodies recovered)" and na["bodies"] == 1539
+        z = G.item3(d / "twitch" / "tw_100008", cov, t)
+        assert z["ok"] is False and z["recorded"] is False and "no recovered body" in z["reading"], z
+        assert G.item3(d / "twitch" / "tw_100007", cov, None)["ok"] is False          # still needs the table
+        rows = [{"session": "tw_100007", "item3": na}, {"session": "tw_100008", "item3": z}, {"session": "x", "error": "e"}]
+        assert G.item3_not_applicable(rows) == {"n": 1, "sessions": ["tw_100007"]}
     import importlib.util
     spec = importlib.util.spec_from_file_location("rsc", Path(__file__).resolve().parent.parent / "ops" / "round_stop_checks.py")
     R = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(R)
     bad, _ = R.gating({"item3": {"ok": False, "reading": "not read: no --single-table"}})
     assert bad and bad[0].startswith("item3"), bad
+    bad, notes = R.gating({"item3": na})
+    assert not bad and notes == ["item3 not applicable: no sized media response (bodies recovered) (reported)"], notes
 
 
 def main() -> int:

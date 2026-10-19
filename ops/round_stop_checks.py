@@ -82,6 +82,8 @@ def gating(row: dict) -> tuple[list[str], list[str]]:
         v = row.get(k)
         if isinstance(v, dict) and v.get("ok") is False:
             bad.append(f"{k}: " + json.dumps({x: y for x, y in v.items() if x not in ("rendered_fps",)}, default=str)[:200])
+    if (row.get("item3") or {}).get("applicable") is False:    # levi 2026-10-20: no sized media response, bodies recovered
+        notes.append(f"item3 {row['item3'].get('reading')} (reported)")
     lim = (row.get("item4a") or {}).get("device_limited_tiers")
     if lim:
         notes.append(f"item4a device_limited {lim} (reported)")
