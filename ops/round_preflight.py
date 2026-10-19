@@ -21,7 +21,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "networkSim"))
 import offloads  # noqa: E402
-import trio_slots as T  # noqa: E402
 
 
 def _run(cmd: list[str], run=subprocess.run) -> tuple[int, str]:
@@ -32,7 +31,9 @@ def _run(cmd: list[str], run=subprocess.run) -> tuple[int, str]:
         return -1, repr(e)
 
 
-def check(iface: str, sha: str, worktree: Path, run=subprocess.run, cg_root: Path = T.CG_ROOT) -> dict:
+def check(iface: str, sha: str, worktree: Path, run=subprocess.run, cg_root: Path | None = None) -> dict:
+    import trio_slots as T                     # imported here: single mode's modules never load trio_slots (test guard)
+    cg_root = cg_root or T.CG_ROOT
     rec: dict = {"iface": iface, "expected_sha": sha}
     rc, qd = _run(["tc", "qdisc", "show", "dev", iface], run)
     bad_q = [line for line in qd.splitlines() if any(k in line for k in ("htb", "netem", "ingress"))]
