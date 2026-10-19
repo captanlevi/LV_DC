@@ -1,0 +1,297 @@
+{
+ "shared_down": [
+  "tc qdisc del dev wlp0s20f3 root",
+  "tc qdisc del dev wlp0s20f3 ingress",
+  "nft delete table inet lvdc_trio",
+  "ip link del lvi_def",
+  "ip link del lvo_def",
+  "rmdir /sys/fs/cgroup/lvdc.slice"
+ ],
+ "shared_up": [
+  "modprobe ifb",
+  "modprobe act_connmark",
+  "modprobe cls_fw",
+  "modprobe sch_netem",
+  "modprobe nft_socket",
+  "ip link add lvi_def type ifb",
+  "ip link set lvi_def up",
+  "ip link add lvo_def type ifb",
+  "ip link set lvo_def up",
+  "mkdir -p /sys/fs/cgroup/lvdc.slice",
+  "nft add table inet lvdc_trio",
+  "nft add chain inet lvdc_trio out '{ type route hook output priority mangle; policy accept; }'",
+  "nft add rule inet lvdc_trio out 'meta mark 0 ct mark & 0xf0 == 0x10 meta mark set ct mark comment \"lvdc restore\"'",
+  "tc qdisc add dev wlp0s20f3 handle ffff: ingress",
+  "tc filter add dev wlp0s20f3 parent ffff: protocol ip prio 1 u32 match ip protocol 17 0xff match ip sport 41641 0xffff action ok",
+  "tc filter add dev wlp0s20f3 parent ffff: protocol ip prio 1 u32 match ip protocol 17 0xff match ip dport 41641 0xffff action ok",
+  "tc filter add dev wlp0s20f3 parent ffff: protocol ip prio 1 u32 match ip protocol 6 0xff match ip sport 22 0xffff action ok",
+  "tc filter add dev wlp0s20f3 parent ffff: protocol ip prio 1 u32 match ip protocol 6 0xff match ip dport 22 0xffff action ok",
+  "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 5 matchall action connmark continue",
+  "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 40 handle 0x10/0xf0 fw action drop",
+  "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 50 matchall action mirred egress redirect dev lvi_def",
+  "tc qdisc add dev wlp0s20f3 root handle 1: htb default 30",
+  "tc class add dev wlp0s20f3 parent 1: classid 1:20 htb rate 1000mbit",
+  "tc class add dev wlp0s20f3 parent 1: classid 1:30 htb rate 1000mbit",
+  "tc filter add dev wlp0s20f3 parent 1: protocol ip prio 1 u32 match ip protocol 17 0xff match ip sport 41641 0xffff flowid 1:20",
+  "tc filter add dev wlp0s20f3 parent 1: protocol ip prio 1 u32 match ip protocol 17 0xff match ip dport 41641 0xffff flowid 1:20",
+  "tc filter add dev wlp0s20f3 parent 1: protocol ip prio 1 u32 match ip protocol 6 0xff match ip sport 22 0xffff flowid 1:20",
+  "tc filter add dev wlp0s20f3 parent 1: protocol ip prio 1 u32 match ip protocol 6 0xff match ip dport 22 0xffff flowid 1:20",
+  "tc filter add dev wlp0s20f3 parent 1: protocol all prio 5 matchall action connmark continue",
+  "tc filter add dev wlp0s20f3 parent 1: protocol all prio 40 handle 0x10/0xf0 fw action drop",
+  "tc filter add dev wlp0s20f3 parent 1: protocol all prio 50 matchall flowid 1:30 action mirred egress mirror dev lvo_def"
+ ],
+ "slots": {
+  "tt": {
+   "detach": [
+    "tc filter del dev wlp0s20f3 parent ffff: prio 12",
+    "tc filter del dev wlp0s20f3 parent 1: prio 12"
+   ],
+   "down": [
+    "sh -c 'test -d /sys/fs/cgroup/lvdc.slice/tt && echo 1 > /sys/fs/cgroup/lvdc.slice/tt/cgroup.kill || true'",
+    "tc filter del dev wlp0s20f3 parent ffff: prio 12",
+    "tc filter del dev wlp0s20f3 parent 1: prio 12",
+    "tc qdisc del dev wlp0s20f3 parent 1:313",
+    "tc class del dev wlp0s20f3 classid 1:313",
+    "ip link del lvi_tt",
+    "ip link del lvo_tt",
+    "nft delete rule inet lvdc_trio out handle 7",
+    "sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do rmdir /sys/fs/cgroup/lvdc.slice/tt 2>/dev/null && exit 0; test -d /sys/fs/cgroup/lvdc.slice/tt || exit 0; sleep 0.5; done; exit 1'"
+   ],
+   "make_n": {
+    "kill_chrome": "echo \"\ud83d\uded1 Killing collection Chrome...\"\n# [r]: the pattern must not match this recipe's own shell, whose command line contains it (make: *** Killed)\npkill -9 -f \"[r]emote-debugging-port=9225\" 2>/dev/null || true\nfor i in 1 2 3 4 5 6 7 8 9 10; do \\\npgrep -f \"[r]emote-debugging-port=9225\" > /dev/null 2>&1 || break; \\\nsleep 1; \\\ndone\nrm -f \"/P/prof/Default/Sessions\" \\\n\"/P/prof/Default/Last Session\" \\\n\"/P/prof/Default/Current Session\" \\\n\"/P/prof/Default/Last Tabs\" \\\n\"/P/prof/Default/Current Tabs\" \\\n\"/P/prof/Default/Last Browser\" 2>/dev/null || true\nrm -f /C/chrome_tt.pid /C/chrome_tt.log\necho \"\u2705 Chrome killed, session files cleared\"\n",
+    "merge-capture": "echo \"\ud83d\udd17 Merging incoming and outgoing captures...\"\nmergecap -w /S/yt_1/merged.pcap /T/incoming.pcap /T/outgoing.pcap\necho \"\u2705 Merged capture saved to /S/yt_1/merged.pcap\"\nrm /T/incoming.pcap\nrm /T/outgoing.pcap\n",
+    "slow_0": "echo \"\ud83d\udcc9 Applying bandwidth limit and delay...\"\n# Ingress \u2014 add first, fall back to change if already exists\nsudo tc class add dev lvi_tt parent 1: classid 1:10 htb rate 179kbit 2>/dev/null || \\\nsudo tc class change dev lvi_tt parent 1: classid 1:10 htb rate 179kbit\nsudo tc qdisc add dev lvi_tt parent 1:10 netem delay 45ms loss 0.5% 2>/dev/null || \\\nsudo tc qdisc change dev lvi_tt parent 1:10 netem delay 45ms loss 0.5%\n# Egress\nsudo tc class add dev wlp0s20f3 parent 1: classid 1:313 htb rate 179kbit 2>/dev/null || \\\nsudo tc class change dev wlp0s20f3 parent 1: classid 1:313 htb rate 179kbit\nsudo tc qdisc add dev wlp0s20f3 parent 1:313 netem delay 45ms loss 0.5% 2>/dev/null || \\\nsudo tc qdisc change dev wlp0s20f3 parent 1:313 netem delay 45ms loss 0.5%\necho \"\u2705 Network shaping applied: 179kbit, 45ms, loss 0.5%\"\n",
+    "slow_1": "echo \"\ud83d\udcc9 Applying bandwidth limit and delay...\"\n# Ingress \u2014 add first, fall back to change if already exists\nsudo tc class add dev lvi_tt parent 1: classid 1:10 htb rate 5200kbit 2>/dev/null || \\\nsudo tc class change dev lvi_tt parent 1: classid 1:10 htb rate 5200kbit\nsudo tc qdisc add dev lvi_tt parent 1:10 netem delay 10ms loss 0.0% 2>/dev/null || \\\nsudo tc qdisc change dev lvi_tt parent 1:10 netem delay 10ms loss 0.0%\n# Egress\nsudo tc class add dev wlp0s20f3 parent 1: classid 1:313 htb rate 5200kbit 2>/dev/null || \\\nsudo tc class change dev wlp0s20f3 parent 1: classid 1:313 htb rate 5200kbit\nsudo tc qdisc add dev wlp0s20f3 parent 1:313 netem delay 10ms loss 0.0% 2>/dev/null || \\\nsudo tc qdisc change dev wlp0s20f3 parent 1:313 netem delay 10ms loss 0.0%\necho \"\u2705 Network shaping applied: 5200kbit, 10ms, loss 0.0%\"\n",
+    "start-capture": "mkdir -p /C\nmkdir -p /S/yt_1\n# v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails (\"Couldn't change ownership of\n# savefile\") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never\n# opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.\nsudo sh -c 'exec tcpdump -i lvi_tt -U -w - \"not (udp port 41641 or tcp port 22)\" > \"/T/incoming.pcap\" 2> \"/T/tcpdump_in.err\"' & echo $! > /C/lvi_tt.pid\nsudo sh -c 'exec tcpdump -i lvo_tt -U -w - \"not (udp port 41641 or tcp port 22)\" > \"/T/outgoing.pcap\" 2> \"/T/tcpdump_out.err\"' & echo $! > /C/lvo_tt.pid\necho \"\u2705 Capture started\"\n",
+    "start_chrome": "echo \"\ud83d\ude80 Starting Chrome with remote debugging...\"\nLAUNCH_USER=${SUDO_USER:-${USER}}; \\\nmkdir -p /P/prof; \\\nchown -R $LAUNCH_USER /P/prof 2>/dev/null || true; \\\nCHROME_ARGS=\"--no-sandbox --user-data-dir=/P/prof --remote-debugging-port=9225 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --load-extension=<REPO>/labeling about:blank\"; \\\nif [ \"$LAUNCH_USER\" = \"$(id -un)\" ]; then \\\n<REPO>/networkSim/in_cgroup.sh lvdc.slice/tt env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome_tt.log 2>&1 & \\\nelse \\\n<REPO>/networkSim/in_cgroup.sh lvdc.slice/tt sudo -u $LAUNCH_USER env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome_tt.log 2>&1 & \\\nfi; \\\necho $! > /C/chrome_tt.pid\necho \"\u2705 Chrome launched (debug port 9225, log \u2192 /C/chrome_tt.log)\"\n",
+    "stop-capture": "echo \"\ud83d\uded1 Stopping capture...\"\nif [ -f /C/lvi_tt.pid ]; then \\\nPID=`cat /C/lvi_tt.pid`; \\\nsudo kill -INT $PID; \\\nfor i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \\\nrm /C/lvi_tt.pid; \\\nfi\nif [ -f /C/lvo_tt.pid ]; then \\\nPID=`cat /C/lvo_tt.pid`; \\\nsudo kill -INT $PID; \\\nfor i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \\\nrm /C/lvo_tt.pid; \\\nfi\n# (the loop above waits up to 10 s for tcpdump to flush and exit; `sudo wait` never waited: wait is a shell builtin)\necho \"\u2705 Capture fully stopped\"\n"
+   },
+   "make_vars": [
+    "IFB_INGRESS=lvi_tt",
+    "IFB_EGRESS=lvo_tt",
+    "EGRESS_CLASS=1:313",
+    "CDP_PORT=9225",
+    "SLOT_SUFFIX=_tt",
+    "CHROME_PREFIX=/private/tmp/wt-lvdc-nslot/networkSim/in_cgroup.sh lvdc.slice/tt",
+    "IN_FILE=/T/incoming.pcap",
+    "OUT_FILE=/T/outgoing.pcap",
+    "CAPTURE_ERR_IN=/T/tcpdump_in.err",
+    "CAPTURE_ERR_OUT=/T/tcpdump_out.err"
+   ],
+   "record_e0": {
+    "cdp_port": 9225,
+    "cgroup": "lvdc.slice/tt",
+    "egress_class": "1:13",
+    "epoch": 0,
+    "ifb_in": "lvi_tt",
+    "ifb_out": "lvo_tt",
+    "mark": "0x13",
+    "platform": "tiktok",
+    "prio": 12,
+    "tag": "tt"
+   },
+   "record_e3": {
+    "cdp_port": 9225,
+    "cgroup": "lvdc.slice/tt",
+    "egress_class": "1:313",
+    "epoch": 3,
+    "ifb_in": "lvi_tt",
+    "ifb_out": "lvo_tt",
+    "mark": "0x313",
+    "platform": "tiktok",
+    "prio": 12,
+    "tag": "tt"
+   },
+   "up_e0": [
+    "mkdir -p /sys/fs/cgroup/lvdc.slice/tt",
+    "nft add rule inet lvdc_trio out 'socket cgroupv2 level 2 \"lvdc.slice/tt\" meta mark set 0x13 ct mark set meta mark comment \"lvdc slot tt\"'",
+    "ip link add lvi_tt type ifb",
+    "ip link set lvi_tt up",
+    "ip link add lvo_tt type ifb",
+    "ip link set lvo_tt up",
+    "tc qdisc add dev lvi_tt root handle 1: htb default 10",
+    "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 12 handle 0x13 fw action mirred egress redirect dev lvi_tt",
+    "tc filter add dev wlp0s20f3 parent 1: protocol all prio 12 handle 0x13 fw flowid 1:13 action mirred egress mirror dev lvo_tt"
+   ],
+   "up_e3": [
+    "mkdir -p /sys/fs/cgroup/lvdc.slice/tt",
+    "nft add rule inet lvdc_trio out 'socket cgroupv2 level 2 \"lvdc.slice/tt\" meta mark set 0x313 ct mark set meta mark comment \"lvdc slot tt\"'",
+    "ip link add lvi_tt type ifb",
+    "ip link set lvi_tt up",
+    "ip link add lvo_tt type ifb",
+    "ip link set lvo_tt up",
+    "tc qdisc add dev lvi_tt root handle 1: htb default 10",
+    "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 12 handle 0x313 fw action mirred egress redirect dev lvi_tt",
+    "tc filter add dev wlp0s20f3 parent 1: protocol all prio 12 handle 0x313 fw flowid 1:313 action mirred egress mirror dev lvo_tt"
+   ]
+  },
+  "tw": {
+   "detach": [
+    "tc filter del dev wlp0s20f3 parent ffff: prio 11",
+    "tc filter del dev wlp0s20f3 parent 1: prio 11"
+   ],
+   "down": [
+    "sh -c 'test -d /sys/fs/cgroup/lvdc.slice/tw && echo 1 > /sys/fs/cgroup/lvdc.slice/tw/cgroup.kill || true'",
+    "tc filter del dev wlp0s20f3 parent ffff: prio 11",
+    "tc filter del dev wlp0s20f3 parent 1: prio 11",
+    "tc qdisc del dev wlp0s20f3 parent 1:312",
+    "tc class del dev wlp0s20f3 classid 1:312",
+    "ip link del lvi_tw",
+    "ip link del lvo_tw",
+    "nft delete rule inet lvdc_trio out handle 7",
+    "sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do rmdir /sys/fs/cgroup/lvdc.slice/tw 2>/dev/null && exit 0; test -d /sys/fs/cgroup/lvdc.slice/tw || exit 0; sleep 0.5; done; exit 1'"
+   ],
+   "make_n": {
+    "kill_chrome": "echo \"\ud83d\uded1 Killing collection Chrome...\"\n# [r]: the pattern must not match this recipe's own shell, whose command line contains it (make: *** Killed)\npkill -9 -f \"[r]emote-debugging-port=9224\" 2>/dev/null || true\nfor i in 1 2 3 4 5 6 7 8 9 10; do \\\npgrep -f \"[r]emote-debugging-port=9224\" > /dev/null 2>&1 || break; \\\nsleep 1; \\\ndone\nrm -f \"/P/prof/Default/Sessions\" \\\n\"/P/prof/Default/Last Session\" \\\n\"/P/prof/Default/Current Session\" \\\n\"/P/prof/Default/Last Tabs\" \\\n\"/P/prof/Default/Current Tabs\" \\\n\"/P/prof/Default/Last Browser\" 2>/dev/null || true\nrm -f /C/chrome_tw.pid /C/chrome_tw.log\necho \"\u2705 Chrome killed, session files cleared\"\n",
+    "merge-capture": "echo \"\ud83d\udd17 Merging incoming and outgoing captures...\"\nmergecap -w /S/yt_1/merged.pcap /T/incoming.pcap /T/outgoing.pcap\necho \"\u2705 Merged capture saved to /S/yt_1/merged.pcap\"\nrm /T/incoming.pcap\nrm /T/outgoing.pcap\n",
+    "slow_0": "echo \"\ud83d\udcc9 Applying bandwidth limit and delay...\"\n# Ingress \u2014 add first, fall back to change if already exists\nsudo tc class add dev lvi_tw parent 1: classid 1:10 htb rate 179kbit 2>/dev/null || \\\nsudo tc class change dev lvi_tw parent 1: classid 1:10 htb rate 179kbit\nsudo tc qdisc add dev lvi_tw parent 1:10 netem delay 45ms loss 0.5% 2>/dev/null || \\\nsudo tc qdisc change dev lvi_tw parent 1:10 netem delay 45ms loss 0.5%\n# Egress\nsudo tc class add dev wlp0s20f3 parent 1: classid 1:312 htb rate 179kbit 2>/dev/null || \\\nsudo tc class change dev wlp0s20f3 parent 1: classid 1:312 htb rate 179kbit\nsudo tc qdisc add dev wlp0s20f3 parent 1:312 netem delay 45ms loss 0.5% 2>/dev/null || \\\nsudo tc qdisc change dev wlp0s20f3 parent 1:312 netem delay 45ms loss 0.5%\necho \"\u2705 Network shaping applied: 179kbit, 45ms, loss 0.5%\"\n",
+    "slow_1": "echo \"\ud83d\udcc9 Applying bandwidth limit and delay...\"\n# Ingress \u2014 add first, fall back to change if already exists\nsudo tc class add dev lvi_tw parent 1: classid 1:10 htb rate 5200kbit 2>/dev/null || \\\nsudo tc class change dev lvi_tw parent 1: classid 1:10 htb rate 5200kbit\nsudo tc qdisc add dev lvi_tw parent 1:10 netem delay 10ms loss 0.0% 2>/dev/null || \\\nsudo tc qdisc change dev lvi_tw parent 1:10 netem delay 10ms loss 0.0%\n# Egress\nsudo tc class add dev wlp0s20f3 parent 1: classid 1:312 htb rate 5200kbit 2>/dev/null || \\\nsudo tc class change dev wlp0s20f3 parent 1: classid 1:312 htb rate 5200kbit\nsudo tc qdisc add dev wlp0s20f3 parent 1:312 netem delay 10ms loss 0.0% 2>/dev/null || \\\nsudo tc qdisc change dev wlp0s20f3 parent 1:312 netem delay 10ms loss 0.0%\necho \"\u2705 Network shaping applied: 5200kbit, 10ms, loss 0.0%\"\n",
+    "start-capture": "mkdir -p /C\nmkdir -p /S/yt_1\n# v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails (\"Couldn't change ownership of\n# savefile\") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never\n# opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.\nsudo sh -c 'exec tcpdump -i lvi_tw -U -w - \"not (udp port 41641 or tcp port 22)\" > \"/T/incoming.pcap\" 2> \"/T/tcpdump_in.err\"' & echo $! > /C/lvi_tw.pid\nsudo sh -c 'exec tcpdump -i lvo_tw -U -w - \"not (udp port 41641 or tcp port 22)\" > \"/T/outgoing.pcap\" 2> \"/T/tcpdump_out.err\"' & echo $! > /C/lvo_tw.pid\necho \"\u2705 Capture started\"\n",
+    "start_chrome": "echo \"\ud83d\ude80 Starting Chrome with remote debugging...\"\nLAUNCH_USER=${SUDO_USER:-${USER}}; \\\nmkdir -p /P/prof; \\\nchown -R $LAUNCH_USER /P/prof 2>/dev/null || true; \\\nCHROME_ARGS=\"--no-sandbox --user-data-dir=/P/prof --remote-debugging-port=9224 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --load-extension=<REPO>/labeling about:blank\"; \\\nif [ \"$LAUNCH_USER\" = \"$(id -un)\" ]; then \\\n<REPO>/networkSim/in_cgroup.sh lvdc.slice/tw env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome_tw.log 2>&1 & \\\nelse \\\n<REPO>/networkSim/in_cgroup.sh lvdc.slice/tw sudo -u $LAUNCH_USER env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome_tw.log 2>&1 & \\\nfi; \\\necho $! > /C/chrome_tw.pid\necho \"\u2705 Chrome launched (debug port 9224, log \u2192 /C/chrome_tw.log)\"\n",
+    "stop-capture": "echo \"\ud83d\uded1 Stopping capture...\"\nif [ -f /C/lvi_tw.pid ]; then \\\nPID=`cat /C/lvi_tw.pid`; \\\nsudo kill -INT $PID; \\\nfor i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \\\nrm /C/lvi_tw.pid; \\\nfi\nif [ -f /C/lvo_tw.pid ]; then \\\nPID=`cat /C/lvo_tw.pid`; \\\nsudo kill -INT $PID; \\\nfor i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \\\nrm /C/lvo_tw.pid; \\\nfi\n# (the loop above waits up to 10 s for tcpdump to flush and exit; `sudo wait` never waited: wait is a shell builtin)\necho \"\u2705 Capture fully stopped\"\n"
+   },
+   "make_vars": [
+    "IFB_INGRESS=lvi_tw",
+    "IFB_EGRESS=lvo_tw",
+    "EGRESS_CLASS=1:312",
+    "CDP_PORT=9224",
+    "SLOT_SUFFIX=_tw",
+    "CHROME_PREFIX=/private/tmp/wt-lvdc-nslot/networkSim/in_cgroup.sh lvdc.slice/tw",
+    "IN_FILE=/T/incoming.pcap",
+    "OUT_FILE=/T/outgoing.pcap",
+    "CAPTURE_ERR_IN=/T/tcpdump_in.err",
+    "CAPTURE_ERR_OUT=/T/tcpdump_out.err"
+   ],
+   "record_e0": {
+    "cdp_port": 9224,
+    "cgroup": "lvdc.slice/tw",
+    "egress_class": "1:12",
+    "epoch": 0,
+    "ifb_in": "lvi_tw",
+    "ifb_out": "lvo_tw",
+    "mark": "0x12",
+    "platform": "twitch",
+    "prio": 11,
+    "tag": "tw"
+   },
+   "record_e3": {
+    "cdp_port": 9224,
+    "cgroup": "lvdc.slice/tw",
+    "egress_class": "1:312",
+    "epoch": 3,
+    "ifb_in": "lvi_tw",
+    "ifb_out": "lvo_tw",
+    "mark": "0x312",
+    "platform": "twitch",
+    "prio": 11,
+    "tag": "tw"
+   },
+   "up_e0": [
+    "mkdir -p /sys/fs/cgroup/lvdc.slice/tw",
+    "nft add rule inet lvdc_trio out 'socket cgroupv2 level 2 \"lvdc.slice/tw\" meta mark set 0x12 ct mark set meta mark comment \"lvdc slot tw\"'",
+    "ip link add lvi_tw type ifb",
+    "ip link set lvi_tw up",
+    "ip link add lvo_tw type ifb",
+    "ip link set lvo_tw up",
+    "tc qdisc add dev lvi_tw root handle 1: htb default 10",
+    "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 11 handle 0x12 fw action mirred egress redirect dev lvi_tw",
+    "tc filter add dev wlp0s20f3 parent 1: protocol all prio 11 handle 0x12 fw flowid 1:12 action mirred egress mirror dev lvo_tw"
+   ],
+   "up_e3": [
+    "mkdir -p /sys/fs/cgroup/lvdc.slice/tw",
+    "nft add rule inet lvdc_trio out 'socket cgroupv2 level 2 \"lvdc.slice/tw\" meta mark set 0x312 ct mark set meta mark comment \"lvdc slot tw\"'",
+    "ip link add lvi_tw type ifb",
+    "ip link set lvi_tw up",
+    "ip link add lvo_tw type ifb",
+    "ip link set lvo_tw up",
+    "tc qdisc add dev lvi_tw root handle 1: htb default 10",
+    "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 11 handle 0x312 fw action mirred egress redirect dev lvi_tw",
+    "tc filter add dev wlp0s20f3 parent 1: protocol all prio 11 handle 0x312 fw flowid 1:312 action mirred egress mirror dev lvo_tw"
+   ]
+  },
+  "yt": {
+   "detach": [
+    "tc filter del dev wlp0s20f3 parent ffff: prio 10",
+    "tc filter del dev wlp0s20f3 parent 1: prio 10"
+   ],
+   "down": [
+    "sh -c 'test -d /sys/fs/cgroup/lvdc.slice/yt && echo 1 > /sys/fs/cgroup/lvdc.slice/yt/cgroup.kill || true'",
+    "tc filter del dev wlp0s20f3 parent ffff: prio 10",
+    "tc filter del dev wlp0s20f3 parent 1: prio 10",
+    "tc qdisc del dev wlp0s20f3 parent 1:311",
+    "tc class del dev wlp0s20f3 classid 1:311",
+    "ip link del lvi_yt",
+    "ip link del lvo_yt",
+    "nft delete rule inet lvdc_trio out handle 7",
+    "sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do rmdir /sys/fs/cgroup/lvdc.slice/yt 2>/dev/null && exit 0; test -d /sys/fs/cgroup/lvdc.slice/yt || exit 0; sleep 0.5; done; exit 1'"
+   ],
+   "make_n": {
+    "kill_chrome": "echo \"\ud83d\uded1 Killing collection Chrome...\"\n# [r]: the pattern must not match this recipe's own shell, whose command line contains it (make: *** Killed)\npkill -9 -f \"[r]emote-debugging-port=9223\" 2>/dev/null || true\nfor i in 1 2 3 4 5 6 7 8 9 10; do \\\npgrep -f \"[r]emote-debugging-port=9223\" > /dev/null 2>&1 || break; \\\nsleep 1; \\\ndone\nrm -f \"/P/prof/Default/Sessions\" \\\n\"/P/prof/Default/Last Session\" \\\n\"/P/prof/Default/Current Session\" \\\n\"/P/prof/Default/Last Tabs\" \\\n\"/P/prof/Default/Current Tabs\" \\\n\"/P/prof/Default/Last Browser\" 2>/dev/null || true\nrm -f /C/chrome_yt.pid /C/chrome_yt.log\necho \"\u2705 Chrome killed, session files cleared\"\n",
+    "merge-capture": "echo \"\ud83d\udd17 Merging incoming and outgoing captures...\"\nmergecap -w /S/yt_1/merged.pcap /T/incoming.pcap /T/outgoing.pcap\necho \"\u2705 Merged capture saved to /S/yt_1/merged.pcap\"\nrm /T/incoming.pcap\nrm /T/outgoing.pcap\n",
+    "slow_0": "echo \"\ud83d\udcc9 Applying bandwidth limit and delay...\"\n# Ingress \u2014 add first, fall back to change if already exists\nsudo tc class add dev lvi_yt parent 1: classid 1:10 htb rate 179kbit 2>/dev/null || \\\nsudo tc class change dev lvi_yt parent 1: classid 1:10 htb rate 179kbit\nsudo tc qdisc add dev lvi_yt parent 1:10 netem delay 45ms loss 0.5% 2>/dev/null || \\\nsudo tc qdisc change dev lvi_yt parent 1:10 netem delay 45ms loss 0.5%\n# Egress\nsudo tc class add dev wlp0s20f3 parent 1: classid 1:311 htb rate 179kbit 2>/dev/null || \\\nsudo tc class change dev wlp0s20f3 parent 1: classid 1:311 htb rate 179kbit\nsudo tc qdisc add dev wlp0s20f3 parent 1:311 netem delay 45ms loss 0.5% 2>/dev/null || \\\nsudo tc qdisc change dev wlp0s20f3 parent 1:311 netem delay 45ms loss 0.5%\necho \"\u2705 Network shaping applied: 179kbit, 45ms, loss 0.5%\"\n",
+    "slow_1": "echo \"\ud83d\udcc9 Applying bandwidth limit and delay...\"\n# Ingress \u2014 add first, fall back to change if already exists\nsudo tc class add dev lvi_yt parent 1: classid 1:10 htb rate 5200kbit 2>/dev/null || \\\nsudo tc class change dev lvi_yt parent 1: classid 1:10 htb rate 5200kbit\nsudo tc qdisc add dev lvi_yt parent 1:10 netem delay 10ms loss 0.0% 2>/dev/null || \\\nsudo tc qdisc change dev lvi_yt parent 1:10 netem delay 10ms loss 0.0%\n# Egress\nsudo tc class add dev wlp0s20f3 parent 1: classid 1:311 htb rate 5200kbit 2>/dev/null || \\\nsudo tc class change dev wlp0s20f3 parent 1: classid 1:311 htb rate 5200kbit\nsudo tc qdisc add dev wlp0s20f3 parent 1:311 netem delay 10ms loss 0.0% 2>/dev/null || \\\nsudo tc qdisc change dev wlp0s20f3 parent 1:311 netem delay 10ms loss 0.0%\necho \"\u2705 Network shaping applied: 5200kbit, 10ms, loss 0.0%\"\n",
+    "start-capture": "mkdir -p /C\nmkdir -p /S/yt_1\n# v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails (\"Couldn't change ownership of\n# savefile\") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never\n# opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.\nsudo sh -c 'exec tcpdump -i lvi_yt -U -w - \"not (udp port 41641 or tcp port 22)\" > \"/T/incoming.pcap\" 2> \"/T/tcpdump_in.err\"' & echo $! > /C/lvi_yt.pid\nsudo sh -c 'exec tcpdump -i lvo_yt -U -w - \"not (udp port 41641 or tcp port 22)\" > \"/T/outgoing.pcap\" 2> \"/T/tcpdump_out.err\"' & echo $! > /C/lvo_yt.pid\necho \"\u2705 Capture started\"\n",
+    "start_chrome": "echo \"\ud83d\ude80 Starting Chrome with remote debugging...\"\nLAUNCH_USER=${SUDO_USER:-${USER}}; \\\nmkdir -p /P/prof; \\\nchown -R $LAUNCH_USER /P/prof 2>/dev/null || true; \\\nCHROME_ARGS=\"--no-sandbox --user-data-dir=/P/prof --remote-debugging-port=9223 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --load-extension=<REPO>/labeling about:blank\"; \\\nif [ \"$LAUNCH_USER\" = \"$(id -un)\" ]; then \\\n<REPO>/networkSim/in_cgroup.sh lvdc.slice/yt env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome_yt.log 2>&1 & \\\nelse \\\n<REPO>/networkSim/in_cgroup.sh lvdc.slice/yt sudo -u $LAUNCH_USER env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome_yt.log 2>&1 & \\\nfi; \\\necho $! > /C/chrome_yt.pid\necho \"\u2705 Chrome launched (debug port 9223, log \u2192 /C/chrome_yt.log)\"\n",
+    "stop-capture": "echo \"\ud83d\uded1 Stopping capture...\"\nif [ -f /C/lvi_yt.pid ]; then \\\nPID=`cat /C/lvi_yt.pid`; \\\nsudo kill -INT $PID; \\\nfor i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \\\nrm /C/lvi_yt.pid; \\\nfi\nif [ -f /C/lvo_yt.pid ]; then \\\nPID=`cat /C/lvo_yt.pid`; \\\nsudo kill -INT $PID; \\\nfor i in $(seq 50); do sudo kill -0 $PID 2>/dev/null || break; sleep 0.2; done; \\\nrm /C/lvo_yt.pid; \\\nfi\n# (the loop above waits up to 10 s for tcpdump to flush and exit; `sudo wait` never waited: wait is a shell builtin)\necho \"\u2705 Capture fully stopped\"\n"
+   },
+   "make_vars": [
+    "IFB_INGRESS=lvi_yt",
+    "IFB_EGRESS=lvo_yt",
+    "EGRESS_CLASS=1:311",
+    "CDP_PORT=9223",
+    "SLOT_SUFFIX=_yt",
+    "CHROME_PREFIX=/private/tmp/wt-lvdc-nslot/networkSim/in_cgroup.sh lvdc.slice/yt",
+    "IN_FILE=/T/incoming.pcap",
+    "OUT_FILE=/T/outgoing.pcap",
+    "CAPTURE_ERR_IN=/T/tcpdump_in.err",
+    "CAPTURE_ERR_OUT=/T/tcpdump_out.err"
+   ],
+   "record_e0": {
+    "cdp_port": 9223,
+    "cgroup": "lvdc.slice/yt",
+    "egress_class": "1:11",
+    "epoch": 0,
+    "ifb_in": "lvi_yt",
+    "ifb_out": "lvo_yt",
+    "mark": "0x11",
+    "platform": "youtube",
+    "prio": 10,
+    "tag": "yt"
+   },
+   "record_e3": {
+    "cdp_port": 9223,
+    "cgroup": "lvdc.slice/yt",
+    "egress_class": "1:311",
+    "epoch": 3,
+    "ifb_in": "lvi_yt",
+    "ifb_out": "lvo_yt",
+    "mark": "0x311",
+    "platform": "youtube",
+    "prio": 10,
+    "tag": "yt"
+   },
+   "up_e0": [
+    "mkdir -p /sys/fs/cgroup/lvdc.slice/yt",
+    "nft add rule inet lvdc_trio out 'socket cgroupv2 level 2 \"lvdc.slice/yt\" meta mark set 0x11 ct mark set meta mark comment \"lvdc slot yt\"'",
+    "ip link add lvi_yt type ifb",
+    "ip link set lvi_yt up",
+    "ip link add lvo_yt type ifb",
+    "ip link set lvo_yt up",
+    "tc qdisc add dev lvi_yt root handle 1: htb default 10",
+    "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 10 handle 0x11 fw action mirred egress redirect dev lvi_yt",
+    "tc filter add dev wlp0s20f3 parent 1: protocol all prio 10 handle 0x11 fw flowid 1:11 action mirred egress mirror dev lvo_yt"
+   ],
+   "up_e3": [
+    "mkdir -p /sys/fs/cgroup/lvdc.slice/yt",
+    "nft add rule inet lvdc_trio out 'socket cgroupv2 level 2 \"lvdc.slice/yt\" meta mark set 0x311 ct mark set meta mark comment \"lvdc slot yt\"'",
+    "ip link add lvi_yt type ifb",
+    "ip link set lvi_yt up",
+    "ip link add lvo_yt type ifb",
+    "ip link set lvo_yt up",
+    "tc qdisc add dev lvi_yt root handle 1: htb default 10",
+    "tc filter add dev wlp0s20f3 parent ffff: protocol all prio 10 handle 0x311 fw action mirred egress redirect dev lvi_yt",
+    "tc filter add dev wlp0s20f3 parent 1: protocol all prio 10 handle 0x311 fw flowid 1:311 action mirred egress mirror dev lvo_yt"
+   ]
+  }
+ }
+}
