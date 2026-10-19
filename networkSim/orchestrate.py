@@ -260,13 +260,22 @@ def _session_passed(troot: Path, p: str, name: str | None, select=None) -> bool:
         return False
 
 
+TRIO_RUN_ID: str | None = None      # run_trio's run id (decode_stress: its targets count this run's sessions only)
+
+
 def trio_select():
     """t58 L-3 / L-5 (levi; brad's audit item 6): one membership rule for the trio's targets, its failure count, the
     rotation hygiene (not_usable) and the steering: a counted run (--trio-record) counts its sessions of record only
-    (record.is_record: the flag and the current ERA); a pilot run counts every session in the trio root, as before
-    (counting record ones only would never reach a pilot's targets)."""
+    (record.is_record: the flag and the current ERA); a decode_stress run (--trio-stress) counts its own run's sessions
+    only (meta.json concurrency.trio_run; shagun 2026-10-19: earlier stress sessions in data/_trio_stress met the
+    targets and the N = 5 run started none); a pilot run counts every session in the trio root, as before."""
     import record
-    return record.is_record if TRIO_RECORD else None
+    if TRIO_RECORD:
+        return record.is_record
+    if TRIO_STRESS and TRIO_RUN_ID:
+        run = TRIO_RUN_ID
+        return lambda meta: ((meta or {}).get("concurrency") or {}).get("trio_run") == run
+    return None
 
 
 def free_share() -> float:
@@ -780,7 +789,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     except SystemExit:
         return EXIT_OFFLOADS
     os.environ["LVDC_CAPTURE_IFACE"] = iface              # each slot's exp.py ensures and records them on the same one
-    run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    global TRIO_RUN_ID
+    run_id = TRIO_RUN_ID = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     if not _RUNS_DIR.is_dir():           # never create data/ on the root filesystem (a missing data link)
         print(f"\n  TRIO: the data dir {_RUNS_DIR} does not exist: not starting the trio.")
         return EXIT_PREFLIGHT
