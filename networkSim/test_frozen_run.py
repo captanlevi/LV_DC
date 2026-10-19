@@ -62,9 +62,12 @@ v.paused = false; tick();
 const startAfterPlay = sent.filter(e => e.type === "start").length - startsBefore;
 play(12); frozen(3);                                 // a real advance (>= 10 advancing ticks) ends a run
 // chaos tw_27 (2026-10-18): a frozen player under the spinner; the resumer presses play (pause / start events clear
-// the stall label) and twitch re-attaches a new <video> at the same playhead (video_start): the run goes on through both
+// the stall label) and twitch re-attaches a new <video> at the same playhead (video_start). Under addendum N's measure
+// (restored 2026-10-19, levi) a tick without the stall label ends the run, so the press ends it; the 2026-10-18 measure
+// (reverted) carried the run through both. Parity is checked on this window's own events.
 play(12);
 const tw27From = out.length;
+const tw27Ev = sent.length;
 for (let i = 0; i < 20; i++) { v.readyState = 2; tick(); }
 v.paused = true; tick(); v.paused = false; v.readyState = 4; tick(); tick();       // the resume press: label to playing
 for (let i = 0; i < 20; i++) { v.readyState = 2; tick(); }
@@ -79,11 +82,13 @@ for (let k = 0; k < 2; k++) {
 }
 videos = [v]; ctx.__attach(v); play(12);                                            // a real advance ends the run
 const tw27Max = Math.max(...out.slice(tw27From));
+const tw27EvEnd = sent.length;
 // the platform swaps in a replacement element that is still buffering, mid-stall: video_start clears the stall label,
 // so the new element's own "stall" must be emitted (stall state is per element, re-evaluated on attach)
 const w = mkVideo(); w.readyState = 2; videos = [w, v]; v.isConnected = false;
 ctx.__attach(w); tick(); tick();
-fs.writeFileSync(process.argv[3], JSON.stringify({ frozen_s: out, events: sent, startWhilePaused, startAfterPlay, tw27Max }));
+fs.writeFileSync(process.argv[3], JSON.stringify({ frozen_s: out, events: sent, startWhilePaused, startAfterPlay, tw27Max,
+                                                   tw27Ev, tw27EvEnd }));
 """
 
 
@@ -103,14 +108,21 @@ def main() -> int:
     js_max = max(d["frozen_s"])
     types = [e["type"] for e in d["events"]]
     after_swap = types[types.index("video_start", 1):] if types.count("video_start") > 1 else []
-    runs = check_session.frozen_runs(rows)
-    tw27_py = max(b - a for a, b in runs[-3:])
+    runs = check_session.frozen_runs(rows[d["tw27Ev"]:d["tw27EvEnd"]])         # the tw_27-like window's events only
+    tw27_py = max((b - a for a, b in runs), default=0.0)
+    # addendum N: the resume press ends the run (< 80 s; the reverted 2026-10-18 measure read >= 80 s), JS = Python
     ok = (abs(py - js_max) < 1e-6 and py > 0 and "stall" in after_swap and d["startWhilePaused"] == 0
-          and d["startAfterPlay"] >= 1 and d["tw27Max"] >= 80 and abs(tw27_py - d["tw27Max"]) < 1e-6)
+          and d["startAfterPlay"] >= 1 and 0 < d["tw27Max"] < 80 and abs(tw27_py - d["tw27Max"]) < 1e-6)
     print(json.dumps({"python_frozen_s": py, "content_js_max_frozen_s": js_max, "events": len(rows),
                       "stall_after_swap": "stall" in after_swap, "start_while_paused": d["startWhilePaused"],
                       "start_after_play": d["startAfterPlay"], "tw27_like_run_js_py": [d["tw27Max"], tw27_py], "pass": ok}))
     return 0 if ok else 1
+
+
+def test_content_js_frozen_run_equals_check_session():
+    """The parity as a pytest that fails (levi t58, F-5 / B-1): without node it fails, it never skips."""
+    assert shutil.which("node"), "node not found: the content.js = check_session parity cannot run (install node)"
+    assert main() == 0
 
 
 if __name__ == "__main__":
