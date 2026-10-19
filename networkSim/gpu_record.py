@@ -10,7 +10,7 @@ for every session of record, joinable to the labels). One JSON line per second, 
     process's /proc stat and its --type), procs, mem_mb (memory.current).
   - cpu_pct (box, 0-100 over all cores, /proc/stat), mem_available_mb, swap_used_kb, oom_kill (/proc/vmstat).
 A second whose sample failed is a line with "error"; a pause longer than 1.5 intervals is a "gap" line, so coverage
-is never silently lost. The header line carries the recorder's code sha256 and commit. Ops only: the collector does
+is never silently lost; a pass that raises is logged ("restart: ...") and started again with a new header. The header line carries the recorder's code sha256 and commit. Ops only: the collector does
 not change (its sha does not move).
 
     sudo -n nice -n 10 python3 networkSim/gpu_record.py --out <run>/box_record.jsonl        (stop: SIGTERM / SIGINT)
@@ -440,7 +440,14 @@ def main(argv=None) -> int:
     ev = threading.Event()
     for s in (signal.SIGTERM, signal.SIGINT):
         signal.signal(s, lambda *_: ev.set())
-    n = record(a.out, a.interval, a.duration, ev)
+    n, t_end = 0, None if a.duration is None else time.time() + a.duration
+    while not ev.is_set() and (t_end is None or time.time() < t_end):   # restart on failure (supervisor): a pass that
+        try:                                                             # raises is logged and started again
+            n += record(a.out, a.interval, None if t_end is None else max(t_end - time.time(), 0), ev)
+        except Exception as exc:
+            with open(a.out, "a") as fh:
+                fh.write(json.dumps({"t": round(time.time(), 3), "error": "restart: " + repr(exc)[:300]}) + "\n")
+            ev.wait(a.interval)
     print(json.dumps({"lines": n, "out": str(a.out)}))
     return 0
 

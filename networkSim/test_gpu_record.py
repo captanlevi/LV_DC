@@ -195,6 +195,21 @@ def test_cli_without_pmu():
             G.open_reader.__defaults__ = saved
         lines = [json.loads(x) for x in out.read_text().splitlines()]
         assert lines[0]["gpu_source"] == "drm-fdinfo" and lines[0]["fallback_why"] == "no i915 PMU" and len(lines) >= 3
+        out2, real, calls = Path(d) / "c.jsonl", G.record, []        # a pass that raises: logged, started again
+
+        def flaky(*args, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return real(*args, **kw)
+        G.record = flaky
+        G.open_reader.__defaults__ = (str(Path(d) / "nopmu"), str(Path(d) / "noproc"))
+        try:
+            assert G.main(["--out", str(out2), "--interval", "0.05", "--duration", "0.3"]) == 0
+        finally:
+            G.record, G.open_reader.__defaults__ = real, saved
+        lines = [json.loads(x) for x in out2.read_text().splitlines()]
+        assert lines[0]["error"].startswith("restart: RuntimeError") and lines[1]["header"] and len(calls) == 2, lines
 
 
 if __name__ == "__main__":
