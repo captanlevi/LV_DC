@@ -162,7 +162,28 @@ def test_a_content_startup_failure_is_no_systematic_event():
         assert not any("consecutive" in x for x in r2["gating"]), r2        # yt_100007 (before yt_100008) stays content
 
 
+def test_verify_kinds_on_pass_sessions_are_reported_never_systematic():
+    """supervisor 2026-10-19 (round 2): verify's 'paused while labelled playing' on check-PASS sessions in two rounds in
+    a row is reported with its share per round, never a systematic stop; a check exclusion still is."""
+    def g2(name, verify_reasons=(), cls="normal"):
+        return {"sessions": [_row(name, items1_2={
+            "1": {"ok": None, "verdict": "suspicious", "reasons": list(verify_reasons)} if verify_reasons
+            else {"ok": True, "reading": "PASS"},
+            "2": {"ok": True, "reading": "PASS"} if cls == "normal" else
+            {"ok": None, "reasons": [], "session_class": cls}})]}
+    base = {"verify": {"twitch": {"coarse": {"paused while labelled playing": {"sessions": 1, "rate": 0.01}}}},
+            "check": {"twitch": {"coarse": {"class:player_frozen": {"sessions": 1, "rate": 0.01}}}}}
+    flag = ["paused while labelled playing (share 0.12)"]
+    r1, r2 = R.round_kinds(g2("tw_100010", flag)), R.round_kinds(g2("tw_100013", flag))
+    assert r1["kinds"] == {} and r2["reported"]["kinds"]["twitch"]["verify"], r2
+    assert list(r2["reported"]["share"]["twitch"]["verify"].values()) == [1.0], r2
+    assert R.systematic(r2, [{"round_kinds": r1}], base) == []
+    f1, f2 = R.round_kinds(g2("tw_100011", cls="player_frozen")), R.round_kinds(g2("tw_100014", cls="player_frozen"))
+    assert any("2 consecutive" in x for x in R.systematic(f2, [{"round_kinds": f1}], base))
+
+
 if __name__ == "__main__":
+    test_verify_kinds_on_pass_sessions_are_reported_never_systematic()
     test_stop_rule()
     test_startup_failure_rule()
     test_systematic_rule()

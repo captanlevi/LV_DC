@@ -23,9 +23,11 @@ is no event for the systematic rule below (supervisor 2026-10-19: left out of th
 round_kinds.content; an earlier round's content sessions likewise, from its list or re-read by the same rule).
 
 Systematic exclusion (levi's rule, supervisor 2026-10-19), with --inventory (brad's json with base_rates; both shas
-checked) and --history (the earlier counted rounds' --out jsons, oldest first). Over the sessions whose verify / check
-did not PASS, the coarse kinds per platform (brad's kind rule; check's class as "class:<x>"; a kind counts once per
-session and file). Stop and diagnose when:
+checked) and --history (the earlier counted rounds' --out jsons, oldest first). Over the sessions whose check did not
+PASS (exclusions: a FAIL kind or a non-normal class, freezes included), the coarse kinds per platform (brad's kind rule;
+check's class as "class:<x>"; a kind counts once per session). verify's kinds (verify is PASS or "suspicious", it never
+excludes on its own) are reported per round with their share (round_kinds.reported), never a stop (supervisor
+2026-10-19, after round 2's 'paused while labelled playing' on PASS sessions). Stop and diagnose when:
   - the same kind on the same platform appears in this round and the previous counted round; or
   - over all counted rounds, a platform's sessions carrying a kind number >= 3 and their share is >= 2 x the kind's
     single-mode base rate on that platform (base_rates[file][platform].coarse[kind].rate).
@@ -96,7 +98,7 @@ def round_kinds(gate2: dict, content: set | frozenset = frozenset()) -> dict:
     startup_failure_rule) is no collection event: left out of the kinds and the counts, listed under "content"."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "networkSim"))
     from gate2_items import reason_kind
-    n, kinds = {}, {}
+    n, kinds, reported = {}, {}, {}
     for r in gate2.get("sessions") or []:
         sd = Path(r.get("session", ""))
         if sd.name in content:
@@ -111,9 +113,17 @@ def round_kinds(gate2: dict, content: set | frozenset = frozenset()) -> dict:
             c = v.get("session_class")
             if f == "check" and c is not None and c not in ("normal", "censored"):
                 rs.append(f"class:{c}")
+            # supervisor 2026-10-19 (round 2): only exclusions count toward the systematic rule, i.e. check's non-PASS
+            # kinds (a FAIL, a non-normal class: freezes included); verify never excludes on its own (PASS or
+            # "suspicious"), so its kinds are reported per round with their share, never a stop
+            dest = kinds if f == "check" else reported
             for k in {reason_kind(x, coarse=True) for x in rs}:
-                kinds.setdefault(plat, {}).setdefault(f, {}).setdefault(k, []).append(sd.name)
-    return {"n_sessions": n, "kinds": kinds, "content": sorted(content)}
+                dest.setdefault(plat, {}).setdefault(f, {}).setdefault(k, []).append(sd.name)
+    share = {p: {f: {k: round(len(set(ss)) / n[p], 4) for k, ss in ks.items()} for f, ks in fk.items()}
+             for p, fk in reported.items() if n.get(p)}
+    return {"n_sessions": n, "kinds": kinds, "content": sorted(content),
+            "reported": {"kinds": reported, "share": share,
+                         "rule": "verify kinds: reported per round with their share, never a systematic stop"}}
 
 
 def history_content(h: dict, sessions: list[Path]) -> set:
