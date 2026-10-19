@@ -7,7 +7,10 @@ session) and teardown, and its tc stat parsers. Runs without root (command gener
 """
 import importlib.util
 import sys
+import os
 from pathlib import Path
+
+os.environ.setdefault("LVDC_MGMT_UDP_PORT", "41641")   # t58 L-6: the goldens hold the default port
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("trio_dry_run", HERE.parent / "ops" / "diag" / "trio_dry_run.py")

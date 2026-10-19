@@ -294,6 +294,55 @@ def test_tt_idle_rule_reads_the_slots_own_ifb():
         B.SHAPED_IFACE, B.RX_OWN_IFB = saved
 
 
+def test_mgmt_udp_port_is_the_makefiles_live_lookup():
+    """t58 L-6 (brad's audit): the trio's management bypass takes tailscaled's live UDP port as the Makefile reads it
+    (sudo -n ss -ulpnH), recorded with its source in meta concurrency; an override (tests) and the 41641 fallback."""
+    import subprocess as sp
+    saved, env = sp.run, os.environ.pop("LVDC_MGMT_UDP_PORT", None)
+    try:
+        sp.run = lambda *a, **k: types.SimpleNamespace(stdout="UNCONN 0 0 0.0.0.0:41999 0.0.0.0:* users:((\"tailscaled\",pid=9))\n")
+        assert T.mgmt_udp_port_record() == {"port": 41999, "source": "tailscaled (ss -ulpnH)"}
+        assert "match ip dport 41999 0xffff" in " ".join(T.shared_up_cmds())
+        sp.run = lambda *a, **k: types.SimpleNamespace(stdout="UNCONN 0 0 0.0.0.0:5353 0.0.0.0:* users:((\"avahi\",pid=1))\n")
+        assert T.mgmt_udp_port_record()["port"] == T.MGMT_UDP_PORT
+        os.environ["LVDC_MGMT_UDP_PORT"] = "40000"
+        assert T.mgmt_udp_port_record() == {"port": 40000, "source": "LVDC_MGMT_UDP_PORT"}
+    finally:
+        sp.run = saved
+        os.environ.pop("LVDC_MGMT_UDP_PORT", None)
+        if env is not None:
+            os.environ["LVDC_MGMT_UDP_PORT"] = env
+
+
+def test_twitch_history_reads_both_roots_and_skips_uncategorised_running():
+    """t58 L-7: recent twitch channels come from both roots (single and trio), as tt rooms do; a running session whose
+    category is not written yet is not counted as Just Chatting; a channel page a sibling plays is never taken (the
+    category pick instead, recorded)."""
+    try:
+        import websocket  # noqa: F401
+    except ImportError:
+        sys.modules["websocket"] = types.ModuleType("websocket")
+    import browser as B
+    import tw_categories as TC
+    with tempfile.TemporaryDirectory() as d:
+        data = Path(d)
+        for rel, t, url, cat, done in (("twitch/tw_1", 1.0, "https://www.twitch.tv/single", "Chess", True),
+                                       ("_trio/twitch/tw_100001", 2.0, "https://www.twitch.tv/trio", None, False),
+                                       ("_trio/_failed/twitch/tw_100002", 3.0, "https://www.twitch.tv/failed", None, True)):
+            (data / rel).mkdir(parents=True)
+            (data / rel / "meta.json").write_text(json.dumps({"started_at": t, "channel_url": url,
+                                                              **({"tw_category": cat} if cat else {})}))
+            if done:
+                (data / rel / "check.json").write_text("{}")
+        me = data / "_trio" / "twitch" / "tw_100003"
+        assert B.recent_tw_channels(me) == ["https://www.twitch.tv/failed", "https://www.twitch.tv/single",
+                                            "https://www.twitch.tv/trio"], B.recent_tw_channels(me)
+        counts = TC.collected_counts(data / "_trio")
+        assert counts.get(TC.PRE_ROTATION_CATEGORY, 0) == 0, counts          # tw_100001: running, no category yet
+    src = (Path(__file__).resolve().parent / "browser.py").read_text()
+    assert 'self.tw_pick["first_url_held_by_sibling"] = first' in src
+
+
 def main() -> int:
     test_slot_table()
     test_reservation_and_fullscreen_token()
@@ -305,6 +354,8 @@ def main() -> int:
     test_exp_accepts_the_composition_tags()
     test_a_pick_is_claimed_before_it_lands()
     test_tt_idle_rule_reads_the_slots_own_ifb()
+    test_mgmt_udp_port_is_the_makefiles_live_lookup()
+    test_twitch_history_reads_both_roots_and_skips_uncategorised_running()
     print("test_nslot: ok")
     return 0
 

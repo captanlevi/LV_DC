@@ -5,7 +5,12 @@
 # Removes BATCH_GO (no relaunch after a reboot while paused), waits for the session to end (zombie-aware: a finished
 # child of a stopped orchestrate stays a zombie), then undoes the shaping, kills the collection Chrome, logs "box free".
 . "${OPS:-$(dirname "$(readlink -f "$0")")}/env.sh"
-rm -f "$LVDC_STATE/BATCH_GO"; O=$(pgrep -f "$ORCH_PATTERN"); X=$(pgrep -f "$EXP_PATTERN")
+# t58 T-3 (brad's audit): single mode only. A trio / N-slot run has several exp.py (the wait below would never end) and
+# its shared tree must not see make disable: refuse; drain a trio with its drain file instead
+O=$(pgrep -f "$ORCH_PATTERN"); X=$(pgrep -f "$EXP_PATTERN")
+if [ -n "$O" ] && ps -o args= -p $O | grep -q -- "--concurrent"; then log "PAUSE refused: orchestrate --concurrent (trio): drain it instead"; exit 1; fi
+if [ "$(echo "$X" | grep -c .)" -gt 1 ]; then log "PAUSE refused: $(echo "$X" | grep -c .) exp.py running (a trio?)"; exit 1; fi
+rm -f "$LVDC_STATE/BATCH_GO"
 [ -n "$O" ] && kill -STOP $O; log "PAUSE requested (${1:-finish}); BATCH_GO removed; orchestrate=$O frozen; session pid=${X:-none}"
 if [ "$1" = now ] && [ -n "$X" ]; then kill -TERM $X; log "current session aborted (user_pause; archived to _failed by check_session)"; fi
 while [ -n "$X" ] && kill -0 $X 2>/dev/null && [ "$(ps -o stat= -p $X | cut -c1)" != Z ]; do sleep 10; done

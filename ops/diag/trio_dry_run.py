@@ -89,7 +89,13 @@ def platform_of(tag: str) -> str:
 
 SESSIONS = sessions_of({"youtube": 1, "twitch": 1, "tiktok": 1})    # --slots changes it (main)
 DEFAULT_STATES = {s: PLATFORM_STATES[platform_of(s)] for s in SESSIONS}
-MGMT_UDP_PORT, MGMT_TCP_PORT = 41641, 22
+MGMT_UDP_PORT, MGMT_TCP_PORT = 41641, 22             # the fallback; the tree uses _mgmt_udp() (t58 L-6)
+
+
+def _mgmt_udp() -> int:
+    """t58 L-6: the live tailscaled port, the same lookup as production's tree (trio_slots.mgmt_udp_port)."""
+    import trio_slots
+    return trio_slots.mgmt_udp_port()
 BULK_URL = "http://mirror.aarnet.edu.au/pub/ubuntu/releases/24.04/ubuntu-24.04.5-live-server-amd64.iso"   # ~3 GB
 MARK_BY = "cgroup"  # "uid" only for a test kernel without nft socket cgroupv2 (each session a user lvdc_<p>)
 TOP_STATE_KBIT = 9000.0                                      # SCENARIOS state 10's upper rate limit
@@ -145,7 +151,7 @@ def tree_up_cmds(iface: str) -> list[str]:
     # ingress: bypass management, restore the mark, redirect by mark
     c += [f"tc qdisc del dev {iface} root 2>/dev/null || true", f"tc qdisc del dev {iface} ingress 2>/dev/null || true",
           f"tc qdisc add dev {iface} handle ffff: ingress"]
-    for proto, port, side in ((17, MGMT_UDP_PORT, "sport"), (17, MGMT_UDP_PORT, "dport"), (6, MGMT_TCP_PORT, "sport"),
+    for proto, port, side in ((17, _mgmt_udp(), "sport"), (17, _mgmt_udp(), "dport"), (6, MGMT_TCP_PORT, "sport"),
                               (6, MGMT_TCP_PORT, "dport")):
         c.append(f"tc filter add dev {iface} parent ffff: protocol ip prio 1 u32 match ip protocol {proto} 0xff "
                  f"match ip {side} {port} 0xffff action ok")
@@ -163,7 +169,7 @@ def tree_up_cmds(iface: str) -> list[str]:
     c += [f"tc qdisc add dev {iface} root handle 1: htb default 30",
           f"tc class add dev {iface} parent 1: classid 1:20 htb rate 1000mbit",
           f"tc class add dev {iface} parent 1: classid 1:30 htb rate 1000mbit"]
-    for proto, port, side in ((17, MGMT_UDP_PORT, "sport"), (17, MGMT_UDP_PORT, "dport"), (6, MGMT_TCP_PORT, "sport"),
+    for proto, port, side in ((17, _mgmt_udp(), "sport"), (17, _mgmt_udp(), "dport"), (6, MGMT_TCP_PORT, "sport"),
                               (6, MGMT_TCP_PORT, "dport")):
         c.append(f"tc filter add dev {iface} parent 1: protocol ip prio 1 u32 match ip protocol {proto} 0xff "
                  f"match ip {side} {port} 0xffff flowid 1:20")

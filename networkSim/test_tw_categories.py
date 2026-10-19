@@ -24,6 +24,9 @@ def main() -> int:
             s = d / "twitch" / f"tw_{i}"
             s.mkdir(parents=True)
             (s / "meta.json").write_text(json.dumps({"tw_category": cat} if cat else {}))
+            (s / "check.json").write_text("{}")                                     # finished sessions
+        (d / "twitch" / "tw_8").mkdir(parents=True)                             # t58 L-7: running, category not written
+        (d / "twitch" / "tw_8" / "meta.json").write_text("{}")
         f = d / "_failed" / "twitch" / "tw_9"
         f.mkdir(parents=True)
         (f / "meta.json").write_text(json.dumps({"tw_category": "Music"}))          # _failed does not count

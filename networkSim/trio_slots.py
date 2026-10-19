@@ -32,7 +32,28 @@ CG_ROOT = Path("/sys/fs/cgroup")
 SLICE = "lvdc.slice"
 NFT_TABLE = "lvdc_trio"
 IFACE_DEFAULT = "wlp0s20f3"
-MGMT_UDP_PORT, MGMT_TCP_PORT = 41641, 22
+MGMT_UDP_PORT, MGMT_TCP_PORT = 41641, 22             # MGMT_UDP_PORT: the fallback; mgmt_udp_port() is what the tree uses
+
+
+def mgmt_udp_port_record() -> dict:
+    """t58 L-6 (brad's audit): tailscaled's live UDP port, read as the Makefile reads it (`sudo -n ss -ulpnH`, the
+    tailscaled line's local port), so the trio's management bypass, single mode's BPF and meta.json mgmt_exclusion name
+    one port; LVDC_MGMT_UDP_PORT overrides (tests); else MGMT_UDP_PORT. {port, source}."""
+    v = os.environ.get("LVDC_MGMT_UDP_PORT")
+    if v:
+        return {"port": int(v), "source": "LVDC_MGMT_UDP_PORT"}
+    try:
+        out = subprocess.run(["sudo", "-n", "ss", "-ulpnH"], capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            if "tailscaled" in line:
+                return {"port": int(line.split()[3].rsplit(":", 1)[1]), "source": "tailscaled (ss -ulpnH)"}
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        pass
+    return {"port": MGMT_UDP_PORT, "source": "default (no tailscaled port read)"}
+
+
+def mgmt_udp_port() -> int:
+    return mgmt_udp_port_record()["port"]
 HERE = Path(__file__).resolve().parent
 CURRENT_DATA = Path(__file__).resolve().parent.parent / "current_data"
 # A2 (supervisor): during a trio session its pcaps are written on the root filesystem (SSD), not the data volume (USB
@@ -182,9 +203,10 @@ def slot_of(tag_or_platform: str) -> Slot:
 
 # ------------------------------------------------------------------------------------------------ the tree
 def _mgmt_filters(iface: str, parent: str, verdict: str) -> list[str]:
+    udp = mgmt_udp_port()                              # t58 L-6: the live port, as the Makefile's BPF and meta
     return [f"tc filter add dev {iface} parent {parent} protocol ip prio 1 u32 match ip protocol {proto} 0xff "
             f"match ip {side} {port} 0xffff {verdict}"
-            for proto, port, side in ((17, MGMT_UDP_PORT, "sport"), (17, MGMT_UDP_PORT, "dport"),
+            for proto, port, side in ((17, udp, "sport"), (17, udp, "dport"),
                                       (6, MGMT_TCP_PORT, "sport"), (6, MGMT_TCP_PORT, "dport"))]
 
 
@@ -614,7 +636,7 @@ def concurrency_record(s: Slot | None, **extra) -> dict:
     # t56 (levi's pooling ruling): n, the composition and the collector's sha per session
     return {"mode": "trio", "pool": "per_session", **s.record(), "record": os.environ.get("LVDC_TRIO_RECORD") == "1",
             "era": record.ERA, "n": len(SLOTS), "composition": composition_of(SLOTS),
-            "lvdc_commit": session_meta.lvdc_commit(), **extra}
+            "lvdc_commit": session_meta.lvdc_commit(), "mgmt_udp_port": mgmt_udp_port_record(), **extra}
 
 
 def slots_log_append(path: Path, rec: dict) -> None:
@@ -816,15 +838,19 @@ def conntrack_timeouts(proc: Path = Path("/proc/sys/net/netfilter")) -> dict:
     return out
 
 
-def trio_root_floor_gb(runs_dir: Path, single_floor_gb: float, platforms=("youtube", "twitch", "tiktok")) -> dict:
-    """A2: in trio mode the root filesystem floor = single mode's + three times the largest per-session pcap observed
-    (merged.pcap of accepted and _failed sessions)."""
+def trio_root_floor_gb(runs_dir: Path, single_floor_gb: float, platforms=("youtube", "twitch", "tiktok"),
+                       n_slots: int | None = None) -> dict:
+    """A2: in trio mode the root filesystem floor = single mode's + the slot count (t58 N-5: was a fixed three) times the
+    largest per-session pcap observed (merged.pcap of accepted and _failed sessions, single mode's root and the trio's:
+    t58 N-5, the trio's own sessions were not scanned)."""
+    n = n_slots if n_slots is not None else len(SLOTS)
     largest = 0
-    for p in platforms:
-        for f in list((runs_dir / p).glob("*/merged.pcap")) + list((runs_dir / "_failed" / p).glob("*/merged.pcap")):
-            try:
-                largest = max(largest, f.stat().st_size)
-            except OSError:
-                pass
-    return {"single_floor_gb": single_floor_gb, "largest_pcap_gb": round(largest / 1e9, 2),
-            "floor_gb": round(single_floor_gb + 3 * largest / 1e9, 1)}
+    for root in (runs_dir, runs_dir / TRIO_DIR):
+        for p in platforms:
+            for f in list((root / p).glob("*/merged.pcap")) + list((root / "_failed" / p).glob("*/merged.pcap")):
+                try:
+                    largest = max(largest, f.stat().st_size)
+                except OSError:
+                    pass
+    return {"single_floor_gb": single_floor_gb, "largest_pcap_gb": round(largest / 1e9, 2), "n_slots": n,
+            "floor_gb": round(single_floor_gb + n * largest / 1e9, 1)}

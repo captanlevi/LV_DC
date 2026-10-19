@@ -107,7 +107,7 @@ def collected_counts(data_dir: Path, platform: str, select=None) -> dict[str, in
     -> bool: only the sessions it keeps (the trio: its sessions of record, levi)."""
     counts = {g: 0 for g in GEOMETRY_CHOICES.get(platform, [])}
     for m in data_dir.rglob("meta.json"):
-        if m.parent.parent.name != platform or "_failed" in m.parts or "_trio" in m.relative_to(data_dir).parts:   # trio: its own root
+        if m.parent.parent.name != platform or "_failed" in m.parts or any(x.startswith("_trio") for x in m.relative_to(data_dir).parts):   # trio: its own root
             continue
         try:
             meta = json.loads(m.read_text())

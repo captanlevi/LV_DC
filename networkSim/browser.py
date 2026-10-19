@@ -444,12 +444,14 @@ def _norm_channel(u: str | None) -> str:
 
 
 def recent_tw_channels(session_dir: Path | None, n: int = TW_RECENT_CHANNELS_N) -> list[str]:
-    """Channel URLs of the last n twitch sessions (data/twitch and data/_failed/twitch, by meta.json started_at)."""
+    """Channel URLs of the last n twitch sessions (by meta.json started_at) over both roots, single mode's and the
+    trio's, whichever the session is in (t58 L-7: the gap 8a93881 closed for tt rooms)."""
     if session_dir is None:
         return []
     root = Path(session_dir).resolve().parent.parent
+    data = root.parent if root.name.startswith("_trio") else root
     metas = []
-    for d in list((root / "twitch").glob("*")) + list((root / "_failed" / "twitch").glob("*")):
+    for d in [x for r in (data, data / "_trio") for x in list((r / "twitch").glob("*")) + list((r / "_failed" / "twitch").glob("*"))]:
         m = d / "meta.json"
         if d.resolve() == Path(session_dir).resolve() or not m.exists():
             continue
@@ -2834,7 +2836,11 @@ class BrowserSession:
             troot = not_usable.trio_root_of(self._session_dir)
             na = not_usable.set_aside(troot, "twitch") if troot is not None else {}
             self.tw_pick = {**({"sibling_excluded": sib} if sib else {}), **({"not_usable_excluded": na} if na else {})}
-            self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
+            first = self.first_url
+            if first and "/directory/" not in first and _norm_room(first) in set(sib):
+                self.tw_pick["first_url_held_by_sibling"] = first     # t58 L-7: never the channel a sibling plays
+                first = None
+            self.list_url = _navigate_to_live(self._page, self.platform, first_url=first,
                                               exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)),
                                               record=self.tw_pick,
                                               claim=lambda u: publish_stream(self._session_dir, "twitch", u, "intent"))

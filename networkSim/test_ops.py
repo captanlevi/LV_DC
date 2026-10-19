@@ -35,6 +35,14 @@ def main() -> int:
     assert len(re.findall(r'^: "\$\{LVQOE_LOOP_DIR:=', env, re.M)) == 1
     assert set(re.findall(r"\$\{?(LVQOE_\w+_DIR)", loop)) == {"LVQOE_LOOP_DIR"}
     assert not re.search(r"LVQOE_(VERIFY|FRAMES)_DIR", env + loop)
+    # t58 T-3: the single-mode wrappers refuse a trio / N-slot run (run_batch's cleanup and pause_batch's make disable
+    # would take the trio's shared tree down; pause_batch's wait assumes one exp.py), and run_batch's refusal drops its
+    # cleanup trap first; the apply gate pauses through pause_batch, so it refuses with it
+    rb, pb = (OPS / "run_batch.sh").read_text(), (OPS / "pause_batch.sh").read_text()
+    assert re.search(r'case " \$SPEC \$OPTS " in \*" --concurrent"\*\).*trap - EXIT; exit 1', rb), "run_batch refusal"
+    assert rb.index("--concurrent\"*)") < rb.index("mountpoint -q")
+    assert 'grep -q -- "--concurrent"' in pb and "exp.py running (a trio?)" in pb
+    assert pb.index("PAUSE refused") < pb.index('rm -f "$LVDC_STATE/BATCH_GO"') < pb.rindex("make disable")
     print("test_ops: ok")
     return 0
 

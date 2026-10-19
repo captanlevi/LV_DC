@@ -14,7 +14,10 @@ import re
 import shutil
 import subprocess
 import sys
+import os
 from pathlib import Path
+
+os.environ.setdefault("LVDC_MGMT_UDP_PORT", "41641")   # t58 L-6: the goldens hold the default port
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))

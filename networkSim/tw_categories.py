@@ -62,7 +62,7 @@ def collected_counts(data_dir: Path, select=None) -> dict[str, int]:
     """select(meta) -> bool: only the sessions it keeps (the trio: its sessions of record, levi)."""
     counts = {c["name"]: 0 for c in TW_CATEGORIES}
     for m in data_dir.rglob("meta.json"):
-        if m.parent.parent.name != "twitch" or "_failed" in m.parts or "_trio" in m.relative_to(data_dir).parts:   # trio: its own root
+        if m.parent.parent.name != "twitch" or "_failed" in m.parts or any(x.startswith("_trio") for x in m.relative_to(data_dir).parts):   # trio: its own root
             continue
         try:
             meta = json.loads(m.read_text())
@@ -70,6 +70,8 @@ def collected_counts(data_dir: Path, select=None) -> dict[str, int]:
             continue
         if select is not None and not select(meta):
             continue
+        if not meta.get("tw_category") and not (m.parent / "check.json").exists():
+            continue                     # t58 L-7: a running session whose category is not written yet, not Just Chatting
         name = meta.get("tw_category") or PRE_ROTATION_CATEGORY
         if name in counts:
             counts[name] += 1

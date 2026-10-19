@@ -14,6 +14,8 @@ import tempfile
 import time
 from pathlib import Path
 
+os.environ.setdefault("LVDC_MGMT_UDP_PORT", "41641")   # t58 L-6: the goldens hold the default port
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
@@ -240,8 +242,15 @@ def test_siblings_and_floor():
             (data / rel).parent.mkdir(parents=True)
             with open(data / rel, "wb") as fh:
                 fh.truncate(n)
-        fl = T.trio_root_floor_gb(data, 5.0)
-        assert fl == {"single_floor_gb": 5.0, "largest_pcap_gb": 3.0, "floor_gb": 14.0}
+        fl = T.trio_root_floor_gb(data, 5.0, n_slots=3)
+        assert fl == {"single_floor_gb": 5.0, "largest_pcap_gb": 3.0, "n_slots": 3, "floor_gb": 14.0}
+        # t58 N-5: the trio root's pcaps are scanned too, and the floor scales with the slot count
+        (data / T.TRIO_DIR / "twitch" / "tw_100001").mkdir(parents=True)
+        with open(data / T.TRIO_DIR / "twitch" / "tw_100001" / "merged.pcap", "wb") as fh:
+            fh.truncate(4_000_000_000)
+        assert T.trio_root_floor_gb(data, 5.0, n_slots=5) == {"single_floor_gb": 5.0, "largest_pcap_gb": 4.0, "n_slots": 5,
+                                                              "floor_gb": 25.0}
+        assert T.trio_root_floor_gb(data, 5.0)["n_slots"] == len(T.SLOTS)
 
 
 def _pkt(t, src, dst, proto, sport, dport, n=100, dcid="", sni="", qname="", resp="", ans=""):
@@ -422,7 +431,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     O.session_matrix = (lambda p, f=None, ex=(), data_dir=None, select=None, reserved=None, key=None:
                         calls.append(("matrix", p, f, ex, data_dir, select, reserved, key)) or "A")
     O.accepted_sessions = lambda p, root=None, select=None: calls.append(("accepted", p, root)) and 0 or 0
-    O.report_flags = lambda p, t, root=None: []
+    O.report_flags = lambda p, t, root=None, only=None: []
     O._summary = lambda: None
     O.preclean = lambda: calls.append(("preclean",))
     O.most_needed_state = lambda *a, **k: None

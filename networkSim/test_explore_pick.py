@@ -143,6 +143,65 @@ def test_one_membership_rule_for_the_trio_targets():
     assert record.ERA == "t56-nslot-2026-10-19"
 
 
+def test_failure_streaks_are_per_slot_and_flags_per_session():
+    """t58 N-4 (brad's audit): with two slots of one platform, a slot's consecutive failures are its own (a sibling's
+    PASS no longer resets them) and judged from its own session (the slots log's start for the slot in this run); a
+    slot's exit reports flags for its own session only."""
+    import orchestrate as O
+    with tempfile.TemporaryDirectory() as d:
+        troot = Path(d)
+        log = troot / "_summaries" / "trio_slots.jsonl"
+        log.parent.mkdir(parents=True)
+        ok = _sess(d, "tw_100001", "TW-M", 1.0)                                   # tw1's session: PASS
+        bad = _sess(d, "tw_100002", "TW-M", 2.0, accepted=False, failed=True)     # tw2's session: FAIL
+        log.write_text("".join(json.dumps(e) + "\n" for e in (
+            {"event": "start", "slot": "tw1", "session": "tw_100001", "platform": "twitch", "run": "R"},
+            {"event": "start", "slot": "tw2", "session": "tw_100002", "platform": "twitch", "run": "R"},
+            {"event": "start", "slot": "tw2", "session": "tw_old", "platform": "twitch", "run": "OLD"})))
+        assert O._slot_session(log, "tw2", "R") == "tw_100002" and O._slot_session(log, "tw9", "R") is None
+        assert O._session_passed(troot, "twitch", "tw_100001") and not O._session_passed(troot, "twitch", "tw_100002")
+        paused, fails, frozen = {}, {"tw1": 0, "tw2": O.MAX_CONSECUTIVE_FAIL - 1}, {"tw1": 0, "tw2": 0}
+        # the old delta rule would read tw1's PASS as tw2's success (accepted count went up): now tw2's own FAIL counts
+        O._account("twitch", 1, 0, None, None, 0.0, paused, fails, frozen, {}, troot, key="tw2",
+                   passed=O._session_passed(troot, "twitch", O._slot_session(log, "tw2", "R")))
+        assert fails == {"tw1": 0, "tw2": O.MAX_CONSECUTIVE_FAIL} and "slot tw2" in paused.get("twitch", ""), (fails, paused)
+        for sd, flag in ((ok, "unexpected_codec"), (bad, "single_rung_ladder")):
+            c = json.loads((sd / "check.json").read_text())
+            (sd / "check.json").write_text(json.dumps({**c, "suspicious": [{"flag": flag}]}))
+        rows = O.report_flags("twitch", 0, troot, only="tw_100002")
+        assert [r["session"] for r in rows] == ["tw_100002"], rows
+
+
+def test_a_pinned_fullscreen_waits_for_the_token():
+    """t58 N-6: a pin's fullscreen geometry goes through the one-fullscreen token: deferred (drawn geometry kept,
+    recorded) while a sibling holds fullscreen; applied otherwise; a non-fullscreen pin applies as before."""
+    import orchestrate as O
+    pin = {"geometry": "fullscreen:1920x1080", "reason": "r"}
+    held = {"yt2": {"geom": "fullscreen:1920x1080"}, "tw1": {"geom": "window:1920x1080"}}
+    assert O.pin_geometry(pin, "player:853x480", held, "yt1") == ("player:853x480",
+                                                                  {**pin, "geometry_deferred": "fullscreen:1920x1080"})
+    assert O.pin_geometry(pin, "player:853x480", {"yt1": {"geom": "fullscreen:1920x1080"}}, "yt1") == \
+        ("fullscreen:1920x1080", pin)                                   # its own (previous) session holds nothing now
+    assert O.pin_geometry({"geometry": "window:1920x1080"}, "player:853x480", held, "tw2")[0] == "window:1920x1080"
+    assert O.pin_geometry({"state": "3"}, "player:853x480", held, "tw2") == ("player:853x480", {"state": "3"})
+
+
+def test_trio_stress_sessions_never_count_as_single_mode():
+    """t58 N-9: single mode's history readers skip every trio-family root (_trio, _trio_stress), not only the exact
+    "_trio" (geometry / tw_categories / yt_channels collected_counts, yt last_channel)."""
+    import geometry as G
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        spec = G.GEOMETRY_CHOICES["youtube"][0]
+        mode, size = spec.split(":", 1)
+        for rel in ("youtube/yt_1", "_trio/youtube/yt_100001", "_trio_stress/youtube/yt_100002"):
+            (d / rel).mkdir(parents=True)
+            (d / rel / "meta.json").write_text(json.dumps({"geometry_target": spec}))
+        assert G.collected_counts(d, "youtube")[spec] == 1, G.collected_counts(d, "youtube")
+    src = "".join((Path(__file__).resolve().parent / f).read_text() for f in ("yt_channels.py", "tw_categories.py"))
+    assert '"_trio" in ' not in src and '"_trio" not in ' not in src
+
+
 def main() -> int:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

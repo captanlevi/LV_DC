@@ -13,6 +13,9 @@ OPTS=$(cat "$LVDC_STATE/batch_opts" 2>/dev/null || echo "$LVDC_BATCH_OPTS")   # 
 L=$LVDC_STATE/batch_v2_$(date +%Y%m%d_%H%M).log
 cleanup() { make disable >/dev/null 2>&1; make kill_chrome >/dev/null 2>&1; echo "$(date -Is) CLEANUP tc=$(tc qdisc show dev "$LVDC_IFACE" | head -1)" >> "$L"; echo ALLDONE >> "$L"; }
 trap cleanup EXIT
+# t58 T-3 (brad's audit): single mode only; a trio / N-slot run is orchestrate --concurrent, launched on its own (this
+# wrapper's cleanup would run make disable over the trio's shared tree)
+case " $SPEC $OPTS " in *" --concurrent"*) echo "$(date -Is) ABORT --concurrent: run_batch.sh is single mode only" >> "$L"; trap - EXIT; exit 1;; esac
 mountpoint -q "$LVDC_MOUNT" || { echo "$(date -Is) ABORT $LVDC_MOUNT not mounted" >> "$L"; exit 1; }
 [ "$(ip -6 addr show scope global | grep -c inet6)" = 0 ] || { echo "$(date -Is) ABORT global IPv6 present" >> "$L"; exit 1; }
 echo "$(date -Is) START lvdc=$(git -C .. rev-parse --short HEAD) dirty=$(git -C .. status --short | wc -l) chrome=$(google-chrome --version) screen=$(xdpyinfo | grep -o "[0-9]*x[0-9]* pixels") spec=$SPEC opts=$OPTS" >> "$L"

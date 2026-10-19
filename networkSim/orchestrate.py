@@ -230,6 +230,36 @@ def accepted_sessions(platform: str, runs_dir: Path | None = None, select=None) 
     return n
 
 
+def _slot_session(slots_log: Path, tag: str, run_id: str) -> str | None:
+    """The session the slot's latest start in this run named (exp.py's slots-log start event; t58 N-4)."""
+    name = None
+    try:
+        lines = Path(slots_log).read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("event") == "start" and e.get("slot") == tag and e.get("run") == run_id:
+            name = e.get("session")
+    return name
+
+
+def _session_passed(troot: Path, p: str, name: str | None, select=None) -> bool:
+    """The session counts as accepted (accepted_sessions' rule): PASS, under troot/<p> (not _failed), selected."""
+    if not name:
+        return False
+    d = Path(troot) / p / name
+    try:
+        if json.loads((d / "check.json").read_text()).get("verdict") != "PASS":
+            return False
+        return select is None or bool(select(json.loads((d / "meta.json").read_text())))
+    except (OSError, ValueError):
+        return False
+
+
 def trio_select():
     """t58 L-3 / L-5 (levi; brad's audit item 6): one membership rule for the trio's targets, its failure count, the
     rotation hygiene (not_usable) and the steering: a counted run (--trio-record) counts its sessions of record only
@@ -324,10 +354,11 @@ def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, exc
 FLAGS_FILE = "_summaries/flags.jsonl"
 
 
-def report_flags(p: str, since: float, runs_dir: Path | None = None) -> list[dict]:
+def report_flags(p: str, since: float, runs_dir: Path | None = None, only: str | None = None) -> list[dict]:
     """After a session (supervisor 2026-10-18: a collection fault is caught on the first session): every check.json of
     `p` written since `since` (accepted or _failed) with stream-regime flags gets a FLAG line and a flags.jsonl row;
-    `new` lists the flags this platform had not raised before."""
+    `new` lists the flags this platform had not raised before. only: that session alone (the trio, t58 N-4: a slot's
+    exit no longer re-reports its siblings' sessions)."""
     root = runs_dir or _RUNS_DIR
     path = root / FLAGS_FILE
     seen: set = set()
@@ -342,6 +373,8 @@ def report_flags(p: str, since: float, runs_dir: Path | None = None) -> list[dic
     rows = []
     found = []
     for c in list((root / p).glob("*/check.json")) + list((root / "_failed" / p).glob("*/check.json")):
+        if only is not None and c.parent.name != only:
+            continue
         try:
             if c.stat().st_mtime >= since:
                 found.append((c.stat().st_mtime, str(c), c, json.loads(c.read_text())))
@@ -442,27 +475,33 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
 
 
 def _account(p: str, rc: int, before: int, channel: dict | None, category: dict | None, now: float,
-             paused: dict, fails: dict, frozen: dict, not_live: dict, runs_dir: Path | None = None) -> None:
+             paused: dict, fails: dict, frozen: dict, not_live: dict, runs_dir: Path | None = None,
+             key: str | None = None, passed: bool | None = None) -> None:
     """A finished session's exit code into the batch state: login-wall pause, not-a-failure aborts, the not-live skip,
-    the consecutive-failure pause (run_batch and, per slot, run_trio)."""
+    the consecutive-failure pause (run_batch and, per slot, run_trio). The trio (t58 N-4) counts a slot's own streaks
+    (fails / frozen keyed by `key`, the slot tag) and passes `passed`, its own session's result: a sibling's PASS on the
+    platform no longer resets them; the pause stays per platform."""
+    k = key or p
+    who = p if k == p else f"{p} (slot {k})"
     if rc == EXIT_LOGIN_WALL:
         paused[p] = "login wall (fix the profile template, then rerun)"
     elif rc in NOT_A_FAILURE:
-        frozen[p] += 1
-        print(f"  {NOT_A_FAILURE[rc]} on {p} ({frozen[p]} such aborts in a row): not counted as a failure; "
+        frozen[k] += 1
+        print(f"  {NOT_A_FAILURE[rc]} on {who} ({frozen[k]} such aborts in a row): not counted as a failure; "
               f"next session re-picks")
-        if frozen[p] >= MAX_CONSECUTIVE_FROZEN:
-            paused[p] = f"{frozen[p]} consecutive player_frozen / room_ended / player_dead aborts"
+        if frozen[k] >= MAX_CONSECUTIVE_FROZEN:
+            paused[p] = f"{frozen[k]} consecutive player_frozen / room_ended / player_dead aborts on {who}"
     elif rc != 0 and channel:
         not_live[channel["handle"]] = now
     elif rc != 0 and category:
         not_live[category.get("channel") or category["name"]] = now
     if rc not in NOT_A_FAILURE:
-        frozen[p] = 0
-        fails[p] = 0 if (accepted_sessions(p, runs_dir, trio_select()) if runs_dir else accepted_sessions(p)) > before \
-            else fails[p] + 1
-    if fails[p] >= MAX_CONSECUTIVE_FAIL and p not in paused:
-        paused[p] = f"{fails[p]} consecutive sessions without a PASS"
+        frozen[k] = 0
+        ok = passed if passed is not None else (
+            (accepted_sessions(p, runs_dir, trio_select()) if runs_dir else accepted_sessions(p)) > before)
+        fails[k] = 0 if ok else fails[k] + 1
+    if fails[k] >= MAX_CONSECUTIVE_FAIL and p not in paused:
+        paused[p] = f"{fails[k]} consecutive sessions without a PASS on {who}"
     if p in paused:
         print(f"  PAUSED {p}: {paused[p]}")
 
@@ -601,6 +640,18 @@ def _reserved(tag: str, T, running: dict) -> dict:
     return dict(out)
 
 
+def pin_geometry(pin: dict, geom: str | None, running: dict, tag: str) -> tuple[str | None, dict]:
+    """A pin's geometry, through the one-fullscreen token (t58 N-6, brad's audit: the pin was applied after the token
+    check): a pinned fullscreen geometry while a sibling holds fullscreen is deferred, the drawn geometry kept and the
+    deferral recorded in the pin (geometry_deferred)."""
+    pg = pin.get("geometry")
+    if pg and pg.startswith("fullscreen") and any(str(r.get("geom") or "").startswith("fullscreen")
+                                                  for t2, r in running.items() if t2 != tag):
+        print(f"  PINNED {tag}: geometry {pg} deferred (a sibling holds the fullscreen token); {geom} instead")
+        return geom, {**pin, "geometry_deferred": pg}
+    return pg or geom, pin
+
+
 def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, paused: dict, not_live: dict,
                  rotate_geometry: bool, yt_matrix: str, capacity_kbit: float | None, run_id: str, summaries: Path,
                  spawn, floor: dict | None = None, stop_signal: list | None = None) -> bool:
@@ -649,7 +700,7 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         if pin.get("category"):
             category = {"name": pin["category"], "type": "pinned", "channel": pin.get("channel")}
         init = pin.get("state") or init
-        geom = pin.get("geometry") or geom
+        geom, pin = pin_geometry(pin, geom, running, tag)
         print(f"  PINNED {tag}: {json.dumps(pin)}")
     cmd = _collection_cmd(p, initial_state=init, episodes=EPISODES_V2.get(p, 5), auto=True, yt_matrix=yt_matrix,
                           channel=channel, geom=geom, tw_category=category, matrix=mid)
@@ -737,8 +788,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     summaries.mkdir(parents=True, exist_ok=True)
     slots_log, drain_path = troot / T.SLOTS_LOG, troot / TRIO_DRAIN_FILE
     paused: dict[str, str] = {}
-    fails = {p: 0 for p in targets}
-    frozen = {p: 0 for p in targets}
+    fails = {tag: 0 for tag in T.SLOTS}                  # t58 N-4: a slot's own streaks (the pause stays per platform)
+    frozen = {tag: 0 for tag in T.SLOTS}
     not_live: dict[str, float] = {}
     started = {tag: 0 for tag in T.SLOTS}
     running: dict[str, dict] = {}                         # by slot tag
@@ -820,8 +871,9 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                 p = T.SLOTS[tag].platform
                 T.slots_log_append(slots_log, {"event": "exit", "slot": tag, "rc": rc, "t": time.time()})
                 print(f"[{dt.datetime.now():%H:%M}] TRIO {tag}: exp.py rc {rc} (log {r['log']})")
+                name = _slot_session(slots_log, tag, run_id)
                 try:
-                    report_flags(p, r["t"], troot)
+                    report_flags(p, r["t"], troot, only=name)
                 except Exception as e:
                     print(f"  (flag report failed: {e!r})")
                 if rc == EXIT_STOPPED:
@@ -829,7 +881,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                     end_rc = end_rc or EXIT_STOPPED
                 else:
                     _account(p, rc, r["before"], r["channel"], r["category"], r["now"], paused, fails, frozen, not_live,
-                             troot)
+                             troot, key=tag, passed=_session_passed(troot, p, name, trio_select()))
             draining = bool(stop_signal) or end_rc != 0 or drain_path.exists()
             done = {p: accepted_sessions(p, troot, trio_select()) >= targets[p] for p in targets}
             todo = [tag for p in BATCH_ORDER for tag, s in T.SLOTS.items() if s.platform == p and p in targets
@@ -1049,6 +1101,8 @@ if __name__ == "__main__":
             TRIO_PINS[plat] = pin
         if args.trio_yt_fullscreen and not args.concurrent:
             sys.exit("--trio-yt-fullscreen needs --concurrent")
+        if args.trio_yt_fullscreen and args.trio_layout != "composite":      # t58 N-7: the keeper needs the composite
+            sys.exit("--trio-yt-fullscreen needs --trio-layout composite (the fullscreen keeper runs only there)")
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
         if args.concurrent:
             import trio_slots
