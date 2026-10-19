@@ -93,7 +93,40 @@ def test_systematic_rule():
             pass
 
 
+def test_startup_failure_rule():
+    """levi: a startup_failure is content, excluded (items 1 / 2 don't gate) unless its channel played normally before
+    in either mode, or a sibling in the round also failed to start."""
+    def sess(root, rel, cls, t, verdict="FAIL", **meta):
+        d = root / rel
+        d.mkdir(parents=True)
+        (d / "check.json").write_text(json.dumps({"verdict": verdict, "session_class": cls}))
+        (d / "meta.json").write_text(json.dumps({"started_at": t, **meta}))
+        hdr = {"header": True, "stamp": {"window": [t - 1, t + 101]}}
+        (d / "box_record.jsonl").write_text("".join(json.dumps(x) + "\n" for x in
+                                                    [hdr] + [{"t": t + i + 0.5, "gpu_busy_pct": {}} for i in range(100)]))
+        return d
+    fail2 = lambda name: _row(name, items1_2={"1": {"ok": True, "reading": "PASS"},
+                                              "2": {"ok": False, "reading": "gates: class:startup_failure"}})
+    with tempfile.TemporaryDirectory() as d:
+        data = Path(d) / "data"
+        yt = sess(data, "_trio/_failed/youtube/yt_100007", "startup_failure", 1000.0, channel_handle="@FuboSports")
+        tt = sess(data, "_trio/tiktok/ti_100007", "normal", 1000.0, verdict="PASS", channel_url="https://www.tiktok.com/@x/live")
+        g = {"sessions": [fail2("yt_100007"), _row("ti_100007")]}
+        res = R.check(g, None, [yt, tt])
+        assert res["ok"] and res["report"]["yt_100007"]["reported"][1].startswith("startup_failure: content, excluded"), res
+        sess(data, "youtube/yt_5", "normal", 500.0, verdict="PASS", channel_handle="@FuboSports")   # single mode played it
+        res = R.check(g, None, [yt, tt])
+        assert not res["ok"] and any("played before ['yt_5']" in x for x in res["gating"]), res
+    with tempfile.TemporaryDirectory() as d:
+        data = Path(d) / "data"
+        yt = sess(data, "_trio/_failed/youtube/yt_100007", "startup_failure", 1000.0, channel_handle="@FuboSports")
+        tw = sess(data, "_trio/_failed/twitch/tw_100007", "startup_failure", 1000.0, channel_url="https://www.twitch.tv/robcdee")
+        res = R.check({"sessions": [fail2("yt_100007"), fail2("tw_100007")]}, None, [yt, tw])
+        assert not res["ok"] and any("siblings failed ['tw_100007']" in x for x in res["gating"]), res
+
+
 if __name__ == "__main__":
     test_stop_rule()
+    test_startup_failure_rule()
     test_systematic_rule()
     print("test_round_stop_checks: ok")

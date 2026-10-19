@@ -15,6 +15,11 @@ Read only. Stop (exit 1, "BAD ...") on:
     seconds (Addendum T, D1); a covered second holds a data line (has gpu_busy_pct).
 Everything else goes to the report (non-gating items with a reading, the device-limited tiers).
 
+startup_failure (levi's ruling 2026-10-19, after yt_100007 on @FuboSports): a session whose check class is
+startup_failure stops the chain only if its channel / room played normally before in either mode (an accepted PASS
+session on the same key, single mode's root or the trio's), or a sibling in the same round also failed to start;
+otherwise it reads "content, excluded": its items 1 / 2 do not gate (resource items still do) and it is reported.
+
 Systematic exclusion (levi's rule, supervisor 2026-10-19), with --inventory (brad's json with base_rates; both shas
 checked) and --history (the earlier counted rounds' --out jsons, oldest first). Over the sessions whose verify / check
 did not PASS, the coarse kinds per platform (brad's kind rule; check's class as "class:<x>"; a kind counts once per
@@ -133,6 +138,49 @@ def systematic(cur: dict, history: list[dict], base: dict) -> list[str]:
     return bad
 
 
+def _json(p: Path) -> dict:
+    try:
+        return json.loads(Path(p).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _key(platform: str, meta: dict) -> str | None:
+    if platform == "youtube":
+        return meta.get("channel_handle") or None
+    return (meta.get("channel_url") or "").split("?")[0].rstrip("/").lower() or None
+
+
+def _roots(sd: Path) -> tuple[Path, list[Path]]:
+    """(platform dir name, the accepted session dirs of that platform in both modes' roots) for a session dir."""
+    sd = Path(sd).resolve()
+    plat = sd.parent.name
+    trio = next((a for a in sd.parents if a.name.startswith("_trio")), None)
+    data = trio.parent if trio is not None else (sd.parent.parent.parent if sd.parent.parent.name == "_failed" else sd.parent.parent)
+    dirs = [d for root in ([data] + ([trio] if trio is not None else [])) for d in (root / plat).glob("*")]
+    return plat, dirs
+
+
+def startup_failure_rule(sd: Path, round_sessions: list[Path]) -> dict | None:
+    """levi's rule for a startup_failure session: {gates, played_before, siblings_failed, key}; None otherwise."""
+    if _json(Path(sd) / "check.json").get("session_class") != "startup_failure":
+        return None
+    meta = _json(Path(sd) / "meta.json")
+    plat, dirs = _roots(sd)
+    key, t0 = _key(plat, meta), float(meta.get("started_at") or 0)
+    played = []
+    for d in dirs:
+        if d.resolve() == Path(sd).resolve():
+            continue
+        c, m = _json(d / "check.json"), _json(d / "meta.json")
+        if (key and c.get("verdict") == "PASS" and c.get("session_class") in ("normal", None)
+                and _key(plat, m) == key and float(m.get("started_at") or 0) < t0):
+            played.append(d.name)
+    sib = [Path(x).name for x in round_sessions if Path(x).resolve() != Path(sd).resolve()
+           and _json(Path(x) / "check.json").get("session_class") == "startup_failure"]
+    return {"key": key, "played_before": sorted(played), "siblings_failed": sib, "gates": bool(played or sib)}
+
+
 def check(gate2: dict, teardown: dict | None, sessions: list[Path], history: list[dict] | None = None,
           base: dict | None = None) -> dict:
     rows = {Path(r.get("session", "")).name: r for r in gate2.get("sessions") or []}
@@ -150,6 +198,13 @@ def check(gate2: dict, teardown: dict | None, sessions: list[Path], history: lis
             bad.append(f"{name}: not in the reader's output")
             continue
         b, n = gating(r)
+        sf = startup_failure_rule(sd, sessions)
+        if sf is not None:
+            if sf["gates"]:
+                b.append(f"startup_failure gates: played before {sf['played_before']} / siblings failed {sf['siblings_failed']}")
+            else:                                          # levi: content, excluded; items 1 / 2 do not gate
+                b = [x for x in b if not x.startswith(("item 1:", "item 2:"))]
+                n.insert(0, f"startup_failure: content, excluded ({sf['key']} never played in either mode)")
         cov = coverage(sd)
         if not cov["ok"]:
             b.append(f"device record: {cov.get('why') or cov.get('covered_share')}")
