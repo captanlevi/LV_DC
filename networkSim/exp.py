@@ -768,7 +768,9 @@ if __name__ == "__main__":
     off = offloads.ensure_off(os.environ.get("LVDC_CAPTURE_IFACE") or offloads.IFACE_DEFAULT)
     import data_root as _data_root            # the data root as set, and the volume each session was written to
     data_root_rec = _data_root.record(DATA_DIR)
-    session_meta.write(session_dir, capture={"offloads": off, "data_root": data_root_rec})
+    from trio_slots import TCPDUMP_B_KIB      # every session capture's kernel buffer (= the Makefile's TCPDUMP_B)
+    session_meta.write(session_dir, capture={"offloads": off, "data_root": data_root_rec,
+                                             "tcpdump_buffer_kib": TCPDUMP_B_KIB})
     if not off["ok"]:
         from profile_clone import remove_profile_clone
         print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
@@ -788,7 +790,8 @@ if __name__ == "__main__":
     # features off); recorded per device; a flag that did not take fails the session loudly
     ifbs = [SLOT.ifb_in, SLOT.ifb_out] if SLOT is not None else ["ifb0", "ifb1"]
     ifb_off = {d: offloads.ensure_off(d, features=offloads.IFB_OFF) for d in ifbs}
-    session_meta.write(session_dir, capture={"offloads": {**off, "ifbs": ifb_off}, "data_root": data_root_rec})
+    session_meta.write(session_dir, capture={"offloads": {**off, "ifbs": ifb_off}, "data_root": data_root_rec,
+                                             "tcpdump_buffer_kib": TCPDUMP_B_KIB})
     if not all(r["ok"] for r in ifb_off.values()):
         if SLOT is not None:
             session_meta.write(session_dir, concurrency=TRIO)

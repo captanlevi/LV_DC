@@ -52,7 +52,7 @@ def main() -> int:
     assert cur == GOLDEN.read_text(), "single mode's make -n output changed (t53: byte-identical with the flag off)"
     import trio_slots                                    # the overrides a slot actually passes (exp.py --slot)
     slot = dry(HERE / "Makefile", trio_slots.make_vars(trio_slots.slot_of("yt1"), Path("/T")))   # t56: slot tags
-    for want in ("dev lvi_yt1 parent 1: classid 1:10", "classid 1:11 htb", "parent 1:11 netem", "tcpdump -Z root -i lvo_yt1",
+    for want in ("dev lvi_yt1 parent 1: classid 1:10", "classid 1:11 htb", "parent 1:11 netem", "tcpdump -Z root -B 65536 -i lvo_yt1",
                  "/C/lvi_yt1.pid", "--remote-debugging-port=9223", "/C/chrome_yt1.pid", "/C/chrome_yt1.log",
                  "<REPO>/networkSim/in_cgroup.sh lvdc.slice/yt1 env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log",
                  "[r]emote-debugging-port=9223", '> "/T/incoming.pcap" 2> "/T/tcpdump_in.err"',
@@ -70,7 +70,7 @@ def main() -> int:
         assert one and trio.replace(tw.ifb_in, "ifb0").replace(tw.egress_class, "1:10") == one, (one, trio)
     slot = dry(HERE / "Makefile", ["IFB_INGRESS=lvi_yt", "IFB_EGRESS=lvo_yt", "EGRESS_CLASS=1:11", "CDP_PORT=9223",
                                    "SLOT_SUFFIX=_yt", "CHROME_PREFIX=sudo /x/in_cgroup.sh lvdc.slice/yt"])
-    for want in ("dev lvi_yt parent 1: classid 1:10", "classid 1:11 htb", "parent 1:11 netem", "tcpdump -i lvo_yt",
+    for want in ("dev lvi_yt parent 1: classid 1:10", "classid 1:11 htb", "parent 1:11 netem", "tcpdump -B 65536 -i lvo_yt",
                  "/C/lvi_yt.pid", "--remote-debugging-port=9223", "/C/chrome_yt.pid", "/C/chrome_yt.log",
                  "sudo /x/in_cgroup.sh lvdc.slice/yt env SSLKEYLOGFILE", "[r]emote-debugging-port=9223"):
         assert want in slot, want

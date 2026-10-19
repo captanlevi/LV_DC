@@ -64,6 +64,7 @@ CURRENT_DATA = Path(__file__).resolve().parent.parent / "current_data"
 from data_root import DATA_ROOT as DATA  # noqa: E402  (one setting: data_root.py)
 STAGING = Path(os.environ.get("LVDC_TRIO_STAGING") or (DATA / "_trio_staging"))
 TCPDUMP_Z = "-Z root"
+TCPDUMP_B_KIB = 65536      # t57 tw_100023 (levi): every session capture's kernel buffer, = the Makefile's TCPDUMP_B
 DATASET_TRIO_DIR = "_trio"                            # the counted collection's root (decode_stress's is STRESS_DIR)
 # supervisor 2026-10-19: trio sessions have their own data root, data/_trio/<platform>/ (single mode's accepted counts,
 # coverage snapshot, checkpoint list and verify loop never see them: am. 13's "never pooled silently", mechanically)
@@ -724,7 +725,7 @@ DNS_TSHARK_FILTER = "dns.qry.type == 1 or dns.qry.type == 28"      # LVQoE scan_
 
 
 def dns_capture_start(staging: Path) -> subprocess.Popen:
-    cmd = (f'exec tcpdump {TCPDUMP_Z} -i lvi_def -U -w - "{DNS_FILTER}" > "{staging / "dns_default.pcap"}" '
+    cmd = (f'exec tcpdump {TCPDUMP_Z} -B {TCPDUMP_B_KIB} -i lvi_def -U -w - "{DNS_FILTER}" > "{staging / "dns_default.pcap"}" '
            f'2> "{staging / "dns_default.err"}"')
     return subprocess.Popen(["sudo", "-n", "sh", "-c", cmd])
 

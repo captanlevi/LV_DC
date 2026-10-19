@@ -74,8 +74,8 @@ mkdir -p /S/yt_1
 # v2 (t37, chaos): the session dir can be on exFAT, where `tcpdump -w FILE` fails ("Couldn't change ownership of
 # savefile") and writes only the header. A root shell opens the file and tcpdump writes to stdout, so tcpdump never
 # opens or chowns it; `exec` makes tcpdump sudo's direct child, so stop-capture's SIGINT reaches it via sudo.
-sudo sh -c 'exec tcpdump -i ifb0 -U -w - "not (udp port 41641 or tcp port 22)" > "/S/yt_1/incoming.pcap"' & echo $! > /C/ifb0.pid
-sudo sh -c 'exec tcpdump -i ifb1 -U -w - "not (udp port 41641 or tcp port 22)" > "/S/yt_1/outgoing.pcap"' & echo $! > /C/ifb1.pid
+sudo sh -c 'exec tcpdump -B 65536 -i ifb0 -U -w - "not (udp port 41641 or tcp port 22)" > "/S/yt_1/incoming.pcap"' & echo $! > /C/ifb0.pid
+sudo sh -c 'exec tcpdump -B 65536 -i ifb1 -U -w - "not (udp port 41641 or tcp port 22)" > "/S/yt_1/outgoing.pcap"' & echo $! > /C/ifb1.pid
 echo "✅ Capture started"
 === stop-capture
 echo "🛑 Stopping capture..."

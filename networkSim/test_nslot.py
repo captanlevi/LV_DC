@@ -362,7 +362,10 @@ def test_staging_on_the_data_volume():
     assert "preflight.run(_RUNS_DIR, max(MIN_FREE_GB, floor[\"floor_gb\"]))" in orch_src
     assert "trio_root_floor_gb" not in orch_src and "root_min_free_gb=floor" not in orch_src
     mk = (here / "Makefile").read_text()
-    assert mk.count("exec tcpdump $(TCPDUMP_Z) -i") == 2 and "TCPDUMP_Z ?=" in mk
+    assert mk.count("exec tcpdump $(TCPDUMP_Z) -B $(TCPDUMP_B) -i") == 2 and "TCPDUMP_Z ?=" in mk
+    import trio_slots as _T                       # t57 tw_100023 (levi): every capture's 64 MiB kernel buffer, one value
+    assert f"TCPDUMP_B ?= {_T.TCPDUMP_B_KIB}" in mk and _T.TCPDUMP_B_KIB == 65536
+    assert "-B {TCPDUMP_B_KIB}" in inspect.getsource(_T.dns_capture_start)
 
 
 def main() -> int:

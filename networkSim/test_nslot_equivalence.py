@@ -10,7 +10,8 @@ Chrome) through those variables; plus the shared tree. fixtures/trio_slot_comman
 c1f9181's trio code (its trio_slots.py and Makefile, this file's commands(); never rewrite it). The N line's intended
 differences are outside these commands (FROZEN_COLLECTOR, the c1f9181 row's known deltas): tt's own-IFB room rule,
 the sibling claim, the steering / membership / ERA, the live management port (equal here at its default). One known
-delta lies inside them and is asserted, then undone, by name (KNOWN_DELTAS): the staged tcpdump's -Z root (t58).
+delta lies inside them and is asserted, then undone, by name (KNOWN_DELTAS): the capture buffer's -B 65536 (t57) and the
+staged tcpdump's -Z root (t58).
 
     python3 test_nslot_equivalence.py        (exit 0 = pass)
 """
@@ -114,7 +115,21 @@ def staged_tcpdump_as_root(got: dict) -> list[str]:
     return seen
 
 
-KNOWN_DELTAS = (("staged tcpdump runs as root (t58: staging on the data volume)", staged_tcpdump_as_root),)
+def capture_buffer_64mib(got: dict) -> list[str]:
+    """Known delta (t57 tw_100023, levi 2026-10-20): every session capture runs with a 64 MiB kernel buffer (-B 65536,
+    the Makefile's TCPDUMP_B; no captured byte changes). Asserted on both start-capture tcpdumps, then taken out."""
+    seen = []
+    for tag, s in got["slots"].items():
+        if "make_n" in s:
+            sc = s["make_n"]["start-capture"]
+            assert sc.count(" -B 65536 -i ") == 2, (tag, sc)
+            s["make_n"]["start-capture"] = sc.replace(" -B 65536 -i ", " -i ")
+            seen.append(f"{tag}: start-capture tcpdump -B 65536 (2)")
+    return seen or ["no make here"]
+
+
+KNOWN_DELTAS = (("the capture buffer, 64 MiB (t57 tw_100023)", capture_buffer_64mib),
+                ("staged tcpdump runs as root (t58: staging on the data volume)", staged_tcpdump_as_root))
 
 
 def main() -> int:
