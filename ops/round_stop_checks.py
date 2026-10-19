@@ -4,7 +4,8 @@ non-gating items): stop only where the signed round reader says a gating item fa
 
 Read only. Stop (exit 1, "BAD ...") on:
   - any gate2_items item whose ok is False: items 1 / 2 (a verify / check reason outside single mode's frozen inventory,
-    or a missing verify / check), 4a's visibility, 7, 9 (capture drops), 11 (a payload split or shared flow outside the
+    or a missing verify / check), 3 (frames coverage below single mode's min, or not read; levi 2026-10-20: a FAIL there
+    is a stop-and-diagnose of the extractor), 4a's visibility, 7, 9 (capture drops), 11 (a payload split or shared flow outside the
     link-local multicast exception, or one undecided), 12-14, the per-session teardown. The reader decides what gates:
     reported items (4a's rendered fps / device_limited, 5, 8, fullscreen) carry ok None and never stop;
   - a session dir missing, a session missing from the reader's output, or a reader error. A session in _failed stops
@@ -77,7 +78,7 @@ def gating(row: dict) -> tuple[list[str], list[str]]:
             bad.append(f"item {k}: {v.get('reading')}")
         elif v.get("ok") is None:
             notes.append(f"item {k}: {v.get('reading')}")
-    for k in ("item4a", "item7", "item9", "item11", "item12", "item13", "item14", "teardown"):
+    for k in ("item3", "item4a", "item7", "item9", "item11", "item12", "item13", "item14", "teardown"):
         v = row.get(k)
         if isinstance(v, dict) and v.get("ok") is False:
             bad.append(f"{k}: " + json.dumps({x: y for x, y in v.items() if x not in ("rendered_fps",)}, default=str)[:200])

@@ -4,6 +4,9 @@ from a session's labels.csv and shots/index.jsonl, for shagun's per-session gate
 and the single-mode reference read the same way). Read-only; no media truth.
 
 Checklist as revised by levi's gate-2 call on pilot-1 (2026-10-19, from round 1):
+  3  frames coverage (levi's ruling 2026-10-20 §2, gating): LVQoE extract_frames.frames_coverage (recovered media
+     bodies / sized media responses; --frames-coverage, scripts/audit/frames_coverage.py's json) >= single mode's min for
+     the platform (brad's frozen single table, --single-table / --single-table-sha); not read: a FAIL.
 An item not recorded is a FAIL (ok false, recorded false; levi); ok null only where a rule says "reported" (4a
 insufficient support, 5 not shaper-bound, 1 / 2 content band only). Admission: no gated ok is false.
   1 / 2 verify / check: PASS; a non-PASS whose every reason is a content band (verify's B/s-per-tier p10..p90; the speed
@@ -406,8 +409,44 @@ def items1_2(sd: Path, inventory: dict | None = None) -> dict:
     return out
 
 
+PLATFORM_DIRS = ("youtube", "twitch", "tiktok")
+
+
+def load_single_table(path: Path, expect: str | None) -> dict:
+    """brad's frozen single-mode reference table (LVQoE t53_equivalence --emit-single-table), refused unless its file
+    sha256 starts with `expect`; item 3 reads its frames_coverage.min_by_platform (levi's ruling 2026-10-20 §2)."""
+    import hashlib
+    raw = Path(path).read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+    if not expect or not sha.startswith(expect):
+        raise SystemExit(f"refused: single table sha {sha[:12]} (expected {expect})")
+    t = json.loads(raw)
+    mins = (t.get("frames_coverage") or {}).get("min_by_platform")
+    if not mins:
+        raise SystemExit("refused: the single table carries no frames_coverage.min_by_platform")
+    return {"sha": sha, "min_by_platform": mins, "definition": (t.get("frames_coverage") or {}).get("definition")}
+
+
+def item3(sd: Path, coverage: dict | None, table: dict | None) -> dict:
+    """Item 3 (levi's ruling 2026-10-20 §2, gating): frames coverage, LVQoE extract_frames.frames_coverage (the one
+    definition: recovered media bodies / sized media responses; scripts/audit/frames_coverage.py's json, --frames-coverage),
+    >= single mode's min for the platform (brad's frozen table, --single-table). Not read (either input missing, or the
+    session absent from the coverage json): recorded False, ok False (an item not recorded is a FAIL)."""
+    plat = Path(sd).parent.name
+    rec = ((coverage or {}).get("sessions") or {}).get(Path(sd).name)
+    if table is None or rec is None or rec.get("coverage") is None or plat not in table["min_by_platform"]:
+        why = ("no --single-table" if table is None else "no coverage record for the session" if rec is None
+               else "no sized media response or no frames summary" if rec.get("coverage") is None
+               else f"no single-mode min for {plat}")
+        return {"recorded": False, "ok": False, "reading": f"not read: {why}"}
+    lo = float(table["min_by_platform"][plat])
+    return {"coverage": rec["coverage"], "bodies": rec.get("bodies"), "responses": rec.get("responses"),
+            "frames_schema": rec.get("frames_schema"), "single_min": lo, "table_sha": table["sha"][:12],
+            "definition": coverage.get("definition"), "ok": rec["coverage"] >= lo}
+
+
 def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dict | None = None,
-                  inventory: dict | None = None) -> dict:
+                  inventory: dict | None = None, coverage: dict | None = None, table: dict | None = None) -> dict:
     sd = Path(sd)
     tk, spans = ticks(sd), shot_spans(sd)
     iv = intervals(tk, spans)
@@ -422,7 +461,8 @@ def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dic
     return {"session": str(sd), "mode": c.get("mode", "single"),
             # levi: the operator sets the flag; printed so a forgotten flag or a flagged pilot shows in the round summary
             "record": {"flag": c.get("record"), "era": c.get("era"), "is_record": is_rec},
-            "ticks": len(tk), "items1_2": items1_2(sd, inventory), "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
+            "ticks": len(tk), "items1_2": items1_2(sd, inventory), "item3": item3(sd, coverage, table),
+            "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
             "item8": item8(iv, len(spans)), **concurrency_items(meta),
             **(overlap_items(f"{sd.parent.name}/{sd.name}", flow_overlap)
                or (missing_overlap_items() if (meta.get("concurrency") or {}).get("mode") == "trio" else {})),
@@ -439,9 +479,16 @@ def main(argv=None) -> int:
     ap.add_argument("--inventory", type=Path, default=None,
                     help="items 1 / 2 (Q am. 16): brad's single-mode reason inventory json (collection_start_items.py)")
     ap.add_argument("--inventory-sha", default=None, help="the inventory's expected sha prefix (refused otherwise)")
+    ap.add_argument("--frames-coverage", type=Path, default=None,
+                    help="item 3: LVQoE scripts/audit/frames_coverage.py --out json of the round's sessions")
+    ap.add_argument("--single-table", type=Path, default=None,
+                    help="item 3: brad's frozen single-mode table (its frames_coverage.min_by_platform)")
+    ap.add_argument("--single-table-sha", default=None, help="the table file's expected sha256 prefix (refused otherwise)")
     ap.add_argument("--out", type=Path, default=None)
     a = ap.parse_args(argv)
     fps = json.loads(a.rendition_fps.read_text()) if a.rendition_fps else {}
+    cov = json.loads(a.frames_coverage.read_text()) if a.frames_coverage else None
+    table = load_single_table(a.single_table, a.single_table_sha) if a.single_table else None
     fos = [json.loads(f.read_text()) for f in a.flow_overlap]
     inv = load_inventory(a.inventory, a.inventory_sha) if a.inventory else None
     rows = []
@@ -449,7 +496,7 @@ def main(argv=None) -> int:
         try:
             rows.append(session_items(sd, (fps.get(sd.name) or {}).get("detail"),
                                       next((f for f in fos if f"{sd.parent.name}/{sd.name}" in (f.get("sessions") or {})), None),
-                                      inv))
+                                      inv, cov, table))
         except Exception as e:  # noqa: BLE001 -- one session's failure is reported
             rows.append({"session": str(sd), "error": repr(e)[:300]})
         print(json.dumps(rows[-1]), flush=True)

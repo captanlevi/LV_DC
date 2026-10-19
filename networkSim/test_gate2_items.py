@@ -278,7 +278,47 @@ def test_cli():
         assert r["items1_2"]["1"]["reading"] == "verify.json missing" and r["item5"]["ok"] is None
 
 
+def test_item3_frames_coverage_against_the_single_min():
+    """levi's ruling 2026-10-20 §2: item 3 = LVQoE frames_coverage (bodies / sized media responses) >= single mode's
+    min for the platform from brad's frozen table (sha-checked); not read is a FAIL; round_stop_checks gates on it."""
+    import hashlib
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        tab = {"frames_coverage": {"min_by_platform": {"youtube": 1.0, "twitch": 0.9}, "definition": "extract_frames.frames_coverage"}}
+        raw = json.dumps(tab).encode()
+        (d / "table.json").write_bytes(raw)
+        sha = hashlib.sha256(raw).hexdigest()
+        t = G.load_single_table(d / "table.json", sha[:12])
+        for bad in (None, "000000000000"):
+            try:
+                G.load_single_table(d / "table.json", bad)
+                raise AssertionError(bad)
+            except SystemExit:
+                pass
+        cov = {"definition": "extract_frames.frames_coverage", "sessions": {
+            "yt_100001": {"coverage": 1.07, "bodies": 199, "responses": 186, "frames_schema": 6},
+            "tw_100001": {"coverage": 0.5, "bodies": 1, "responses": 2, "frames_schema": 6},
+            "ti_100001": {"coverage": None, "bodies": None, "responses": 0, "frames_schema": None}}}
+        yt = G.item3(d / "youtube" / "yt_100001", cov, t)
+        assert yt["ok"] is True and yt["single_min"] == 1.0 and yt["table_sha"] == sha[:12], yt
+        assert G.item3(d / "twitch" / "tw_100001", cov, t)["ok"] is False                    # below the min
+        for sd, tb, why in ((d / "tiktok" / "ti_100001", t, "no sized media response"),
+                            (d / "youtube" / "yt_100009", t, "no coverage record"),
+                            (d / "youtube" / "yt_100001", None, "no --single-table")):
+            r = G.item3(sd, cov, tb)
+            assert r["recorded"] is False and r["ok"] is False and why in r["reading"], r
+        t2 = {**t, "min_by_platform": {"youtube": 1.0}}
+        assert "no single-mode min for twitch" in G.item3(d / "twitch" / "tw_100001", cov, t2)["reading"]
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rsc", Path(__file__).resolve().parent.parent / "ops" / "round_stop_checks.py")
+    R = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(R)
+    bad, _ = R.gating({"item3": {"ok": False, "reading": "not read: no --single-table"}})
+    assert bad and bad[0].startswith("item3"), bad
+
+
 def main() -> int:
+    test_item3_frames_coverage_against_the_single_min()
     test_item8_shot_free_rate()
     test_item4a_visibility_and_fps()
     test_item5_byte_total_ratio()
