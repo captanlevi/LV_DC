@@ -77,7 +77,19 @@ def main() -> int:
     up = T.upload_cmd(T.UPLOAD_URL, Path("/o/upload_4MiB.bin"), 359)
     assert up.startswith("sh -c ") and "--data-binary @/o/upload_4MiB.bin" in up and T.UPLOAD_URL in up and "359" in up
     u = T.udpgso_cmd("192.168.4.1", 359)
-    assert "setsockopt(17, 103, 1200)" in u and "4800" in u and u.endswith("359 192.168.4.1"), u
+    assert "setsockopt(17, 103, 1200)" in u and "4800" in u and u.endswith("359 192.168.4.1 0.05"), u
+    # levi (B2): the load at <= 0.3 x the state's egress rate, half TCP (curl --limit-rate), half UDP (the send gap)
+    lim = T.upload_limits(215)                                    # tw state 1: 215 kbit
+    assert lim == {"tcp_limit_Bps": 4031, "udp_gap_s": 1.191}, lim
+    assert (lim["tcp_limit_Bps"] + 4800 / lim["udp_gap_s"]) * 8 / 1000 <= 0.3 * 215 + 0.1
+    assert "--limit-rate 4031 " in T.upload_cmd(T.UPLOAD_URL, Path("/o/u.bin"), 119, lim["tcp_limit_Bps"])
+    assert T.udpgso_cmd("10.0.0.1", 119, lim["udp_gap_s"]).endswith("119 10.0.0.1 1.191")
+    with tempfile.TemporaryDirectory() as d:                     # teardown: every slot cgroup emptied before rmdir
+        for s, procs in (("yt1", ""), ("tw1", "")):
+            (Path(d) / s).mkdir()
+            (Path(d) / s / "cgroup.procs").write_text(procs)
+        assert T.empty_cgroups(["yt1", "tw1"], Path(d), wait_s=0.2) == {"yt1": 0, "tw1": 0}
+        assert (Path(d) / "yt1" / "cgroup.kill").read_text() == "1"
     calls = []
     saved = T.sh
     try:

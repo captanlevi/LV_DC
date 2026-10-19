@@ -8,7 +8,8 @@ above the gate's 10 min).
 
 Read per session (labels.csv, meta.json; read only):
   - stalls: a stall event to the next start / video_start / end. Its cause by buffer-ahead sampled at the event (levi):
-    device >= 2.0 s, network < 2.0 s, unknown when none was recorded (tt's MediaStream player has no element buffer).
+    device >= 2.0 s, network < 2.0 s, unattributed when none was recorded (tt's MediaStream player has no element
+    buffer); a stall inside an ad or on a 0 x 0 element is a loading stall, reported apart.
   - playing seconds: res_meta ticks not paused, not an ad, playhead advancing (playhead_still_s < 1 s).
   - rendered fps per tier (video_h) from total_frames over playing ticks, and the dropped share: recorded, never a gate
     (decision A). Delivered fps is the post-hoc reader's (LVQoE rendition_fps on these sessions).
@@ -71,14 +72,19 @@ def read_labels(path: Path) -> list[dict]:
 
 
 def stalls(rows: list[dict], t_end: float | None = None) -> list[dict]:
-    """Each stall event to the next start / video_start / end (seconds), with buffer-ahead at the event and its cause."""
-    ev = [(float(r["ts"]) / 1000.0, r["type"], _f(r.get("buffered_ahead_s"))) for r in rows if _f(r.get("ts")) is not None]
+    """Each stall event to the next start / video_start / end (seconds), with buffer-ahead at the event and its cause:
+    device / network / unattributed (no buffer-ahead recorded). A stall inside an ad or on a 0 x 0 element (a fresh
+    element loading: yt's ad / content swaps, levi on yt_900001) is a loading stall, cause "load", never a playback
+    reading."""
+    ev = [(float(r["ts"]) / 1000.0, r["type"], _f(r.get("buffered_ahead_s")),
+           _b(r.get("is_ad")) is True or (_f(r.get("video_h")) or 0) <= 0) for r in rows if _f(r.get("ts")) is not None]
     out = []
-    for i, (t, typ, ba) in enumerate(ev):
+    for i, (t, typ, ba, load) in enumerate(ev):
         if typ != "stall":
             continue
-        t1 = next((u for u, ty, _ in ev[i + 1:] if ty in ("start", "video_start", "end")), t_end if t_end else ev[-1][0])
-        cause = "unknown" if ba is None else ("device" if ba >= DEVICE_STALL_BA_S else "network")
+        t1 = next((u for u, ty, _, _ in ev[i + 1:] if ty in ("start", "video_start", "end")), t_end if t_end else ev[-1][0])
+        cause = ("load" if load else "unattributed" if ba is None else
+                 "device" if ba >= DEVICE_STALL_BA_S else "network")
         out.append({"t0": round(t, 3), "t1": round(t1, 3), "s": round(max(t1 - t, 0.0), 3), "ba": ba, "cause": cause})
     return out
 
@@ -131,7 +137,7 @@ def session_reading(sd: Path) -> dict:
     t0, t1 = meta.get("started_at"), meta.get("ended_at")
     st = stalls(rows, t1)
     play = playing_seconds(rows)
-    by = {c: round(sum(x["s"] for x in st if x["cause"] == c), 3) for c in ("device", "network", "unknown")}
+    by = {c: round(sum(x["s"] for x in st if x["cause"] == c), 3) for c in ("device", "network", "unattributed", "load")}
     tr = tiers(rows)
     platform = meta.get("platform") or sd.parent.name
     rec = {"session": sd.name, "platform": platform, "slot": (meta.get("concurrency") or {}).get("tag"),
@@ -141,7 +147,10 @@ def session_reading(sd: Path) -> dict:
            "device_stall_share": round(by["device"] / play, 4) if play else None, "tiers": tr,
            "top_tier": max((int(h) for h, v in tr.items() if v["s"] >= TIER_MIN_S), default=None),
            "media_decoders": meta.get("media_decoders"), "display_start": meta.get("display_start")}
-    rec["device_stall_readable"] = not st or any(x["cause"] != "unknown" for x in st)
+    play_st = [x for x in st if x["cause"] != "load"]
+    rec["playback_stalls"], rec["load_stalls"] = len(play_st), len(st) - len(play_st)
+    # levi: no playback stall is readable (share 0); playback stalls none of which carries buffer-ahead are the gap
+    rec["device_stall_readable"] = not play_st or any(x["cause"] != "unattributed" for x in play_st)
     if platform == "tiktok":
         hit = [h for h, v in tr.items() if v["s"] >= TIER_MIN_S and (v["rendered_fps"] or 0) >= FPS60_MIN]
         rec["tt_60fps_tier"] = (f"reached (rendered, {hit})" if hit else
@@ -204,6 +213,37 @@ def commands(a, comp: dict, tags: list[str], out: Path) -> tuple[list[str], list
     return box_cmd, cmd
 
 
+def stop_recorder(box, record: Path, run=subprocess.run, wait_s: float = 15.0) -> dict:
+    """Stop the device recorder (levi): a signal to the sudo parent does not reach it (1941f80 / aef581a ran on under
+    sudo), so SIGTERM goes to the recorder's own pid (its header line) through sudo -n kill, a join with a timeout, then
+    SIGKILL. Returns {pid, term_rc, killed, stop_ok}."""
+    pid = None
+    try:
+        hdr = json.loads(Path(record).read_text().splitlines()[0])
+        pid = int(hdr["pid"]) if hdr.get("header") else None
+    except (OSError, ValueError, IndexError, KeyError, TypeError):
+        pass
+    rec: dict = {"pid": pid, "killed": False}
+    targets = [str(pid)] if pid else []
+    rec["term_rc"] = run(["sudo", "-n", "kill", "-TERM", *targets], capture_output=True).returncode if targets else None
+    try:
+        box.send_signal(signal.SIGTERM)                # the sudo parent too (harmless when it is gone)
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        box.wait(timeout=wait_s)
+    except subprocess.TimeoutExpired:
+        if targets:
+            run(["sudo", "-n", "kill", "-KILL", *targets], capture_output=True)
+        rec["killed"] = True
+        try:
+            box.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+    rec["stop_ok"] = box.poll() is not None and not rec["killed"]
+    return rec
+
+
 def run(a) -> dict:
     os.environ["LVDC_TRIO_DIR"] = STRESS
     sys.path.insert(0, str(NS))
@@ -224,11 +264,7 @@ def run(a) -> dict:
             rep["orchestrate_rc"] = subprocess.call(cmd, cwd=NS, stdout=log, stderr=subprocess.STDOUT)
     finally:
         t1 = time.time()
-        box.send_signal(signal.SIGTERM)                 # sudo relays it to the recorder
-        try:
-            box.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            rep["box_record_stop"] = "did not stop in 15 s"
+        rep["box_record_stop"] = stop_recorder(box, out / "box_record.jsonl")
     rep["t0"], rep["t1"] = t0, t1
     sessions = [d for p in PLATFORMS for d in sorted((DATA / STRESS / p).glob("*"))
                 if (d / "meta.json").exists() and (json.loads((d / "meta.json").read_text()).get("started_at") or 0) >= t0 - 5]

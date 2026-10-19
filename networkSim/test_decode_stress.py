@@ -106,9 +106,9 @@ def test_readings():
         (sd / "meta.json").write_text(json.dumps({"started_at": 990.0, "ended_at": 1700.0, "platform": "youtube",
                                                   "hold_state": "10", "concurrency": {"tag": "yt1"}}))
         st = D.stalls(D.read_labels(sd / "labels.csv"))
-        assert [(x["cause"], x["s"]) for x in st] == [("device", 4.0), ("network", 6.0), ("unknown", 1.0)], st
+        assert [(x["cause"], x["s"]) for x in st] == [("device", 4.0), ("network", 6.0), ("unattributed", 1.0)], st
         r = D.session_reading(sd)
-        assert r["stall_s"] == {"device": 4.0, "network": 6.0, "unknown": 1.0} and r["slot"] == "yt1", r
+        assert r["stall_s"] == {"device": 4.0, "network": 6.0, "unattributed": 1.0, "load": 0.0} and r["slot"] == "yt1", r
         assert r["playing_s"] == 51.0 and r["device_stall_share"] == round(4.0 / r["playing_s"], 4), r
         assert r["tiers"]["1080"]["rendered_fps"] == 60.0 and r["tiers"]["720"]["rendered_fps"] == 30.0, r["tiers"]
         assert r["tiers"]["1080"]["dropped_share"] == 0.01 and r["top_tier"] == 1080 and r["device_stall_readable"]
@@ -140,6 +140,62 @@ def test_gate():
     g = D.gate([_r("yt1", 0.0)], dict(box, swap_growth_kb=512, oom_kills=1), ["yt1"])
     assert not g["pass"] and len(g["fails"]) == 2, g
     assert D.gate([_r("yt1", 0.0)], None, ["yt1"])["fails"] == ["no device record"]
+
+
+def test_loading_stalls_and_readability():
+    """levi on yt_900001: stalls inside an ad or on a 0 x 0 element (yt's ad / content swaps) are loading stalls,
+    reported apart; with no playback stall a slot is readable (share 0); playback stalls none of which carries
+    buffer-ahead are the stated gap."""
+    rows = _ticks(1000, 30, 1080, 30.0) + [["1010000", "stall", "0", "None", "False", "0", "True", "", ""],
+                                          ["1012000", "start", "1080", "", "False", "0", "False", "", ""],
+                                          ["1020000", "stall", "0", "None", "False", "0", "False", "", ""],
+                                          ["1021000", "video_start", "1080", "", "False", "0", "False", "", ""]]
+    rows.sort(key=lambda r: float(r[0]))
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d) / "_trio_stress" / "youtube" / "yt_900001"
+        sd.mkdir(parents=True)
+        _labels(sd / "labels.csv", rows)
+        (sd / "meta.json").write_text(json.dumps({"started_at": 990.0, "ended_at": 1700.0, "platform": "youtube",
+                                                  "concurrency": {"tag": "yt1"}}))
+        r = D.session_reading(sd)
+        assert (r["load_stalls"], r["playback_stalls"], r["device_stall_readable"], r["device_stall_share"]) == (2, 0, True, 0.0), r
+        assert r["stall_s"]["load"] == 3.0, r
+
+
+def test_stop_recorder():
+    """The recorder is stopped by its own pid (its header) through sudo -n kill; a recorder that ignores TERM is
+    killed and stop_ok is false; stop_ok is true when it exits after TERM."""
+    class Box:
+        def __init__(self, exits):
+            self.exits, self.done = exits, False
+
+        def send_signal(self, s):
+            pass
+
+        def wait(self, timeout=None):
+            if self.exits or self.done:
+                self.done = True
+                return 0
+            raise subprocess.TimeoutExpired("x", timeout)
+
+        def poll(self):
+            return 0 if (self.exits or self.done) else None
+    calls = []
+
+    def run(cmd, capture_output=True):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0)
+    with tempfile.TemporaryDirectory() as d:
+        rec = Path(d) / "box_record.jsonl"
+        rec.write_text(json.dumps({"header": True, "pid": 4242}) + "\n")
+        r = D.stop_recorder(Box(True), rec, run=run, wait_s=0.01)
+        assert r == {"pid": 4242, "killed": False, "term_rc": 0, "stop_ok": True} and calls == [["sudo", "-n", "kill", "-TERM", "4242"]], r
+        calls.clear()
+        b = Box(False)
+        orig = b.wait
+        b.wait = lambda timeout=None: (setattr(b, "done", True) or 0) if ["sudo", "-n", "kill", "-KILL", "4242"] in calls else orig(timeout)
+        r = D.stop_recorder(b, rec, run=run, wait_s=0.01)
+        assert r["killed"] and r["stop_ok"] is False and calls[-1] == ["sudo", "-n", "kill", "-KILL", "4242"], (r, calls)
 
 
 if __name__ == "__main__":

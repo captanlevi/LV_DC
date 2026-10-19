@@ -397,10 +397,7 @@ def run(a) -> dict:
             for i in range(a.bulk_streams):
                 procs.append(start(in_cgroup(s, bulk_cmd(a.url, secs)), out / f"curl_{s}_{i}.log"))
             procs.append(start(in_cgroup(s, f"ping -n -i {a.ping_interval} {a.ping_host}"), out / f"ping_{s}.log"))
-            if up is not None:
-                procs.append(start(in_cgroup(s, upload_cmd(a.upload_url, out / "upload_4MiB.bin", secs)), out / f"upload_{s}.log"))
-                if up["udp_sink"]:
-                    procs.append(start(in_cgroup(s, udpgso_cmd(up["udp_sink"], secs)), out / f"udpgso_{s}.log"))
+        up_procs: dict = {s: [] for s in SESSIONS}         # the upload load, restarted at each state with its limits
         samples, timeline = [], []
         t0 = time.time()
         rep["t0_epoch"] = t0          # the bulk schedule's start (brad / levi: C4 / C6 align on it, not by correlation)
@@ -414,6 +411,16 @@ def run(a) -> dict:
                             sh(c)
                     timeline.append({"t": round(time.time() - t0, 2), "session": s, "state": states[s][k], **p,
                                      "tc_detail": None if NO_IFB else tc_detail(f"lvi_{s}")})
+                    if up is not None:
+                        stop(up_procs[s])
+                        lim = upload_limits(p["rate_kbit"])
+                        timeline[-1]["upload"] = lim
+                        up_procs[s] = [start(in_cgroup(s, upload_cmd(a.upload_url, out / "upload_4MiB.bin", a.state_s - 1,
+                                                                     lim["tcp_limit_Bps"])), out / f"upload_{s}_{k}.log")]
+                        if up["udp_sink"]:
+                            up_procs[s].append(start(in_cgroup(s, udpgso_cmd(up["udp_sink"], a.state_s - 1, lim["udp_gap_s"])),
+                                                     out / f"udpgso_{s}_{k}.log"))
+                        procs += up_procs[s]
             t_end = time.time() + a.state_s
             while time.time() < t_end:
                 samples.append({"t": round(time.time() - t0, 2), "classes": {d: class_stats(d) for d in devs},
@@ -441,6 +448,7 @@ def run(a) -> dict:
         rep["error"] = repr(e)[:600]
     finally:
         stop(procs)
+        rep["cgroups_left"] = empty_cgroups(SESSIONS)       # every slot cgroup empty before its rmdir
         for c in tree_down_cmds(a.iface):
             sh(c, check=False)
         rep["torn_down"] = True
@@ -598,29 +606,65 @@ def bulk_cmd(url: str, seconds: float) -> str:
 
 UPLOAD_URL = "https://speed.cloudflare.com/__up"     # accepts large POSTs (t55 B2 upstream load)
 UPLOAD_FILE_BYTES = 4 * 2 ** 20
+UPLOAD_SHARE = 0.3          # levi (B2): the upload load at <= 0.3 x the state's egress set rate, half TCP, half UDP
 _UDPGSO_PY = ("import socket, sys, time\n"
-              "end, sink = time.time() + float(sys.argv[1]), sys.argv[2]\n"
+              "end, sink, gap = time.time() + float(sys.argv[1]), sys.argv[2], float(sys.argv[3])\n"
               "u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.setsockopt(17, 103, 1200)\n"
               "n = e = 0\n"
               "while time.time() < end:\n"
               "    try:\n        u.sendto(b'q' * 4800, (sink, 9)); n += 1\n"
               "    except OSError:\n        e += 1\n"
-              "    time.sleep(0.05)\n"
+              "    time.sleep(gap)\n"
               "print('udp_gso sends', n, 'errors', e, flush=True)\n")
 
 
-def upload_cmd(url: str, path: Path, seconds: float) -> str:
+def upload_limits(rate_kbit: float) -> dict:
+    """levi (B2: an unlimited upload at the low states saturated the slot's uplink class and starved the bulk's ACKs):
+    the state's upload budget, UPLOAD_SHARE x its egress set rate, half to the TCP POSTs (curl --limit-rate, B/s), half
+    to the UDP GSO sends (4800 B each, the gap between sends)."""
+    half = UPLOAD_SHARE * rate_kbit * 125.0 / 2            # B/s
+    return {"tcp_limit_Bps": max(int(half), 1000), "udp_gap_s": round(4800.0 / max(half, 1.0), 3)}
+
+
+def upload_cmd(url: str, path: Path, seconds: float, limit_bps: int | None = None) -> str:
     """t55 B2 / P3 (levi 00120): Chrome-like upstream, 4 MiB HTTPS POSTs back to back for `seconds` (a bulk download
-    writes one MSS upstream at most, so it cannot show a sender's > MSS skbs); each POST's bytes on its own line."""
+    writes one MSS upstream at most, so it cannot show a sender's > MSS skbs), rate-limited to limit_bps; each POST's
+    bytes on its own line."""
+    lim = f"--limit-rate {int(limit_bps)} " if limit_bps else ""
     loop = (f'end=$(( $(date +%s) + {int(seconds)} )); while :; do rem=$(( end - $(date +%s) )); '
             f'[ "$rem" -gt 0 ] || break; curl -s -o /dev/null -w "%{{size_upload}} %{{http_code}}\\n" --max-time "$rem" '
-            f'--data-binary @{shlex.quote(str(path))} {shlex.quote(url)}; done')
+            f'{lim}--data-binary @{shlex.quote(str(path))} {shlex.quote(url)}; done')
     return "sh -c " + shlex.quote(loop)
 
 
-def udpgso_cmd(sink: str, seconds: float) -> str:
-    """QUIC-like UDP GSO upstream: one UDP_SEGMENT 1200 send of 4800 B (4 datagrams) every 50 ms to sink:9 (discard)."""
-    return "python3 -c " + shlex.quote(_UDPGSO_PY) + f" {int(seconds)} {shlex.quote(sink)}"
+def udpgso_cmd(sink: str, seconds: float, gap_s: float = 0.05) -> str:
+    """QUIC-like UDP GSO upstream: one UDP_SEGMENT 1200 send of 4800 B (4 datagrams) every gap_s to sink:9 (discard)."""
+    return "python3 -c " + shlex.quote(_UDPGSO_PY) + f" {int(seconds)} {shlex.quote(sink)} {gap_s}"
+
+
+def empty_cgroups(slots, root: Path = CG_ROOT / SLICE, wait_s: float = 5.0) -> dict:
+    """Before the teardown's rmdir (shagun: B2 left empty slot cgroups while the load's children were still exiting):
+    cgroup.kill each slot cgroup, then wait until its cgroup.procs is empty. {slot: procs left}."""
+    left = {}
+    for s in slots:
+        cg = Path(root) / s
+        try:
+            (cg / "cgroup.kill").write_text("1")
+        except OSError:
+            pass
+        end = time.time() + wait_s
+        while time.time() < end:
+            try:
+                if not (cg / "cgroup.procs").read_text().split():
+                    break
+            except OSError:
+                break
+            time.sleep(0.1)
+        try:
+            left[s] = len((cg / "cgroup.procs").read_text().split())
+        except OSError:
+            left[s] = 0
+    return left
 
 
 def default_gateway() -> str | None:
