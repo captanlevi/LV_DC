@@ -5,9 +5,11 @@ lossless and verified, never deleted. Ops only (not the collector): unit_extract
 c1f9181); nothing else reads the raw PDML.
 
 Per session, only when http_v2.json exists and (unless --no-verify-pass) verify.json reads PASS:
-  zstd -q -T0 -<level> <f> -o <f>.zst; the decompressed stream's sha256 must equal the original's, then <f> goes (the
-  .zst holds the same bytes). Each file's record is appended to <session>/raw_pdml_compressed.jsonl: bytes, zst bytes,
-  sha256 of the original (= the decompressed), sha256 of the .zst, the zstd version and level.
+  zstd -q -T0 -<level> <f> -o <f>.zst; the original's sha256 is recorded first, the .zst is decompressed and its
+  sha256 (the round trip) must equal it, and only then does <f> leave (the .zst holds the same bytes); a failed round
+  trip keeps the original and removes the .zst. Each file's record goes to <session>/compress_record.json (levi), a
+  list: bytes, zst bytes, sha256 (the original), roundtrip_sha256 (the decompressed .zst), zst_sha256, zstd version,
+  level.
 
     nice -n 19 python3 ops/compress_raw_pdml.py <session dir> ...      (or --root <data root>: every session under it)
 """
@@ -76,15 +78,20 @@ def compress_session(sd: Path, level: int = LEVEL, verify_pass: bool = True) -> 
             z.unlink(missing_ok=True)
             out.append({"session": sd.name, "file": name, "error": r.stderr.strip()[:200]})
             continue
-        if _sha_decompressed(z) != sha:
+        if _sha_decompressed(z) != sha:                    # the round trip: the original stays on a mismatch
             z.unlink(missing_ok=True)
             out.append({"session": sd.name, "file": name, "error": "decompressed sha256 differs: original kept"})
             continue
+        rt = _sha_decompressed(z)
         rec = {"t": round(time.time(), 1), "file": name, "bytes": f.stat().st_size, "zst_bytes": z.stat().st_size,
-               "sha256": sha, "zst_sha256": _sha_file(z), "zstd": ver, "level": level}
+               "sha256": sha, "roundtrip_sha256": rt, "zst_sha256": _sha_file(z), "zstd": ver, "level": level}
+        cr = sd / "compress_record.json"                   # written before the original leaves the volume
+        try:
+            recs = json.loads(cr.read_text())
+        except (OSError, ValueError):
+            recs = []
+        cr.write_text(json.dumps(recs + [rec], indent=1))
         f.unlink()
-        with open(sd / "raw_pdml_compressed.jsonl", "a") as fh:
-            fh.write(json.dumps(rec) + "\n")
         out.append({"session": sd.name, **rec})
     return out
 

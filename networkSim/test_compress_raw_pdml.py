@@ -39,9 +39,19 @@ def test_compress_in_place_verified():
         assert [r["file"] for r in res] == ["h2_raw.pdml", "h3_raw.pdml"] and all("error" not in r for r in res), res
         assert not (sd / "h2_raw.pdml").exists() and (sd / "h2_raw.pdml.zst").exists()
         assert subprocess.run(["zstd", "-dc", str(sd / "h2_raw.pdml.zst")], capture_output=True).stdout == orig
-        recs = [json.loads(x) for x in (sd / "raw_pdml_compressed.jsonl").read_text().splitlines()]
+        recs = json.loads((sd / "compress_record.json").read_text())
         assert recs[0]["bytes"] == len(orig) and recs[0]["zst_bytes"] < len(orig) and len(recs[0]["sha256"]) == 64
+        assert recs[0]["roundtrip_sha256"] == recs[0]["sha256"] and len(recs) == 2
         assert C.compress_session(sd) == []                         # nothing left to do; the .zst stays
+
+
+def test_failed_roundtrip_keeps_the_original(monkeypatch):
+    with tempfile.TemporaryDirectory() as d:
+        sd = _sess(Path(d), "tw_2")
+        monkeypatch.setattr(C, "_sha_decompressed", lambda z: "0" * 64)          # a round trip that does not match
+        r = C.compress_session(sd)
+        assert all("error" in x for x in r) and (sd / "h2_raw.pdml").exists() and not (sd / "h2_raw.pdml.zst").exists(), r
+        assert not (sd / "compress_record.json").exists()
 
 
 def test_ineligible_sessions_untouched():
