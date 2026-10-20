@@ -51,10 +51,9 @@ def test_each_minimum_at_and_below():
     assert M.h3(20)["sufficient"] and not M.h3(19)["sufficient"] and M.h3(20)["gate"] == "h3_exercised"
     assert M.no_leak({"yt1": 1, "tw1": 3})["sufficient"]
     assert not M.no_leak({"yt1": 1, "tw1": 0})["sufficient"] and not M.no_leak({})["sufficient"]
-    assert M.decode_stress({"yt1": 300.0, "tw1": 300.0}, 300.0)["sufficient"]
-    assert not M.decode_stress({"yt1": 300.0, "tw1": 299.9}, 300.0)["sufficient"]
-    assert not M.decode_stress({"yt1": 300.0, "tw1": None}, 300.0)["sufficient"]
-    assert not M.decode_stress({"yt1": 300.0}, 299.0)["sufficient"]
+    # levi (prereg 40843f81): the seconds with every slot at its top shaping state, all running, at any tier
+    assert M.decode_stress(300.0)["sufficient"] and M.decode_stress(300.0)["support"] == {"all_top_state_s": 300.0}
+    assert not M.decode_stress(299.9)["sufficient"] and not M.decode_stress(None)["sufficient"]
     c = M.goodput(12.0)
     assert c["minimum"] == {"seconds": 30.0} and c["support"] == {"seconds": 12.0} and c["gate"] == "goodput"
 
@@ -75,7 +74,8 @@ def test_the_short_profile_meets_every_minimum():
     # the bulk read window is the state less 3 s and 0.5 s, its sampled span up to ~1 s shorter at each end
     assert S["state_s"] - 3.5 - 2.0 >= m["bulk_ratio"]["non_straddling_s"]
     assert S["player_state_s"] >= m["player_a"]["state_s"] and S["fast_changes"] >= m["fast"]["changes"]
-    assert M.DECODE_SHORT_MINUTES * 60 - 60 >= m["decode_stress"]["seconds_at_top_tier"]   # a minute for startup
+    # the all-top window opens late at N = 5 (stagger + tt's lead-in) and closes at the first slot's end; 30 s margin
+    assert M.DECODE_SHORT_MINUTES * 60 - M.DECODE_SHORT_START_S >= m["decode_stress"]["all_top_state_s"] + 30.0
     n = M.short_total_s(S, 3, {"goodput": True, "top_capture": True})
     assert n == {"goodput": 35.0, "bulk": 120.0, "top_capture": 69.0, "total": 224.0}, n
     full = M.short_total_s(S, 3, {"goodput": True, "idle_ping": True, "top_capture": True, "fast": 140.0, "player": True})
@@ -272,15 +272,21 @@ def test_decode_stress_short():
     assert "--episodes" not in D.commands(a, {"youtube": 1}, ["yt1"], Path("/o"))[1]
     box = {"swap_growth_kb": 0, "oom_kills": 0, "cpu_pct": {"p95": 70.0}, "gpu_above_report_line": []}
 
-    def r(tag, top, t0=0.0, t1=420.0):
+    def r(tag, top, t0=0.0, t1=420.0, shaped=20.0):
         return {"slot": tag, "duration_s": t1 - t0, "device_stall_readable": True, "device_stall_share": 0.0,
-                "started_at": t0, "ended_at": t1, "seconds_at_top_tier": top}
-    g = D.gate([r("yt1", 300.0), r("tw1", 310.0)], box, ["yt1", "tw1"], min_session_s=None)
-    assert g["status"] == "pass" and g["pass"] and not g["fails"], g              # 7 min sessions: no 10 min rule
-    g = D.gate([r("yt1", 300.0), r("tw1", 299.0)], box, ["yt1", "tw1"], min_session_s=None)
-    assert g["status"] == "insufficient" and g["pass"] is False and not g["fails"], g
+                "started_at": t0, "ended_at": t1, "seconds_at_top_tier": top, "top_state_spans": [[t0 + shaped, t1]]}
+    # levi (prereg 40843f81): the support is the seconds all slots sit at the top state together, at any tier; a slot
+    # holding its top tier for only part of them (tw1 at 1080 for 60 s) no longer makes it insufficient
+    g = D.gate([r("yt1", 300.0), r("tw1", 60.0)], box, ["yt1", "tw1"], min_session_s=None)
+    assert g["status"] == "pass" and g["pass"] and not g["fails"], g              # short sessions: no 10 min rule
+    assert g["support"]["support"] == {"all_top_state_s": 400.0} and g["window"] == [[20.0, 420.0]], g
+    g = D.gate([r("yt1", 300.0), r("tw1", 300.0, shaped=121.0)], box, ["yt1", "tw1"], min_session_s=None)
+    assert g["status"] == "insufficient" and g["pass"] is False and not g["fails"], g   # tw1 shaped late: 299 s
     g = D.gate([r("yt1", 300.0), r("tw1", 300.0, t0=150.0, t1=570.0)], box, ["yt1", "tw1"], min_session_s=None)
-    assert g["status"] == "insufficient" and g["support"]["support"]["overlap_s"] == 270.0, g   # not all at once
+    assert g["status"] == "insufficient" and g["support"]["support"]["all_top_state_s"] == 250.0, g   # not all at once
+    no_top = dict(r("tw1", 300.0), top_state_spans=[])
+    assert D.gate([r("yt1", 300.0), no_top], box, ["yt1", "tw1"], min_session_s=None)["status"] == "insufficient"
+    assert D.gate([r("yt1", 300.0)], box, ["yt1", "tw1"], min_session_s=None)["status"] == "fail"   # tw1: no session
     g = D.gate([r("yt1", 300.0), r("tw1", 300.0)], dict(box, oom_kills=1), ["yt1", "tw1"], min_session_s=None)
     assert g["status"] == "fail", g
     assert D.gate([r("yt1", 300.0)], box, ["yt1"])["status"] == "fail"           # the full form keeps the 10 min rule
