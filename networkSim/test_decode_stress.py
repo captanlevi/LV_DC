@@ -126,7 +126,7 @@ def _r(tag, share, readable=True, dur=700.0, tt60=None, top_s=None):
     # restart prereg (short dry runs): the gate's support, >= 300 s at every slot's top tier with every session at once
     return {"slot": tag, "duration_s": dur, "device_stall_readable": readable, "device_stall_share": share,
             "started_at": 0.0, "ended_at": dur, "seconds_at_top_tier": dur - 60.0 if top_s is None else top_s,
-            "top_state_spans": [[20.0, dur]],
+            "top_state_spans": [[20.0, dur]], "first_playing_at": 10.0,
             **({"tt_60fps_tier": tt60} if tt60 else {})}
 
 
@@ -241,10 +241,12 @@ def test_all_top_window_and_reread():
         out = Path(d) / "out"
         out.mkdir()
         sds = []
-        # yt1 runs 1000-1420 at 720, shaped at 10 from 1015; tw1 runs 1030-1450 and swings 1080 / 720 (the ABR's
-        # oscillation at the top state), shaped at 10 from 1040, one sub-step at state 7 (1100-1120)
+        # yt1 runs 1000-1420 at 720, shaped at 10 from 1015, loading (paused ticks) until 1060 (levi on 0097779: the
+        # window opens at its first playing tick); tw1 runs 1030-1450 and swings 1080 / 720 (the ABR's oscillation at
+        # the top state), shaped at 10 from 1040, one sub-step at state 7 (1100-1120): two spans
         for tag, plat, t0, t1, shaped, ticks in (
-                ("yt1", "youtube", 1000.0, 1420.0, [(1015.0, "10")], _ticks(1001, 418, 720, 30.0)),
+                ("yt1", "youtube", 1000.0, 1420.0, [(1015.0, "10")],
+                 _ticks(1001, 59, 720, 0.0, paused=True) + _ticks(1060, 359, 720, 30.0)),
                 ("tw1", "twitch", 1030.0, 1450.0, [(1040.0, "10"), (1100.0, "7"), (1120.0, "10"), (1300.0, "10")],
                  _ticks(1031, 100, 1080, 60.0) + _ticks(1131, 318, 720, 30.0, frames0=6000))):
             sd = Path(d) / "_trio_stress" / plat / f"{tag}_900001"
@@ -256,7 +258,8 @@ def test_all_top_window_and_reread():
             sds.append(sd)
         assert D.top_state_spans(sds[1], "10", 1450.0) == [[1040.0, 1100.0], [1120.0, 1450.0]]
         assert D.intersect([[[0, 10], [20, 30]], [[5, 25]]]) == [[5, 10], [20, 25]] and D.intersect([]) == []
-        rows = [{"t": t, "cpu_pct": 95.0 if t < 1040 else 50.0, "swap_used_kb": 0, "oom_kill": 0,
+        # CPU busy at startup and in the gap between the spans (levi: the union of the spans, not their hull)
+        rows = [{"t": t, "cpu_pct": 95.0 if t < 1060 or 1100 <= t < 1120 else 50.0, "swap_used_kb": 0, "oom_kill": 0,
                  "gpu_busy_pct": {"rcs0": 40.0}} for t in range(1000, 1460, 2)]
         (out / "box_record.jsonl").write_text(json.dumps({"header": True, "gpu_source": "x"}) + "\n"
                                               + "".join(json.dumps(r) + "\n" for r in rows))
@@ -266,14 +269,18 @@ def test_all_top_window_and_reread():
         (out / "report.json").write_text(json.dumps(rep))
         rr = D.reread(out / "report.json")
         g = rr["gate"]
-        assert g["window"] == [[1040.0, 1100.0], [1120.0, 1420.0]], g["window"]
-        assert g["support"]["support"] == {"all_top_state_s": 360.0} and g["status"] == "pass", g
-        assert rr["box_window"] == {"t0": 1040.0, "t1": 1420.0, "spans": 2, "over": "all-top window"}
-        assert rr["box_record"]["cpu_pct"]["p95"] == 50.0 and g["short_of_headroom"] is False   # startup's 95 % outside
+        assert g["window"] == [[1060.0, 1100.0], [1120.0, 1420.0]], g["window"]
+        assert g["support"]["support"] == {"all_top_state_s": 340.0} and g["status"] == "pass", g
+        assert rr["box_window"] == {"t0": 1060.0, "t1": 1420.0, "spans": [[1060.0, 1100.0], [1120.0, 1420.0]],
+                                    "over": "all-top window (union of spans)"}
+        # startup's and the gap's 95 % outside (over the hull: 10 of 180 rows at 95, p95 95)
+        assert rr["box_record"]["cpu_pct"]["p95"] == 50.0 and rr["box_record"]["n"] == 170, rr["box_record"]
+        assert g["short_of_headroom"] is False
         tw = g["slots"]["tw1"]["tiers_all_top_s"]
-        assert tw == {"720": 289.0, "1080": 70.0} and g["slots"]["tw1"]["top_tier_all_top"] == 1080, tw
-        assert g["slots"]["yt1"]["tiers_all_top_s"] == {"720": 358.0}, g["slots"]["yt1"]   # its last tick 1418
-        assert any(n.startswith("tw1: top tier 1080 held 70.0 s") for n in g["notes"]), g["notes"]
+        assert tw == {"720": 289.0, "1080": 50.0} and g["slots"]["tw1"]["top_tier_all_top"] == 1080, tw
+        assert g["slots"]["yt1"]["tiers_all_top_s"] == {"720": 338.0}, g["slots"]["yt1"]   # its last tick 1418
+        assert any(n.startswith("tw1: top tier 1080 held 50.0 s") for n in g["notes"]), g["notes"]
+        assert rr["readings"][0]["first_playing_at"] == 1060.0
         assert rr["reread_of"]["gate"] == {"status": "insufficient"}
         assert D.main(["--reread", str(out / "report.json")]) == 0 and (out / "report_reread.json").exists()
 

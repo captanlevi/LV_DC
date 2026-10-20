@@ -45,6 +45,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -192,8 +193,9 @@ def intersect(spans: list[list[list[float]]]) -> list[list[float]]:
 
 
 def all_top_window(readings: list[dict], slots: list[str] | None = None) -> list[list[float]]:
-    """The seconds every slot's session is running (started_at to ended_at) with its shaper at its top state (levi,
-    prereg 40843f81); empty when any slot is missing or never at it."""
+    """The seconds every slot's session is running after startup (its first playing tick to ended_at; levi on 0097779)
+    with its shaper at its top state (levi, prereg 40843f81); empty when any slot is missing, never plays or is never
+    at it."""
     by = {r.get("slot"): r for r in readings}
     want = slots or sorted(by)
     if not want or any(t not in by for t in want):
@@ -201,9 +203,10 @@ def all_top_window(readings: list[dict], slots: list[str] | None = None) -> list
     per = []
     for t in want:
         r = by[t]
-        if not isinstance(r.get("started_at"), (int, float)) or not isinstance(r.get("ended_at"), (int, float)):
+        t0, t1 = r.get("first_playing_at"), r.get("ended_at")
+        if not isinstance(t0, (int, float)) or not isinstance(t1, (int, float)):
             return []
-        per.append(intersect([r.get("top_state_spans") or [], [[r["started_at"], r["ended_at"]]]]))
+        per.append(intersect([r.get("top_state_spans") or [], [[t0, t1]]]))
     return intersect(per)
 
 
@@ -232,6 +235,9 @@ def session_reading(sd: Path) -> dict:
            "media_decoders": meta.get("media_decoders"), "display_start": meta.get("display_start")}
     # the short form's support (restart prereg): playing seconds at the slot's top tier (playing ticks: after startup)
     rec["seconds_at_top_tier"] = tr[str(rec["top_tier"])]["s"] if rec["top_tier"] is not None else None
+    # levi on 0097779: a slot counts toward the all-top seconds from its first playing tick (after startup)
+    first = next((float(r["ts"]) / 1000.0 for r in rows if _playing(r) and _f(r.get("ts")) is not None), None)
+    rec["first_playing_at"] = round(first, 3) if first is not None else None
     rec["top_state"] = str(meta.get("hold_state") or TOP_STATE)
     rec["top_state_spans"] = top_state_spans(sd, rec["top_state"], t1)
     play_st = [x for x in st if x["cause"] != "load"]
@@ -328,15 +334,27 @@ def with_window_tiers(readings: list[dict], sessions: list, slots: list[str] | N
 
 
 def box_over(record: Path, window: list[list[float]], t0: float | None, t1: float | None) -> tuple[dict | None, dict]:
-    """The device record read over the all-top window's span (levi: CPU p95, swap and OOM over the same seconds); with
+    """The device record read over the all-top window's spans, their union only (levi: CPU p95, swap and OOM over the
+    same seconds; the gaps between spans left out), through gpu_record.summary on the record's lines inside them; with
     no window, over the whole stress [t0, t1], stated."""
     sys.path.insert(0, str(NS))
     import gpu_record
-    if window:
-        w = {"t0": window[0][0], "t1": window[-1][1], "spans": len(window), "over": "all-top window"}
-    else:
-        w = {"t0": t0, "t1": t1, "spans": 0, "over": "the whole stress (no all-top window)"}
-    return gpu_record.summary(Path(record), w["t0"], w["t1"]), w
+    if not window:
+        w = {"t0": t0, "t1": t1, "spans": [], "over": "the whole stress (no all-top window)"}
+        return gpu_record.summary(Path(record), t0, t1), w
+    w = {"t0": window[0][0], "t1": window[-1][1], "spans": window, "over": "all-top window (union of spans)"}
+    keep = []
+    for line in Path(record).read_text().splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("header") or (isinstance(r.get("t"), (int, float)) and _inside(r["t"], window)):
+            keep.append(line)
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl") as fh:
+        fh.write("\n".join(keep) + "\n")
+        fh.flush()
+        return gpu_record.summary(Path(fh.name)), w
 
 
 def commands(a, comp: dict, tags: list[str], out: Path) -> tuple[list[str], list[str]]:

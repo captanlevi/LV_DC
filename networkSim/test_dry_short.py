@@ -272,9 +272,10 @@ def test_decode_stress_short():
     assert "--episodes" not in D.commands(a, {"youtube": 1}, ["yt1"], Path("/o"))[1]
     box = {"swap_growth_kb": 0, "oom_kills": 0, "cpu_pct": {"p95": 70.0}, "gpu_above_report_line": []}
 
-    def r(tag, top, t0=0.0, t1=420.0, shaped=20.0):
+    def r(tag, top, t0=0.0, t1=420.0, shaped=20.0, plays=10.0):
         return {"slot": tag, "duration_s": t1 - t0, "device_stall_readable": True, "device_stall_share": 0.0,
-                "started_at": t0, "ended_at": t1, "seconds_at_top_tier": top, "top_state_spans": [[t0 + shaped, t1]]}
+                "started_at": t0, "ended_at": t1, "seconds_at_top_tier": top, "top_state_spans": [[t0 + shaped, t1]],
+                "first_playing_at": None if plays is None else t0 + plays}
     # levi (prereg 40843f81): the support is the seconds all slots sit at the top state together, at any tier; a slot
     # holding its top tier for only part of them (tw1 at 1080 for 60 s) no longer makes it insufficient
     g = D.gate([r("yt1", 300.0), r("tw1", 60.0)], box, ["yt1", "tw1"], min_session_s=None)
@@ -284,6 +285,10 @@ def test_decode_stress_short():
     assert g["status"] == "insufficient" and g["pass"] is False and not g["fails"], g   # tw1 shaped late: 299 s
     g = D.gate([r("yt1", 300.0), r("tw1", 300.0, t0=150.0, t1=570.0)], box, ["yt1", "tw1"], min_session_s=None)
     assert g["status"] == "insufficient" and g["support"]["support"]["all_top_state_s"] == 250.0, g   # not all at once
+    # levi on 0097779: a slot counts from its first playing tick; one loading late inside the top state shortens it
+    g = D.gate([r("yt1", 300.0), r("tw1", 300.0, plays=121.0)], box, ["yt1", "tw1"], min_session_s=None)
+    assert g["status"] == "insufficient" and g["window"] == [[121.0, 420.0]], g
+    assert D.gate([r("yt1", 300.0), r("tw1", 300.0, plays=None)], box, ["yt1", "tw1"], min_session_s=None)["window"] == []
     no_top = dict(r("tw1", 300.0), top_state_spans=[])
     assert D.gate([r("yt1", 300.0), no_top], box, ["yt1", "tw1"], min_session_s=None)["status"] == "insufficient"
     assert D.gate([r("yt1", 300.0)], box, ["yt1", "tw1"], min_session_s=None)["status"] == "fail"   # tw1: no session
