@@ -638,13 +638,24 @@ class TcSampler:
         r = [x for x in self.rows if (x.get("in") or {}).get("bytes") is not None]
         if not r:
             return {"samples": 0, "file": self.path.name}
-        bound = sum(bool(b["in"]["backlog"]) or b["in"]["drops"] > a["in"]["drops"] for a, b in zip(r, r[1:]))
+        bound = sum(shaper_bound(a["in"], b["in"]) for a, b in zip(r, r[1:]))
         flagged = sum(1 for x in r if x.get("flagged"))
         return {"samples": len(r), "sample_s": self.sample_s, "capacity_kbit": self.capacity,
                 "shaper_bound_share": round(bound / max(1, len(r) - 1), 3),
                 "ingress_drops": r[-1]["in"]["drops"] - r[0]["in"]["drops"],
                 "flagged_seconds": flagged, "flagged_share": round(flagged / len(r), 3),
                 "qa_flag": flagged / len(r) > FLAGGED_SHARE_QA, "file": self.path.name}
+
+
+def shaper_bound(prev: dict | None, cur: dict | None) -> bool:
+    """One interval shaper-bound, between two samples of a class's tc counters (prev, cur: parse_classes rows): its
+    backlog > 0 at cur, or its drops grew since prev. The one definition (levi t58, brad's B-8): TcSampler's summary and
+    ops/diag/trio_dry_run's shaper_bound_share import it. Report-only (levi on cc62d89): the class's drops include
+    netem's emulated loss, so a lossy state reads bound with no backlog; it never feeds a gate or a qualifying rule (the
+    player load qualifies by the tokens rule)."""
+    if not cur:
+        return False
+    return bool(cur.get("backlog")) or (prev is not None and (cur.get("drops") or 0) > (prev.get("drops") or 0))
 
 
 # ------------------------------------------------------------------------------------------------ records

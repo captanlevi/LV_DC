@@ -588,12 +588,12 @@ def single_mode_reference(a, states: dict, out: Path) -> dict:
             prs = [start(bulk_cmd(a.url, a.ref_state_s), out / f"curl_single_{st}_{i}.log") for i in range(a.bulk_streams)]
             time.sleep(3.0)
             c0, n0, t0 = (class_stats("ifb0").get("1:10") or {}), netem_stats("ifb0").get("1:10") or {}, time.time()
-            bound, k, series = 0, 0, [(t0, c0.get("bytes"))]
+            bound, k, series, prev = 0, 0, [(t0, c0.get("bytes"))], c0
             while time.time() < t0 + a.ref_state_s - 3:
                 cs = class_stats("ifb0").get("1:10") or {}
                 series.append((time.time(), cs.get("bytes")))
-                bound += bool(cs.get("backlog"))
-                k += 1
+                bound += _shaper_bound(prev, cs)              # backlog or drops grew (trio_slots' one definition)
+                prev, k = cs, k + 1
                 time.sleep(1.0)
             detail = tc_detail("ifb0")
             c1, n1, t1 = (class_stats("ifb0").get("1:10") or {}), netem_stats("ifb0").get("1:10") or {}, time.time()
@@ -961,6 +961,12 @@ def _ratio_gate(*a):
     return _reading().ratio_gate(*a)
 
 
+def _shaper_bound(prev: dict | None, cur: dict | None) -> bool:
+    """levi t58 (brad's B-8): the shaper-bound interval is trio_slots.shaper_bound, imported (it was backlog only here)."""
+    import trio_slots
+    return trio_slots.shaper_bound(prev, cur)
+
+
 def summarise(samples, timeline, states, a, out) -> dict:
     res = {}
     for s in SESSIONS:
@@ -980,9 +986,9 @@ def summarise(samples, timeline, states, a, out) -> dict:
                 netem_loss = round(dd / (dp + dd), 5) if dp + dd else None
             else:
                 netem_loss = None
-            bound = sum(1 for x in samples if t0 <= x["t"] <= t1
-                        and ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("backlog"))
-            n = sum(1 for x in samples if t0 <= x["t"] <= t1)
+            win = [((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}) for x in samples if t0 <= x["t"] <= t1]
+            bound = sum(_shaper_bound(c0, c1) for c0, c1 in zip(win, win[1:]))   # backlog or drops grew, per interval
+            n = max(0, len(win) - 1)
             ser = [(x["t"], ((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}).get("bytes"))
                    for x in samples if t0 <= x["t"] <= t1]
             qs, _thr = _qualifying(samples, f"lvi_{s}", "1:10", t0, t1, p["rate_kbit"], p["delay_ms"])

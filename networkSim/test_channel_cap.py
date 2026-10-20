@@ -59,8 +59,8 @@ def test_the_wiring():
     assert '| set((cap or {}).get("capped") or [])),' in src                    # twitch: the directory's exclusions
     assert 'cap = channel_cap.cap_state(troot, "tiktok", record.counted_any_era)' in src
     assert '| {_norm_room(k) for k in ((cap or {}).get("capped") or [])})' in src  # tt: the room choice's exclusions
-    assert '**({"channel_pick": browser.channel_pick} if browser.channel_pick is not None else {}),' in \
-        (HERE / "exp.py").read_text()
+    # restart prereg §5: the end write merges the cap state into the start's pick record (twitch: the category draw)
+    assert '**({"channel_pick": {**channel_pick_start, **browser.channel_pick}}' in (HERE / "exp.py").read_text()
 
 
 def main() -> int:

@@ -37,10 +37,12 @@ def main() -> int:
         assert T.last_category(d) == "Chess"
         assert T.next_category(d, live_check=lambda ch: False)[0]["name"] != "Chess"
         (d / "twitch" / "tw_3" / "meta.json").write_text(json.dumps({"tw_category": "Chess"}))
-        c, sk = T.next_category(d, live_check=lambda ch: ch == "lck")
+        # restart prereg §5: ties among the least-collected go to a seeded draw, not list order, so the esports cases
+        # exclude the other 0-count categories (test_tw_category_floor.py tests the tie itself)
+        c, sk = T.next_category(d, exclude={"Music", "IRL"}, live_check=lambda ch: ch == "lck")
         assert c["type"] == "esports" and c["channel"] == "lck" and sk is None, (c, sk)
-        c, sk = T.next_category(d, live_check=lambda ch: False)
-        assert c["name"] == "Music" and sk["reason"] == "esports_unavailable", (c, sk)
+        c, sk = T.next_category(d, exclude={"Music", "IRL"}, live_check=lambda ch: False)
+        assert c["type"] != "esports" and c["name"] not in ("Music", "IRL") and sk["reason"] == "esports_unavailable", (c, sk)
         assert T.channel_url("lec") == "https://www.twitch.tv/lec" and "Just%20Chatting" in T.url_of("Just Chatting")
         (d / "_summaries").mkdir()
         (d / "_summaries" / "tw_esports_skips.jsonl").write_text(json.dumps({**sk, "ts": time.time()}) + "\n")

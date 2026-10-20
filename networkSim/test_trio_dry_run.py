@@ -102,8 +102,26 @@ def main() -> int:
         assert T.default_gateway() == "192.168.4.1"
     finally:
         T.sh = saved
+    test_shaper_bound_is_the_one_definition()
     print("test_trio_dry_run: ok")
     return 0
+
+
+def test_shaper_bound_is_the_one_definition():
+    """levi t58 (brad's B-8): the dry run's shaper_bound_share counts trio_slots.shaper_bound intervals (backlog > 0 or
+    drops grew), as TcSampler's summary does; it was backlog only."""
+    import inspect
+    sys.path.insert(0, str(HERE))
+    import trio_slots
+    assert T._shaper_bound({"drops": 3, "backlog": 0}, {"drops": 4, "backlog": 0})            # drops grew
+    assert T._shaper_bound({"drops": 4, "backlog": 0}, {"drops": 4, "backlog": 1500})         # backlog
+    assert not T._shaper_bound({"drops": 4, "backlog": 0}, {"drops": 4, "backlog": 0})
+    assert not T._shaper_bound(None, {}) and T._shaper_bound(None, {"backlog": 1}) and not T._shaper_bound({}, None)
+    assert "trio_slots.shaper_bound(prev, cur)" in inspect.getsource(T._shaper_bound)
+    for fn in (T.summarise, T.single_mode_reference):
+        src = inspect.getsource(fn)
+        assert "_shaper_bound(" in src and 'get("backlog"))\n' not in src and 'bool(cs.get("backlog"))' not in src
+    assert "shaper_bound(a[\"in\"], b[\"in\"])" in inspect.getsource(trio_slots.TcSampler.summary)
 
 
 def test_trio_dry_run():
