@@ -5,7 +5,8 @@ written (-> MB/s), ms reading / writing, ios in flight, ms doing io (-> util %),
 A device is a /proc/diskstats name (sda, nvme0n1) or a mount point (an absolute path), resolved at start to the whole disk under it
 (st_dev -> /sys/dev/block/MAJ:MIN; a partition -> its parent disk), so a disk swap behind the same mount path (the 4 TB migration,
 shagun's runbook 00314) needs no edit; a path that is not a mount point stops the sampler (never a silent read of the root disk). The
-header records each argument's resolution. Default: the data volume's mount and /. Moved into the repo from chaos current_data (sha256
+header records each argument's resolution. Default: the data volume's mount (LVDC_MOUNT, as ops/env.sh) and /; after a
+cutover that keeps the old disk mounted, pass both mounts. Moved into the repo from chaos current_data (sha256
 b57ab7eddb89, devices by name only; rows unchanged).
 Usage: diskstats_sampler.py <out.jsonl> [devices or mount points...]; stop with SIGTERM / SIGINT. Read only."""
 import hashlib
@@ -15,7 +16,9 @@ import signal
 import sys
 import time
 
-DEFAULT_DEVICES = ["/media/captanlevi/memories", "/"]
+# the data volume's mount as ops/env.sh sets it (LVDC_MOUNT, default /media/<user>/memories), and the system disk
+_USER = os.environ.get("SUDO_USER") or os.environ.get("USER") or "captanlevi"
+DEFAULT_DEVICES = [os.environ.get("LVDC_MOUNT") or f"/media/{_USER}/memories", "/"]
 
 
 def resolve(arg: str, sys_root: str = "/sys", ismount=os.path.ismount, stat=os.stat) -> str:
