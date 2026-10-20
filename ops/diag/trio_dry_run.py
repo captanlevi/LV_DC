@@ -455,6 +455,11 @@ def run(a) -> dict:
             with open(out / "fast_segment.json", "w") as fh:
                 json.dump(ph, fh)
             rep["fast_segment"] = read_fast_segment(ph)
+        if a.walk_segment_s and not NO_IFB:   # restart §2: the base schedule with the walk under the bulk load
+            ph = fast_segment_phase(a, out, family="base")
+            with open(out / "walk_segment.json", "w") as fh:
+                json.dump(ph, fh)
+            rep["walk_segment"] = read_fast_segment(ph)
         if a.player_load:               # Q am. 16: the player-shaped load, its own phase on the same states
             ph = player_phase(a, states, out)
             rep["player_load"] = {"timeline": ph["timeline"], "t0_epoch": ph["t0_epoch"],
@@ -718,17 +723,19 @@ def _fast_snap(s: str, t0: float, clock=time.time) -> dict:
             "netem": netem_stats(f"lvi_{s}").get("1:10")}
 
 
-def fast_segment_phase(a, out: Path, clock=time.time, sleep=time.sleep) -> dict:
+def fast_segment_phase(a, out: Path, clock=time.time, sleep=time.sleep, family: str = "fast") -> dict:
     """Q am. 17's landing condition: every slot's class driven by its platform's @fast plan (fast_segment.schedule,
     seeded by --fast-seed) for --fast-segment-s under the bulk load; each change applied with rate_cmds at its time,
     the slot's class / netem snapshotted just before and after the tc commands and fast_segment.SETTLE_S later; every
-    device sampled once a second, as the bulk phase does."""
+    device sampled once a second, as the bulk phase does. family "base": restart §2's walk segment, the base matrix's
+    plan for --walk-segment-s (the same seed), read by the same gates."""
     F = _fast()
-    plan = {s: F.schedule(platform_of(s), s, a.fast_segment_s, a.fast_seed) for s in SESSIONS}
+    seconds = a.fast_segment_s if family == "fast" else a.walk_segment_s
+    plan = {s: F.schedule(platform_of(s), s, seconds, a.fast_seed, family) for s in SESSIONS}
     for s in SESSIONS:
         for c in rate_cmds(a.iface, s, plan[s][0]):
             sh(c)
-    procs = [start(in_cgroup(s, bulk_cmd(a.url, a.fast_segment_s + 5)), out / f"curl_fast_{s}_{i}.log")
+    procs = [start(in_cgroup(s, bulk_cmd(a.url, seconds + 5)), out / f"curl_{family}_{s}_{i}.log")
              for s in SESSIONS for i in range(a.bulk_streams)]
     devs = [f"lvi_{s}" for s in SESSIONS] + [a.iface]
     # the first plan step is in force from before t0 (applied above): an initial entry, no snapshots (never a change read)
@@ -739,7 +746,7 @@ def fast_segment_phase(a, out: Path, clock=time.time, sleep=time.sleep) -> dict:
         sleep(3.0)                                   # the load fills the classes before the first change
         t0 = clock()
         ev = sorted([(e["t"], 1, s, i) for s in SESSIONS for i, e in enumerate(plan[s]) if i]
-                    + [(float(k), 0, None, None) for k in range(int(a.fast_segment_s) + 1)])
+                    + [(float(k), 0, None, None) for k in range(int(seconds) + 1)])
         pending: list = []                           # settle snapshots due: (t, slot, change index)
         for t_ev, kind, s, i in ev:
             while True:
@@ -766,7 +773,8 @@ def fast_segment_phase(a, out: Path, clock=time.time, sleep=time.sleep) -> dict:
             pending.append((t_ev + F.SETTLE_S, s, len(changes[s]) - 1))
     finally:
         stop(procs)
-    return {"plan": plan, "changes": changes, "samples": samples, "seconds": a.fast_segment_s, "seed": a.fast_seed}
+    return {"plan": plan, "changes": changes, "samples": samples, "seconds": seconds, "seed": a.fast_seed,
+            "family": family}
 
 
 def read_fast_segment(ph: dict) -> dict:
@@ -782,6 +790,7 @@ def read_fast_segment(ph: dict) -> dict:
     ok = bool(per) and all(v["change_drops"]["gate"] == "pass" and v["ratio_non_straddling"]["gate"] == "pass"
                            for v in per.values())
     return {"per_slot": per, "pass": ok, "seconds": ph["seconds"], "seed": ph["seed"], "notes": F.NOTES,
+            "family": ph.get("family", "fast"),
             "rule": "Q am. 17: no class drops at change instants beyond the set loss; the ratio in "
                     f"[{F.RATIO_LO}, {F.RATIO_HI}] on backlogged seconds not straddling a change"}
 
@@ -1054,7 +1063,11 @@ def main(argv=None) -> int:
     ap.add_argument("--fast-segment-s", type=float, default=0.0,
                     help="Q am. 17: seconds of each slot's @fast plan under the bulk load after the bulk phase (the "
                          "schedule families' landing dry run: 180); 0 = off")
-    ap.add_argument("--fast-seed", type=int, default=0, help="the @fast plans' seed (recorded)")
+    ap.add_argument("--fast-seed", type=int, default=0, help="the @fast and walk plans' seed (recorded)")
+    ap.add_argument("--walk-segment-s", type=float, default=0.0,
+                    help="restart §2: seconds of each slot's base-matrix plan with the walk (2 s steps between 12-30 s "
+                         "re-draws) and a delay / loss factor under the bulk load, after the @fast segment, read by the "
+                         "@fast gates; 0 = off")
     a = ap.parse_args(argv)
     a.states = {k: v.split(",") for k, v in a.states.items()}
     global SESSIONS, DEFAULT_STATES

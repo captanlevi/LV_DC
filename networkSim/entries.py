@@ -270,7 +270,8 @@ def startup_rates(entries: list[dict]) -> dict:
 
 
 def read_net_labels(sd) -> list[dict]:
-    """net_labels.txt: one JSON object per line ({timestamp, speed, state})."""
+    """net_labels.txt: one JSON object per line ({timestamp, speed, state}; from restart §2 also the realised delay /
+    loss, the sub-step's re-draw and walk_step: utils/dataModels.NetLabel). Every row is a shaper change."""
     import json
     from pathlib import Path
     p = Path(sd) / "net_labels.txt"

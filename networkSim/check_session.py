@@ -361,6 +361,28 @@ def tick_presence(ts: list[float], window: tuple[float, float] | None = None, ga
     return max(0.0, 1.0 - uncovered / (hi - lo + 1.0))
 
 
+def substeps(lab: list[dict], t_end: float) -> list[tuple[dict, float, float | None]]:
+    """net_labels rows grouped into the shaper's sub-steps: (the sub-step's first row, its end, the set rate over it).
+    Restart §2's walk rows (walk_step >= 1) continue their sub-step and its set rate is their time-weighted mean; rows
+    without walk_step (before §2) are a sub-step each, at their own speed."""
+    out, ends = [], [x["timestamp"] for x in lab[1:]] + [t_end]
+    for x, end in zip(lab, ends):
+        if out and (x.get("walk_step") or 0) >= 1:
+            out[-1][1].append((x, end))
+        else:
+            out.append((x, [(x, end)]))
+    res = []
+    for first, rows in out:
+        w = sum(max(0.0, e - r["timestamp"]) for r, e in rows)
+        sp = [r.get("speed") for r, _ in rows]
+        if len(rows) == 1 or None in sp:
+            set_kbit = first.get("speed")
+        else:
+            set_kbit = (sum(r["speed"] * max(0.0, e - r["timestamp"]) for r, e in rows) / w) if w > 0 else first.get("speed")
+        res.append((first, rows[-1][1], set_kbit))
+    return res
+
+
 def session_window(meta: dict, net: list[dict]) -> tuple[float, float] | None:
     """The seconds the res_meta ticks must cover: from the shaper's first label (the schedule starts once the stream
     plays; earlier time is browser start and entry) to the session's end (meta ended_at); None when either is missing."""
@@ -758,15 +780,15 @@ def traffic_checks(sd: Path, platform: str) -> dict:
     eps, binds = [], []
     nl = sd / "net_labels.txt"
     lab = [json.loads(l) for l in nl.read_text().splitlines() if l.strip()] if nl.exists() else []
-    for a, b in zip(lab, lab[1:] + [{"timestamp": t1}]):
-        lo, hi = a["timestamp"], b["timestamp"]
+    for a, hi, set_kbit in substeps(lab, t1):
+        lo = a["timestamp"]
         if hi - lo < 10:
             continue
         seg = [d for d in down if lo <= d[0] < hi]
         byts = sum(d[1] for d in seg)
         kbit = byts * 8 / 1000 / (hi - lo)
-        ratio = kbit / a["speed"] if a.get("speed") else None
-        eps.append({"state": a.get("state"), "set_kbit": a.get("speed"), "measured_kbit": kbit, "ratio": ratio,
+        ratio = kbit / set_kbit if set_kbit else None
+        eps.append({"state": a.get("state"), "set_kbit": set_kbit, "measured_kbit": kbit, "ratio": ratio,
                     "background_share": (1 - sum(d[1] for d in seg if d[2]) / byts) if byts else None})
         binds.append(ratio is not None and ratio <= CHECKS["shaper_ratio_max"])
     # capture gaps: minutes with zero client packets while the shaper runs

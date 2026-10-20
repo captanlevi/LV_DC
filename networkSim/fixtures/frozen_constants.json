@@ -1508,6 +1508,21 @@
    40.0
   ]
  },
+ "shaping_walk": {
+  "DL_FACTOR_HI": 2.0,
+  "DL_FACTOR_LO": 0.5,
+  "DL_FACTOR_RULE": "restart 2026-10-21 \u00a72 (b): one factor per session, log-U(0.5, 2), on the re-drawn delay and loss",
+  "SHAPING_SEED": 0,
+  "WALK_LAST_MIN_S": 1.0,
+  "WALK_REF_STEPS": 10,
+  "WALK_RULE": "restart 2026-10-21 \u00a72 (a): reflecting random walk in linear rate in the state's band from the sub-step's re-draw",
+  "WALK_SIGMA_PER_BAND": 0.159,
+  "WALK_SIM_SEED": 0,
+  "WALK_SIM_SESSIONS": 1000,
+  "WALK_SIM_SHA256": "92724ddef31a495154ab9b7f8362518beb90aed4a259bdef11b2c85704616781",
+  "WALK_SPAN_SHARE": 0.5,
+  "WALK_STEP_S": 2.0
+ },
  "shot_origin": {
   "SHOT_CALIB_MARGIN_PX": 64,
   "SHOT_CALIB_MAX_RESIDUAL": 8.0,

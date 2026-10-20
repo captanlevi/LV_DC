@@ -1,0 +1,1733 @@
+{
+ "delay_loss_by_state": {
+  "1": {
+   "delay_ms": {
+    "realised": {
+     "p5": 7,
+     "p50": 70,
+     "p95": 202
+    },
+    "redraw": {
+     "p5": 7,
+     "p50": 76,
+     "p95": 143
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.231,
+     "p95": 0.678
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.3,
+     "p95": 0.5
+    }
+   }
+  },
+  "10": {
+   "delay_ms": {
+    "realised": {
+     "p5": 1,
+     "p50": 9,
+     "p95": 28
+    },
+    "redraw": {
+     "p5": 1,
+     "p50": 10,
+     "p95": 19
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.0,
+     "p95": 0.0
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.0,
+     "p95": 0.0
+    }
+   }
+  },
+  "2": {
+   "delay_ms": {
+    "realised": {
+     "p5": 5,
+     "p50": 60,
+     "p95": 175
+    },
+    "redraw": {
+     "p5": 6,
+     "p50": 64,
+     "p95": 124
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.229,
+     "p95": 0.685
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.3,
+     "p95": 0.5
+    }
+   }
+  },
+  "3": {
+   "delay_ms": {
+    "realised": {
+     "p5": 5,
+     "p50": 51,
+     "p95": 148
+    },
+    "redraw": {
+     "p5": 5,
+     "p50": 54,
+     "p95": 105
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.182,
+     "p95": 0.557
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.2,
+     "p95": 0.4
+    }
+   }
+  },
+  "4": {
+   "delay_ms": {
+    "realised": {
+     "p5": 4,
+     "p50": 41,
+     "p95": 121
+    },
+    "redraw": {
+     "p5": 4,
+     "p50": 45,
+     "p95": 86
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.14,
+     "p95": 0.398
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.1,
+     "p95": 0.3
+    }
+   }
+  },
+  "5": {
+   "delay_ms": {
+    "realised": {
+     "p5": 3,
+     "p50": 37,
+     "p95": 107
+    },
+    "redraw": {
+     "p5": 4,
+     "p50": 40,
+     "p95": 77
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.119,
+     "p95": 0.336
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.1,
+     "p95": 0.2
+    }
+   }
+  },
+  "6": {
+   "delay_ms": {
+    "realised": {
+     "p5": 3,
+     "p50": 33,
+     "p95": 95
+    },
+    "redraw": {
+     "p5": 3,
+     "p50": 35,
+     "p95": 67
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.1,
+     "p95": 0.305
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.1,
+     "p95": 0.2
+    }
+   }
+  },
+  "7": {
+   "delay_ms": {
+    "realised": {
+     "p5": 2,
+     "p50": 28,
+     "p95": 82
+    },
+    "redraw": {
+     "p5": 3,
+     "p50": 30,
+     "p95": 58
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.1,
+     "p95": 0.304
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.1,
+     "p95": 0.2
+    }
+   }
+  },
+  "8": {
+   "delay_ms": {
+    "realised": {
+     "p5": 2,
+     "p50": 19,
+     "p95": 54
+    },
+    "redraw": {
+     "p5": 2,
+     "p50": 20,
+     "p95": 39
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.07,
+     "p95": 0.18
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.1,
+     "p95": 0.1
+    }
+   }
+  },
+  "9": {
+   "delay_ms": {
+    "realised": {
+     "p5": 1,
+     "p50": 14,
+     "p95": 41
+    },
+    "redraw": {
+     "p5": 1,
+     "p50": 15,
+     "p95": 29
+    }
+   },
+   "loss_pct": {
+    "realised": {
+     "p5": 0.0,
+     "p50": 0.05,
+     "p95": 0.175
+    },
+    "redraw": {
+     "p5": 0.0,
+     "p50": 0.1,
+     "p95": 0.1
+    }
+   }
+  }
+ },
+ "dl_factor": {
+  "hi": 2.0,
+  "lo": 0.5,
+  "rule": "restart 2026-10-21 \u00a72 (b): one factor per session, log-U(0.5, 2), on the re-drawn delay and loss"
+ },
+ "matrices": {
+  "tiktok": {
+   "TT-M": {
+    "changes_per_min": {
+     "after_walk": 30.03,
+     "before_walk": 3.39
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 699,
+      "mean": 690.76,
+      "median": 691,
+      "min": 682,
+      "p10": 687,
+      "p90": 694
+     },
+     "before_walk": {
+      "max": 84,
+      "mean": 77.93,
+      "median": 78,
+      "min": 72,
+      "p10": 75,
+      "p90": 81
+     }
+    },
+    "occupancy": {
+     "1": 0.024998,
+     "10": 0.06491,
+     "2": 0.035999,
+     "3": 0.087953,
+     "4": 0.191617,
+     "5": 0.180687,
+     "6": 0.106653,
+     "7": 0.103746,
+     "8": 0.101656,
+     "9": 0.10178
+    },
+    "schedule": {
+     "base_matrix": "TT-M",
+     "episode_s": 60,
+     "episodes": 23,
+     "low_cap_s": 240,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1380,
+     "start_rule": "stationary"
+    },
+    "seed": "0:tiktok:TT-M",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8302,
+      "p50": 1.0,
+      "p95": 1.1694
+     },
+     "realised_over_redraw_by_state": {
+      "1": 1.0034,
+      "10": 0.9991,
+      "2": 0.9975,
+      "3": 1.0006,
+      "4": 1.0004,
+      "5": 1.0,
+      "6": 0.9992,
+      "7": 1.0,
+      "8": 0.9997,
+      "9": 1.0002
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8304,
+      "p50": 1.0,
+      "p95": 1.1694
+     },
+     "span_share": {
+      "mean": 0.4354,
+      "p10": 0.196,
+      "p50": 0.415,
+      "p90": 0.7125,
+      "substeps": 74876
+     },
+     "span_share_ref_length": {
+      "mean": 0.499,
+      "p10": 0.2833,
+      "p50": 0.4733,
+      "p90": 0.76,
+      "substeps": 6821
+     },
+     "steps_per_substep": {
+      "mean": 7.86,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   },
+   "TT-M@fast": {
+    "changes_per_min": {
+     "after_walk": 30.23,
+     "before_walk": 15.81
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 713,
+      "mean": 695.34,
+      "median": 695,
+      "min": 674,
+      "p10": 688,
+      "p90": 702
+     },
+     "before_walk": {
+      "max": 381,
+      "mean": 363.52,
+      "median": 364,
+      "min": 350,
+      "p10": 357,
+      "p90": 370
+     }
+    },
+    "occupancy": {
+     "1": 0.048983,
+     "10": 0.064365,
+     "2": 0.064304,
+     "3": 0.110322,
+     "4": 0.137261,
+     "5": 0.13873,
+     "6": 0.115357,
+     "7": 0.10953,
+     "8": 0.1096,
+     "9": 0.101548
+    },
+    "schedule": {
+     "base_matrix": "TT-M",
+     "episode_s": 12,
+     "episodes": 115,
+     "low_cap_s": 240,
+     "redraw_s": [
+      2.4,
+      6.0
+     ],
+     "schedule": "fast",
+     "self_loops": false,
+     "session_s": 1380,
+     "start_rule": "stationary"
+    },
+    "seed": "0:tiktok:TT-M@fast",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8225,
+      "p50": 1.0,
+      "p95": 1.1778
+     },
+     "realised_over_redraw_by_state": {
+      "1": 1.0,
+      "10": 0.9999,
+      "2": 1.0001,
+      "3": 1.0003,
+      "4": 0.9999,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0002,
+      "8": 1.0001,
+      "9": 1.0001
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8219,
+      "p50": 1.0,
+      "p95": 1.1775
+     },
+     "span_share": {
+      "mean": 0.1356,
+      "p10": 0.0229,
+      "p50": 0.115,
+      "p90": 0.276,
+      "substeps": 259815
+     },
+     "span_share_ref_length": {
+      "mean": null,
+      "substeps": 0
+     },
+     "steps_per_substep": {
+      "mean": 0.91,
+      "p10": 0,
+      "p50": 1,
+      "p90": 2
+     }
+    }
+   },
+   "TT-M@slow": {
+    "changes_per_min": {
+     "after_walk": 30.0,
+     "before_walk": 2.93
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 699,
+      "mean": 689.98,
+      "median": 690,
+      "min": 684,
+      "p10": 687,
+      "p90": 693
+     },
+     "before_walk": {
+      "max": 77,
+      "mean": 67.39,
+      "median": 67,
+      "min": 61,
+      "p10": 65,
+      "p90": 70
+     }
+    },
+    "occupancy": {
+     "1": 0.005043,
+     "10": 0.056667,
+     "2": 0.022087,
+     "3": 0.066783,
+     "4": 0.20842,
+     "5": 0.196667,
+     "6": 0.139333,
+     "7": 0.110667,
+     "8": 0.106,
+     "9": 0.088333
+    },
+    "schedule": {
+     "base_matrix": "TT-M",
+     "episode_s": 460.0,
+     "episodes": 3,
+     "low_cap_s": 240,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "slow",
+     "self_loops": false,
+     "session_s": 1380.0,
+     "start_rule": "stationary"
+    },
+    "seed": "0:tiktok:TT-M@slow",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8357,
+      "p50": 0.9997,
+      "p95": 1.1639
+     },
+     "realised_over_redraw_by_state": {
+      "1": 0.9734,
+      "10": 0.9997,
+      "2": 1.0019,
+      "3": 0.9987,
+      "4": 0.9999,
+      "5": 1.0,
+      "6": 1.0001,
+      "7": 0.9999,
+      "8": 0.9996,
+      "9": 0.9986
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8353,
+      "p50": 1.0,
+      "p95": 1.1647
+     },
+     "span_share": {
+      "mean": 0.4726,
+      "p10": 0.2425,
+      "p50": 0.45,
+      "p90": 0.7462,
+      "substeps": 67030
+     },
+     "span_share_ref_length": {
+      "mean": 0.505,
+      "p10": 0.2867,
+      "p50": 0.4833,
+      "p90": 0.764,
+      "substeps": 7105
+     },
+     "steps_per_substep": {
+      "mean": 9.24,
+      "p10": 6,
+      "p50": 9,
+      "p90": 13
+     }
+    }
+   },
+   "current": {
+    "changes_per_min": {
+     "after_walk": 30.04,
+     "before_walk": 3.39
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 700,
+      "mean": 690.88,
+      "median": 691,
+      "min": 684,
+      "p10": 688,
+      "p90": 694
+     },
+     "before_walk": {
+      "max": 86,
+      "mean": 77.94,
+      "median": 78,
+      "min": 71,
+      "p10": 75,
+      "p90": 81
+     }
+    },
+    "occupancy": {
+     "1": 0.001043,
+     "10": 0.076998,
+     "2": 0.001652,
+     "3": 0.001739,
+     "4": 0.049306,
+     "5": 0.136005,
+     "6": 0.189433,
+     "7": 0.208696,
+     "8": 0.196736,
+     "9": 0.138393
+    },
+    "schedule": {
+     "base_matrix": "current",
+     "episode_s": 60,
+     "episodes": 23,
+     "low_cap_s": 120,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1380,
+     "start_rule": "linear"
+    },
+    "seed": "0:tiktok:current",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.835,
+      "p50": 1.0,
+      "p95": 1.165
+     },
+     "realised_over_redraw_by_state": {
+      "1": 0.9871,
+      "10": 0.9983,
+      "2": 1.0104,
+      "3": 1.0032,
+      "4": 1.0013,
+      "5": 0.9994,
+      "6": 0.9997,
+      "7": 0.9995,
+      "8": 1.0006,
+      "9": 0.9994
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.836,
+      "p50": 1.0005,
+      "p95": 1.165
+     },
+     "span_share": {
+      "mean": 0.4346,
+      "p10": 0.1935,
+      "p50": 0.4135,
+      "p90": 0.7133,
+      "substeps": 74877
+     },
+     "span_share_ref_length": {
+      "mean": 0.5,
+      "p10": 0.28,
+      "p50": 0.48,
+      "p90": 0.755,
+      "substeps": 6820
+     },
+     "steps_per_substep": {
+      "mean": 7.86,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   }
+  },
+  "twitch": {
+   "TW-L": {
+    "changes_per_min": {
+     "after_walk": 30.04,
+     "before_walk": 3.39
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 700,
+      "mean": 690.82,
+      "median": 691,
+      "min": 683,
+      "p10": 687,
+      "p90": 694
+     },
+     "before_walk": {
+      "max": 86,
+      "mean": 77.92,
+      "median": 78,
+      "min": 71,
+      "p10": 75,
+      "p90": 81
+     }
+    },
+    "occupancy": {
+     "1": 0.067651,
+     "10": 0.0,
+     "2": 0.189213,
+     "3": 0.253091,
+     "4": 0.427609,
+     "5": 0.059132,
+     "6": 0.003305,
+     "7": 0.0,
+     "8": 0.0,
+     "9": 0.0
+    },
+    "schedule": {
+     "base_matrix": "TW-L",
+     "episode_s": 60,
+     "episodes": 23,
+     "low_cap_s": 120,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1380,
+     "start_rule": "stationary"
+    },
+    "seed": "0:twitch:TW-L",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8139,
+      "p50": 1.0,
+      "p95": 1.1863
+     },
+     "realised_over_redraw_by_state": {
+      "1": 0.9992,
+      "2": 0.9999,
+      "3": 0.9999,
+      "4": 0.9997,
+      "5": 1.0012,
+      "6": 0.9998
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8137,
+      "p50": 1.0012,
+      "p95": 1.1863
+     },
+     "span_share": {
+      "mean": 0.4343,
+      "p10": 0.1941,
+      "p50": 0.412,
+      "p90": 0.7133,
+      "substeps": 74850
+     },
+     "span_share_ref_length": {
+      "mean": 0.4963,
+      "p10": 0.2767,
+      "p50": 0.476,
+      "p90": 0.7625,
+      "substeps": 6833
+     },
+     "steps_per_substep": {
+      "mean": 7.87,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   },
+   "TW-M": {
+    "changes_per_min": {
+     "after_walk": 30.04,
+     "before_walk": 3.39
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 699,
+      "mean": 690.86,
+      "median": 691,
+      "min": 683,
+      "p10": 687,
+      "p90": 694
+     },
+     "before_walk": {
+      "max": 85,
+      "mean": 77.93,
+      "median": 78,
+      "min": 72,
+      "p10": 75,
+      "p90": 81
+     }
+    },
+    "occupancy": {
+     "1": 0.009957,
+     "10": 0.095353,
+     "2": 0.028131,
+     "3": 0.057873,
+     "4": 0.19904,
+     "5": 0.17009,
+     "6": 0.109301,
+     "7": 0.088172,
+     "8": 0.099785,
+     "9": 0.142298
+    },
+    "schedule": {
+     "base_matrix": "TW-M",
+     "episode_s": 60,
+     "episodes": 23,
+     "low_cap_s": 120,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1380,
+     "start_rule": "stationary"
+    },
+    "seed": "0:twitch:TW-M",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8318,
+      "p50": 0.9992,
+      "p95": 1.1682
+     },
+     "realised_over_redraw_by_state": {
+      "1": 1.0033,
+      "10": 1.0004,
+      "2": 0.9985,
+      "3": 1.0023,
+      "4": 0.9989,
+      "5": 1.0003,
+      "6": 0.9999,
+      "7": 0.9998,
+      "8": 0.9982,
+      "9": 0.999
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8318,
+      "p50": 0.9997,
+      "p95": 1.1687
+     },
+     "span_share": {
+      "mean": 0.4352,
+      "p10": 0.195,
+      "p50": 0.415,
+      "p90": 0.7133,
+      "substeps": 74876
+     },
+     "span_share_ref_length": {
+      "mean": 0.5014,
+      "p10": 0.284,
+      "p50": 0.48,
+      "p90": 0.7625,
+      "substeps": 6739
+     },
+     "steps_per_substep": {
+      "mean": 7.86,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   },
+   "TW-M@fast": {
+    "changes_per_min": {
+     "after_walk": 30.23,
+     "before_walk": 15.79
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 715,
+      "mean": 695.25,
+      "median": 695,
+      "min": 680,
+      "p10": 688,
+      "p90": 702
+     },
+     "before_walk": {
+      "max": 377,
+      "mean": 363.24,
+      "median": 363,
+      "min": 346,
+      "p10": 357,
+      "p90": 370
+     }
+    },
+    "occupancy": {
+     "1": 0.04487,
+     "10": 0.089191,
+     "2": 0.074939,
+     "3": 0.09367,
+     "4": 0.142226,
+     "5": 0.140583,
+     "6": 0.09887,
+     "7": 0.093026,
+     "8": 0.100365,
+     "9": 0.122261
+    },
+    "schedule": {
+     "base_matrix": "TW-M",
+     "episode_s": 12,
+     "episodes": 115,
+     "low_cap_s": 120,
+     "redraw_s": [
+      2.4,
+      6.0
+     ],
+     "schedule": "fast",
+     "self_loops": false,
+     "session_s": 1380,
+     "start_rule": "stationary"
+    },
+    "seed": "0:twitch:TW-M@fast",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.822,
+      "p50": 1.0,
+      "p95": 1.1781
+     },
+     "realised_over_redraw_by_state": {
+      "1": 1.0004,
+      "10": 1.0001,
+      "2": 0.9997,
+      "3": 0.9995,
+      "4": 0.9997,
+      "5": 1.0,
+      "6": 0.9999,
+      "7": 1.0002,
+      "8": 1.0,
+      "9": 1.0
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.822,
+      "p50": 1.0,
+      "p95": 1.1781
+     },
+     "span_share": {
+      "mean": 0.1358,
+      "p10": 0.0227,
+      "p50": 0.1154,
+      "p90": 0.2767,
+      "substeps": 260030
+     },
+     "span_share_ref_length": {
+      "mean": null,
+      "substeps": 0
+     },
+     "steps_per_substep": {
+      "mean": 0.91,
+      "p10": 0,
+      "p50": 1,
+      "p90": 2
+     }
+    }
+   },
+   "TW-M@slow": {
+    "changes_per_min": {
+     "after_walk": 30.0,
+     "before_walk": 2.94
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 697,
+      "mean": 690.1,
+      "median": 690,
+      "min": 683,
+      "p10": 687,
+      "p90": 693
+     },
+     "before_walk": {
+      "max": 75,
+      "mean": 67.51,
+      "median": 67,
+      "min": 60,
+      "p10": 65,
+      "p90": 70
+     }
+    },
+    "occupancy": {
+     "1": 0.004522,
+     "10": 0.095667,
+     "2": 0.011478,
+     "3": 0.025043,
+     "4": 0.235957,
+     "5": 0.185333,
+     "6": 0.106667,
+     "7": 0.097,
+     "8": 0.103667,
+     "9": 0.134667
+    },
+    "schedule": {
+     "base_matrix": "TW-M",
+     "episode_s": 460.0,
+     "episodes": 3,
+     "low_cap_s": 120,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "slow",
+     "self_loops": false,
+     "session_s": 1380.0,
+     "start_rule": "stationary"
+    },
+    "seed": "0:twitch:TW-M@slow",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8353,
+      "p50": 1.0,
+      "p95": 1.1647
+     },
+     "realised_over_redraw_by_state": {
+      "1": 0.9975,
+      "10": 0.9994,
+      "2": 1.0006,
+      "3": 0.9989,
+      "4": 1.0003,
+      "5": 1.0001,
+      "6": 1.0018,
+      "7": 1.0005,
+      "8": 1.0007,
+      "9": 1.0003
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8353,
+      "p50": 0.9991,
+      "p95": 1.1648
+     },
+     "span_share": {
+      "mean": 0.4713,
+      "p10": 0.2413,
+      "p50": 0.4473,
+      "p90": 0.744,
+      "substeps": 67173
+     },
+     "span_share_ref_length": {
+      "mean": 0.4958,
+      "p10": 0.28,
+      "p50": 0.475,
+      "p90": 0.75,
+      "substeps": 7128
+     },
+     "steps_per_substep": {
+      "mean": 9.22,
+      "p10": 6,
+      "p50": 9,
+      "p90": 13
+     }
+    }
+   },
+   "current": {
+    "changes_per_min": {
+     "after_walk": 30.03,
+     "before_walk": 3.38
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 699,
+      "mean": 690.72,
+      "median": 691,
+      "min": 682,
+      "p10": 687,
+      "p90": 694
+     },
+     "before_walk": {
+      "max": 87,
+      "mean": 77.79,
+      "median": 78,
+      "min": 71,
+      "p10": 75,
+      "p90": 81
+     }
+    },
+    "occupancy": {
+     "1": 0.000956,
+     "10": 0.088001,
+     "2": 0.008566,
+     "3": 0.025564,
+     "4": 0.094784,
+     "5": 0.14339,
+     "6": 0.179299,
+     "7": 0.171734,
+     "8": 0.156007,
+     "9": 0.131699
+    },
+    "schedule": {
+     "base_matrix": "current",
+     "episode_s": 60,
+     "episodes": 23,
+     "low_cap_s": 120,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1380,
+     "start_rule": "linear"
+    },
+    "seed": "0:twitch:current",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8346,
+      "p50": 0.9992,
+      "p95": 1.1646
+     },
+     "realised_over_redraw_by_state": {
+      "1": 1.0082,
+      "10": 0.9987,
+      "2": 1.0034,
+      "3": 0.9988,
+      "4": 1.0003,
+      "5": 1.0011,
+      "6": 0.9998,
+      "7": 1.0012,
+      "8": 0.9995,
+      "9": 0.9987
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8342,
+      "p50": 0.9988,
+      "p95": 1.1652
+     },
+     "span_share": {
+      "mean": 0.4355,
+      "p10": 0.1955,
+      "p50": 0.415,
+      "p90": 0.715,
+      "substeps": 74794
+     },
+     "span_share_ref_length": {
+      "mean": 0.5017,
+      "p10": 0.2825,
+      "p50": 0.4825,
+      "p90": 0.76,
+      "substeps": 6744
+     },
+     "steps_per_substep": {
+      "mean": 7.88,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   }
+  },
+  "youtube": {
+   "A": {
+    "changes_per_min": {
+     "after_walk": 30.04,
+     "before_walk": 3.39
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 640,
+      "mean": 630.87,
+      "median": 631,
+      "min": 623,
+      "p10": 628,
+      "p90": 634
+     },
+     "before_walk": {
+      "max": 79,
+      "mean": 71.15,
+      "median": 71,
+      "min": 64,
+      "p10": 68,
+      "p90": 74
+     }
+    },
+    "occupancy": {
+     "1": 0.070474,
+     "10": 0.039809,
+     "2": 0.169433,
+     "3": 0.196332,
+     "4": 0.228854,
+     "5": 0.057762,
+     "6": 0.06538,
+     "7": 0.056144,
+     "8": 0.05805,
+     "9": 0.057762
+    },
+    "schedule": {
+     "base_matrix": "A",
+     "episode_s": 60,
+     "episodes": 21,
+     "low_cap_s": 360,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1260,
+     "start_rule": "stationary"
+    },
+    "seed": "0:youtube:A",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8104,
+      "p50": 1.0,
+      "p95": 1.189
+     },
+     "realised_over_redraw_by_state": {
+      "1": 0.999,
+      "10": 1.0022,
+      "2": 0.9993,
+      "3": 1.0002,
+      "4": 1.0011,
+      "5": 1.0007,
+      "6": 0.9991,
+      "7": 1.0009,
+      "8": 1.0027,
+      "9": 1.0027
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8093,
+      "p50": 1.0,
+      "p95": 1.1896
+     },
+     "span_share": {
+      "mean": 0.4359,
+      "p10": 0.196,
+      "p50": 0.4154,
+      "p90": 0.7133,
+      "substeps": 68278
+     },
+     "span_share_ref_length": {
+      "mean": 0.5023,
+      "p10": 0.2829,
+      "p50": 0.48,
+      "p90": 0.76,
+      "substeps": 6258
+     },
+     "steps_per_substep": {
+      "mean": 7.87,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   },
+   "A@fast": {
+    "changes_per_min": {
+     "after_walk": 30.22,
+     "before_walk": 15.78
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 653,
+      "mean": 634.71,
+      "median": 635,
+      "min": 615,
+      "p10": 628,
+      "p90": 642
+     },
+     "before_walk": {
+      "max": 346,
+      "mean": 331.44,
+      "median": 332,
+      "min": 314,
+      "p10": 325,
+      "p90": 337
+     }
+    },
+    "occupancy": {
+     "1": 0.105219,
+     "10": 0.037438,
+     "2": 0.183867,
+     "3": 0.176086,
+     "4": 0.137381,
+     "5": 0.068876,
+     "6": 0.077219,
+     "7": 0.074533,
+     "8": 0.074505,
+     "9": 0.064876
+    },
+    "schedule": {
+     "base_matrix": "A",
+     "episode_s": 12,
+     "episodes": 105,
+     "low_cap_s": 360,
+     "redraw_s": [
+      2.4,
+      6.0
+     ],
+     "schedule": "fast",
+     "self_loops": false,
+     "session_s": 1260,
+     "start_rule": "stationary"
+    },
+    "seed": "0:youtube:A@fast",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8049,
+      "p50": 0.9993,
+      "p95": 1.1948
+     },
+     "realised_over_redraw_by_state": {
+      "1": 0.9999,
+      "10": 0.9994,
+      "2": 1.0001,
+      "3": 1.0,
+      "4": 1.0,
+      "5": 1.0,
+      "6": 1.0,
+      "7": 1.0003,
+      "8": 1.0002,
+      "9": 0.9997
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8047,
+      "p50": 0.9992,
+      "p95": 1.1953
+     },
+     "span_share": {
+      "mean": 0.1357,
+      "p10": 0.0231,
+      "p50": 0.1154,
+      "p90": 0.2765,
+      "substeps": 237187
+     },
+     "span_share_ref_length": {
+      "mean": null,
+      "substeps": 0
+     },
+     "steps_per_substep": {
+      "mean": 0.91,
+      "p10": 0,
+      "p50": 1,
+      "p90": 2
+     }
+    }
+   },
+   "A@slow": {
+    "changes_per_min": {
+     "after_walk": 30.0,
+     "before_walk": 2.96
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 638,
+      "mean": 630.02,
+      "median": 630,
+      "min": 623,
+      "p10": 627,
+      "p90": 633
+     },
+     "before_walk": {
+      "max": 70,
+      "mean": 62.12,
+      "median": 62,
+      "min": 57,
+      "p10": 60,
+      "p90": 65
+     }
+    },
+    "occupancy": {
+     "1": 0.027429,
+     "10": 0.028667,
+     "2": 0.144286,
+     "3": 0.224857,
+     "4": 0.146095,
+     "5": 0.131333,
+     "6": 0.104667,
+     "7": 0.074,
+     "8": 0.061667,
+     "9": 0.057
+    },
+    "schedule": {
+     "base_matrix": "A",
+     "episode_s": 420.0,
+     "episodes": 3,
+     "low_cap_s": 360,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "slow",
+     "self_loops": false,
+     "session_s": 1260.0,
+     "start_rule": "stationary"
+    },
+    "seed": "0:youtube:A@slow",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8191,
+      "p50": 1.0,
+      "p95": 1.1815
+     },
+     "realised_over_redraw_by_state": {
+      "1": 0.9968,
+      "10": 0.9986,
+      "2": 1.0003,
+      "3": 0.9985,
+      "4": 1.0007,
+      "5": 1.0007,
+      "6": 0.9997,
+      "7": 0.9992,
+      "8": 0.9982,
+      "9": 1.0009
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8174,
+      "p50": 1.0,
+      "p95": 1.1826
+     },
+     "span_share": {
+      "mean": 0.4699,
+      "p10": 0.2386,
+      "p50": 0.4475,
+      "p90": 0.7415,
+      "substeps": 61713
+     },
+     "span_share_ref_length": {
+      "mean": 0.4985,
+      "p10": 0.285,
+      "p50": 0.477,
+      "p90": 0.7471,
+      "substeps": 6601
+     },
+     "steps_per_substep": {
+      "mean": 9.14,
+      "p10": 6,
+      "p50": 9,
+      "p90": 13
+     }
+    }
+   },
+   "B": {
+    "changes_per_min": {
+     "after_walk": 30.04,
+     "before_walk": 3.39
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 638,
+      "mean": 630.78,
+      "median": 631,
+      "min": 623,
+      "p10": 627,
+      "p90": 634
+     },
+     "before_walk": {
+      "max": 80,
+      "mean": 71.15,
+      "median": 71,
+      "min": 65,
+      "p10": 68,
+      "p90": 74
+     }
+    },
+    "occupancy": {
+     "1": 0.069811,
+     "10": 0.007668,
+     "2": 0.232469,
+     "3": 0.286624,
+     "4": 0.308339,
+     "5": 0.031521,
+     "6": 0.016666,
+     "7": 0.017666,
+     "8": 0.014665,
+     "9": 0.014572
+    },
+    "schedule": {
+     "base_matrix": "B",
+     "episode_s": 60,
+     "episodes": 21,
+     "low_cap_s": 360,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1260,
+     "start_rule": "stationary"
+    },
+    "seed": "0:youtube:B",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.807,
+      "p50": 1.0,
+      "p95": 1.1932
+     },
+     "realised_over_redraw_by_state": {
+      "1": 1.0013,
+      "10": 1.0075,
+      "2": 1.0007,
+      "3": 1.0,
+      "4": 0.9996,
+      "5": 1.003,
+      "6": 0.9982,
+      "7": 0.9999,
+      "8": 0.9964,
+      "9": 0.9987
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8055,
+      "p50": 1.0,
+      "p95": 1.194
+     },
+     "span_share": {
+      "mean": 0.436,
+      "p10": 0.196,
+      "p50": 0.4154,
+      "p90": 0.716,
+      "substeps": 68305
+     },
+     "span_share_ref_length": {
+      "mean": 0.4989,
+      "p10": 0.2824,
+      "p50": 0.4767,
+      "p90": 0.757,
+      "substeps": 6163
+     },
+     "steps_per_substep": {
+      "mean": 7.86,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   },
+   "H": {
+    "changes_per_min": {
+     "after_walk": 30.04,
+     "before_walk": 3.39
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 638,
+      "mean": 630.76,
+      "median": 631,
+      "min": 623,
+      "p10": 628,
+      "p90": 634
+     },
+     "before_walk": {
+      "max": 79,
+      "mean": 71.19,
+      "median": 71,
+      "min": 64,
+      "p10": 68,
+      "p90": 74
+     }
+    },
+    "occupancy": {
+     "1": 4.8e-05,
+     "10": 0.270475,
+     "2": 0.001906,
+     "3": 0.022188,
+     "4": 0.04076,
+     "5": 0.052805,
+     "6": 0.077808,
+     "7": 0.110198,
+     "8": 0.169666,
+     "9": 0.254147
+    },
+    "schedule": {
+     "base_matrix": "H",
+     "episode_s": 60,
+     "episodes": 21,
+     "low_cap_s": 120,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1260,
+     "start_rule": "stationary"
+    },
+    "seed": "0:youtube:H",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8217,
+      "p50": 0.9999,
+      "p95": 1.1781
+     },
+     "realised_over_redraw_by_state": {
+      "1": 0.8987,
+      "10": 0.9993,
+      "2": 1.0068,
+      "3": 0.9979,
+      "4": 0.9996,
+      "5": 1.0007,
+      "6": 0.9999,
+      "7": 1.0002,
+      "8": 1.0002,
+      "9": 0.9997
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8224,
+      "p50": 1.0001,
+      "p95": 1.1778
+     },
+     "span_share": {
+      "mean": 0.4348,
+      "p10": 0.195,
+      "p50": 0.414,
+      "p90": 0.7114,
+      "substeps": 68434
+     },
+     "span_share_ref_length": {
+      "mean": 0.4992,
+      "p10": 0.2814,
+      "p50": 0.4765,
+      "p90": 0.7575,
+      "substeps": 6236
+     },
+     "steps_per_substep": {
+      "mean": 7.86,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   },
+   "current": {
+    "changes_per_min": {
+     "after_walk": 30.03,
+     "before_walk": 3.39
+    },
+    "changes_per_session": {
+     "after_walk": {
+      "max": 637,
+      "mean": 630.71,
+      "median": 631,
+      "min": 621,
+      "p10": 627,
+      "p90": 634
+     },
+     "before_walk": {
+      "max": 77,
+      "mean": 71.09,
+      "median": 71,
+      "min": 64,
+      "p10": 68,
+      "p90": 74
+     }
+    },
+    "occupancy": {
+     "1": 0.00181,
+     "10": 0.081523,
+     "2": 0.016286,
+     "3": 0.048572,
+     "4": 0.122958,
+     "5": 0.154863,
+     "6": 0.161192,
+     "7": 0.15514,
+     "8": 0.133234,
+     "9": 0.124424
+    },
+    "schedule": {
+     "base_matrix": "current",
+     "episode_s": 60,
+     "episodes": 21,
+     "low_cap_s": 120,
+     "redraw_s": [
+      12.0,
+      30.0
+     ],
+     "schedule": "base",
+     "self_loops": true,
+     "session_s": 1260,
+     "start_rule": "linear"
+    },
+    "seed": "0:youtube:current",
+    "sessions": 1000,
+    "walk": {
+     "realised_over_midpoint": {
+      "p5": 0.8347,
+      "p50": 1.0,
+      "p95": 1.1652
+     },
+     "realised_over_redraw_by_state": {
+      "1": 1.0065,
+      "10": 1.0019,
+      "2": 1.0012,
+      "3": 1.0003,
+      "4": 1.0003,
+      "5": 0.9998,
+      "6": 1.0002,
+      "7": 1.0003,
+      "8": 0.9992,
+      "9": 1.0004
+     },
+     "redraw_over_midpoint": {
+      "p5": 0.8342,
+      "p50": 1.0,
+      "p95": 1.1656
+     },
+     "span_share": {
+      "mean": 0.4358,
+      "p10": 0.195,
+      "p50": 0.415,
+      "p90": 0.715,
+      "substeps": 68329
+     },
+     "span_share_ref_length": {
+      "mean": 0.5022,
+      "p10": 0.284,
+      "p50": 0.48,
+      "p90": 0.7575,
+      "substeps": 6134
+     },
+     "steps_per_substep": {
+      "mean": 7.87,
+      "p10": 3,
+      "p50": 8,
+      "p90": 13
+     }
+    }
+   }
+  }
+ },
+ "rule": "restart prereg 2026-10-21 \u00a72: the shaper with the walk and the delay / loss factor, seeded",
+ "session_episodes": {
+  "tiktok": 23,
+  "twitch": 23,
+  "youtube": 21
+ },
+ "session_length_note": "fixed SESSION_EPISODES lengths; the restart's per-session length draw is not simulated",
+ "walk": {
+  "last_min_s": 1.0,
+  "ref_steps": 10,
+  "reference_span_at_sigma": 0.4997,
+  "rule": "restart 2026-10-21 \u00a72 (a): reflecting random walk in linear rate in the state's band from the sub-step's re-draw",
+  "sigma_kbit_by_state": {
+   "1": 20.67,
+   "10": 477.0,
+   "2": 27.03,
+   "3": 39.75,
+   "4": 47.7,
+   "5": 63.6,
+   "6": 63.6,
+   "7": 111.3,
+   "8": 238.5,
+   "9": 318.0
+  },
+  "sigma_per_band": 0.159,
+  "space": "linear",
+  "span_share": 0.5,
+  "step_s": 2.0
+ }
+}
