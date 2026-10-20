@@ -200,6 +200,36 @@ def test_stop_recorder():
         assert r["killed"] and r["stop_ok"] is False and calls[-1] == ["sudo", "-n", "kill", "-KILL", "4242"], (r, calls)
 
 
+
+def test_a_cut_run_tears_its_tree_down():
+    """levi (shagun's 7de5518 cut): orchestrate runs in its own session; decode_stress forwards TERM / INT / HUP to it
+    (its drain), kills its group after the grace, always stops the recorder, and refuses a launch while a tree lives."""
+    import os
+    import signal
+    src = (D.Path(D.__file__)).read_text()
+    assert "start_new_session=True" in src and "(signal.SIGTERM, signal.SIGINT, signal.SIGHUP)" in src
+    assert src.index("finally:\n        t1 = time.time()\n        rep[\"box_record_stop\"] = stop_recorder(") > src.index("wait_or_stop(orch, stop)")
+    # the group kill, on a real child in its own session
+    child = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    t = [0.0]
+    rc = D.wait_or_stop(child, {"t": -10.0}, clock=lambda: t[0], sleep=lambda _: None, grace_s=5.0)
+    assert rc == -signal.SIGKILL, rc
+    # no stop signal: it just waits
+    done = subprocess.Popen(["true"])
+    assert D.wait_or_stop(done, {"t": None}, sleep=lambda _: None) == 0
+    # a live tree blocks a launch; a dead or absent one does not
+    with tempfile.TemporaryDirectory() as d:
+        tf = Path(d) / "tree.json"
+        none = lambda *a, **k: SimpleNamespace(stdout="")
+        assert D.live_tree(tf, run=none) == []
+        tf.write_text(json.dumps({"pid": os.getppid(), "orchestrate_pid": 999999999}))
+        assert D.live_tree(tf, run=none) == [f"pid {os.getppid()}"]
+        tf.write_text(json.dumps({"orchestrate_pid": 999999999}))
+        assert D.live_tree(tf, run=none) == []
+        ps = lambda *a, **k: SimpleNamespace(stdout="4321 python3 orchestrate.py --batch x --concurrent --trio-stress\n"
+                                                    "4322 python3 orchestrate.py --batch y --concurrent\n")
+        assert D.live_tree(tf, run=ps) == ["orchestrate 4321"]
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
