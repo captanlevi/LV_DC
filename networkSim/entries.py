@@ -53,9 +53,12 @@ def tick_states(rows: list[dict]) -> list[tuple[dict, bool]]:
     return out
 
 
-def sustained_at(rows: list[dict], t: float, window_s: float = SUSTAIN_WINDOW_S, run_s: float = SUSTAIN_RUN_S) -> float | None:
+def sustained_at(rows: list[dict], t: float, window_s: float = SUSTAIN_WINDOW_S, run_s: float = SUSTAIN_RUN_S,
+                 ads_count: bool = False) -> float | None:
     """Time (s) at which a run of playing ticks (stall label off, not an ad, not paused) with the playhead advancing
-    tick to tick first reached run_s, if within window_s of t; else None."""
+    tick to tick first reached run_s, if within window_s of t; else None. ads_count (restart prereg fe48beec, boundary
+    bundle item 5; the entries' startup reading only): an unpaused ad tick with the playhead advancing is play too
+    (tw_100051: a 70 s preroll read as a startup failure)."""
     start, prev_ct = None, None
     for r, stall in tick_states(rows):
         ts, ct = _f(r.get("ts")), _f(r.get("current_time"))
@@ -67,7 +70,7 @@ def sustained_at(rows: list[dict], t: float, window_s: float = SUSTAIN_WINDOW_S,
             continue
         if ts > t + window_s:
             return None
-        playing = (not stall and not _true(r.get("is_ad")) and not _true(r.get("paused"))
+        playing = (not stall and (ads_count or not _true(r.get("is_ad"))) and not _true(r.get("paused"))
                    and ct is not None and prev_ct is not None and ct > prev_ct)
         if playing:
             start = ts if start is None else start
@@ -137,7 +140,7 @@ def compute_entries(rows: list[dict], meta: dict, net_labels: list[dict]) -> lis
     cen = meta.get("censored") or {}
     stall0 = (cen.get("frozen_window") or [None])[0]
     for e in out:
-        s = sustained_at(rows, e["t"])
+        s = sustained_at(rows, e["t"], ads_count=True)      # fe48beec: ad play sustains the entry
         e.update(shaper_at_entry=shaper_at(net_labels, e["t"]), first_shaped_after=first_shaped_after(net_labels, e["t"]),
                  sustained_60s=s is not None, sustained_at=s)
         if start_failed and e["kind"] == "stream":
