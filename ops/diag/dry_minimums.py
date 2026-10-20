@@ -12,7 +12,9 @@ a pass below the minimum reads "insufficient"; a fail stays a fail. Per slot (th
   walk           a >= 120 s segment, >= 30 changes, >= 20 non-straddling backlogged seconds for the ratio
   player_a       >= 10 s summed qualifying per state, 3 states x >= 60 s; h3-exercised over >= 20 h3 segments
   no_leak        any segment with player traffic on every slot (binary)
-  decode_stress  >= 5 min with every slot at its top playable tier, after startup (CPU p95, swap, OOM)
+  decode_stress  >= 5 min with every slot at its top shaping state and all slots running, at whatever tier the ABR
+                 holds (levi, LVQoE prereg 40843f81: the top tier is reported per slot, not required); CPU p95, swap
+                 and OOM read over the same seconds
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ MINIMUMS = {
     "walk": {"segment_s": 120.0, "changes": 30, "non_straddling_s": 20.0},
     "player_a": {"states": 3, "state_s": 60.0, "qualifying_s": 10.0, "h3_segments": 20},
     "no_leak": {"slots_with_player_traffic": "every slot"},
-    "decode_stress": {"seconds_at_top_tier": 300.0},
+    "decode_stress": {"all_top_state_s": 300.0},
 }
 # The short profile's durations: each minimum with a small margin (trio_dry_run --short). The bulk state's read window
 # is the state less its first 3 s and last 0.5 s, and the sampled span inside it is up to ~1 s shorter at each end, so
@@ -35,7 +37,11 @@ SHORT = {"goodput_s": 35.0, "ping_s": 10.0, "state_s": 40.0, "player_state_s": 6
 FULL = {"goodput_s": 60.0, "ping_s": 20.0, "state_s": 60.0, "player_state_s": None, "top_capture_s": 66.0,
         "fast_changes": None, "walk_s": 0.0}     # levi: the full set runs the capture-drops segment at every N
 TOP_SETTLE_S = 3.0
-DECODE_SHORT_MINUTES = 7          # base episodes of 60 s held at the top state: >= 5 min at the top tier after startup
+# decode_stress --short's held sessions, base episodes of 60 s: the all-top window opens at the last slot's first shaped
+# row (N = 5: the 4 x STAGGER_S starts and tt's ~90 s before its first tc change) and closes at the first slot's end;
+# at 975a493's 1/2/2 short read 7 episodes gave a 236.5 s window, so 9 (+120 s) gives ~356 s >= the 300 s minimum
+DECODE_SHORT_MINUTES = 9
+DECODE_SHORT_START_S = 4 * 30.0 + 90.0     # the window's late start at N = 5 (stagger + tt's lead-in), tested
 
 
 def _chk(gate: str, support: dict, ok: bool) -> dict:
@@ -92,12 +98,11 @@ def no_leak(tuples_per_slot: dict[str, int]) -> dict:
                 bool(tuples_per_slot) and all((n or 0) > 0 for n in tuples_per_slot.values()))
 
 
-def decode_stress(seconds_at_top_tier: dict[str, float | None], overlap_s: float | None) -> dict:
-    """Per slot its playing seconds at its top tier (after startup), and the seconds every slot's session ran at once."""
-    m = MINIMUMS["decode_stress"]["seconds_at_top_tier"]
-    return _chk("decode_stress", {"seconds_at_top_tier": dict(seconds_at_top_tier), "overlap_s": overlap_s},
-                bool(seconds_at_top_tier) and all((v or 0) >= m for v in seconds_at_top_tier.values())
-                and (overlap_s or 0) >= m)
+def decode_stress(all_top_state_s: float | None) -> dict:
+    """The seconds with every slot at its top shaping state and every slot's session running (levi, prereg 40843f81:
+    at whatever tier the ABR holds; was >= 5 min at every slot's top tier)."""
+    return _chk("decode_stress", {"all_top_state_s": all_top_state_s},
+                (all_top_state_s or 0) >= MINIMUMS["decode_stress"]["all_top_state_s"])
 
 
 def status(reading: str | bool | None, chk: dict) -> str:

@@ -22,15 +22,19 @@ Gate (levi 00271, decision A):
   - box (the device record over the stress): no swap growth, no OOM kill; CPU p95 above 85 % = "short of headroom"
     (N_collect then steps down once); GPU engine busy is reported (the 85 % line a report, not a gate);
   - every slot ran one session of at least 10 min.
-Short form (--short = --minutes 7; LVQoE restart prereg, short dry runs): each held session runs --minutes base episodes
+Short form (--short = --minutes 9; LVQoE restart prereg, short dry runs): each held session runs --minutes base episodes
 (orchestrate --trio-stress --episodes), the 10 min session rule gives way to the support check, and in either form a
-pass below the minimum (>= 5 min at every slot's top tier after startup, every session running at once) reads
-"insufficient", never a pass (dry_minimums.decode_stress); a fail stays a fail.
+pass below the minimum reads "insufficient", never a pass (dry_minimums.decode_stress); a fail stays a fail. The minimum
+(levi, LVQoE prereg 40843f81): >= 5 min with every slot at its top shaping state (net_labels.txt rows of the held
+state) and every slot's session running, at whatever tier the ABR holds; each slot reports its seconds per tier over
+those seconds (a slot never reaching its top tier there is stated), and CPU p95, swap and OOM are read over the same
+seconds (the window's span). --reread <report.json> re-reads a finished stress's sessions and device record with it.
 The null comes first and is not this script's: the same device-stall definition on the frozen single-mode reference
 sessions (p90 above 2 % stops the gate), the readers' (brad / levi); --read-only reads any session dirs with it.
 
     python3 ops/diag/decode_stress.py --slots youtube=2,twitch=1,tiktok=1 --out <dir> [--yt-fullscreen] [--dpms-off]
     python3 ops/diag/decode_stress.py --read-only <session_dir> ...        (the readings alone, no run)
+    python3 ops/diag/decode_stress.py --reread <out>/report.json [--short]  (a finished stress re-gated; report_reread.json)
 """
 from __future__ import annotations
 
@@ -120,13 +124,20 @@ def playing_seconds(rows: list[dict]) -> float:
     return round(s, 3)
 
 
-def tiers(rows: list[dict]) -> dict:
+def _inside(t: float, window: list[list[float]] | None) -> bool:
+    return window is None or any(a <= t < b for a, b in window)
+
+
+def tiers(rows: list[dict], window: list[list[float]] | None = None) -> dict:
     """Per video height: playing support seconds and rendered fps (total_frames over consecutive playing ticks of that
-    height), and the dropped share over the same pairs."""
+    height), and the dropped share over the same pairs; with a window ([[t0, t1], ...], seconds) only the pairs starting
+    inside it."""
     ticks = [r for r in rows if r.get("type") == "res_meta" and _f(r.get("ts")) is not None]
     agg: dict = {}
     for a, b in zip(ticks, ticks[1:]):
         if not (_playing(a) and _playing(b)) or a.get("video_h") != b.get("video_h"):
+            continue
+        if not _inside(float(a["ts"]) / 1000.0, window):
             continue
         fa, fb = _f(a.get("total_frames")), _f(b.get("total_frames"))
         dt = (float(b["ts"]) - float(a["ts"])) / 1000.0
@@ -141,6 +152,63 @@ def tiers(rows: list[dict]) -> dict:
     return {h: {"s": round(g["s"], 1), "rendered_fps": round(g["frames"] / g["s"], 2) if g["s"] else None,
                 "dropped_share": round(g["dropped"] / g["frames"], 4) if g["frames"] else None}
             for h, g in sorted(agg.items(), key=lambda kv: int(kv[0]))}
+
+
+def top_state_spans(sd: Path, state: str, t_end: float | None) -> list[list[float]]:
+    """The spans a session's shaper sat at `state`: each net_labels.txt row (one per tc change) holds its state to the
+    next row (the last to t_end); adjacent spans merged."""
+    try:
+        rows = [json.loads(ln) for ln in (Path(sd) / "net_labels.txt").read_text().splitlines() if ln.strip()]
+    except (OSError, ValueError):
+        return []
+    rows = sorted((r for r in rows if _f(r.get("timestamp")) is not None), key=lambda r: float(r["timestamp"]))
+    out: list[list[float]] = []
+    for i, r in enumerate(rows):
+        a = float(r["timestamp"])
+        b = float(rows[i + 1]["timestamp"]) if i + 1 < len(rows) else t_end
+        if str(r.get("state")) != str(state) or b is None or b <= a:
+            continue
+        if out and out[-1][1] >= a:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [[round(a, 3), round(b, 3)] for a, b in out]
+
+
+def intersect(spans: list[list[list[float]]]) -> list[list[float]]:
+    """The intersection of several span lists ([[t0, t1], ...] each, sorted, disjoint)."""
+    if not spans:
+        return []
+    cur = spans[0]
+    for nxt in spans[1:]:
+        out = []
+        for a, b in cur:
+            for c, d in nxt:
+                lo, hi = max(a, c), min(b, d)
+                if hi > lo:
+                    out.append([lo, hi])
+        cur = out
+    return cur
+
+
+def all_top_window(readings: list[dict], slots: list[str] | None = None) -> list[list[float]]:
+    """The seconds every slot's session is running (started_at to ended_at) with its shaper at its top state (levi,
+    prereg 40843f81); empty when any slot is missing or never at it."""
+    by = {r.get("slot"): r for r in readings}
+    want = slots or sorted(by)
+    if not want or any(t not in by for t in want):
+        return []
+    per = []
+    for t in want:
+        r = by[t]
+        if not isinstance(r.get("started_at"), (int, float)) or not isinstance(r.get("ended_at"), (int, float)):
+            return []
+        per.append(intersect([r.get("top_state_spans") or [], [[r["started_at"], r["ended_at"]]]]))
+    return intersect(per)
+
+
+def span_s(window: list[list[float]]) -> float:
+    return round(float(sum(b - a for a, b in window)), 1)
 
 
 def session_reading(sd: Path) -> dict:
@@ -164,6 +232,8 @@ def session_reading(sd: Path) -> dict:
            "media_decoders": meta.get("media_decoders"), "display_start": meta.get("display_start")}
     # the short form's support (restart prereg): playing seconds at the slot's top tier (playing ticks: after startup)
     rec["seconds_at_top_tier"] = tr[str(rec["top_tier"])]["s"] if rec["top_tier"] is not None else None
+    rec["top_state"] = str(meta.get("hold_state") or TOP_STATE)
+    rec["top_state_spans"] = top_state_spans(sd, rec["top_state"], t1)
     play_st = [x for x in st if x["cause"] != "load"]
     rec["playback_stalls"], rec["load_stalls"] = len(play_st), len(st) - len(play_st)
     # levi: no playback stall is readable (share 0); playback stalls none of which carries buffer-ahead are the gap
@@ -186,10 +256,13 @@ def overlap_s(readings: list[dict]) -> float | None:
 
 def gate(readings: list[dict], box: dict | None, slots: list[str] | None = None,
          min_session_s: float | None = MIN_SESSION_S) -> dict:
-    """The decode item's verdict: per slot device stalls, the box's swap / OOM / CPU headroom, GPU reported; then the
-    support check (restart prereg, short dry runs): >= 5 min with every slot at its top playable tier after startup and
-    every session running at once, else a pass reads "insufficient". min_session_s None (--short / --minutes): the
-    session-length rule is the support check alone."""
+    """The decode item's verdict: per slot device stalls, the box's swap / OOM / CPU headroom (box: the device record
+    read over the all-top window, run / reread), GPU reported; then the support check (restart prereg, short dry runs;
+    levi, prereg 40843f81): >= 5 min with every slot at its top shaping state and every session running, at whatever
+    tier the ABR holds, else a pass reads "insufficient". Each slot reports its seconds per tier over those seconds
+    (tiers_all_top, filled by with_window_tiers); a slot whose top tier there is below its session's, or that has no
+    tier there, is stated. min_session_s None (--short / --minutes): the session-length rule is the support check
+    alone."""
     fails, notes, per = [], [], {}
     by_slot = {r.get("slot"): r for r in readings}
     for tag in slots or sorted(by_slot):
@@ -223,11 +296,47 @@ def gate(readings: list[dict], box: dict | None, slots: list[str] | None = None,
     else:
         fails.append("no device record")
     want = slots or sorted(by_slot)
-    support = M.decode_stress({t: (by_slot.get(t) or {}).get("seconds_at_top_tier") for t in want},
-                              overlap_s([by_slot[t] for t in want if t in by_slot]))
+    window = all_top_window(readings, want)
+    support = M.decode_stress(span_s(window))
+    for tag in want:
+        r = by_slot.get(tag)
+        if r is None or "tiers_all_top" not in r:
+            continue
+        tw = {h: v["s"] for h, v in r["tiers_all_top"].items()}
+        top = max((int(h) for h, v in tw.items() if v >= TIER_MIN_S), default=None)
+        per[tag].update({"tiers_all_top_s": tw, "top_tier_all_top": top})
+        if top is None:
+            notes.append(f"{tag}: no tier held >= {TIER_MIN_S:.0f} s in the all-top seconds")
+        elif r.get("top_tier") is not None and top < r["top_tier"]:
+            notes.append(f"{tag}: top tier {r['top_tier']} not held >= {TIER_MIN_S:.0f} s in the all-top seconds "
+                         f"(there {top}; {tw})")
+        elif tw.get(str(top), 0.0) < support["minimum"]["all_top_state_s"]:
+            notes.append(f"{tag}: top tier {top} held {tw.get(str(top))} s of the all-top seconds; the rest {tw}")
     st = M.status(not fails, support)
-    return {"pass": st == "pass", "status": st, "support": support, "fails": fails, "notes": notes,
+    return {"pass": st == "pass", "status": st, "support": support, "window": window, "fails": fails, "notes": notes,
             "short_of_headroom": headroom, "slots": per}
+
+
+def with_window_tiers(readings: list[dict], sessions: list, slots: list[str] | None = None) -> list[list[float]]:
+    """Fill each reading's tiers_all_top (its seconds per tier over the all-top window) from its labels; returns the
+    window."""
+    window = all_top_window(readings, slots)
+    for r, sd in zip(readings, sessions):
+        lab = Path(sd) / "labels.csv"
+        r["tiers_all_top"] = tiers(read_labels(lab), window) if lab.exists() else {}
+    return window
+
+
+def box_over(record: Path, window: list[list[float]], t0: float | None, t1: float | None) -> tuple[dict | None, dict]:
+    """The device record read over the all-top window's span (levi: CPU p95, swap and OOM over the same seconds); with
+    no window, over the whole stress [t0, t1], stated."""
+    sys.path.insert(0, str(NS))
+    import gpu_record
+    if window:
+        w = {"t0": window[0][0], "t1": window[-1][1], "spans": len(window), "over": "all-top window"}
+    else:
+        w = {"t0": t0, "t1": t1, "spans": 0, "over": "the whole stress (no all-top window)"}
+    return gpu_record.summary(Path(record), w["t0"], w["t1"]), w
 
 
 def commands(a, comp: dict, tags: list[str], out: Path) -> tuple[list[str], list[str]]:
@@ -329,7 +438,6 @@ def run(a) -> dict:
     os.environ["LVDC_TRIO_DIR"] = STRESS
     sys.path.insert(0, str(NS))
     import trio_slots as T
-    import gpu_record
     comp = T.parse_composition(a.slots)
     tags = list(T.build_slots(comp))
     out = Path(a.out)
@@ -377,15 +485,32 @@ def run(a) -> dict:
     sessions = [d for p in PLATFORMS for d in sorted((DATA / STRESS / p).glob("*"))
                 if (d / "meta.json").exists() and (json.loads((d / "meta.json").read_text()).get("started_at") or 0) >= t0 - 5]
     rep["sessions"] = [str(d) for d in sessions]
+    read_out(rep, out, sessions, tags, getattr(a, "minutes", None))
+    return rep
+
+
+def read_out(rep: dict, out: Path, sessions: list, tags: list[str], minutes) -> dict:
+    """The readings, the all-top window's tiers, the device record over it and the gate, into rep."""
     rep["readings"] = [session_reading(d) for d in sessions]
+    window = with_window_tiers(rep["readings"], sessions, tags)
     try:
-        rep["box_record"] = gpu_record.summary(out / "box_record.jsonl", t0, t1)
+        rep["box_record"], rep["box_window"] = box_over(Path(out) / "box_record.jsonl", window, rep.get("t0"), rep.get("t1"))
     except Exception as e:
         rep["box_record"] = None
         rep["box_record_error"] = repr(e)[:300]
-    rep["gate"] = gate(rep["readings"], rep["box_record"], tags,
-                       min_session_s=None if getattr(a, "minutes", None) else MIN_SESSION_S)
+    rep["gate"] = gate(rep["readings"], rep["box_record"], tags, min_session_s=None if minutes else MIN_SESSION_S)
     return rep
+
+
+def reread(report: Path, short: bool | None = None) -> dict:
+    """A finished stress re-gated with the current reading (its sessions and box_record.jsonl beside report.json);
+    the short form unless the report's command had no --episodes (or short says otherwise)."""
+    report = Path(report)
+    old = json.loads(report.read_text())
+    minutes = "--episodes" in (old.get("cmd") or []) if short is None else short
+    rep = {k: old.get(k) for k in ("what", "composition", "slots", "state", "cmd", "t0", "t1", "sessions")}
+    rep["reread_of"] = {"report": str(report), "gate": old.get("gate")}
+    return read_out(rep, report.parent, [Path(d) for d in old.get("sessions") or []], old.get("slots") or [], minutes)
 
 
 def main(argv=None) -> int:
@@ -402,10 +527,19 @@ def main(argv=None) -> int:
     ap.add_argument("--minutes", type=int, default=None,
                     help="each held session's length in 60 s base episodes (orchestrate --trio-stress --episodes); "
                          "default the collection length (>= 10 min, the full gate). Set: the 10 min session rule gives "
-                         "way to the short form's support check (>= 5 min at every slot's top tier, all at once)")
+                         "way to the short form's support check (>= 5 min with every slot at its top state, all "
+                         "running)")
     ap.add_argument("--short", action="store_true",
                     help=f"the short form (restart prereg): --minutes {M.DECODE_SHORT_MINUTES} unless given")
+    ap.add_argument("--reread", type=Path, help="a finished stress's report.json: re-read its sessions and device "
+                                                "record with the current gate (writes report_reread.json beside it)")
     a = ap.parse_args(argv)
+    if a.reread:
+        sys.path.insert(0, str(NS))
+        rep = reread(a.reread, True if a.short else None)
+        Path(a.reread).with_name("report_reread.json").write_text(json.dumps(rep, indent=1, default=str))
+        print(json.dumps(rep["gate"], indent=1, default=str))
+        return 0 if rep["gate"]["pass"] else 1
     if a.short and a.minutes is None:
         a.minutes = M.DECODE_SHORT_MINUTES
     if a.read_only:
