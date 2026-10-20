@@ -23,6 +23,18 @@ RATIO_LO, RATIO_HI = 0.9, 1.15
 MIN_QUAL_S = 10
 H3_MIN_SHARE = 0.9
 BURST_S, PAUSE_S = 2.0, 0.5
+# levi's ruling on the 5ba0b94 dry run (00132 -> peter's proposal, option A): the qualifying second is the rate stage busy,
+# read from the HTB leaf class's own token bucket, not its backlog (a whole segment held in netem's delay line fills the
+# backlog while HTB, unable to dequeue it, sits idle with its tokens refilling). At TOKENS_HZ (levi, after 730b0a0a's
+# per-second form read tt's ~70-85 %-busy seconds at ~0.85 from their partial edges; set before the next run): a
+# sampling interval qualifies when tokens <= 0 at both its samples and bytes moved; the ratio is per state over the
+# qualifying intervals (bytes / (rate x their seconds)), support their summed seconds; at 1 Hz (weaker, stated): tokens
+# <= 0 at both bounding samples and bytes moving. Validated on the bulk phase of the same run: >= VALID_MIN_SHARE of each
+# slot-state's time qualifies and the ratio is within VALID_TOL of the bulk's own, else (A) is not reading the shaper.
+# The backlog rule stays a reported third column for one run; (B) per-fetch delivery is reported.
+TOKENS_HZ = 10
+VALID_MIN_SHARE, VALID_TOL = 0.9, 0.02
+FETCH_BDP_MULT = 4
 
 
 def delay_line_bytes(rate_kbit: float, delay_ms: float) -> float:
@@ -52,6 +64,68 @@ def ratio_gate(q: list[tuple[float, int]], rate_kbit: float) -> dict:
     return {"qualifying_s": len(q), "ratio": round(ratio, 3) if ratio is not None else None, "gate": gate}
 
 
+def _cls(x: dict, dev: str, cls: str = "1:10") -> dict:
+    return ((x.get("classes") or {}).get(dev) or {}).get(cls) or {}
+
+
+def rate_stage_intervals_10hz(fast: list[dict], dev: str, t0: float, t1: float) -> tuple[list, float]:
+    """(qualifying (seconds, bytes) intervals, the window's sampled seconds) under the TOKENS_HZ rule: consecutive samples
+    inside [t0, t1] with tokens <= 0 at both and bytes moved; fast: [{t, dev: {bytes, tokens}}]."""
+    rows = [x for x in fast if dev in x and t0 <= x["t"] <= t1 and x[dev].get("tokens") is not None
+            and x[dev].get("bytes") is not None]
+    out = [(b["t"] - a["t"], b[dev]["bytes"] - a[dev]["bytes"]) for a, b in zip(rows, rows[1:])
+           if a[dev]["tokens"] <= 0 and b[dev]["tokens"] <= 0 and b[dev]["bytes"] > a[dev]["bytes"]]
+    return out, (rows[-1]["t"] - rows[0]["t"]) if len(rows) >= 2 else 0.0
+
+
+def rate_stage_seconds_1hz(samples: list[dict], dev: str, t0: float, t1: float) -> list:
+    """The weaker 1 Hz form: tokens <= 0 at both bounding samples and bytes moving."""
+    rows = [x for x in samples if t0 <= x["t"] <= t1]
+    out = []
+    for a, b in zip(rows, rows[1:]):
+        ca, cb = _cls(a, dev), _cls(b, dev)
+        if (ca.get("tokens") is not None and cb.get("tokens") is not None and ca["tokens"] <= 0 and cb["tokens"] <= 0
+                and cb.get("bytes", 0) > ca.get("bytes", 0)):
+            out.append((b["t"] - a["t"], cb["bytes"] - ca["bytes"]))
+    return out
+
+
+def rate_stage_gate(fast: list[dict] | None, samples: list[dict], dev: str, t0: float, t1: float, rate_kbit: float) -> dict:
+    """Option A's gate over the window: the 10 Hz rule when the window has fast samples, else the 1 Hz form (weaker)."""
+    if fast and any(dev in x and t0 <= x["t"] <= t1 for x in fast):
+        q, n = rate_stage_intervals_10hz(fast, dev, t0, t1)
+        mode = f"{TOKENS_HZ} Hz intervals: tokens <= 0 at both samples, bytes moved"
+    else:
+        q, n = rate_stage_seconds_1hz(samples, dev, t0, t1), max(0, int(t1 - t0))
+        mode = "1 Hz (weaker): tokens <= 0 at both bounding samples, bytes moving"
+    secs = sum(d for d, _ in q)
+    ratio = (sum(b for _, b in q) * 8 / 1000 / secs / rate_kbit) if secs and rate_kbit else None
+    gate = "insufficient" if secs < MIN_QUAL_S else ("pass" if RATIO_LO <= ratio <= RATIO_HI else "fail")
+    return {"mode": mode, "window_s": round(n, 1), "qualifying_share": round(secs / n, 3) if n else None,
+            "qualifying_s": round(secs, 1), "ratio": round(ratio, 3) if ratio is not None else None, "gate": gate}
+
+
+def validate_on_bulk(gate: dict, bulk_ratio: float | None) -> dict:
+    """Option A on a bulk slot-state: >= VALID_MIN_SHARE of its seconds qualify and its ratio is within VALID_TOL of the
+    bulk's own (realised over set across the window)."""
+    share, r = gate.get("qualifying_share"), gate.get("ratio")
+    ok = (share is not None and share >= VALID_MIN_SHARE and r is not None and bulk_ratio is not None
+          and abs(r - bulk_ratio) <= VALID_TOL + 1e-9)     # both rounded to 3 places: 0.984 - 0.964 is 0.020000...02
+    return {"qualifying_share": share, "ratio_a": r, "bulk_ratio": bulk_ratio, "ok": bool(ok)}
+
+
+def fetch_delivery(segs: list[dict], rate_kbit: float, rtt_s: float) -> dict | None:
+    """Option B (reported): for ok fetches >= FETCH_BDP_MULT x BDP, (size / rate + RTT) / actual; 1 = the set rate."""
+    bdp = rate_kbit * 1000 / 8 * rtt_s
+    r = [((s["bytes"] * 8 / 1000 / rate_kbit) + rtt_s) / (s["t1"] - s["t0"]) for s in segs
+         if s.get("ok") and s.get("bytes") and s["bytes"] >= FETCH_BDP_MULT * bdp and s["t1"] > s["t0"] and rate_kbit]
+    if not r:
+        return None
+    within = sum(1 for x in r if RATIO_LO <= x <= RATIO_HI) / len(r)
+    return {"n": len(r), "rtt_s": round(rtt_s, 3), "min_bytes": round(FETCH_BDP_MULT * bdp), **(q(r) or {}),
+            "share_in_band": round(within, 3)}
+
+
 def h3_share(segs: list[dict]) -> float | None:
     att = [s for s in segs if "bytes" in s and "summary" not in s and "start" not in s]
     return (sum(1 for s in att if s.get("ok") and s.get("alpn") == "h3") / len(att)) if att else None
@@ -64,6 +138,7 @@ def five_tuples(segs: list[dict]) -> set[tuple]:
         t = s.get("five_tuple") or {}
         try:
             rip, rport = t["remote"].rsplit(":", 1)
+            rip = rip[7:] if rip.lower().startswith("::ffff:") else rip     # an IPv4-mapped address: tcpdump prints IPv4
             lport = t["local"].rsplit(":", 1)[1]
             out.add((t["transport"], rip, int(rport), int(lport)))
         except Exception:  # noqa: BLE001
@@ -142,10 +217,14 @@ def q(xs, ps=(50, 90)):
     return {f"p{p}": round(xs[min(len(xs) - 1, int(p / 100 * len(xs)))], 3) for p in ps} if xs else None
 
 
-def read_state(samples, s: str, k: int, entry: dict, segs: list[dict], state_s: float, phase_t0: float) -> dict:
-    """One slot's state in the player phase: the gated readings and the reported ones."""
+def read_state(samples, s: str, k: int, entry: dict, segs: list[dict], state_s: float, phase_t0: float,
+               fast: list[dict] | None = None, base_rtt_s: float | None = None) -> dict:
+    """One slot's state in the player phase: option A gates (rate_stage_gate); the backlog rule (third column, one
+    run) and option B (per-fetch delivery) reported."""
     t0, t1 = k * state_s + 3.0, (k + 1) * state_s - 0.5
     qs, thr = qualifying(samples, f"lvi_{s}", "1:10", t0, t1, entry["rate_kbit"], entry["delay_ms"])
+    a_gate = rate_stage_gate(fast, samples, f"lvi_{s}", t0, t1, entry["rate_kbit"])
+    rtt_s = 2 * entry["delay_ms"] / 1000 + (base_rtt_s or 0.0)
     seg = [x for x in segs if "t0" in x]
     summ = next((x["summary"] for x in segs if "summary" in x), {})
     share = h3_share(segs)
@@ -155,7 +234,9 @@ def read_state(samples, s: str, k: int, entry: dict, segs: list[dict], state_s: 
               "gate": "pass" if share is not None and share >= H3_MIN_SHARE else "fail (not read)"}
     b = bursts(samples, f"lvi_{s}", "1:10", seg, entry["rate_kbit"], phase_t0)
     return {"state": entry["state"], "proto": entry["proto"], "rate_kbit": entry["rate_kbit"],
-            "delay_line_threshold_bytes": round(thr), **ratio_gate(qs, entry["rate_kbit"]), "h3": h3,
+            **{k_: a_gate[k_] for k_ in ("qualifying_s", "ratio", "gate")}, "rate_stage": a_gate,
+            "backlog_rule": {"delay_line_threshold_bytes": round(thr), **ratio_gate(qs, entry["rate_kbit"])},
+            "fetch_delivery": fetch_delivery(seg, entry["rate_kbit"], rtt_s), "h3": h3,
             "segments": summ.get("segments"), "errors": summ.get("errors"), "stalls": summ.get("stalls"),
             "stall_s": summ.get("stall_s"), "behind_max": max((x.get("behind", 0) for x in seg), default=None),
             "fallback_segments": sum(1 for x in seg if x.get("fallback")),
