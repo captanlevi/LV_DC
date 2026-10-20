@@ -266,16 +266,18 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
           chrome_profile: Path, matrix_id: str | None = None, low_state_cap: int | None = None,
           initial_state_rule: str | None = None, forced_initial_state: str | None = None,
           channel_url_requested: str | None = None, channel_type: str | None = None,
-          channel_handle: str | None = None, profile_template: dict | None = None, schedule: dict | None = None) -> dict:
+          channel_handle: str | None = None, profile_template: dict | None = None, schedule: dict | None = None,
+          shaping: dict | None = None) -> dict:
     """schedule (Q am. 17): utils/shaping.schedule_of's record plus the session's episodes, merged into shaper (episode_s
-    is the schedule's; low_state_cap stays in base 60 s episodes, low_cap_s is the cap in seconds)."""
+    is the schedule's; low_state_cap stays in base 60 s episodes, low_cap_s is the cap in seconds). shaping (restart
+    §2): utils/netStat.session_shaping's record (walk, dl_factor), merged into shaper."""
     sched = {k: v for k, v in (schedule or {}).items() if k != "episode_s"}
     return write(session_dir, schema="lvdc_session_meta_v2", platform=platform, argv=argv,
                  started_at=time.time(), hostname=socket.gethostname(), lvdc_commit=lvdc_commit(),
                  extension_version=extension_version(), chrome_profile=str(chrome_profile),
                  shaper=shaper_config(platform, transitions, episode_s, matrix_id=matrix_id,
                                       low_state_cap=low_state_cap, initial_state_rule=initial_state_rule,
-                                      forced_initial_state=forced_initial_state, **sched),
+                                      forced_initial_state=forced_initial_state, **sched, **(shaping or {})),
                  channel_url_requested=channel_url_requested, channel_type=channel_type, channel_handle=channel_handle,
                  profile_template=profile_template,
                  ntp_offset_start=ntp_offset(), ipv6_sysctl=ipv6_state(), data_volume_start=data_volume(session_dir),

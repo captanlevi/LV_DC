@@ -1,4 +1,6 @@
-"""The dry run's @fast segment (LVQoE prereg Addendum Q am. 17, landing condition): each slot's platform's @fast family
+"""The dry run's @fast segment (LVQoE prereg Addendum Q am. 17, landing condition) and restart §2's walk segment (the
+platform's base matrix, the walk's 2 s steps between its 12-30 s re-draws; both segments carry the walk and a delay / loss
+factor per slot, as the collector runs them): each slot's platform's @fast family
 (utils/shaping FAMILY_BASE + "@fast") drives its class for the segment, from a seeded run of the collector's own
 generator (utils/netStat.family_episode_generator: every sub-step is a tc change, 2.4-6 s apart, as exp.py applies it),
 under the bulk load. Pure functions over the plan, the per-change snapshots and the per-second samples, so they test
@@ -24,24 +26,38 @@ RATIO_LO, RATIO_HI = 0.9, 1.15
 MIN_QUAL_S = 10
 
 
-def schedule(platform: str, slot: str, seconds: float, seed: int = 0) -> list[dict]:
-    """The slot's @fast plan: [{t, dur, state, rate_kbit, delay_ms, loss_pct}] covering `seconds` (seeded per slot; the
-    global random state is restored). Needs networkSim on sys.path."""
-    from utils.netStat import family_episode_generator
-    from utils.shaping import FAMILY_BASE, PLATFORM_MATRICES, initial_state_stationary, schedule_of
-    mid = f"{FAMILY_BASE[platform]}@fast"
+def schedule(platform: str, slot: str, seconds: float, seed: int = 0, family: str = "fast") -> list[dict]:
+    """The slot's plan: [{t, dur, state, rate_kbit, delay_ms, loss_pct, ...}] covering `seconds` (seeded per slot; the
+    global random state is restored). family "fast": the platform's @fast family (Q am. 17); "base": its base matrix's
+    schedule (60 s episodes, the re-draw at 12-30 s), restart §2's walk segment. Both carry restart §2 as exp.py runs
+    it: the walk's steps between re-draws and a delay / loss factor per slot (utils/netStat.session_shaping, seeded by
+    the family, seed and slot). Needs networkSim on sys.path."""
+    from utils.netStat import family_episode_generator, net_episode_generator, session_shaping
+    from utils.shaping import BASE_EPISODE_S, FAMILY_BASE, PLATFORM_MATRICES, initial_state_stationary, schedule_of
+    if family not in ("fast", "base"):
+        raise ValueError(f"family {family!r}: fast or base")
+    mid = f"{FAMILY_BASE[platform]}@fast" if family == "fast" else FAMILY_BASE[platform]
     transitions, cap, _ = PLATFORM_MATRICES[platform][mid]
-    sc = schedule_of(mid, cap)
+    walk_rng, rec = session_shaping(f"dry-{family}:{seed}:{slot}")
+    f = rec["dl_factor"]["value"]
+    if family == "fast":
+        sc = schedule_of(mid, cap)
+        gen = lambda: family_episode_generator(sc["episode_s"], transitions, sc["redraw_s"], sc["low_cap_s"],  # noqa: E731
+                                               sc["self_loops"], initial_state_fn=initial_state_stationary,
+                                               walk_rng=walk_rng, dl_factor=f)
+    else:
+        gen = lambda: net_episode_generator(BASE_EPISODE_S, transitions, max_consecutive_low=cap,  # noqa: E731
+                                            initial_state_fn=initial_state_stationary, walk_rng=walk_rng, dl_factor=f)
     saved = random.getstate()
-    random.seed(f"dry-fast:{seed}:{slot}")
+    random.seed(f"dry-{family}:{seed}:{slot}")
     plan, t = [], 0.0
     try:
-        for ns in family_episode_generator(sc["episode_s"], transitions, sc["redraw_s"], sc["low_cap_s"],
-                                           sc["self_loops"], initial_state_fn=initial_state_stationary):
+        for ns in gen():
             if t >= seconds - 1e-6:
                 break
             plan.append({"t": round(t, 3), "dur": round(ns.duration, 3), "state": ns.state, "rate_kbit": ns.rate,
-                         "delay_ms": ns.delay_ms, "loss_pct": ns.loss_pct, "matrix_id": mid})
+                         "delay_ms": ns.delay_ms, "loss_pct": ns.loss_pct, "matrix_id": mid,
+                         "redraw_kbit": ns.redraw_kbit, "walk_step": ns.walk_step, "dl_factor": f})
             t += ns.duration
     finally:
         random.setstate(saved)
@@ -118,6 +134,7 @@ def whole_drop_share(changes: list[dict]) -> dict:
             "set_loss_mean": round(sum(c["params"]["loss_pct"] for c in changes) / len(changes) / 100, 5)}
 
 
-NOTES = ("each change is the collector's: a sub-step of the platform's @fast family, applied with tc class / qdisc "
+NOTES = ("each change is the collector's: a sub-step of the platform's @fast family (or, in the walk segment, of its "
+         "base matrix) or restart §2's walk step within one, applied with tc class / qdisc "
          "replace as single mode's make slow does; drops are netem's (emulated loss and tail drops alike), read from "
          "just before the tc commands to SETTLE_S after them; the ratio excludes every second containing a change")

@@ -35,6 +35,7 @@ import yt_channels as YT  # noqa: E402
 import channel_cap as CC  # noqa: E402
 import orchestrate as O  # noqa: E402
 import stuck as S  # noqa: E402
+import walk_simulation as WS  # noqa: E402
 from utils import netStat as NS, shaping as SH  # noqa: E402
 
 GOLDEN = HERE / "fixtures" / "frozen_constants.json"
@@ -83,6 +84,13 @@ def current() -> dict:
                      "youtube": _matrices(SH.YOUTUBE_MATRICES)},
         "low_state": {"_LOW_STATE_THRESHOLD": NS._LOW_STATE_THRESHOLD, "_MAX_CONSECUTIVE_LOW": NS._MAX_CONSECUTIVE_LOW,
                       "_MIN_RECOVERY_STATE": NS._MIN_RECOVERY_STATE},
+        # restart prereg 2026-10-21 §2: the walk in linear rate and the per-session delay / loss factor
+        "shaping_walk": {"WALK_RULE": NS.WALK_RULE, "WALK_STEP_S": NS.WALK_STEP_S, "WALK_LAST_MIN_S": NS.WALK_LAST_MIN_S,
+                         "WALK_SPAN_SHARE": NS.WALK_SPAN_SHARE, "WALK_REF_STEPS": NS.WALK_REF_STEPS,
+                         "WALK_SIGMA_PER_BAND": NS.WALK_SIGMA_PER_BAND, "DL_FACTOR_RULE": NS.DL_FACTOR_RULE,
+                         "DL_FACTOR_LO": NS.DL_FACTOR_LO, "DL_FACTOR_HI": NS.DL_FACTOR_HI,
+                         "SHAPING_SEED": NS.SHAPING_SEED, "WALK_SIM_SHA256": WS.WALK_SIM_SHA256,
+                         "WALK_SIM_SEED": WS.SIM_SEED, "WALK_SIM_SESSIONS": WS.SIM_SESSIONS},
         "episodes": {"EPISODES_V2": O.EPISODES_V2, "episode_s": episode_s},
         "schedules": {"SCHEDULES": {k: {**v, "redraw_s": list(v["redraw_s"])} for k, v in SH.SCHEDULES.items()},
                       "FAMILY_BASE": SH.FAMILY_BASE, "FAMILY_FLOOR": CR.FAMILY_FLOOR, "DEFICIT_RANK": CR.DEFICIT_RANK,

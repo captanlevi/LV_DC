@@ -25,7 +25,7 @@ import threading
 import argparse
 import asyncio
 
-from utils.netStat import net_episode_generator, family_episode_generator
+from utils.netStat import net_episode_generator, family_episode_generator, session_shaping
 from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
                            get_higher_state, get_lower_state, schedule_of)
@@ -319,6 +319,7 @@ async def _ossilate(
     
 )-> bool:
     # returns True if the for loop ends
+    deadline = None
     for net_stat in SHAPER_GEN(
         episode_length=episode_time_in_seconds,
         transition_dict=transition_dct,
@@ -328,11 +329,16 @@ async def _ossilate(
     ):
         _apply_net_stat(net_stat= net_stat)
         ts = time.time()
-        net_labels.append(
-            NetLabel(timestamp=ts, speed=net_stat.rate, state=net_stat.state)
+        net_labels.append(    # restart §2 (c): the realised rate / delay / loss beside the nominal state and the re-draw
+            NetLabel(timestamp=ts, speed=net_stat.rate, state=net_stat.state, delay_ms=net_stat.delay_ms,
+                     loss_pct=net_stat.loss_pct, redraw_kbit=net_stat.redraw_kbit,
+                     redraw_delay_ms=net_stat.redraw_delay_ms, redraw_loss_pct=net_stat.redraw_loss_pct,
+                     walk_step=net_stat.walk_step)
         )
-
-        while time.time() < ts + net_stat.duration:
+        # restart §2: a change every 2 s, so the changes keep the schedule's own clock (deadline + duration); an apply's
+        # time (make slow) and the tick's overshoot no longer add to the session per change
+        deadline = (ts if deadline is None else deadline) + net_stat.duration
+        while time.time() < deadline:
             await asyncio.sleep(SYSTEM_TICK)
             if stop_event.is_set():
                 return False
@@ -704,6 +710,10 @@ if __name__ == "__main__":
         session_dir = (make_session_dir(platform) if SLOT is None else
                        make_session_dir(platform, DATA_DIR / trio_slots.TRIO_DIR, trio_slots.TRIO_NAME_FLOOR))
     print(f"Session directory: {session_dir}")
+    # restart prereg 2026-10-21 §2: the walk's generator and the delay / loss factor, seeded by the session's name; the
+    # record (rules, sigma per state, factor, seeds) goes to meta.json shaper
+    WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)
+    SHAPER_OPTS.update(walk_rng=WALK_RNG, dl_factor=SHAPING_REC["dl_factor"]["value"])
     template = None if args.empty_profile else (args.profile_template or PROFILE_TEMPLATES / platform)
     chrome_profile, profile_template = fresh_chrome_profile(session_dir, template)
     from profile_clone import template_note_of
@@ -714,7 +724,7 @@ if __name__ == "__main__":
                        matrix_id=matrix_id, low_state_cap=low_cap, initial_state_rule=init_rule,
                        forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
                        channel_type=args.channel_type, channel_handle=args.channel_handle,
-                       profile_template=profile_template)
+                       profile_template=profile_template, shaping=SHAPING_REC)
     if args.hold_state is not None:
         session_meta.write(session_dir, hold_state=args.hold_state)
     if SLOT is None:
