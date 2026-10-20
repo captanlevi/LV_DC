@@ -474,8 +474,16 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
                     print(f"  pre-check: {s['handle']} not live now, skipped (not a strike)")
     # addendum O: the twitch category rotation (a category whose directory gave no playable stream is skipped
     # NOT_LIVE_RETRY_S, like a yt channel)
-    category, esports_skip = (tw_categories.next_category(out, exclude=skip, select=select) if p == "twitch"
-                              else (None, None))
+    # restart prereg §5 / §0: the category floor and the channel cap within it count identity over every counted trio
+    # session, any era (the record flag alone; record.counted_any_era on the restart tip is the same predicate)
+    ident = (lambda m: bool(((m or {}).get("concurrency") or {}).get("record"))) if root is not None else None
+    if p == "twitch":
+        import channel_cap
+        capped = set((channel_cap.cap_state(root, "twitch", ident) or {}).get("capped") or ())
+        category, esports_skip = tw_categories.next_category(out, exclude=skip, select=ident, capped=capped)
+        category = {**category, "pick": dict(tw_categories.LAST_PICK)}   # meta.json channel_pick.category (trio)
+    else:
+        category, esports_skip = None, None
     if esports_skip:      # levi: no league channel live -> the next type; the skip goes to the daily summary
         (out / "_summaries").mkdir(parents=True, exist_ok=True)
         with open(out / "_summaries" / "tw_esports_skips.jsonl", "a") as fh:
@@ -732,6 +740,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     env.pop("LVDC_CHANNEL_PICK", None)
     if (channel or {}).get("pick"):
         env["LVDC_CHANNEL_PICK"] = json.dumps(channel["pick"], default=str)
+    elif (category or {}).get("pick"):            # restart prereg §5: the category draw, its floor and seeded tie
+        env["LVDC_CHANNEL_PICK"] = json.dumps({"category": category["pick"]}, default=str)
     env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
     env.pop("LVDC_TRIO_YT_FULLSCREEN", None)
     if yt_fs:

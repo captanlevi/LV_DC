@@ -1372,6 +1372,43 @@
   },
   "SIM_SEED": 0,
   "SIM_SESSIONS": 2000,
+  "TW_CATEGORIES": [
+   {
+    "name": "Just Chatting",
+    "type": "talk"
+   },
+   {
+    "name": "Counter-Strike",
+    "type": "gaming_fast"
+   },
+   {
+    "name": "Chess",
+    "type": "gaming_slow"
+   },
+   {
+    "channels": [
+     "riotgames",
+     "lck",
+     "lec",
+     "eslcs",
+     "valorant"
+    ],
+    "name": "esports",
+    "type": "esports"
+   },
+   {
+    "name": "Music",
+    "type": "music_creative"
+   },
+   {
+    "name": "IRL",
+    "type": "irl"
+   }
+  ],
+  "TW_CATEGORY_FLOOR": 2,
+  "TW_CATEGORY_HOLD_AT": 3,
+  "TW_CATEGORY_RULE": "restart prereg \u00a75: least-collected, seeded tie (CATEGORY_TIE_SEED + the root's twitch session dirs); every category reaches 2 sessions of record before any gets a 4th, the floor before the no-repeat rule; an unavailable category cannot block (floor_open); the channel cap within",
+  "TW_CATEGORY_TIE_SEED": 0,
   "TW_TT_CAP_MIN": 2,
   "TW_TT_CAP_RULE": "levi 2026-10-20: twitch / tt open pools, a cap only: max(2, ceil(0.10 x n_record)) sessions of record per channel / host",
   "TW_TT_CAP_SHARE": 0.1

@@ -33,6 +33,7 @@ import record as REC  # noqa: E402
 import schedule_occupancy as SO  # noqa: E402
 import yt_channels as YT  # noqa: E402
 import channel_cap as CC  # noqa: E402
+import tw_categories as TC  # noqa: E402
 import orchestrate as O  # noqa: E402
 import stuck as S  # noqa: E402
 from utils import netStat as NS, shaping as SH  # noqa: E402
@@ -90,6 +91,9 @@ def current() -> dict:
                       "CHANNEL_TIE_SEED": YT.CHANNEL_TIE_SEED, "DIVERSITY_RULE": YT.DIVERSITY_RULE,
                       "CHANNEL_FLOOR": YT.CHANNEL_FLOOR, "CHANNEL_CAP_MULT": YT.CHANNEL_CAP_MULT,
                       "TW_TT_CAP_SHARE": CC.CAP_SHARE, "TW_TT_CAP_MIN": CC.CAP_MIN, "TW_TT_CAP_RULE": CC.CAP_RULE,
+                      "TW_CATEGORIES": TC.TW_CATEGORIES, "TW_CATEGORY_FLOOR": TC.CATEGORY_FLOOR,
+                      "TW_CATEGORY_HOLD_AT": TC.CATEGORY_HOLD_AT, "TW_CATEGORY_TIE_SEED": TC.CATEGORY_TIE_SEED,
+                      "TW_CATEGORY_RULE": TC.CATEGORY_RULE,
                       "OCCUPANCY_SHA256": SO.OCCUPANCY_SHA256, "SIM_SEED": SO.SIM_SEED, "SIM_SESSIONS": SO.SIM_SESSIONS},
         "coverage": {"MATRIX_RULE": O.MATRIX_RULE, "MATRIX_IDS": O.MATRIX_IDS, "COVERAGE_ALLOWED": O.COVERAGE_ALLOWED,
                      "RULE_VERSION": CR.RULE_VERSION, "FLOOR_SESSIONS": CR.FLOOR_SESSIONS,
