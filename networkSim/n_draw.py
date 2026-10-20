@@ -32,9 +32,11 @@ ROTATION = ("youtube", "twitch", "tiktok")      # N = 4's doubled and N = 5's si
 ROTATING = (4, 5)
 N_DRAW_RULE = ("restart prereg §1: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support "
                "(an N with no composition left is out); round k = the earlier draws of this era and record flag in the "
-               "slots log; u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative "
-               "weights; 3 = 1/1/1; 4 = 2/1/1 with the doubled platform and 5 = 2/2/1 with the single platform rotating "
-               "yt -> tw -> tt (less any excluded composition) by the count of earlier draws of that N")
+               "slots log (a record draw fails closed on an unreadable log); u = random.Random('<seed>:<era>:"
+               "<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1; 4: the doubled platform "
+               "rotating yt -> tw -> tt (2/1/1, 1/2/1, 1/1/2); 5: the single platform rotating yt -> tw -> tt (1/2/2, "
+               "2/1/2, 2/2/1); less any excluded composition, by the count of earlier draws of that N; a record draw's "
+               "support / exclusions are the era's last record draw's unless a signed change narrows them")
 
 
 def parse_support(spec: str | None) -> tuple[int, ...]:
@@ -87,16 +89,25 @@ def composition(n: int, index: int = 0, exclude: tuple = ()) -> dict[str, int]:
 
 
 def prior_draws(slots_log: Path | None, era: str, record: bool) -> list[dict]:
-    """The earlier draws of this era and record flag (trio_up events carrying n_draw), in log order."""
+    """The earlier draws of this era and record flag (trio_up events carrying n_draw), in log order. A record draw
+    fails closed (levi 00138): no or an unreadable slots log, or an undecodable trio_up line, raises (k and the
+    rotation counters would otherwise restart at 0)."""
     out = []
     try:
-        lines = Path(slots_log).read_text().splitlines() if slots_log else []
-    except OSError:
+        if not slots_log:
+            raise OSError("no slots log")
+        lines = Path(slots_log).read_text().splitlines()
+    except OSError as e:
+        if record:
+            raise RuntimeError(f"n_draw: the slots log {slots_log} is unreadable ({e!r}); a record draw fails closed "
+                               f"(an empty file starts an era's first record round)")
         lines = []
     for ln in lines:
         try:
             ev = json.loads(ln)
         except ValueError:
+            if record and "trio_up" in ln:
+                raise RuntimeError(f"n_draw: an undecodable trio_up line in {slots_log}; a record draw fails closed")
             continue
         d = ev.get("n_draw") if ev.get("event") == "trio_up" else None
         if isinstance(d, dict) and d.get("era") == era and bool(d.get("record")) == bool(record):
@@ -124,17 +135,41 @@ def draw_at(k: int, index: dict[int, int], era: str, record: bool, support: tupl
         r = rotation(n, exclude)
         rot = {"index": i, "doubled" if n == 4 else "single": r[i % len(r)], "rotation": list(r)}
     return {"rule": N_DRAW_RULE, "seed": seed, "era": era, "record": bool(record), "round": k, "u": round(u, 6),
-            "support": list(eff), "weights": {str(m): round(v, 4) for m, v in w.items()}, "n": n,
+            "support": list(support), "support_effective": list(eff),
+            "weights": {str(m): round(v, 4) for m, v in w.items()}, "n": n,
             "composition": composition(n, i, exclude), **({"rotation": rot} if rot else {}),
-            **({"excluded": [f"{a}:{b}" for a, b in exclude]} if exclude else {})}
+            "excluded": [f"{a}:{b}" for a, b in exclude]}
+
+
+def check_frozen(prior: list[dict], support: tuple[int, ...], exclude: tuple, change_sign: str | None) -> None:
+    """levi 00138: a record draw's support and exclusions are the era's last record draw's; a change needs a signed
+    reference (--n-change-sign, e.g. levi's ruling on a failed composition) and may only narrow them (an N leaves the
+    support, a composition is excluded), never widen."""
+    if not prior:
+        return
+    last = prior[-1]
+    ls, lx = set(last.get("support") or ()), set(last.get("excluded") or ())
+    s, x = set(support), {f"{a}:{b}" for a, b in exclude}
+    if (s, x) == (ls, lx):
+        return
+    if not change_sign:
+        raise ValueError(f"n_draw: support {sorted(s)} / excluded {sorted(x)} differ from the era's last record draw's "
+                         f"({sorted(ls)} / {sorted(lx)}): a change needs --n-change-sign")
+    if not (s <= ls and x >= lx):
+        raise ValueError(f"n_draw: a signed change may only narrow the support / add exclusions (was {sorted(ls)} / "
+                         f"{sorted(lx)}, asked {sorted(s)} / {sorted(x)})")
 
 
 def draw(slots_log: Path | None, era: str, record: bool, support: tuple[int, ...] = N_SUPPORT,
-         seed: int = N_DRAW_SEED, exclude: tuple = ()) -> dict:
-    """This round's draw: k and each N's rotation index from the slots log's earlier draws."""
+         seed: int = N_DRAW_SEED, exclude: tuple = (), change_sign: str | None = None) -> dict:
+    """This round's draw: k and each N's rotation index from the slots log's earlier draws; a record draw's support
+    and exclusions frozen per era (check_frozen)."""
     prior = prior_draws(slots_log, era, record)
+    if record:
+        check_frozen(prior, support, exclude, change_sign)
     idx = {n: sum(1 for d in prior if d.get("n") == n) for n in ROTATING}
-    return draw_at(len(prior), idx, era, record, support, seed, exclude)
+    d = draw_at(len(prior), idx, era, record, support, seed, exclude)
+    return {**d, "change_sign": change_sign} if change_sign else d
 
 
 def simulate(rounds: int, era: str, record: bool = True, support: tuple[int, ...] = N_SUPPORT,

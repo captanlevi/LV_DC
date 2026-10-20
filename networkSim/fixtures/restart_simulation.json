@@ -1,27 +1,28 @@
 {
  "rule": {
-  "n_draw": "restart prereg \u00a71: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support (an N with no composition left is out); round k = the earlier draws of this era and record flag in the slots log; u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1; 4 = 2/1/1 with the doubled platform and 5 = 2/2/1 with the single platform rotating yt -> tw -> tt (less any excluded composition) by the count of earlier draws of that N",
+  "n_draw": "restart prereg \u00a71: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support (an N with no composition left is out); round k = the earlier draws of this era and record flag in the slots log (a record draw fails closed on an unreadable log); u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1; 4: the doubled platform rotating yt -> tw -> tt (2/1/1, 1/2/1, 1/1/2); 5: the single platform rotating yt -> tw -> tt (1/2/2, 2/1/2, 2/2/1); less any excluded composition, by the count of earlier draws of that N; a record draw's support / exclusions are the era's last record draw's unless a signed change narrows them",
   "session_length": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
   "window": "restart \u00a710: a slot runs its next drawn length when it fits before the window's end, else idles to the end (no truncation, no re-draw)"
  },
  "summary": {
+  "allowance_s": 180.0,
   "concurrency_mean_p10_p50_p90": [
-   2.912,
-   3.892,
+   2.923,
+   3.893,
    4.875
   ],
   "era": "t58-restart-2026-10-21",
   "hours": 24.0,
   "length_mean_drawn_law_min": 25.0,
-  "length_mean_min": 24.18,
+  "length_mean_min": 24.24,
   "length_tercile_cuts_min": [
    20.0,
    30.0
   ],
   "length_tercile_shares": [
-   0.389,
-   0.284,
-   0.327
+   0.386,
+   0.277,
+   0.337
   ],
   "n_counts": {
    "3": 2,
@@ -47,17 +48,17 @@
    ]
   },
   "session_minutes_per_platform": {
-   "tiktok": 1725.4,
-   "twitch": 1671.3,
+   "tiktok": 1619.8,
+   "twitch": 1641.9,
    "youtube": 1633.7
   },
-  "sessions": 208,
+  "sessions": 202,
   "sessions_per_platform": {
-   "tiktok": 75,
-   "twitch": 65,
+   "tiktok": 70,
+   "twitch": 64,
    "youtube": 68
   },
-  "slot_busy_share_mean": 0.8059,
+  "slot_busy_share_mean": 0.7848,
   "stagger_s": 30.0,
   "window_min": 120.0,
   "windows": 12
@@ -102,7 +103,7 @@
      "tag": "yt1"
     },
     {
-     "concurrency_mean": 3.448,
+     "concurrency_mean": 2.492,
      "minutes": 16.521,
      "platform": "youtube",
      "start_s": 5618.706,
@@ -130,7 +131,7 @@
      "tag": "tw1"
     },
     {
-     "concurrency_mean": 4.592,
+     "concurrency_mean": 4.195,
      "minutes": 12.1146,
      "platform": "twitch",
      "start_s": 5223.654,
@@ -158,7 +159,7 @@
      "tag": "tw2"
     },
     {
-     "concurrency_mean": 4.774,
+     "concurrency_mean": 4.714,
      "minutes": 30.9712,
      "platform": "twitch",
      "start_s": 3915.99,
@@ -193,7 +194,7 @@
      "tag": "tt1"
     },
     {
-     "concurrency_mean": 3.658,
+     "concurrency_mean": 2.972,
      "minutes": 27.2531,
      "platform": "tiktok",
      "start_s": 5148.084000000001,
@@ -233,16 +234,9 @@
      "platform": "tiktok",
      "start_s": 4835.214,
      "tag": "tt2"
-    },
-    {
-     "concurrency_mean": 2.668,
-     "minutes": 24.6823,
-     "platform": "tiktok",
-     "start_s": 5661.978,
-     "tag": "tt2"
     }
    ],
-   "slot_busy_share": 0.8235,
+   "slot_busy_share": 0.784,
    "t0_h": 0.0,
    "u": 0.806513,
    "window": 0
@@ -286,7 +280,7 @@
      "tag": "yt1"
     },
     {
-     "concurrency_mean": 3.96,
+     "concurrency_mean": 3.0,
      "minutes": 13.9152,
      "platform": "youtube",
      "start_s": 5315.388,
@@ -314,7 +308,7 @@
      "tag": "yt2"
     },
     {
-     "concurrency_mean": 3.858,
+     "concurrency_mean": 3.021,
      "minutes": 16.3065,
      "platform": "youtube",
      "start_s": 5190.39,
@@ -370,13 +364,6 @@
      "tag": "tt1"
     },
     {
-     "concurrency_mean": 2.602,
-     "minutes": 29.1553,
-     "platform": "tiktok",
-     "start_s": 5349.126,
-     "tag": "tt1"
-    },
-    {
      "concurrency_mean": 4.859,
      "minutes": 33.8176,
      "platform": "tiktok",
@@ -391,14 +378,14 @@
      "tag": "tt2"
     },
     {
-     "concurrency_mean": 3.927,
+     "concurrency_mean": 3.403,
      "minutes": 37.5682,
      "platform": "tiktok",
      "start_s": 4276.08,
      "tag": "tt2"
     }
    ],
-   "slot_busy_share": 0.7957,
+   "slot_busy_share": 0.7491,
    "t0_h": 2.083,
    "u": 0.829564,
    "window": 1
@@ -584,7 +571,7 @@
      "tag": "yt1"
     },
     {
-     "concurrency_mean": 3.587,
+     "concurrency_mean": 3.2,
      "minutes": 34.6301,
      "platform": "youtube",
      "start_s": 4071.066,
@@ -612,13 +599,6 @@
      "tag": "tw1"
     },
     {
-     "concurrency_mean": 2.353,
-     "minutes": 29.3828,
-     "platform": "twitch",
-     "start_s": 5344.164000000001,
-     "tag": "tw1"
-    },
-    {
      "concurrency_mean": 3.885,
      "minutes": 30.5356,
      "platform": "twitch",
@@ -640,7 +620,7 @@
      "tag": "tw2"
     },
     {
-     "concurrency_mean": 3.043,
+     "concurrency_mean": 2.329,
      "minutes": 32.7292,
      "platform": "twitch",
      "start_s": 4781.808,
@@ -675,14 +655,14 @@
      "tag": "tt1"
     },
     {
-     "concurrency_mean": 3.854,
+     "concurrency_mean": 3.63,
      "minutes": 13.2979,
      "platform": "tiktok",
      "start_s": 4725.138,
      "tag": "tt1"
     }
    ],
-   "slot_busy_share": 0.8188,
+   "slot_busy_share": 0.7601,
    "t0_h": 6.25,
    "u": 0.405639,
    "window": 3
@@ -719,7 +699,7 @@
      "tag": "yt1"
     },
     {
-     "concurrency_mean": 3.57,
+     "concurrency_mean": 3.562,
      "minutes": 38.2314,
      "platform": "youtube",
      "start_s": 4105.29,
@@ -775,7 +755,7 @@
      "tag": "tt1"
     },
     {
-     "concurrency_mean": 3.529,
+     "concurrency_mean": 3.515,
      "minutes": 31.3246,
      "platform": "tiktok",
      "start_s": 4528.32,
@@ -808,16 +788,9 @@
      "platform": "tiktok",
      "start_s": 4919.562,
      "tag": "tt2"
-    },
-    {
-     "concurrency_mean": 1.056,
-     "minutes": 13.5298,
-     "platform": "tiktok",
-     "start_s": 6380.742,
-     "tag": "tt2"
     }
    ],
-   "slot_busy_share": 0.825,
+   "slot_busy_share": 0.798,
    "t0_h": 8.333,
    "u": 0.313165,
    "window": 4
@@ -1073,7 +1046,7 @@
      "tag": "tw2"
     },
     {
-     "concurrency_mean": 3.389,
+     "concurrency_mean": 2.976,
      "minutes": 39.8794,
      "platform": "twitch",
      "start_s": 4529.712,
@@ -1127,16 +1100,9 @@
      "platform": "tiktok",
      "start_s": 5268.708,
      "tag": "tt2"
-    },
-    {
-     "concurrency_mean": 1.84,
-     "minutes": 19.6069,
-     "platform": "tiktok",
-     "start_s": 5934.798,
-     "tag": "tt2"
     }
    ],
-   "slot_busy_share": 0.798,
+   "slot_busy_share": 0.7667,
    "t0_h": 12.5,
    "u": 0.977788,
    "window": 6
@@ -1695,14 +1661,14 @@
      "tag": "yt1"
     },
     {
-     "concurrency_mean": 2.674,
+     "concurrency_mean": 2.448,
      "minutes": 24.4985,
      "platform": "youtube",
      "start_s": 4776.4619999999995,
      "tag": "yt1"
     },
     {
-     "concurrency_mean": 2.0,
+     "concurrency_mean": 1.0,
      "minutes": 10.0207,
      "platform": "youtube",
      "start_s": 6306.371999999999,
@@ -1730,7 +1696,7 @@
      "tag": "tw1"
     },
     {
-     "concurrency_mean": 2.918,
+     "concurrency_mean": 2.873,
      "minutes": 12.2333,
      "platform": "twitch",
      "start_s": 5213.436,
@@ -1763,16 +1729,9 @@
      "platform": "tiktok",
      "start_s": 4955.91,
      "tag": "tt1"
-    },
-    {
-     "concurrency_mean": 1.867,
-     "minutes": 18.5583,
-     "platform": "tiktok",
-     "start_s": 5914.566,
-     "tag": "tt1"
     }
    ],
-   "slot_busy_share": 0.8504,
+   "slot_busy_share": 0.8009,
    "t0_h": 22.917,
    "u": 0.076428,
    "window": 11

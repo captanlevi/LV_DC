@@ -152,8 +152,9 @@ def test_a_family_qualifies_on_its_own_occupancy():
             assert v["min_mass_family"][m] == round(thr, 4) and ((m in v["qualifies"]) == (mass >= thr and mass > 0))
         assert v["mass"]["TW-M"] == round(sum(p for s, p in SH.stationary_distribution(tw["TW-M"][0]).items()
                                               if s in v["band"]), 4)
-    assert C.session_minutes("twitch", "TW-M@slow") == 23.0 and C.session_minutes("youtube", "A@slow") == 21.0
-    assert C.session_minutes("twitch", "TW-M") == 23.0
+    # restart §4 (levi): every platform and schedule qualifies on the expected session minutes, the mean of U(10, 40)
+    assert C.session_minutes("twitch", "TW-M@slow") == C.session_minutes("youtube", "A@slow") == 25.0
+    assert C.session_minutes("twitch", "TW-M") == 25.0
 
 
 def _snap(classes_short: dict, per_matrix: dict | None = None):

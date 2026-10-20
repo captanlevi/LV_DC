@@ -1323,7 +1323,7 @@
   }
  },
  "n_draw": {
-  "N_DRAW_RULE": "restart prereg \u00a71: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support (an N with no composition left is out); round k = the earlier draws of this era and record flag in the slots log; u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1; 4 = 2/1/1 with the doubled platform and 5 = 2/2/1 with the single platform rotating yt -> tw -> tt (less any excluded composition) by the count of earlier draws of that N",
+  "N_DRAW_RULE": "restart prereg \u00a71: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support (an N with no composition left is out); round k = the earlier draws of this era and record flag in the slots log (a record draw fails closed on an unreadable log); u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1; 4: the doubled platform rotating yt -> tw -> tt (2/1/1, 1/2/1, 1/1/2); 5: the single platform rotating yt -> tw -> tt (1/2/2, 2/1/2, 2/2/1); less any excluded composition, by the count of earlier draws of that N; a record draw's support / exclusions are the era's last record draw's unless a signed change narrows them",
   "N_DRAW_SEED": 0,
   "N_SUPPORT": [
    3,
@@ -1366,12 +1366,16 @@
   ],
   "STALL_ADVANCING_SHARE_MAX": 0.5
  },
+ "qualification": {
+  "EXPECTED_SESSION_MINUTES": 25.0
+ },
+ "record_boundary": null,
  "record_era": "t58-restart-2026-10-21",
  "record_eras": [
   "t58-restart-2026-10-21"
  ],
  "record_lines": {
-  "t58-restart-2026-10-21": []
+  "t58-restart-2026-10-21": null
  },
  "schedules": {
   "CHANNEL_CAP_MULT": 2,
@@ -1480,5 +1484,10 @@
    "PLAYING_REF_MIN_PROGRESS": 0.8,
    "PLAYING_REF_S": 30.0
   }
+ },
+ "windows": {
+  "EXIT_WINDOW_READ": 10,
+  "RECORD_WINDOW_MIN": 120.0,
+  "WINDOW_ALLOWANCE_S": 180.0
  }
 }

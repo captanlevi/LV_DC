@@ -13,6 +13,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+from testing_record import of_record  # noqa: E402
 import yt_channels as Y  # noqa: E402
 
 NL = "error: RuntimeError: Failed to navigate to a live youtube stream"
@@ -104,6 +105,7 @@ def test_promotion():
     assert not P([live(0), live(12 * H), {**live(24 * H), "handle": "@x"}], h)["passed"]
 
 
+@of_record
 def test_no_immediate_repeat_and_trio_excluded():
     """levi 00133's full rule: the least-recently-drawn primary (so never the previous yt session's channel while another
     is possible); trio sessions (data/_trio) never count in single mode's rotation (channels, geometry, twitch
@@ -183,6 +185,7 @@ def test_the_restart_pair_is_broken_by_the_seeded_tie():
         assert (a["handle"], b["handle"]) == ("@MonsterJam", "@AlJazeeraEnglish"), (a, b)
 
 
+@of_record
 def test_the_full_rule_forward():
     """levi 00133, simulated forward on an empty trio root (every draw a session of record): the floor gives the first
     F = 10 draws to 10 distinct primaries, LRU then round-robins (3 each after 30 draws); a never-live channel cannot

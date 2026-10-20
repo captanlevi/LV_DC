@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from testing_record import of_record  # noqa: E402
 import balance as B  # noqa: E402
 import coverage_report as C  # noqa: E402
 from test_coverage import session  # noqa: E402
@@ -147,6 +148,7 @@ def test_the_balance_start_state_reads_only_the_selected_runs():
     assert "most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record)" in src
 
 
+@of_record
 def test_one_membership_rule_for_the_trio_targets():
     """t58 L-3 / L-5 (levi; audit item 6): a counted run's targets and failure count count its sessions of record only
     (orchestrate.trio_select, record.is_record: the flag and the current ERA); a pilot run counts every trio session."""
@@ -177,9 +179,18 @@ def test_one_membership_rule_for_the_trio_targets():
             assert O.accepted_sessions("twitch", Path(d), O.trio_select()) == 0
         finally:
             O.TRIO_RECORD, O.TRIO_STRESS, O.TRIO_RUN_ID = saved
-    # the restart (prereg §0): the record is the new era only; t55 / t57 are stated references, never of record now
+
+
+def test_the_restart_record_definition():
+    """Restart prereg §0 and levi 00138 (blocker): the record is the new era only, on its counted line: the boundary sha
+    and its descendants in this checkout (git ancestry), nothing while the boundary is unset (fail closed); t55 / t57
+    are stated references; identity (counted_any_era) spans every era."""
+    import record
     assert record.ERA == "t58-restart-2026-10-21"
     assert record.RECORD_ERAS == (record.ERA,) and record.STATED_ERAS == ("t56-nslot-2026-10-19",)
+    assert record.RECORD_BOUNDARY is None and record.RECORD_LINES == {record.ERA: None}     # set after the apply gate
+    t58 = lambda sha: {"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": sha}}
+    assert not record.is_record(t58("844f115")) and not record.is_record(t58(None))         # fail closed
     stated = {"concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}}
     assert not record.is_record(stated) and not record.of_record_any_era(stated)          # never, not even not_usable
     assert record.counted_any_era(stated)                     # channel identity spans every era (restart §0)
@@ -187,10 +198,17 @@ def test_one_membership_rule_for_the_trio_targets():
     t55 = lambda sha: {"concurrency": {"record": True, "era": "t55-gro-off-2026-10-19"}, "lvdc_commit": {"sha": sha}}
     assert not record.is_record(t55("c1f9181" + "0" * 33)) and record.counted_any_era(t55("c1f9181"))
     assert not record.is_record({"concurrency": {"record": True, "era": "t57-n5-boundary-2026-10-20"}})
-    assert record.is_record({"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": "844f115"}})
     assert not record.counted_any_era({"concurrency": {"record": False, "era": record.ERA}}) and not record.counted_any_era(None)
-    assert record.RECORD_LINES == {record.ERA: ()}
-
+    # the ancestry rule on this checkout's history: f85adff (the tw / tt cap) < 9ee65b3 (its signature row)
+    saved = dict(record.RECORD_LINES)
+    try:
+        record.RECORD_LINES[record.ERA] = "f85adff"
+        assert record.is_record(t58("9ee65b3")) and record.is_record(t58("f85adff"))      # a descendant, itself
+        assert not record.is_record(t58("d4158db")) and not record.is_record(t58("0" * 40))   # an ancestor, unknown
+        assert not record.is_record({**t58("9ee65b3"), "concurrency": {"record": False, "era": record.ERA}})
+    finally:
+        record.RECORD_LINES.clear()
+        record.RECORD_LINES.update(saved)
 
 def test_failure_streaks_are_per_slot_and_flags_per_session():
     """t58 N-4 (brad's audit): with two slots of one platform, a slot's consecutive failures are its own (a sibling's

@@ -67,7 +67,7 @@ from pathlib import Path
 
 import numpy as np
 
-from utils.shaping import PLATFORM_MATRICES, SCENARIOS, schedule_of, session_episodes, stationary_distribution
+from utils.shaping import PLATFORM_MATRICES, SCENARIOS, SESSION_MINUTES, stationary_distribution
 
 from data_root import DATA_ROOT as DATA_DIR  # noqa: E402  (one setting: data_root.py)
 RULE_VERSION = "coverage-v2 (2026-10-18; Addendum Q am. 5: stall events)"
@@ -92,7 +92,10 @@ EXPLORE_REPEAT_CAP = 2
 FLAG_AFTER_SESSIONS = 5                         # supervisor 2026-10-18: a class with zero support after 5 sessions: FLAG
 # Q am. 15 (3), revised 9dfbb62 (levi): the tier class -> state band rule and its inputs
 STEERING_RULE = "Q am. 15 (2026-10-19; (3) revised at LVQoE 9dfbb62)"   # the matrix pick's rule; the floors stay RULE_VERSION
-SESSION_EPISODES = {"youtube": 21, "tiktok": 23, "twitch": 23}   # = orchestrate.EPISODES_V2 (tested)
+SESSION_EPISODES = {"youtube": 21, "tiktok": 23, "twitch": 23}   # = orchestrate.EPISODES_V2 (tested; single mode's base)
+# restart §4 (levi 2026-10-20): a matrix qualifies for a class on the design's expected session minutes, the mean of
+# U(10, 40), for every platform and schedule (not the fixed 21 / 23 base lengths)
+EXPECTED_SESSION_MINUTES = sum(SESSION_MINUTES) / 2
 STATE_RATE = "midpoint"                         # a state's rate: "midpoint" of its range (am. 15 (3)), or "floor"
 RUNG_MARGIN = {"declared_peak": 1.1, "declared_average": 1.4}
 # kbit/s per tier class: (rung, kind, source). Medians over chaos sessions, read 2026-10-19 (peter's band table):
@@ -416,15 +419,14 @@ def state_mass(platform: str, matrices: dict, matrix_id: str) -> dict[str, float
 
 
 def session_minutes(platform: str, matrix_id: str) -> float:
-    """A session's shaped minutes under the matrix's schedule (the base: SESSION_EPISODES of 60 s)."""
-    sc = schedule_of(matrix_id, base_episodes=SESSION_EPISODES[platform])
-    return session_episodes(SESSION_EPISODES[platform], matrix_id) * sc["episode_s"] / 60.0
+    """A session's expected shaped minutes (restart §4: EXPECTED_SESSION_MINUTES, every platform and schedule)."""
+    return EXPECTED_SESSION_MINUTES
 
 
 def band_map(platform: str, matrices: dict, ids: list[str]) -> dict:
     """Per tier class: its band and each allowed matrix's mass in it (state_mass), and the matrices that qualify (mass
     >= FLOOR_MINUTES / the session's minutes under the matrix's schedule, and drawable for the class: MATRIX_TARGETS)."""
-    thr = FLOOR_MINUTES / float(SESSION_EPISODES[platform])
+    thr = FLOOR_MINUTES / EXPECTED_SESSION_MINUTES
     fam = {m: FLOOR_MINUTES / session_minutes(platform, m) for m in ids if "@" in m}
     masses = {m: state_mass(platform, matrices, m) for m in ids}
     out = {}

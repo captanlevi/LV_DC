@@ -41,7 +41,8 @@ def test_weights_and_compositions():
                                                            {"youtube": 1, "twitch": 1, "tiktok": 2}]
     all5 = N.parse_exclude("5:youtube,5:twitch,5:tiktok")
     d = N.draw_at(0, {}, "e", True, exclude=all5)
-    assert d["support"] == [3, 4] and d["n"] in (3, 4) and d["excluded"] == ["5:tiktok", "5:twitch", "5:youtube"]
+    assert d["support"] == [3, 4, 5] and d["support_effective"] == [3, 4] and d["n"] in (3, 4)
+    assert d["excluded"] == ["5:tiktok", "5:twitch", "5:youtube"]
     for bad in ("3:youtube", "5:x", "5"):
         try:
             N.parse_exclude(bad)
@@ -71,7 +72,7 @@ def test_seeded_and_rotating():
     per = Counter()                                             # brad's parity: no platform short by composition
     for d in a:
         per.update(d["composition"])
-    assert max(per.values()) - min(per.values()) <= 0.03 * sum(per.values()), per
+    assert (max(per.values()) - min(per.values())) / max(per.values()) <= 0.01, per     # the row: (max - min) / max
     pilot = N.simulate(300, era, record=False)
     assert [d["n"] for d in pilot] != [d["n"] for d in a]       # a pilot's sequence is its own
     other = N.simulate(300, "another-era")
@@ -86,7 +87,15 @@ def test_round_index_from_the_slots_log():
     seq = N.simulate(12, era)
     with tempfile.TemporaryDirectory() as t:
         log = Path(t) / "trio_slots.jsonl"
-        assert N.draw(log, era, True) == seq[0]                 # no log yet: round 0
+        for bad in (log, None):                                 # levi 00138: a record draw fails closed
+            try:
+                N.draw(bad, era, True)
+                raise AssertionError("no slots log: a record draw must fail closed")
+            except RuntimeError:
+                pass
+        assert N.draw(log, era, False)["round"] == 0            # a pilot draw: lenient
+        log.write_text("")                                      # an era's first record round: an empty log
+        assert N.draw(log, era, True) == seq[0]                 # round 0
         assert N.draw(log, era, True) == seq[0]                 # nothing written: the same draw again
         with open(log, "w") as fh:
             fh.write(json.dumps({"event": "trio_up", "composition": {"youtube": 1}}) + "\n")      # an older run, no draw
@@ -98,6 +107,43 @@ def test_round_index_from_the_slots_log():
                 fh.write(json.dumps({"event": "start", "slot": "yt1", "n_draw": d}) + "\n")    # not a trio_up
         assert N.draw(log, era, True) == seq[7]
         assert N.draw(log, era, False)["round"] == 1            # the pilot's own sequence
+        with open(log, "a") as fh:
+            fh.write('{"event": "trio_up", "n_dr\n')            # a torn trio_up line: a record draw fails closed
+        try:
+            N.draw(log, era, True)
+            raise AssertionError("an undecodable trio_up line must fail a record draw")
+        except RuntimeError:
+            pass
+        assert N.draw(log, era, False)["round"] == 1
+
+
+def test_support_and_exclusions_frozen_per_era():
+    """levi 00138: a record draw's support / exclusions are the era's last record draw's; a change needs a signed
+    reference and may only narrow (an N out, a composition excluded), recorded in the draw."""
+    era = record.ERA
+    with tempfile.TemporaryDirectory() as t:
+        log = Path(t) / "trio_slots.jsonl"
+        log.write_text("")
+        first = N.draw(log, era, True)
+        assert first["support"] == [3, 4, 5] and first["excluded"] == [] and "change_sign" not in first
+        log.write_text(json.dumps({"event": "trio_up", "n_draw": first}) + "\n")
+        assert N.draw(log, era, True)["round"] == 1                                   # unchanged: fine
+        for sup, exc in (((3, 5), ()), ((3, 4, 5), ((5, "tiktok"),))):              # unsigned changes: refused
+            try:
+                N.draw(log, era, True, sup, exclude=exc)
+                raise AssertionError((sup, exc))
+            except ValueError:
+                pass
+        d = N.draw(log, era, True, (3, 4, 5), exclude=((5, "tiktok"),), change_sign="levi 00140")
+        assert d["excluded"] == ["5:tiktok"] and d["change_sign"] == "levi 00140"
+        log.write_text(log.read_text() + json.dumps({"event": "trio_up", "n_draw": d}) + "\n")
+        try:                                                                          # widening back: refused
+            N.draw(log, era, True, (3, 4, 5), exclude=(), change_sign="levi 00141")
+            raise AssertionError("widening must be refused")
+        except ValueError:
+            pass
+        assert N.draw(log, era, True, (3, 4, 5), exclude=((5, "tiktok"),))["round"] == 2   # the new state holds
+        assert N.draw(log, era, False, (3, 5))["round"] == 0                          # a pilot: never frozen
 
 
 def test_cli_guards():
@@ -106,14 +152,27 @@ def test_cli_guards():
                               capture_output=True, text=True, timeout=60)
     r = run("--concurrent", "--trio-record")
     assert r.returncode != 0 and "--trio-record needs --n-draw" in r.stderr, r.stderr
+    for w in ((), ("--window-min", "90")):                       # levi 00138: the record's window is 120 min
+        r = run("--concurrent", "--trio-record", "--n-draw", *w)
+        assert r.returncode != 0 and "--trio-record needs --window-min 120" in r.stderr, r.stderr
+    r = run("--concurrent", "--window-min", "120", "--max-per-slot", "1")
+    assert r.returncode != 0 and "--max-per-slot does not apply inside a window" in r.stderr, r.stderr
+    r = run("--concurrent", "--window-min", "0")
+    assert r.returncode != 0 and "--window-min needs --concurrent and a positive length" in r.stderr, r.stderr
+    r = run("--window-min", "30")
+    assert r.returncode != 0 and "--window-min needs --concurrent" in r.stderr, r.stderr
+    r = run("--concurrent", "--trio-record", "--n-draw", "--window-min", "120", "--session-range", "4,8")
+    assert r.returncode != 0 and "--session-range is for an uncounted" in r.stderr, r.stderr
+    for bad in ("4", "8,4", "x,y"):
+        r = run("--concurrent", "--session-range", bad)
+        assert r.returncode != 0 and "--session-range LO,HI" in r.stderr, (bad, r.stderr)
     r = run("--concurrent", "--n-draw", "--slots", "youtube=2")
     assert r.returncode != 0 and "--n-draw needs --concurrent and no --slots" in r.stderr, r.stderr
     r = run("--n-draw")
     assert r.returncode != 0 and "--n-draw needs --concurrent" in r.stderr, r.stderr
-    r = run("--concurrent", "--n-support", "3,5")
-    assert r.returncode != 0 and "--n-support / --n-exclude need --n-draw" in r.stderr, r.stderr
-    r = run("--concurrent", "--n-exclude", "5:youtube")
-    assert r.returncode != 0 and "--n-support / --n-exclude need --n-draw" in r.stderr, r.stderr
+    for a in (("--n-support", "3,5"), ("--n-exclude", "5:youtube"), ("--n-change-sign", "levi 1")):
+        r = run("--concurrent", *a)
+        assert r.returncode != 0 and "--n-support / --n-exclude / --n-change-sign need --n-draw" in r.stderr, r.stderr
 
 
 def test_wiring():
@@ -206,7 +265,8 @@ def test_the_committed_simulation():
     import hashlib
     import orchestrate as O
     import restart_simulation as R
-    assert R.STAGGER_S == O.TRIO_STAGGER_S and R.WINDOW_MIN == 120.0
+    assert R.STAGGER_S == O.TRIO_STAGGER_S and R.WINDOW_MIN == O.RECORD_WINDOW_MIN == 120.0
+    assert R.ALLOWANCE_S == O.WINDOW_ALLOWANCE_S == 180.0
     raw = R.FIXTURE.read_bytes()
     assert R.dumps(R.simulate()).encode() == raw, "the simulation no longer reproduces fixtures/restart_simulation.json"
     s = json.loads(raw)["summary"]
@@ -219,6 +279,7 @@ def main() -> int:
     test_weights_and_compositions()
     test_seeded_and_rotating()
     test_round_index_from_the_slots_log()
+    test_support_and_exclusions_frozen_per_era()
     test_cli_guards()
     test_wiring()
     test_session_length()

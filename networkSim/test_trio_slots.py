@@ -501,7 +501,9 @@ def test_run_trio_records_the_n_draw_and_session_lengths():
             assert json.loads(env["LVDC_N_DRAW"]) == d
             tag = cmd[cmd.index("--slot") + 1]
             sl = json.loads(env["LVDC_SESSION_LENGTH"])
-            assert sl == shaping.draw_session_minutes(f"{run}:{tag}:1")
+            assert {k: sl[k] for k in ("rule", "seed", "key", "range_min", "minutes")} == \
+                shaping.draw_session_minutes(f"{run}:{tag}:1")
+            assert sl["scheduled_s"] == sl["episodes"] * 60.0                         # matrix "A": 60 s episodes
             assert float(cmd[cmd.index("--session-minutes") + 1]) == sl["minutes"]
             assert int(cmd[cmd.index("--episodes") + 1]) == round(sl["minutes"])        # matrix "A": 60 s episodes
         assert n_draw.draw(tmp / T.TRIO_DIR / T.SLOTS_LOG, record.ERA, False)["round"] == 0   # a record draw: not the pilot's
@@ -542,8 +544,9 @@ def test_window_refill_and_idle():
     """Restart §10: a window run refills each slot while its next drawn length fits before the deadline; a slot whose
     next length does not fit idles to the end (window_idle, no truncation, no re-draw); the window is in trio_up and
     every slot's env (LVDC_TRIO_WINDOW)."""
-    saved = O.draw_session_minutes
+    saved, saved_allow = O.draw_session_minutes, O.WINDOW_ALLOWANCE_S
     try:
+        O.WINDOW_ALLOWANCE_S = 0.0                        # the allowance on its own below
         # the first session of each slot is short enough to fit a 0.05 min window, the second never does
         O.draw_session_minutes = lambda key: {"key": key, "minutes": 0.0001 if key.endswith(":1") else 10.0}
         with tempfile.TemporaryDirectory() as t:
@@ -565,13 +568,64 @@ def test_window_refill_and_idle():
             rc, _ = _trio(tmp, {"youtube": 9}, lambda cmd, env, log: spawned.append(cmd) or FakeProc(1, 0, []),
                           max_per_slot=None, window_min=0.05)
             assert rc == 0 and not spawned
+        O.WINDOW_ALLOWANCE_S = saved_allow                # levi 00138: 3 min for startup + teardown in the fit check
+        with tempfile.TemporaryDirectory() as t:
+            tmp, spawned = Path(t), []
+            O.draw_session_minutes = lambda key: {"key": key, "minutes": 0.0001}
+            rc, _ = _trio(tmp, {"youtube": 9}, lambda cmd, env, log: spawned.append(cmd) or FakeProc(1, 0, []),
+                          max_per_slot=None, window_min=3.0)    # 180 s: a 0.006 s session + 180 s does not fit
+            ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
+            idle = [e for e in ev if e["event"] == "window_idle"]
+            assert not spawned and idle[0]["allowance_s"] == 180.0 and idle[0]["reason"] == "does not fit", idle
     finally:
-        O.draw_session_minutes = saved
+        O.draw_session_minutes, O.WINDOW_ALLOWANCE_S = saved, saved_allow
     with tempfile.TemporaryDirectory() as t:                 # no window: nothing recorded, no env
         spawned = []
         _trio(Path(t), {"youtube": 5}, lambda cmd, env, log: spawned.append(env) or FakeProc(1, 0, []))
         ev = json.loads((Path(t) / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()[0])
         assert "window" not in ev and all("LVDC_TRIO_WINDOW" not in e for e in spawned)
+
+
+def test_window_runs_to_time_pauses_and_bookkeeping():
+    """levi 00138 (§10): inside a window, targets and --max-per-slot never stop a slot (it runs to time); a paused
+    slot idles to the end with its reason; more than one paused slot is a stop-and-read (EXIT_WINDOW_READ); trio_down
+    records the window's actual end and each slot's busy / idle seconds; a session's scheduled_s is recorded."""
+    saved, saved_allow = O.draw_session_minutes, O.WINDOW_ALLOWANCE_S
+    try:
+        O.WINDOW_ALLOWANCE_S = 0.0
+        O.draw_session_minutes = lambda key: {"key": key, "minutes": 10.0 if key.endswith(":3") else 0.0001}
+        with tempfile.TemporaryDirectory() as t:         # target 0 and max 1 per slot: still two sessions per slot
+            tmp, spawned = Path(t), []
+            rc, _ = _trio(tmp, {"youtube": 0, "twitch": 0}, lambda cmd, env, log: spawned.append((cmd, env)) or
+                          FakeProc(1, 0, []), max_per_slot=1, window_min=0.05)
+            assert rc == 0 and len(spawned) == 4, [c[c.index("--slot") + 1] for c, _ in spawned]
+            ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
+            down = ev[-1]
+            assert down["event"] == "trio_down" and down["window"]["t_end"] >= down["window"]["t0"]
+            w = down["window"]
+            assert set(w["busy_s"]) == set(w["idle_s"]) == {"yt1", "tw1", "tt1"}
+            assert all(abs(w["busy_s"][k] + w["idle_s"][k] - w["span_s"]) < 0.2 for k in ("yt1", "tw1"))
+            for cmd, env in spawned:
+                sl = json.loads(env["LVDC_SESSION_LENGTH"])
+                assert sl["episodes"] == int(cmd[cmd.index("--episodes") + 1]) and sl["scheduled_s"] == sl["episodes"] * 60.0
+        with tempfile.TemporaryDirectory() as t:         # a paused slot (login wall) idles with its reason
+            tmp = Path(t)
+            rc, _ = _trio(tmp, {"youtube": 9, "twitch": 9, "tiktok": 9}, lambda cmd, env, log: FakeProc(
+                1, O.EXIT_LOGIN_WALL if "twitch" in cmd else 0, []), max_per_slot=None, window_min=0.05)
+            ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
+            tw = [e for e in ev if e["event"] == "window_idle" and e["slot"] == "tw1"]
+            assert rc == 0 and len(tw) == 1 and tw[0]["reason"].startswith("paused: login wall"), tw
+            assert not [e for e in ev if e["event"] == "window_stop"]
+        with tempfile.TemporaryDirectory() as t:         # two paused slots: stop and read
+            tmp = Path(t)
+            rc, _ = _trio(tmp, {"youtube": 9, "twitch": 9}, lambda cmd, env, log: FakeProc(
+                1, O.EXIT_LOGIN_WALL if "twitch" in cmd else 0, []), max_per_slot=None, window_min=0.05,
+                slots={"youtube": 1, "twitch": 2})
+            ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
+            stop = [e for e in ev if e["event"] == "window_stop"]
+            assert rc == O.EXIT_WINDOW_READ and len(stop) == 1 and stop[0]["reason"] == "2 slots paused", ev
+    finally:
+        O.draw_session_minutes, O.WINDOW_ALLOWANCE_S = saved, saved_allow
 
 
 def test_concurrency_over():

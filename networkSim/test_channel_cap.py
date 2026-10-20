@@ -12,6 +12,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+from testing_record import of_record  # noqa: E402
 import channel_cap as C  # noqa: E402
 import record  # noqa: E402
 
@@ -24,6 +25,7 @@ def _sess(root: Path, plat: str, name: str, url: str, rec: bool = True, failed: 
     (d / "meta.json").write_text(json.dumps({"channel_url": url, **(REC if rec else {})}))
 
 
+@of_record
 def test_the_cap():
     with tempfile.TemporaryDirectory() as t:
         tr = Path(t) / "_trio"

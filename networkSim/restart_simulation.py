@@ -3,8 +3,8 @@
 design-check it). Windows as orchestrate --n-draw --window-min runs them (restart prereg §1 / §4 / §10): each window
 draws N and its composition (n_draw.draw_at, the record sequence of record.ERA, the per-N rotation counters); each slot,
 started STAGGER_S after the previous one, draws its next session's length (shaping.draw_session_minutes, keyed as
-_trio_refill keys it: <run>:<tag>:<index>) and runs it when it fits before the window's end, else idles to the end (no
-truncation, no re-draw); a refill costs REFILL_GAP_S; a window costs its minutes plus OVERHEAD_S. Deterministic (seeded
+_trio_refill keys it: <run>:<tag>:<index>) and runs it when it fits before the window's end with ALLOWANCE_S to spare,
+else idles to the end (no truncation, no re-draw); a refill costs REFILL_GAP_S; a window costs its minutes plus OVERHEAD_S. Deterministic (seeded
 draws; synthetic run ids SIM<k>). Stated assumptions: STAGGER_S (= orchestrate.TRIO_STAGGER_S), REFILL_GAP_S and
 OVERHEAD_S. Output: fixtures/restart_simulation.json (every window and session, and a summary: windows, N counts, the
 rotations, sessions / minutes per platform, the collected length's terciles against the drawn law, slot busy share,
@@ -31,7 +31,8 @@ FIXTURE = HERE / "fixtures" / "restart_simulation.json"
 STAGGER_S = 30.0          # = orchestrate.TRIO_STAGGER_S (tested)
 REFILL_GAP_S = 60.0       # stated assumption: a slot's teardown, pick and next start
 OVERHEAD_S = 300.0        # stated assumption: a window's tree / captures / merge / next window's start
-WINDOW_MIN = 120.0        # restart prereg §10 (levi)
+WINDOW_MIN = 120.0        # restart prereg §10 (levi) = orchestrate.RECORD_WINDOW_MIN (tested)
+ALLOWANCE_S = 180.0       # = orchestrate.WINDOW_ALLOWANCE_S (tested): the fit check's startup + teardown allowance
 TAG_PREFIX = {"youtube": "yt", "twitch": "tw", "tiktok": "tt"}
 
 
@@ -61,7 +62,7 @@ def simulate(hours: float = 24.0, window_min: float = WINDOW_MIN, era: str = rec
             while True:
                 j += 1
                 m = draw_session_minutes(f"SIM{k}:{tag}:{j}")["minutes"]
-                if ts + m * 60 > W:                  # does not fit: the slot idles to the window's end
+                if ts + m * 60 + ALLOWANCE_S > W:    # does not fit: the slot idles to the window's end
                     break
                 sessions.append({"tag": tag, "platform": p, "start_s": ts, "minutes": m})
                 spans.append((ts, ts + m * 60))
@@ -83,7 +84,7 @@ def simulate(hours: float = 24.0, window_min: float = WINDOW_MIN, era: str = rec
         mins_p[s["platform"]] += s["minutes"]
     conc = sorted(s["concurrency_mean"] for s in ss)
     summary = {
-        "hours": hours, "window_min": window_min, "stagger_s": STAGGER_S, "refill_gap_s": REFILL_GAP_S,
+        "hours": hours, "window_min": window_min, "allowance_s": ALLOWANCE_S, "stagger_s": STAGGER_S, "refill_gap_s": REFILL_GAP_S,
         "overhead_s": OVERHEAD_S, "era": era, "windows": len(windows),
         "n_counts": {str(n): c for n, c in sorted(Counter(w["n"] for w in windows).items())},
         "rotations": {str(n): [list(w["rotation"].values())[1] for w in windows if w["n"] == n] for n in N.ROTATING},
