@@ -147,9 +147,10 @@ def test_support_and_exclusions_frozen_per_era():
 
 
 def test_cli_guards():
-    def run(*a):
+    def run(*a, env_add=None):
+        env = {k: v for k, v in os.environ.items() if k != "LVDC_DATA_ROOT_UUID"}
         return subprocess.run([sys.executable, "orchestrate.py", "--batch", "youtube=1", *a], cwd=HERE,
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60, env={**env, **(env_add or {})})
     r = run("--concurrent", "--trio-record")
     assert r.returncode != 0 and "--trio-record needs --n-draw" in r.stderr, r.stderr
     for w in ((), ("--window-min", "90")):                       # levi 00138: the record's window is 120 min
@@ -169,6 +170,12 @@ def test_cli_guards():
     for bad in ("4", "8,4", "x,y"):
         r = run("--concurrent", "--session-range", bad)
         assert r.returncode != 0 and "--session-range LO,HI" in r.stderr, (bad, r.stderr)
+    # bundle item 6 (levi on a2f0cac): the record refuses an unset data volume UUID
+    full = ("--concurrent", "--trio-record", "--n-draw", "--window-min", "120", "--trio-yt-fullscreen")
+    r = run(*full)
+    assert r.returncode != 0 and "--trio-record needs LVDC_DATA_ROOT_UUID" in r.stderr, r.stderr
+    r = run(*full, env_add={"LVDC_DATA_ROOT_UUID": "  "})
+    assert r.returncode != 0 and "--trio-record needs LVDC_DATA_ROOT_UUID" in r.stderr, r.stderr
     r = run("--concurrent", "--n-draw", "--slots", "youtube=2")
     assert r.returncode != 0 and "--n-draw needs --concurrent and no --slots" in r.stderr, r.stderr
     r = run("--n-draw")

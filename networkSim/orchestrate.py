@@ -1260,6 +1260,11 @@ if __name__ == "__main__":
             if not 0 < lo <= hi:
                 sys.exit("--session-range LO,HI with 0 < LO <= HI")
             SESSION_RANGE = (lo, hi)
+        # levi on a2f0cac (bundle item 6): a counted run never runs with the data volume check off; preflight's
+        # check_data_uuid is "not checked" when LVDC_DATA_ROOT_UUID is unset, so the record refuses that here
+        if args.trio_record and not (os.environ.get("LVDC_DATA_ROOT_UUID") or "").strip():
+            sys.exit("--trio-record needs LVDC_DATA_ROOT_UUID (the data volume's filesystem UUID; ops/env.sh / "
+                     "env.local.sh): preflight's data volume check must run for the record")
         TRIO_RECORD = bool(args.trio_record)
         if args.trio_pin and (not args.concurrent or not args.trio_pin_reason):
             sys.exit("--trio-pin needs --concurrent and --trio-pin-reason")
