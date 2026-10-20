@@ -7,7 +7,8 @@ for every session of record, joinable to the labels). One JSON line per second, 
     refuses: DRM fdinfo (per class only: render / copy / video over its capacity / video-enhance), stated per line.
   - slots: each trio slot's Chrome process tree (/sys/fs/cgroup/lvdc.slice/<tag>): cpu_pct (% of one core, summed over
     the tree, from the cgroup's cpu.stat), by_type (browser / renderer / gpu / network / utility / other, from each
-    process's /proc stat and its --type), procs, mem_mb (memory.current).
+    process's /proc stat and its --type), procs, mem_mb (memory.current; when the memory controller is not delegated to the
+    slot cgroups, the slot's VmRSS sum from /proc, a trend: mem_source names which).
   - cpu_pct (box, 0-100 over all cores, /proc/stat), mem_available_mb, swap_used_kb, oom_kill (/proc/vmstat).
 A second whose sample failed is a line with "error"; a pause longer than 1.5 intervals is a "gap" line, so coverage
 is never silently lost; a pass that raises is logged ("restart: ...") and started again with a new header. The header line carries the recorder's code sha256 and commit. Ops only: the collector does
@@ -198,6 +199,21 @@ def proc_type(cmdline: bytes) -> str:
     return typ if typ in ("renderer", "utility") else "other"
 
 
+def proc_rss_sum(pids: list[int], proc: str = "/proc") -> int | None:
+    """The VmRSS sum (bytes) over pids from /proc/<pid>/status; None when none could be read."""
+    total, n = 0, 0
+    for pid in pids:
+        try:
+            for line in (Path(proc) / str(pid) / "status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    total += int(line.split()[1]) * 1024
+                    n += 1
+                    break
+        except (OSError, ValueError, IndexError):
+            continue
+    return total if n else None
+
+
 def slot_read(slice_dir: str = CG_SLICE, proc: str = "/proc", types: dict | None = None) -> dict:
     """{tag: {"usage_usec", "mem_bytes", "ticks": {pid: (type, utime + stime)}}} for every cgroup under the slice.
     types caches each (pid, starttime)'s role (Chrome rewrites its title; its --type stays)."""
@@ -212,14 +228,18 @@ def slot_read(slice_dir: str = CG_SLICE, proc: str = "/proc", types: dict | None
         except (OSError, ValueError, StopIteration):
             continue
         try:
-            mem = int((cg / "memory.current").read_text().strip())
+            mem, src = int((cg / "memory.current").read_text().strip()), "memory.current"
         except (OSError, ValueError):
-            mem = None
+            mem, src = None, None
         ticks = {}
         try:
             pids = [int(x) for x in (cg / "cgroup.procs").read_text().split()]
         except (OSError, ValueError):
             pids = []
+        if mem is None and pids:              # t58 (shagun 07:57): the memory controller is not delegated to the slot
+            rss = proc_rss_sum(pids, proc)    # cgroups, so memory.current is absent: the slot's VmRSS sum (a trend;
+            if rss is not None:               # shared pages count once per process)
+                mem, src = rss, "proc_rss_sum"
         for pid in pids:
             try:
                 st = (Path(proc) / str(pid) / "stat").read_text()
@@ -230,7 +250,7 @@ def slot_read(slice_dir: str = CG_SLICE, proc: str = "/proc", types: dict | None
                 ticks[pid] = (types[key], int(f[11]) + int(f[12]))
             except (OSError, ValueError, IndexError):
                 continue
-        out[cg.name] = {"usage_usec": usage, "mem_bytes": mem, "ticks": ticks}
+        out[cg.name] = {"usage_usec": usage, "mem_bytes": mem, "mem_source": src, "ticks": ticks}
     return out
 
 
@@ -241,7 +261,8 @@ def slot_line(s0: dict, s1: dict, dt: float) -> dict:
     out = {}
     for tag, b in s1.items():
         a = s0.get(tag)
-        rec: dict = {"procs": len(b["ticks"]), "mem_mb": None if b["mem_bytes"] is None else round(b["mem_bytes"] / 2**20, 1)}
+        rec: dict = {"procs": len(b["ticks"]), "mem_mb": None if b["mem_bytes"] is None else round(b["mem_bytes"] / 2**20, 1),
+                     "mem_source": b.get("mem_source")}
         if a is not None and dt > 0:
             rec["cpu_pct"] = round(100.0 * (b["usage_usec"] - a["usage_usec"]) / (dt * 1e6), 2)
             by: dict = {}

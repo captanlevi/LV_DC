@@ -99,7 +99,15 @@ def test_slots():
         types: dict = {}
         s0 = G.slot_read(str(sl), str(pr), types)
         first = G.slot_line({}, s0, 1.0)
-        assert first == {"yt": {"procs": 2, "mem_mb": 512.0}}, first                # first seen: no baseline
+        assert first == {"yt": {"procs": 2, "mem_mb": 512.0, "mem_source": "memory.current"}}, first   # no baseline
+        # t58 (shagun 07:57): no memory.current (the controller not delegated): the slots' VmRSS sum, named
+        (sl / "yt" / "memory.current").unlink()
+        for pid, kb in ((10, 200000), (11, 300000)):
+            (pr / str(pid) / "status").write_text(f"Name:\tchrome\nVmRSS:\t{kb} kB\n")
+        fb = G.slot_line({}, G.slot_read(str(sl), str(pr), types), 1.0)
+        assert fb == {"yt": {"procs": 2, "mem_mb": round(500000 * 1024 / 2**20, 1), "mem_source": "proc_rss_sum"}}, fb
+        assert G.proc_rss_sum([999], str(pr)) is None                              # nothing readable: None
+        (sl / "yt" / "memory.current").write_text(str(512 * 2**20))
         (sl / "yt" / "cpu.stat").write_text("usage_usec 2500000\n")                # 1.5 cores over 1 s
         (sl / "yt" / "cgroup.procs").write_text("10\n11\n12\n")
         _proc(pr, 10, ["/opt/google/chrome/chrome", "--remote-debugging-port=9223"], 110, 20)
