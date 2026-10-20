@@ -521,6 +521,14 @@ if __name__ == "__main__":
         help="Stop after this many state transitions. Default: run until Ctrl+C.",
     )
     parser.add_argument(
+        "--session-minutes",
+        type=float,
+        default=None,
+        help="Restart prereg §4 (orchestrate's trio draw, U(10, 40)): the session's length in minutes, which a "
+             "@slow family's episode length divides (session / 3); --episodes is orchestrate's scaled count. Default: "
+             "the platform's base length (coverage_report.SESSION_EPISODES).",
+    )
+    parser.add_argument(
         "--auto",
         action="store_true",
         help="Auto-navigate to a live stream and handle ads (default: manual — you navigate yourself).",
@@ -686,7 +694,16 @@ if __name__ == "__main__":
         SHAPER_OPTS.update(initial_state_fn=None)
     # Q am. 17: the matrix id's schedule (base, or a "<m>@slow|fast" family: its episode length, self-loop rule, re-draw
     # and low-state cap in seconds, the base matrix's cap x 60 s); recorded in meta.json shaper
-    SCHEDULE = schedule_of(matrix_id, low_cap, coverage_report.SESSION_EPISODES.get(platform))
+    # restart §4: a drawn session length (--session-minutes) replaces the platform's base length in @slow's division
+    SCHEDULE = schedule_of(matrix_id, low_cap, args.session_minutes or coverage_report.SESSION_EPISODES.get(platform))
+    SESSION_LEN = None
+    if args.session_minutes is not None:
+        try:
+            SESSION_LEN = json.loads(os.environ.get("LVDC_SESSION_LENGTH") or "{}") or {"minutes": args.session_minutes}
+        except ValueError:
+            SESSION_LEN = {"minutes": args.session_minutes, "error": "LVDC_SESSION_LENGTH unreadable"}
+        SESSION_LEN = {**SESSION_LEN, "episodes": args.episodes,
+                       "scheduled_s": round(args.episodes * SCHEDULE["episode_s"], 1) if args.episodes else None}
     if SCHEDULE["schedule"] != "base":
         SHAPER_GEN = family_episode_generator
         SHAPER_OPTS = {"initial_state_fn": SHAPER_OPTS.get("initial_state_fn"), "redraw_s": tuple(SCHEDULE["redraw_s"]),
@@ -710,7 +727,8 @@ if __name__ == "__main__":
     template_note = template_note_of(template)
     configure_chrome_download_dir(session_dir, chrome_profile)
     session_meta.start(session_dir, platform, transition, episode_s=SCHEDULE["episode_s"], argv=sys.argv,
-                       chrome_profile=chrome_profile, schedule={**SCHEDULE, "episodes": args.episodes},
+                       chrome_profile=chrome_profile, schedule={**SCHEDULE, "episodes": args.episodes,
+                                                                **({"session_length": SESSION_LEN} if SESSION_LEN else {})},
                        matrix_id=matrix_id, low_state_cap=low_cap, initial_state_rule=init_rule,
                        forced_initial_state=args.initial_state, channel_url_requested=args.channel_url,
                        channel_type=args.channel_type, channel_handle=args.channel_handle,

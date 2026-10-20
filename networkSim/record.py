@@ -7,20 +7,21 @@ they sit under data/_trio. The rule is this one predicate; the era changes only 
 from __future__ import annotations
 
 # t58 L-5 (levi): bumped at the N-slot adoption (t55-gro-off-2026-10-19 -> t56-nslot-2026-10-19). t56 boundary (levi
-# 2026-10-20, the N_collect adoption at 5ba0b94: schedule families, player-error recovery, the in-stall press removed):
-# bumped again so the count restart is real. The t56-nslot era (the 61a852d rounds 1-3) is a stated run (the final
-# checkpoint's re-spec): never of record, for floors, targets, steering or not_usable. Steering counts the record eras:
-# the N = 3 counted line at c1f9181 (t55-gro-off-2026-10-19; pooling condition iii) and this era from 5ba0b94 on; if
-# pooling (iii) fails, coverage is re-read on N_collect alone at the final checkpoint.
-ERA = "t57-n5-boundary-2026-10-20"   # the era this collector writes (capture regime unchanged: GRO / GSO / TSO off)
-# levi on 844f115: membership is the era AND its counted line's collector (meta.json lvdc_commit.sha). t55's counted
-# line is c1f9181 alone: the flagged t55 sessions on e62883d (6) and 9dc66cb (3), the rounds before the c1f9181 restart,
-# are not of record (chaos _trio, 2026-10-20: 40 flagged sessions, t55 c1f9181 16 / e62883d 6 / 9dc66cb 3, t56 61a852d
-# 15). This era's string first exists at 844f115, so every session carrying it was written by 844f115 or a descendant:
-# no sha list (empty = the era string is the line).
-RECORD_LINES = {"t55-gro-off-2026-10-19": ("c1f9181",), ERA: ()}
+# 2026-10-20, the N_collect adoption at 5ba0b94): bumped again (t57-n5-boundary-2026-10-20). The restart (LVQoE
+# restart_2026-10-21_prereg_levi.md §0, rushi GO 2026-10-20; the string fixed by levi): the record is the new era only.
+# Sessions of record are the flag AND this ERA AND a collector on its counted line; the string first exists at the
+# restart's collector, so every session carrying it was written by it or a descendant (empty = the era string is the
+# line). The earlier eras (c1f9181 N = 3 t55, 61a852d N = 5 t56, the t57 boundary) are stated references, never pooled.
+ERA = "t58-restart-2026-10-21"   # the era this collector writes (capture regime unchanged: GRO / GSO / TSO off)
+RECORD_LINES = {ERA: ()}
 RECORD_ERAS = tuple(RECORD_LINES)
 STATED_ERAS = ("t56-nslot-2026-10-19",)
+
+
+def counted_any_era(meta: dict | None) -> bool:
+    """A counted run's session (the record flag) of any era, stated runs included: channel identity (the yt LRU / cap,
+    the twitch / tt caps) spans every era, because identity is content, not record (restart prereg §0)."""
+    return bool(((meta or {}).get("concurrency") or {}).get("record"))
 
 
 def of_record_any_era(meta: dict | None) -> bool:

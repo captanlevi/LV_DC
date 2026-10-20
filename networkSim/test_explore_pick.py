@@ -153,8 +153,8 @@ def test_one_membership_rule_for_the_trio_targets():
     import orchestrate as O
     import record
     with tempfile.TemporaryDirectory() as d:
-        # levi 2026-10-20: the record eras (the c1f9181 counted line's t55 and this era) count, the stated t56-nslot run
-        # (61a852d rounds 1-3) never does
+        # the restart (prereg §0): this era alone counts; t55 (even its c1f9181 counted line) and the stated t56-nslot run
+        # (61a852d rounds 1-3) never do
         for i, (rec, era) in enumerate(((True, record.ERA), (False, record.ERA), (True, "t56-nslot-2026-10-19"),
                                         (True, "t55-gro-off-2026-10-19"))):
             sd = _sess(d, f"tw_{i}", "TW-M", float(i))
@@ -164,7 +164,7 @@ def test_one_membership_rule_for_the_trio_targets():
         saved = (O.TRIO_RECORD, O.TRIO_STRESS, O.TRIO_RUN_ID)
         try:
             O.TRIO_RECORD = True
-            assert O.trio_select() is record.is_record and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 2
+            assert O.trio_select() is record.is_record and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 1
             O.TRIO_RECORD = False
             assert O.trio_select() is None and O.accepted_sessions("twitch", Path(d), O.trio_select()) == 4
             # decode_stress (shagun 2026-10-19): its targets count this run's sessions only, never an earlier run's
@@ -177,17 +177,19 @@ def test_one_membership_rule_for_the_trio_targets():
             assert O.accepted_sessions("twitch", Path(d), O.trio_select()) == 0
         finally:
             O.TRIO_RECORD, O.TRIO_STRESS, O.TRIO_RUN_ID = saved
-    assert record.ERA == "t57-n5-boundary-2026-10-20"
-    assert record.RECORD_ERAS == ("t55-gro-off-2026-10-19", record.ERA) and record.STATED_ERAS == ("t56-nslot-2026-10-19",)
+    # the restart (prereg §0): the record is the new era only; t55 / t57 are stated references, never of record now
+    assert record.ERA == "t58-restart-2026-10-21"
+    assert record.RECORD_ERAS == (record.ERA,) and record.STATED_ERAS == ("t56-nslot-2026-10-19",)
     stated = {"concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}}
     assert not record.is_record(stated) and not record.of_record_any_era(stated)          # never, not even not_usable
+    assert record.counted_any_era(stated)                     # channel identity spans every era (restart §0)
     assert record.of_record_any_era({"concurrency": {"record": True, "era": "t55-gro-off-2026-10-19"}})
-    # levi on 844f115: t55 counts on its counted line only (c1f9181), never e62883d / 9dc66cb's earlier rounds
     t55 = lambda sha: {"concurrency": {"record": True, "era": "t55-gro-off-2026-10-19"}, "lvdc_commit": {"sha": sha}}
-    assert record.is_record(t55("c1f9181" + "0" * 33)) and not record.is_record(t55("e62883d" + "0" * 33))
-    assert not record.is_record(t55("9dc66cb")) and not record.is_record(t55(None))
+    assert not record.is_record(t55("c1f9181" + "0" * 33)) and record.counted_any_era(t55("c1f9181"))
+    assert not record.is_record({"concurrency": {"record": True, "era": "t57-n5-boundary-2026-10-20"}})
     assert record.is_record({"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": "844f115"}})
-    assert record.RECORD_LINES == {"t55-gro-off-2026-10-19": ("c1f9181",), record.ERA: ()}
+    assert not record.counted_any_era({"concurrency": {"record": False, "era": record.ERA}}) and not record.counted_any_era(None)
+    assert record.RECORD_LINES == {record.ERA: ()}
 
 
 def test_failure_streaks_are_per_slot_and_flags_per_session():

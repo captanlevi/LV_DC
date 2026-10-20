@@ -386,9 +386,26 @@ def schedule_of(matrix_id: str | None, cap_episodes: int | None = None, base_epi
             "redraw_s": list(s["redraw_s"]), "low_cap_s": low_cap_s}
 
 
-def session_episodes(base_episodes: int, matrix_id: str | None) -> int:
-    """am. 17: the session time held: a family's episodes = round(base episodes x BASE_EPISODE_S / its episode_s)."""
+def session_episodes(base_episodes: float, matrix_id: str | None) -> int:
+    """am. 17: the session time held: a family's episodes = round(base episodes x BASE_EPISODE_S / its episode_s).
+    base_episodes may be a drawn session's minutes (restart §4; BASE_EPISODE_S is a minute)."""
     return int(round(base_episodes * BASE_EPISODE_S / schedule_of(matrix_id, base_episodes=base_episodes)["episode_s"]))
+
+
+# LVQoE restart_2026-10-21_prereg_levi.md §4 (rushi GO 2026-10-20): each trio session's length is drawn, U(10, 40) min,
+# seeded, independent of everything; the episodes scale with it (base: round(minutes) episodes of 60 s; @slow: 3
+# episodes of the session / 3; @fast: round(minutes x 5) episodes of 12 s). Single mode and a held state keep the base
+# episodes (not of record).
+SESSION_MINUTES = (10.0, 40.0)
+SESSION_LEN_SEED = 0
+SESSION_LEN_RULE = ("restart prereg §4: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot "
+                    "tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)")
+
+
+def draw_session_minutes(key: str, seed: int = SESSION_LEN_SEED) -> dict:
+    """A session's drawn length (restart §4), with its seed and key (meta.json shaper.session_length)."""
+    m = random.Random(f"{seed}:{key}").uniform(*SESSION_MINUTES)
+    return {"rule": SESSION_LEN_RULE, "seed": seed, "key": key, "range_min": list(SESSION_MINUTES), "minutes": round(m, 4)}
 
 
 def next_state_no_self(curr: str, transition_dict: dict[str, dict[str, float]], rng=random) -> str:

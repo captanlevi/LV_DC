@@ -429,7 +429,7 @@ class FakeProc:
 
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
-          xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None, slots=None, coupled=None):
+          xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None, slots=None, coupled=None, n_draw=None):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry", "free_gb")}
@@ -466,7 +466,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
                         [{"cmd": c, "rc": 0} for c in cmds],
                         make=lambda args: calls.append(("make", args[0])) or 0, sleep=sleep, layout=layout,
                         xrandr=xrandr, offloads=offloads or (lambda iface: {"iface": iface, "ok": True, "after": {}, "calls": []}),
-                        slots=slots)
+                        slots=slots, n_draw=n_draw)
     finally:
         for k, v in saved.items():
             setattr(O, k, v)
@@ -475,6 +475,42 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
         O.preflight.run, T.nft_handle_of, T.STAGING, T.trio_preflight = saved_pf, saved_nft, saved_stage, saved_tpf
         T.conntrack_timeouts = saved_ct
     return rc, calls
+
+
+def test_run_trio_records_the_n_draw_and_session_lengths():
+    """Restart prereg §1 / §4: the round's draw runs its composition and is recorded in trio_up and (LVDC_N_DRAW) every
+    slot's env; each session's length is drawn (seeded by the run, slot and index) and passed as --session-minutes with
+    the base matrix's episodes scaled to it."""
+    import n_draw
+    import record
+    from utils import shaping
+    d = next(x for x in n_draw.simulate(20, record.ERA) if x["n"] == 4)
+    with tempfile.TemporaryDirectory() as t:
+        tmp, spawned = Path(t), []
+
+        def spawn(cmd, env, log):
+            spawned.append((cmd, env, log))
+            return FakeProc(1, 0, [])
+        rc, _ = _trio(tmp, {"youtube": 5, "twitch": 5, "tiktok": 5}, spawn, slots=d["composition"], n_draw=d)
+        assert rc == 0 and len(spawned) == 4
+        ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
+        assert ev[0]["event"] == "trio_up" and ev[0]["n_draw"] == d and ev[0]["composition"] == d["composition"]
+        run = ev[0]["run"]
+        for cmd, env, _ in spawned:
+            assert json.loads(env["LVDC_N_DRAW"]) == d
+            tag = cmd[cmd.index("--slot") + 1]
+            sl = json.loads(env["LVDC_SESSION_LENGTH"])
+            assert sl == shaping.draw_session_minutes(f"{run}:{tag}:1")
+            assert float(cmd[cmd.index("--session-minutes") + 1]) == sl["minutes"]
+            assert int(cmd[cmd.index("--episodes") + 1]) == round(sl["minutes"])        # matrix "A": 60 s episodes
+        assert n_draw.draw(tmp / T.TRIO_DIR / T.SLOTS_LOG, record.ERA, False)["round"] == 0   # a record draw: not the pilot's
+        assert n_draw.draw(tmp / T.TRIO_DIR / T.SLOTS_LOG, record.ERA, True)["round"] == 1
+    with tempfile.TemporaryDirectory() as t:                     # no draw: no record, no env
+        spawned = []
+        rc, _ = _trio(Path(t), {"youtube": 5, "twitch": 5, "tiktok": 5},
+                      lambda cmd, env, log: spawned.append((cmd, env)) or FakeProc(1, 0, []))
+        ev = json.loads((Path(t) / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()[0])
+        assert "n_draw" not in ev and all("LVDC_N_DRAW" not in e for _, e in spawned)
 
 
 def test_run_trio():

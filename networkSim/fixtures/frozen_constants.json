@@ -1305,6 +1305,37 @@
    }
   }
  },
+ "n_draw": {
+  "COMPOSITIONS": {
+   "3": {
+    "tiktok": 1,
+    "twitch": 1,
+    "youtube": 1
+   },
+   "5": {
+    "tiktok": 1,
+    "twitch": 2,
+    "youtube": 2
+   }
+  },
+  "N4_ROTATION": [
+   "youtube",
+   "twitch",
+   "tiktok"
+  ],
+  "N_DRAW_RULE": "restart prereg \u00a71: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support; round k = the earlier draws of this era and record flag in the slots log; u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1, 5 = 2/2/1, 4 = 2/1/1 with the doubled platform yt -> tw -> tt by the count of earlier N = 4 draws",
+  "N_DRAW_SEED": 0,
+  "N_SUPPORT": [
+   3,
+   4,
+   5
+  ],
+  "N_WEIGHTS": {
+   "3": 0.2,
+   "4": 0.3,
+   "5": 0.5
+  }
+ },
  "qa": {
   "CHECKS": {
    "advancing_share_min": 0.8,
@@ -1326,16 +1357,12 @@
   ],
   "STALL_ADVANCING_SHARE_MAX": 0.5
  },
- "record_era": "t57-n5-boundary-2026-10-20",
+ "record_era": "t58-restart-2026-10-21",
  "record_eras": [
-  "t55-gro-off-2026-10-19",
-  "t57-n5-boundary-2026-10-20"
+  "t58-restart-2026-10-21"
  ],
  "record_lines": {
-  "t55-gro-off-2026-10-19": [
-   "c1f9181"
-  ],
-  "t57-n5-boundary-2026-10-20": []
+  "t58-restart-2026-10-21": []
  },
  "schedules": {
   "CHANNEL_CAP_MULT": 2,
@@ -1344,7 +1371,7 @@
   "DEFICIT_RANK": "Q am. 17: deficit share = missing / floor, classes, entry states and families alike",
   "DEFICIT_TIE_RULE": "levi 2026-10-20: equal deficit shares ordered by a seeded draw (seed + the platform's record attempts), never the class order; the target is the first",
   "DEFICIT_TIE_SEED": 0,
-  "DIVERSITY_RULE": "levi 00133: least-recently-drawn across every draw (any era, pilots), seeded tie; floor F = the listed primaries; cap max(2, ceil(2 / F x n_record)); channel identity only",
+  "DIVERSITY_RULE": "levi 00133: least-recently-drawn across every draw (any era, pilots), seeded tie; floor F = the listed primaries; cap max(2, ceil(2 / F x n_record)); channel identity only; counts over the counted sessions of every era (restart prereg \u00a70)",
   "FAMILY_BASE": {
    "tiktok": "TT-M",
    "twitch": "TW-M",
@@ -1373,8 +1400,16 @@
   "SIM_SEED": 0,
   "SIM_SESSIONS": 2000,
   "TW_TT_CAP_MIN": 2,
-  "TW_TT_CAP_RULE": "levi 2026-10-20: twitch / tt open pools, a cap only: max(2, ceil(0.10 x n_record)) sessions of record per channel / host",
+  "TW_TT_CAP_RULE": "levi 2026-10-20: twitch / tt open pools, a cap only: max(2, ceil(0.10 x n_record)) sessions per channel / host; n_record = the counted sessions of every era (restart prereg \u00a70: identity spans every era)",
   "TW_TT_CAP_SHARE": 0.1
+ },
+ "session_length": {
+  "SESSION_LEN_RULE": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
+  "SESSION_LEN_SEED": 0,
+  "SESSION_MINUTES": [
+   10.0,
+   40.0
+  ]
  },
  "shot_origin": {
   "SHOT_CALIB_MARGIN_PX": 64,

@@ -659,7 +659,8 @@ def concurrency_record(s: Slot | None, **extra) -> dict:
     # t56 (levi's pooling ruling): n, the composition and the collector's sha per session
     return {"mode": "trio", "pool": "per_session", **s.record(), "record": os.environ.get("LVDC_TRIO_RECORD") == "1",
             "era": record.ERA, "n": len(SLOTS), "composition": composition_of(SLOTS),
-            "lvdc_commit": session_meta.lvdc_commit(), "mgmt_udp_port": mgmt_udp_port_record(), **extra}
+            "lvdc_commit": session_meta.lvdc_commit(), "mgmt_udp_port": mgmt_udp_port_record(),
+            **({"n_draw": json.loads(os.environ["LVDC_N_DRAW"])} if os.environ.get("LVDC_N_DRAW") else {}), **extra}
 
 
 def slots_log_append(path: Path, rec: dict) -> None:

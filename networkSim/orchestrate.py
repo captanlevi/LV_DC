@@ -60,7 +60,7 @@ EXIT_PREFLIGHT = 8    # orchestrate.py's own exit code when the per-session pref
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
-from utils.shaping import session_episodes  # noqa: E402  (Q am. 17: a schedule family holds the session time)
+from utils.shaping import session_episodes, draw_session_minutes  # noqa: E402  (Q am. 17; restart §4)
 
 # --batch (t37, week-long run): stop before a session when the data volume has less than this share free; pause a
 # platform after this many consecutive sessions without a PASS; a yt channel that failed to start is skipped this long
@@ -425,6 +425,7 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
     out = root or _RUNS_DIR
     import record
     select = record.is_record if root is not None else None   # the trio counts its sessions of record only (levi)
+    ident = record.counted_any_era if root is not None else None   # channel identity spans every era (restart §0)
     if p == "youtube" and root is None:
         for r in yt_channels.apply_leave_rule(_RUNS_DIR, now):
             print(f"  LIST: {r['handle']} ({r['type']}, {r['role']}) leaves the yt list ({r['evidence']}; Addendum P); "
@@ -454,10 +455,10 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
         import not_usable
         na = not_usable.set_aside(root, "youtube") if root is not None else {}
         channel, pre_skips = yt_channels.pick_live_channel(out, exclude=skip | set(yt_skips) | set(siblings) | set(unavail) | set(na),
-                                                           select=select, probe=probe)
+                                                           select=ident, probe=probe)
         try:                                       # the rotation's view at the pick (no immediate repeat)
             (out / "_summaries").mkdir(parents=True, exist_ok=True)
-            prec = {**yt_channels.pick_record(out, channel, select),
+            prec = {**yt_channels.pick_record(out, channel, ident),
                     **({"sibling_excluded": sorted(siblings)} if siblings else {}),
                     **({"unavailable_not_live_6h": unavail} if unavail else {}),
                     **({"not_usable": na} if na else {})}
@@ -716,11 +717,15 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         geom, pin = pin_geometry(pin, geom, running, tag)
         print(f"  PINNED {tag}: {json.dumps(pin)}")
     hold = TRIO_STRESS and (pin or {}).get("state")      # decode_stress: the pinned state held for the whole session
-    # Q am. 17: a family's episodes hold the session time; a held state runs base episodes (exp.py: hold is base)
-    eps = EPISODES_V2.get(p, 5) if hold else session_episodes(EPISODES_V2.get(p, 5), mid)
+    # restart prereg §4: the session's length is drawn (U(10, 40) min, seeded by the run, the slot and its session
+    # index) and a schedule's episodes scale with it (Q am. 17); a held state runs base episodes (exp.py: hold is base)
+    slen = None if hold else draw_session_minutes(f"{run_id}:{s.tag}:{started[tag] + 1}")
+    eps = EPISODES_V2.get(p, 5) if hold else session_episodes(slen["minutes"], mid)
     cmd = _collection_cmd(p, initial_state=init, episodes=eps, auto=True, yt_matrix=yt_matrix,
                           channel=channel, geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
+    if slen:
+        cmd += ["--session-minutes", str(slen["minutes"])]
     if hold:
         cmd += ["--hold-state", pin["state"]]
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
@@ -730,6 +735,9 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
            "LVQOE_SHOT_SOURCE": TRIO_SHOT_SOURCE.get(os.environ.get("LVDC_TRIO_LAYOUT") or "cdp", "cdp")}
     env.pop("LVDC_PICK_PINNED", None)
     env.pop("LVDC_CHANNEL_PICK", None)
+    env.pop("LVDC_SESSION_LENGTH", None)
+    if slen:
+        env["LVDC_SESSION_LENGTH"] = json.dumps(slen)
     if (channel or {}).get("pick"):
         env["LVDC_CHANNEL_PICK"] = json.dumps(channel["pick"], default=str)
     env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
@@ -748,7 +756,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
           f"{before}/{targets[p]} accepted"
           + (f"; channel {channel['handle']}" if channel else "")
           + (f"; category {category['name']}" if category else "")
-          + (f"; geometry {geom}" if geom else "") + f"\n  Running: {' '.join(cmd)}\n  log: {log}")
+          + (f"; geometry {geom}" if geom else "") + (f"; {slen['minutes']:.1f} min" if slen else "")
+          + f"\n  Running: {' '.join(cmd)}\n  log: {log}")
     running[tag] = {"proc": spawn(cmd, env, log), "before": before, "channel": channel, "category": category,
                     "now": now, "t": time.time(), "log": str(log), "geom": geom,
                     "target": ((LAST_COVERAGE.get(tag) or {}).get("target") or {}).get("key")}
@@ -769,7 +778,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
              capacity_kbit: float | None = None, max_per_slot: int | None = None,
              stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S, layout: str = "cdp",
              spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None, offloads=None,
-             slots: dict | None = None) -> int:
+             slots: dict | None = None, n_draw: dict | None = None) -> int:
     """t56: the slots of a composition (`slots` {platform: count}, default the trio's one each; trio_slots.build_slots),
     keyed by tag; each slot refilled when its session ends (A1); targets and accounting per platform, until every platform has its
     target of PASS trio sessions (counted in the trio's own data root, data/_trio/<platform>: single mode never sees
@@ -785,6 +794,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     monitor widths for the run, restored at its end; slot k's window at k x the width; X11 shots) or "composite"
     (pilot-1: windows at the origin as cdp, each shot a crop of the window's own XComposite pixmap).
     t55: the capture offloads off on iface before anything starts (offloads: the ensure function, tests).
+    n_draw: the round's N draw (n_draw.draw; restart prereg §1), whose composition `slots` is: recorded in trio_up and,
+    through LVDC_N_DRAW, in every session's meta.json concurrency.n_draw.
     Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT / EXIT_OFFLOADS when that ended it."""
     import signal
     import trio_slots as T
@@ -792,6 +803,9 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
         T.SLOTS.clear()
         T.SLOTS.update(T.build_slots(slots))
     os.environ["LVDC_TRIO_SLOTS"] = ",".join(f"{k}={v}" for k, v in T.composition_of(T.SLOTS).items())
+    os.environ.pop("LVDC_N_DRAW", None)
+    if n_draw:
+        os.environ["LVDC_N_DRAW"] = json.dumps(n_draw)
     apply = apply or T.apply
     try:
         _offloads_or_exit(iface, offloads)
@@ -877,6 +891,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                                        "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
                                        "slots": {k: s.record() for k, s in T.SLOTS.items()},
                                        "composition": T.composition_of(T.SLOTS),
+                                       **({"n_draw": n_draw} if n_draw else {}),
                                        "conntrack_timeouts_before": ct_before, "conntrack_timeouts": T.conntrack_timeouts(),
                                        "conntrack_set": ct_set[0], "resolver_cache_flushed": flush[0],
                                        "layout": layout, "screen": screen, "framebuffer": fb, "ifb_offloads": ifb_off})
@@ -1047,6 +1062,14 @@ if __name__ == "__main__":
     parser.add_argument("--slots", default=None, metavar="youtube=2,twitch=2,tiktok=2",
                         help="--concurrent (t56): the composition, one slot per count (tags yt1, yt2, tw1 ...; at most "
                              "15); default the trio's, one each. Fixed for the run and recorded in every session.")
+    parser.add_argument("--n-draw", action="store_true",
+                        help="--concurrent (restart prereg §1): draw this round's N from {3, 4, 5} (weights 0.2 / 0.3 / "
+                             "0.5, seeded by the era, the record flag and the round's index in the slots log; n_draw.py) "
+                             "and run its fixed composition; recorded in trio_up and meta.json concurrency.n_draw. Not "
+                             "with --slots. A counted run (--trio-record) needs it.")
+    parser.add_argument("--n-support", default=None, metavar="3,4,5",
+                        help="--n-draw: the support (an N that failed its scaling gate is left out; the weights "
+                             "renormalise). Default 3,4,5.")
     parser.add_argument("--trio-pin", action="append", default=[], metavar="PLATFORM|TAG:k=v,...",
                         help="--concurrent: a recorded pin of a slot's pick (levi 00261; default off), e.g. "
                              "'twitch:channel=gothamchess,state=10,geometry=window:1920x1080' (keys: category, channel "
@@ -1105,6 +1128,12 @@ if __name__ == "__main__":
             sys.exit(f"unknown platform(s) in --batch: {unknown}")
         if args.trio_record and not args.concurrent:
             sys.exit("--trio-record needs --concurrent")
+        if args.trio_record and not args.n_draw:          # restart prereg §1: the record's N is drawn per round
+            sys.exit("--trio-record needs --n-draw (the record's N is drawn per round, restart prereg §1)")
+        if args.n_draw and (args.slots or not args.concurrent):
+            sys.exit("--n-draw needs --concurrent and no --slots (the draw fixes the composition)")
+        if args.n_support and not args.n_draw:
+            sys.exit("--n-support needs --n-draw")
         TRIO_RECORD = bool(args.trio_record)
         if args.trio_pin and (not args.concurrent or not args.trio_pin_reason):
             sys.exit("--trio-pin needs --concurrent and --trio-pin-reason")
@@ -1126,14 +1155,24 @@ if __name__ == "__main__":
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
         if args.concurrent:
             import trio_slots
+            nd = None
             try:
-                comp = trio_slots.parse_composition(args.slots)
+                if args.n_draw:
+                    import n_draw
+                    import record
+                    nd = n_draw.draw(_RUNS_DIR / trio_slots.TRIO_DIR / trio_slots.SLOTS_LOG, record.ERA, TRIO_RECORD,
+                                     n_draw.parse_support(args.n_support))
+                    comp = nd["composition"]
+                    print(f"  N DRAW: round {nd['round']} ({'record' if nd['record'] else 'pilot'}, era {nd['era']}): "
+                          f"N = {nd['n']}, {comp} (u {nd['u']}, support {nd['support']})")
+                else:
+                    comp = trio_slots.parse_composition(args.slots)
                 trio_slots.build_slots(comp)
             except ValueError as e:
                 sys.exit(str(e))
             sys.exit(run_trio(targets, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry,
                               iface=args.iface, capacity_kbit=args.link_capacity_kbit, max_per_slot=args.max_per_slot,
-                              layout=args.trio_layout, slots=comp))
+                              layout=args.trio_layout, slots=comp, n_draw=nd))
         run_batch(targets, auto=True, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry)
         sys.exit(0)
 

@@ -3010,7 +3010,7 @@ class BrowserSession:
             troot = not_usable.trio_root_of(self._session_dir)
             na = not_usable.set_aside(troot, "twitch") if troot is not None else {}
             import channel_cap, record           # the next boundary's cap (levi): a channel at the cap is passed over
-            cap = channel_cap.cap_state(troot, "twitch", record.is_record)
+            cap = channel_cap.cap_state(troot, "twitch", record.counted_any_era)
             self.channel_pick = cap
             self.tw_pick = {**({"sibling_excluded": sib} if sib else {}), **({"not_usable_excluded": na} if na else {}),
                             **({"cap_excluded": cap["capped"]} if cap and cap["capped"] else {})}
@@ -3191,7 +3191,7 @@ class BrowserSession:
         troot = not_usable.trio_root_of(self._session_dir)
         na = not_usable.set_aside(troot, "tiktok") if troot is not None else {}
         import channel_cap, record               # the next boundary's cap (levi): a host at the cap is passed over
-        cap = channel_cap.cap_state(troot, "tiktok", record.is_record)
+        cap = channel_cap.cap_state(troot, "tiktok", record.counted_any_era)
         self.channel_pick = cap
         recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(sib) | set(na)
                         | {_norm_room(k) for k in ((cap or {}).get("capped") or [])})

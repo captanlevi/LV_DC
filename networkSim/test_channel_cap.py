@@ -33,6 +33,14 @@ def test_the_cap():
         _sess(tr, "twitch", "tw_91", "https://www.twitch.tv/eslcs", failed=True)      # _failed: no session of record
         st = C.cap_state(tr, "twitch", record.is_record)
         assert st["n_record"] == 25 and st["cap"] == 3 and st["capped"] == ["https://www.twitch.tv/eslcs"], st
+        # restart prereg §0: identity spans every era, so a counted session of a stated era counts toward the cap
+        d = tr / "twitch" / "tw_80"
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"channel_url": "https://www.twitch.tv/c5",
+                                                 "concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}}))
+        assert C.cap_state(tr, "twitch", record.is_record)["n_record"] == 25
+        st = C.cap_state(tr, "twitch", record.counted_any_era)
+        assert st["n_record"] == 26 and st["cap"] == 3, st
         assert st["max_count"] == 3 and st["rule"] == C.CAP_RULE
         for i in range(19):                       # tt today: 19 sessions, max 2 per host: cap max(2, ceil(1.9)) = 2
             _sess(tr, "tiktok", f"ti_{i}", "https://www.tiktok.com/@a/live" if i < 2 else f"https://www.tiktok.com/@h{i}/live")
@@ -45,9 +53,9 @@ def test_the_cap():
 
 def test_the_wiring():
     src = (HERE / "browser.py").read_text()
-    assert 'cap = channel_cap.cap_state(troot, "twitch", record.is_record)' in src
+    assert 'cap = channel_cap.cap_state(troot, "twitch", record.counted_any_era)' in src
     assert '| set((cap or {}).get("capped") or [])),' in src                    # twitch: the directory's exclusions
-    assert 'cap = channel_cap.cap_state(troot, "tiktok", record.is_record)' in src
+    assert 'cap = channel_cap.cap_state(troot, "tiktok", record.counted_any_era)' in src
     assert '| {_norm_room(k) for k in ((cap or {}).get("capped") or [])})' in src  # tt: the room choice's exclusions
     assert '**({"channel_pick": browser.channel_pick} if browser.channel_pick is not None else {}),' in \
         (HERE / "exp.py").read_text()

@@ -320,7 +320,8 @@ def draw_seed(data_dir: Path) -> int:
 CHANNEL_FLOOR: int | None = None
 CHANNEL_CAP_MULT = 2
 DIVERSITY_RULE = ("levi 00133: least-recently-drawn across every draw (any era, pilots), seeded tie; floor F = the "
-                  "listed primaries; cap max(2, ceil(2 / F x n_record)); channel identity only")
+                  "listed primaries; cap max(2, ceil(2 / F x n_record)); channel identity only; counts over the counted "
+                  "sessions of every era (restart prereg §0)")
 LAST_PICK: dict = {}
 
 

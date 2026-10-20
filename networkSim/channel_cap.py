@@ -13,7 +13,8 @@ from pathlib import Path
 
 CAP_SHARE = 0.10
 CAP_MIN = 2
-CAP_RULE = "levi 2026-10-20: twitch / tt open pools, a cap only: max(2, ceil(0.10 x n_record)) sessions of record per channel / host"
+CAP_RULE = ("levi 2026-10-20: twitch / tt open pools, a cap only: max(2, ceil(0.10 x n_record)) sessions per channel / "
+            "host; n_record = the counted sessions of every era (restart prereg §0: identity spans every era)")
 
 
 def channel_key(url: str | None) -> str | None:
