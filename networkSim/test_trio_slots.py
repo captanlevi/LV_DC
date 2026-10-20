@@ -441,8 +441,8 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     O._RUNS_DIR = tmp
     O._pick = lambda p, nl, now, rg, ex=(), root=None, siblings=frozenset(), probe=None: \
         calls.append(("pick", p, ex, root, siblings)) and None or (None, None, None)
-    O.session_matrix = (lambda p, f=None, ex=(), data_dir=None, select=None, reserved=None, key=None:
-                        calls.append(("matrix", p, f, ex, data_dir, select, reserved, key)) or "A")
+    O.session_matrix = (lambda p, f=None, ex=(), data_dir=None, select=None, reserved=None, key=None, couple_geometry=True:
+                        calls.append(("matrix", p, f, ex, data_dir, select, reserved, key, couple_geometry)) or "A")
     O.accepted_sessions = lambda p, root=None, select=None: calls.append(("accepted", p, root)) and 0 or 0
     O.report_flags = lambda p, t, root=None, only=None: []
     O._summary = lambda: None
@@ -595,9 +595,10 @@ def test_run_trio():
             except ValueError:
                 pass
 
-        # t53 (a), default off: a Q_1080p target couples fullscreen; only with --trio-yt-fullscreen does the yt slot take
-        # it (env LVDC_TRIO_YT_FULLSCREEN to its process alone); without, the rotation's draw stands
-        fs = lambda tag, g: "fullscreen:1920x1080" if tag == "yt1" else g      # t56: coupled per slot tag
+        # t53 (a), default off; restart §7: fullscreen is in the yt slot's drawn support only with --trio-yt-fullscreen
+        # (env LVDC_TRIO_YT_FULLSCREEN to its process alone); the geometry is the per-session draw, never the target's
+        # coupling (a forced fullscreen changes nothing) and the coverage rule runs uncoupled
+        fs = lambda tag, g: "fullscreen:1920x1080" if tag == "yt1" else g      # a target that would have coupled
         for on in (False, True):
             spawned.clear()
             O.TRIO_YT_FULLSCREEN = on
@@ -607,11 +608,14 @@ def test_run_trio():
                 O.TRIO_YT_FULLSCREEN = False
             by = {c[c.index("--platform") + 1]: (c, e) for c, e, _ in spawned}
             yc, ye = by["youtube"]
-            got = yc[yc.index("--geometry") + 1] if "--geometry" in yc else None
-            assert (got == "fullscreen:1920x1080") is on and (ye.get("LVDC_TRIO_YT_FULLSCREEN") == "1") is on, (on, yc)
+            gd = json.loads(ye["LVDC_GEOMETRY_DRAW"])
+            want = O.geometry.draw_geometry("youtube", gd["seed"], () if on else ("fullscreen",))
+            assert yc[yc.index("--geometry") + 1] == gd["geometry"] == want["geometry"] and gd == want, (on, gd)
+            assert ("fullscreen:1920x1080" in gd["support"]) is on and (ye.get("LVDC_TRIO_YT_FULLSCREEN") == "1") is on
+            assert gd["seed"].startswith(f"{O.SESSION_DRAW_SEED}:") and gd["seed"].endswith(":yt1:1"), gd
             assert "LVDC_TRIO_YT_FULLSCREEN" not in by["twitch"][1]
             mx = [c for c in calls if c[0] == "matrix" and c[1] == "youtube"]
-            assert mx and mx[0][3] == (() if on else ("fullscreen",)), mx
+            assert mx and mx[0][3] == (() if on else ("fullscreen",)) and mx[0][8] is False, mx
 
         # the "composite" layout (pilot-1, probe v3): windows at the origin, each slot's shots from its window's pixmap
         spawned.clear()

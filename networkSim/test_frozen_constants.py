@@ -33,6 +33,7 @@ import record as REC  # noqa: E402
 import schedule_occupancy as SO  # noqa: E402
 import yt_channels as YT  # noqa: E402
 import channel_cap as CC  # noqa: E402
+import tw_latency as TL  # noqa: E402
 import orchestrate as O  # noqa: E402
 import stuck as S  # noqa: E402
 from utils import netStat as NS, shaping as SH  # noqa: E402
@@ -106,7 +107,11 @@ def current() -> dict:
                      "LOW_YIELD_MIN_SESSIONS": CR.LOW_YIELD_MIN_SESSIONS,
                      "MATRIX_TARGETS": {f"{p}/{m}": list(v) for (p, m), v in CR.MATRIX_TARGETS.items()}},
         "decode_path": {"PLATFORM_DECODE": DP.PLATFORM_DECODE, "DEFAULT": DP.DEFAULT},
-        "geometry": {"GEOMETRY_CHOICES": GEO.GEOMETRY_CHOICES, "MODE_CHROME_ARGS": GEO.MODE_CHROME_ARGS},
+        "geometry": {"GEOMETRY_CHOICES": GEO.GEOMETRY_CHOICES, "MODE_CHROME_ARGS": GEO.MODE_CHROME_ARGS,
+                     "DRAW_RULE": GEO.DRAW_RULE, "DRAW_WEIGHTS": GEO.DRAW_WEIGHTS,
+                     "SESSION_DRAW_SEED": O.SESSION_DRAW_SEED, "GEOMETRY_UNCOUPLED": CR.GEOMETRY_UNCOUPLED},
+        "tw_low_latency": {"KEY": TL.KEY, "P_ON": TL.P_ON, "RULE": TL.RULE, "MODE_ON": TL.MODE_ON,
+                           "MODE_OFF": TL.MODE_OFF, "READ_TRIES": TL.READ_TRIES, "READ_GAP_S": TL.READ_GAP_S},
         "capture_offloads": {"OFF": OFF.OFF}, "record_era": REC.ERA, "record_eras": list(REC.RECORD_ERAS), "record_lines": {k: list(v) for k, v in REC.RECORD_LINES.items()}, "stated_eras": list(REC.STATED_ERAS),
         "shot_origin": {"SHOT_CALIB_MARGIN_PX": B.SHOT_CALIB_MARGIN_PX, "SHOT_CALIB_SCALE": B.SHOT_CALIB_SCALE,
                         "SHOT_CALIB_MAX_RESIDUAL": B.SHOT_CALIB_MAX_RESIDUAL, "SHOT_CALIB_MIN_GAP": B.SHOT_CALIB_MIN_GAP},

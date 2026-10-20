@@ -52,7 +52,7 @@ def test_reservation_and_fullscreen_token():
         running = {"yt1": {"target": "Q_720p", "geom": "window:1920x1080"}, "tw1": {"target": "Q_480p", "geom": None}}
         assert O._reserved("yt2", T, running) == {"Q_720p": 1}                    # the yt sibling's, not twitch's
         running["yt1"]["geom"] = "fullscreen:1920x1080"
-        assert O._reserved("yt2", T, running) == {"Q_720p": 1, "Q_1080p": 1000}   # the token is held: no Q_1080p
+        assert O._reserved("yt2", T, running) == {"Q_720p": 1}    # restart §7: the token no longer touches the target
         assert O._reserved("yt1", T, running) == {}                               # its own session never reserves
     finally:
         T.SLOTS.clear()

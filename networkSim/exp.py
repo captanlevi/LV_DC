@@ -572,6 +572,14 @@ if __name__ == "__main__":
         help="twitch esports (addendum O, levi): the live league channel the rotation picked (meta.json tw_channel).",
     )
     parser.add_argument(
+        "--tw-low-latency",
+        choices=("on", "off"),
+        default=None,
+        help="twitch (restart §8): the player's low-latency setting, set before playback (tw_latency.py; orchestrate's "
+             "per-session draw passes it), read back once, recorded in meta.json tw_low_latency; never aborts. "
+             "Default: the profile's own setting, untouched.",
+    )
+    parser.add_argument(
         "--channel-handle",
         default=None,
         help="yt: the channel's handle from yt_channels.py (meta.json; the rotation counts it).",
@@ -748,6 +756,12 @@ if __name__ == "__main__":
             session_meta.write(session_dir, channel_pick=json.loads(os.environ["LVDC_CHANNEL_PICK"]))
         except Exception as e:
             session_meta.write(session_dir, channel_pick={"error": repr(e)})
+    for env_key, meta_key in (("LVDC_GEOMETRY_DRAW", "geometry_draw"), ("LVDC_TW_LOW_LATENCY", "tw_low_latency")):
+        if os.environ.get(env_key):          # restart §7 / §8: orchestrate's per-session draws (seed, support, drawn)
+            try:
+                session_meta.write(session_dir, **{meta_key: json.loads(os.environ[env_key])})
+            except Exception as e:
+                session_meta.write(session_dir, **{meta_key: {"error": repr(e)}})
     if os.environ.get("LVDC_PICK_PINNED"):   # a recorded t53 round pin (levi 00261: allowed steering if recorded)
         try:
             session_meta.write(session_dir, pick_pinned=json.loads(os.environ["LVDC_PICK_PINNED"]))
@@ -835,7 +849,8 @@ if __name__ == "__main__":
                     eq_cfg = {"snapshot": None, "error": repr(e)}
             browser = BrowserSession(platform, session_dir=session_dir, first_url=first_url, geometry=args.geometry,
                                      room_rotation_s=args.tt_room_rotation if platform == "tiktok" else None,
-                                     entry_quality=eq_cfg)
+                                     entry_quality=eq_cfg,
+                                     tw_low_latency=args.tw_low_latency if platform == "twitch" else None)
             browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)
             browser.start()
             if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
@@ -918,6 +933,23 @@ if __name__ == "__main__":
                               # t58 L-1: the bytes tt's room-end rule (b) reads (a slot's own IFB, or every interface)
                               **({"room_rx_source": _room_rx_source()} if platform == "tiktok" else {}),
                               entry_quality=browser.entry_quality)
+            if os.environ.get("LVDC_GEOMETRY_DRAW"):    # restart §7: the draw (written at start) with the device px taken
+                try:
+                    g = browser.geometry or {}
+                    dpr = g.get("device_pixel_ratio")
+                    dev = lambda wh: [round(x * dpr) for x in wh] if wh and dpr else None
+                    meta_extra["geometry_draw"] = {**json.loads(os.environ["LVDC_GEOMETRY_DRAW"]),
+                                                   "device_pixel_ratio": dpr,
+                                                   "player_device_px": dev(g.get("player_client")),
+                                                   "viewport_device_px": dev(g.get("viewport"))}
+                except Exception as e:
+                    meta_extra["geometry_draw_error"] = repr(e)[:200]
+            if browser.tw_latency is not None:          # restart §8: the draw (written at start), the apply, the read-back
+                try:
+                    ll_draw = json.loads(os.environ.get("LVDC_TW_LOW_LATENCY") or "{}")
+                except ValueError:
+                    ll_draw = {}
+                meta_extra["tw_low_latency"] = {**ll_draw, **browser.tw_latency}
             if platform == "youtube" and not args.channel_handle and browser.list_url:
                 # manual / fallback runs: the handle and type come from the list entry navigated to, never the data
                 hit = next((c for c in yt_channels.YT_CHANNELS if yt_channels.url_of(c["handle"]) == browser.list_url), None)

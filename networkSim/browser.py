@@ -2850,8 +2850,12 @@ class BrowserSession:
 
     def __init__(self, platform: str, session_dir: Path | None = None, close_chat: bool | None = None,
                  first_url: str | None = None, geometry: str | None = None, room_rotation_s: float | None = None,
-                 entry_quality: dict | None = None):
+                 entry_quality: dict | None = None, tw_low_latency: str | None = None):
         self.platform = platform
+        # restart §8: twitch's drawn low-latency setting ("on" / "off"; None = the profile's own, untouched), set before
+        # the first navigation and read back once (tw_latency.py); its record goes to meta.json tw_low_latency
+        self.tw_low_latency = tw_low_latency if platform == "twitch" else None
+        self.tw_latency: dict | None = None
         # Q am. 1 / am. 10: the entry-quality pick (entry_quality.py), only with exp.py --entry-quality on yt / twitch;
         # the config holds the coverage snapshot the entry tier is chosen from; the result goes to meta.json
         import entry_quality as EQ
@@ -3004,6 +3008,14 @@ class BrowserSession:
         if self.platform == "tiktok" and not self.first_url:
             self.list_url = self._tt_choose_room()
         elif self.platform == "twitch":
+            if self.tw_low_latency:              # restart §8: before any twitch document, so the player starts in it
+                try:                             # never an abort: a failed set is recorded and the session goes on
+                    import tw_latency
+                    self.tw_latency = tw_latency.apply(self._page, self.tw_low_latency)
+                except Exception as exc:
+                    self.tw_latency = {"drawn": self.tw_low_latency, "applied": False, "error": repr(exc)[:200]}
+                print(f"[browser] Twitch low latency {self.tw_low_latency}: set before playback {self.tw_latency}",
+                      flush=True)
             self._master = MasterListener(self._ws_url).start()
             sib = sibling_streams(self._session_dir, "twitch")
             import not_usable                    # trio rotation hygiene: 2 trio startup_failures set a channel aside
@@ -3089,6 +3101,14 @@ class BrowserSession:
             except Exception as exc:
                 self.video_stats = f"error: {exc}"
             print(f"[browser] Twitch Video Stats: {self.video_stats}", flush=True)
+            if self.tw_latency is not None:      # restart §8: read back once from the overlay, then the hook goes
+                try:                             # never an abort: a failure is recorded and the session goes on
+                    import tw_latency
+                    self.tw_latency = tw_latency.read_back(self._page, self.tw_latency)
+                except Exception as exc:
+                    self.tw_latency = {**self.tw_latency, "ok": None, "read_back_error": repr(exc)[:200]}
+                print(f"[browser] Twitch low latency read back: {self.tw_latency.get('read_back')} "
+                      f"(ok {self.tw_latency.get('ok')})", flush=True)
         if self.geometry_target:
             tid = None
             try:
