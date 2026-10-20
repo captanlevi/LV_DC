@@ -52,7 +52,9 @@ EXIT_PLAYER_FROZEN = 5   # exp.py's exit code when the watchdog aborted a frozen
 EXIT_ROOM_ENDED = 6      # exp.py's exit code when a tt room died mid-session (room_ended)
 EXIT_PLAYER_DEAD = 7     # exp.py's exit code when the tt player sat at readyState 0 with no media (player_dead)
 # aborts that are not failures of the platform: they do not count toward MAX_CONSECUTIVE_FAIL
-NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended", EXIT_PLAYER_DEAD: "player_dead"}
+EXIT_STREAM_ENDED = 12   # exp.py's exit code when a yt / twitch tab left its live stream (stream_ended; bundle item 3)
+NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended", EXIT_PLAYER_DEAD: "player_dead",
+                 EXIT_STREAM_ENDED: "stream_ended"}
 
 TRIO_SHOT_SOURCE = {"cdp": "cdp", "fb": "x11", "composite": "composite"}   # trio layout -> LVQOE_SHOT_SOURCE
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume has less than MIN_FREE_GB free
