@@ -64,7 +64,8 @@ def test_trio_wiring():
         p, tag = cmd[cmd.index("--platform") + 1], cmd[cmd.index("--slot") + 1]
         gd = json.loads(env["LVDC_GEOMETRY_DRAW"])
         assert gd["seed"].startswith(f"{O.SESSION_DRAW_SEED}:") and gd["seed"].endswith(f":{tag}:1"), gd
-        assert gd == G.draw_geometry(p, gd["seed"], () if p == "youtube" else ("fullscreen",))
+        # token_held is the run's state (yt1's own draw holds the token with p 0.2 from the run id), so it is passed
+        assert gd == G.draw_geometry(p, gd["seed"], () if p == "youtube" else ("fullscreen",), gd["token_held"])
         assert cmd[cmd.index("--geometry") + 1] == gd["geometry"]
         if p == "twitch":
             ll = json.loads(env["LVDC_TW_LOW_LATENCY"])
