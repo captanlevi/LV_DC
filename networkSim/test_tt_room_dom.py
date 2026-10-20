@@ -79,8 +79,83 @@ def test_running_trio_tt_sessions_and_their_ports():
 
 def main() -> int:
     test_running_trio_tt_sessions_and_their_ports()
+    test_room_enter_fields_and_names()
+    test_net_listener_events()
+    test_net_listener_failure_never_raises()
     print("test_tt_room_dom: ok")
     return 0
+
+
+def test_room_enter_fields_and_names():
+    """bundle item 1: the fixed room/enter fields (a reduced real response), and the message-type name counts."""
+    body = json.loads((HERE / "fixtures" / "tt_room_enter_reduced.json").read_text())
+    f = R.room_enter_fields(body)
+    assert f == {"room_id": "7600000000000000001", "battle_status": 0, "battle_id": "0", "n_linked_users": 0,
+                 "n_cohost_linked": 0, "multi_guest_enable": False, "linkmic_layout": 0, "room_layout": 0,
+                 "live_type_linkmic": False, "pk_status": "-1"}, f
+    battle = {"data": {"link_mic": {"battle_settings": {"battle_status": 1, "battle_id": 99}, "linked_user_list": [{}, {}]},
+                       "social_interaction": {"cohost": {"linked_users": [{}]}}}}
+    g = R.room_enter_fields(battle)
+    assert g["battle_status"] == 1 and g["battle_id"] == "99" and g["n_linked_users"] == 2 and g["n_cohost_linked"] == 1
+    assert g["room_id"] is None
+    assert R.room_enter_fields({}) ["n_linked_users"] == 0
+    pb = b"\x0a\x14WebcastLinkMicBattle\x12\x00\x0a\x14WebcastLinkMicBattle\x0a\x17WebcastLinkLayerMessage"
+    assert R.count_names(pb) == {"WebcastLinkMicBattle": 2, "WebcastLinkLayerMessage": 1}
+    assert R.count_names(b"WebcastChatMessage hello") == {}                       # chat is never counted or kept
+
+
+class _WS:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, s):
+        self.sent.append(json.loads(s))
+
+
+def test_net_listener_events():
+    """The listener remembers matched responses, fetches each body once loaded, writes one room_enter row and adds the
+    im/fetch and websocket name counts to the next 30 s row; other traffic is ignored; nothing else is stored."""
+    import base64
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d) / "ti_1"
+        sd.mkdir()
+        L = R.NetListener(sd, "ws://x", 9226)
+        ws, bodies = _WS(), {}
+        ev = lambda m, **p: {"method": m, "params": p}
+        L.handle(ws, ev("Network.responseReceived", requestId="1",
+                        response={"url": "https://webcast.tiktok.com/webcast/room/enter/?aid=1988"}), bodies)
+        L.handle(ws, ev("Network.responseReceived", requestId="2",
+                        response={"url": "https://webcast.tiktok.com/webcast/im/fetch/?x=1"}), bodies)
+        L.handle(ws, ev("Network.responseReceived", requestId="3",
+                        response={"url": "https://pull-flv.tiktokcdn.com/stage/stream.flv"}), bodies)   # media: ignored
+        L.handle(ws, ev("Network.loadingFinished", requestId="3"), bodies)
+        assert ws.sent == []
+        L.handle(ws, ev("Network.loadingFinished", requestId="1"), bodies)
+        L.handle(ws, ev("Network.loadingFinished", requestId="2"), bodies)
+        assert [m["method"] for m in ws.sent] == ["Network.getResponseBody"] * 2
+        enter = json.dumps(json.loads((HERE / "fixtures" / "tt_room_enter_reduced.json").read_text()))
+        L.handle(ws, {"id": ws.sent[0]["id"], "result": {"body": enter, "base64Encoded": False}}, bodies)
+        im = base64.b64encode(b"..WebcastLinkMicArmies..WebcastLinkMicArmies..").decode()
+        L.handle(ws, {"id": ws.sent[1]["id"], "result": {"body": im, "base64Encoded": True}}, bodies)
+        frame = base64.b64encode(b"..WebcastLinkMicMethod..").decode()
+        L.handle(ws, ev("Network.webSocketFrameReceived", response={"opcode": 2, "payloadData": frame}), bodies)
+        rows = [json.loads(l) for l in (sd / "tt_room_dom.jsonl").read_text().splitlines()]
+        assert len(rows) == 1 and rows[0]["kind"] == "room_enter" and rows[0]["battle_status"] == 0
+        assert set(rows[0]) == {"kind", "ts", "cdp_port", "room_id", "battle_status", "battle_id", "n_linked_users",
+                                "n_cohost_linked", "multi_guest_enable", "linkmic_layout", "room_layout",
+                                "live_type_linkmic", "pk_status"}                    # the fixed fields only
+        assert L.take_counts() == {"WebcastLinkMicArmies": 2, "WebcastLinkMicMethod": 1} and L.take_counts() == {}
+        assert bodies == {} and L.pending == {}
+
+
+def test_net_listener_failure_never_raises():
+    with tempfile.TemporaryDirectory() as d:
+        def boom(url):
+            raise OSError("no page")
+        L = R.NetListener(Path(d), "ws://x", None, connect=boom)
+        L.run()                                                         # logs and returns
+        assert L.errors == 1
+    assert R.NET_BUFFER["maxResourceBufferSize"] <= 1024 * 1024        # bounded buffers (supervisor 03:54)
 
 
 if __name__ == "__main__":

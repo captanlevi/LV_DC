@@ -1,0 +1,27 @@
+{
+ "_note": "webcast/room/enter response reduced to the fields tt_room_dom reads (a logged-out laptop room, 2026-10-21; values as recorded, ids replaced, lists emptied)",
+ "data": {
+  "id_str": "7600000000000000001",
+  "link_mic": {
+   "battle_settings": {
+    "battle_id": 0,
+    "battle_status": 0
+   },
+   "linked_user_list": [],
+   "multi_guest_enable": false
+  },
+  "social_interaction": {
+   "cohost": {
+    "linked_users": []
+   }
+  },
+  "linkmic_layout": 0,
+  "room_layout": 0,
+  "live_type_linkmic": false,
+  "decisions": {
+   "server_features": {
+    "pk_status": "-1"
+   }
+  }
+ }
+}
