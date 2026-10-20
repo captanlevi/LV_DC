@@ -305,6 +305,7 @@ TRIO_YT_FULLSCREEN = False
 # t56 decode_stress (--trio-stress): the run's sessions go under data/_trio_stress (LVDC_TRIO_DIR), never counted, and a
 # pinned state is held for the whole session (exp.py --hold-state)
 TRIO_STRESS = False
+TRIO_STRESS_EPISODES: int | None = None   # --trio-stress --episodes: a held session's base episodes (decode_stress --short)
 
 
 def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
@@ -758,6 +759,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     if slen:                                              # §4's covariate: the schedule's own time (levi 00138)
         slen = {**slen, "episodes": eps, "scheduled_s": round(
             eps * schedule_of(mid, base_episodes=slen["minutes"], episode_s=fe["episode_s"] if fe else None)["episode_s"], 1)}
+    if hold and TRIO_STRESS_EPISODES:                    # decode_stress --short / --minutes (never a counted run)
+        eps = TRIO_STRESS_EPISODES
     cmd = _collection_cmd(p, initial_state=init, episodes=eps, auto=True, yt_matrix=yt_matrix,
                           channel=channel, geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
@@ -1210,6 +1213,7 @@ if __name__ == "__main__":
         import trio_slots
         trio_slots.TRIO_DIR, trio_slots.TRIO_NAME_FLOOR = trio_slots.STRESS_DIR, 900000
         TRIO_STRESS = True
+        TRIO_STRESS_EPISODES = args.episodes
     if args.batch:
         targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
         unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]

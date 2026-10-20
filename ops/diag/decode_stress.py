@@ -22,6 +22,10 @@ Gate (levi 00271, decision A):
   - box (the device record over the stress): no swap growth, no OOM kill; CPU p95 above 85 % = "short of headroom"
     (N_collect then steps down once); GPU engine busy is reported (the 85 % line a report, not a gate);
   - every slot ran one session of at least 10 min.
+Short form (--short = --minutes 7; LVQoE restart prereg, short dry runs): each held session runs --minutes base episodes
+(orchestrate --trio-stress --episodes), the 10 min session rule gives way to the support check, and in either form a
+pass below the minimum (>= 5 min at every slot's top tier after startup, every session running at once) reads
+"insufficient", never a pass (dry_minimums.decode_stress); a fail stays a fail.
 The null comes first and is not this script's: the same device-stall definition on the frozen single-mode reference
 sessions (p90 above 2 % stops the gate), the readers' (brad / levi); --read-only reads any session dirs with it.
 
@@ -39,6 +43,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dry_minimums as M  # noqa: E402  (restart prereg: the short dry runs' minimum support per gate)
 
 REPO = Path(__file__).resolve().parents[2]
 NS = REPO / "networkSim"
@@ -142,11 +149,14 @@ def session_reading(sd: Path) -> dict:
     platform = meta.get("platform") or sd.parent.name
     rec = {"session": sd.name, "platform": platform, "slot": (meta.get("concurrency") or {}).get("tag"),
            "hold_state": meta.get("hold_state"), "duration_s": round(t1 - t0, 1) if t0 and t1 else None,
+           "started_at": t0, "ended_at": t1,
            "channel_url_requested": meta.get("channel_url_requested"), "channel_url": meta.get("channel_url"),
            "geometry": meta.get("geometry_target"), "playing_s": play, "stalls": len(st), "stall_s": by,
            "device_stall_share": round(by["device"] / play, 4) if play else None, "tiers": tr,
            "top_tier": max((int(h) for h, v in tr.items() if v["s"] >= TIER_MIN_S), default=None),
            "media_decoders": meta.get("media_decoders"), "display_start": meta.get("display_start")}
+    # the short form's support (restart prereg): playing seconds at the slot's top tier (playing ticks: after startup)
+    rec["seconds_at_top_tier"] = tr[str(rec["top_tier"])]["s"] if rec["top_tier"] is not None else None
     play_st = [x for x in st if x["cause"] != "load"]
     rec["playback_stalls"], rec["load_stalls"] = len(play_st), len(st) - len(play_st)
     # levi: no playback stall is readable (share 0); playback stalls none of which carries buffer-ahead are the gap
@@ -158,8 +168,21 @@ def session_reading(sd: Path) -> dict:
     return rec
 
 
-def gate(readings: list[dict], box: dict | None, slots: list[str] | None = None) -> dict:
-    """The decode item's verdict: per slot device stalls, the box's swap / OOM / CPU headroom, GPU reported."""
+def overlap_s(readings: list[dict]) -> float | None:
+    """The seconds every reading's session ran at once (the latest start to the earliest end)."""
+    t0 = [r.get("started_at") for r in readings]
+    t1 = [r.get("ended_at") for r in readings]
+    if not readings or any(not isinstance(x, (int, float)) for x in t0 + t1):
+        return None
+    return round(max(0.0, min(t1) - max(t0)), 1)
+
+
+def gate(readings: list[dict], box: dict | None, slots: list[str] | None = None,
+         min_session_s: float | None = MIN_SESSION_S) -> dict:
+    """The decode item's verdict: per slot device stalls, the box's swap / OOM / CPU headroom, GPU reported; then the
+    support check (restart prereg, short dry runs): >= 5 min with every slot at its top playable tier after startup and
+    every session running at once, else a pass reads "insufficient". min_session_s None (--short / --minutes): the
+    session-length rule is the support check alone."""
     fails, notes, per = [], [], {}
     by_slot = {r.get("slot"): r for r in readings}
     for tag in slots or sorted(by_slot):
@@ -168,8 +191,8 @@ def gate(readings: list[dict], box: dict | None, slots: list[str] | None = None)
             fails.append(f"{tag}: no session")
             per[tag] = {"ok": False, "why": "no session"}
             continue
-        if (r["duration_s"] or 0) < MIN_SESSION_S:
-            fails.append(f"{tag}: session {r['duration_s']} s < {MIN_SESSION_S:.0f} s")
+        if min_session_s is not None and (r["duration_s"] or 0) < min_session_s:
+            fails.append(f"{tag}: session {r['duration_s']} s < {min_session_s:.0f} s")
         if not r["device_stall_readable"]:
             per[tag] = {"ok": None, "why": "not readable: no buffer-ahead at any stall (stated gap)"}
             notes.append(f"{tag}: device stalls not readable")
@@ -192,7 +215,12 @@ def gate(readings: list[dict], box: dict | None, slots: list[str] | None = None)
             notes.append(f"GPU p95 above 85 % (report): {box['gpu_above_report_line']}")
     else:
         fails.append("no device record")
-    return {"pass": not fails, "fails": fails, "notes": notes, "short_of_headroom": headroom, "slots": per}
+    want = slots or sorted(by_slot)
+    support = M.decode_stress({t: (by_slot.get(t) or {}).get("seconds_at_top_tier") for t in want},
+                              overlap_s([by_slot[t] for t in want if t in by_slot]))
+    st = M.status(not fails, support)
+    return {"pass": st == "pass", "status": st, "support": support, "fails": fails, "notes": notes,
+            "short_of_headroom": headroom, "slots": per}
 
 
 def commands(a, comp: dict, tags: list[str], out: Path) -> tuple[list[str], list[str]]:
@@ -210,6 +238,8 @@ def commands(a, comp: dict, tags: list[str], out: Path) -> tuple[list[str], list
     cmd = [a.python, "orchestrate.py", "--batch", spec, "--concurrent", "--slots", spec, "--trio-stress",
            "--max-per-slot", "1", "--trio-layout", a.layout, "--iface", a.iface, *pins, "--trio-pin-reason", "decode_stress"]
     cmd += (["--trio-yt-fullscreen"] if a.yt_fullscreen else []) + (["--dpms-off"] if a.dpms_off else [])
+    if getattr(a, "minutes", None):                      # the short form: the held session's base episodes (60 s)
+        cmd += ["--episodes", str(int(a.minutes))]
     return box_cmd, cmd
 
 
@@ -275,7 +305,8 @@ def run(a) -> dict:
     except Exception as e:
         rep["box_record"] = None
         rep["box_record_error"] = repr(e)[:300]
-    rep["gate"] = gate(rep["readings"], rep["box_record"], tags)
+    rep["gate"] = gate(rep["readings"], rep["box_record"], tags,
+                       min_session_s=None if getattr(a, "minutes", None) else MIN_SESSION_S)
     return rep
 
 
@@ -290,7 +321,15 @@ def main(argv=None) -> int:
     ap.add_argument("--iface", default="wlp0s20f3")
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--read-only", nargs="+", type=Path, help="read these session dirs only (no run, no gate)")
+    ap.add_argument("--minutes", type=int, default=None,
+                    help="each held session's length in 60 s base episodes (orchestrate --trio-stress --episodes); "
+                         "default the collection length (>= 10 min, the full gate). Set: the 10 min session rule gives "
+                         "way to the short form's support check (>= 5 min at every slot's top tier, all at once)")
+    ap.add_argument("--short", action="store_true",
+                    help=f"the short form (restart prereg): --minutes {M.DECODE_SHORT_MINUTES} unless given")
     a = ap.parse_args(argv)
+    if a.short and a.minutes is None:
+        a.minutes = M.DECODE_SHORT_MINUTES
     if a.read_only:
         print(json.dumps([session_reading(d) for d in a.read_only], indent=1, default=str))
         return 0
@@ -299,6 +338,9 @@ def main(argv=None) -> int:
     rep = run(a)
     Path(a.out, "report.json").write_text(json.dumps(rep, indent=1, default=str))
     print(json.dumps({"gate": rep["gate"], "orchestrate_rc": rep.get("orchestrate_rc")}, indent=1, default=str))
+    if rep["gate"]["status"] == "insufficient":
+        print(f"decode_stress: insufficient (support {json.dumps(rep['gate']['support']['support'])}, minimum "
+              f"{json.dumps(rep['gate']['support']['minimum'])}): not a pass; the full run decides")
     return 0 if rep["gate"]["pass"] else 1
 
 

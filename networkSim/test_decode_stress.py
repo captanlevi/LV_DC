@@ -122,8 +122,10 @@ def test_readings():
         assert rt["device_stall_readable"] is False and rt["tt_60fps_tier"].startswith("tt 60 fps tier not reached"), rt
 
 
-def _r(tag, share, readable=True, dur=700.0, tt60=None):
+def _r(tag, share, readable=True, dur=700.0, tt60=None, top_s=None):
+    # restart prereg (short dry runs): the gate's support, >= 300 s at every slot's top tier with every session at once
     return {"slot": tag, "duration_s": dur, "device_stall_readable": readable, "device_stall_share": share,
+            "started_at": 0.0, "ended_at": dur, "seconds_at_top_tier": dur - 60.0 if top_s is None else top_s,
             **({"tt_60fps_tier": tt60} if tt60 else {})}
 
 
