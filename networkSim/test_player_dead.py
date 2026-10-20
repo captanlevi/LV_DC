@@ -117,6 +117,20 @@ def test_low_state_hold():
     assert any(w.feed(dead, 5000.0 + i) == "player_dead" for i in range(62))
 
 
+def test_room_ended_carries_the_reentry_confirm():
+    """bundle item 4 (supervisor 2026-10-21, ti_100037): room_ended after a re-entry keeps the pre-re-entry sample and
+    carries the re-entry's own confirmation beside it, on both re-entry paths."""
+    r = {"t_nav": 10.0, "t_enter": 13.0, "confirm": {"dead": "ended_page", "rs": None, "ct": None, "ended_text": True},
+         "samples": 6, "samples_no_video": 4, "outcome": "room_ended", "room": "https://www.tiktok.com/@a/live",
+         "dead_window": {"stream": "alive"}}
+    c = B.reentry_confirm_of(r)
+    assert c == {"t_nav": 10.0, "t_enter": 13.0, "confirm": r["confirm"], "samples": 6, "samples_no_video": 4,
+                 "outcome": "room_ended", "room": r["room"]}
+    assert B.reentry_confirm_of(None)["confirm"] is None
+    src = (HERE / "browser.py").read_text()
+    assert src.count('"reentry_confirm": reentry_confirm_of(r)') == 2       # the player_dead and the frozen re-entry
+
+
 def test_entries_and_class():
     meta = {"channel_url": SESS["channel_url"], "room_rotation": SESS["room_rotation"]}
     ents = E.compute_entries(ROWS, meta, SESS["net_labels"])
@@ -522,6 +536,7 @@ def test_ti37_recovered_reads_normal():
 def main() -> int:
     test_ti20_replay()
     test_low_state_hold()
+    test_room_ended_carries_the_reentry_confirm()
     test_recovery_is_a_discontinuity()
     test_entries_and_class()
     test_precedence()
