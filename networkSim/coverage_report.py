@@ -38,7 +38,8 @@ state band is >= FLOOR_MINUTES / the session's episodes (yt 2/21, twitch / tt 2/
 rate (STATE_RATE: the midpoint of the state's range) is >= the margin x the tier's rung (RUNGS: kbit/s, kind, source;
 a declared-peak rung, twitch's BANDWIDTH, x 1.1; a declared-average rung, yt's format bitrate / tt's vbitrate, x 1.4).
 A class no allowed matrix qualifies for is skipped (the next deficit is the target) and listed in
-coverage.unreachable_targets. yt Q_1080p couples to the fullscreen geometry (coverage.geometry_forced). The band map
+coverage.unreachable_targets. yt Q_1080p couples to the fullscreen geometry (coverage.geometry_forced; single mode only:
+the trio draws its geometry, restart §7, coverage.geometry_coupling). The band map
 (band, rung, margin, masses, qualifying matrices) is recorded per session (coverage.bands). STALL steers by onsets
 (am. 5 / am. 15 (1)) and has no band.
 Q am. 15 (5): when the target is a tier class, the session's initial state is drawn from the chosen matrix's stationary
@@ -124,6 +125,7 @@ ABR_ONLY = (("twitch", "Q_1080p"), ("youtube", "Q_240p"), ("youtube", "Q_480p"))
 ABR_ONLY_RULE = ("restart prereg §2b: tw Q_1080p, yt Q_240p, yt Q_480p are ABR-only (the top tier of no state, or of one): "
                  "unreachable targets, never steered; a floor not met reads insufficient")
 GEOMETRY_FOR_CLASS = {("youtube", "Q_1080p"): "fullscreen:1920x1080"}   # am. 15 (3) / am. 2: the only yt geometry for it
+GEOMETRY_UNCOUPLED = "restart §7: geometry drawn per session (geometry.draw_geometry), never forced by the target"
 SUMMARY_FILE = "_summaries/coverage_last.json"
 INITIAL_STATE_RULE = ("Q am. 15 (5): a tier-class target starts in its band, drawn from the matrix's stationary "
                       "distribution restricted to the band")
@@ -484,10 +486,12 @@ def deficits(snap: dict, states: list[str] = (), families: list[str] = (), seed:
 
 
 def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, excluded_geometries: tuple = (),
-                reserved: dict | None = None) -> dict:
+                reserved: dict | None = None, couple_geometry: bool = True) -> dict:
     """The rule (module docstring) on a snapshot. matrices: the platform's {id: (transitions, low cap, init rule)}.
     excluded_geometries (t53 trio v1: ("fullscreen",)): a class whose only geometry (GEOMETRY_FOR_CLASS) is of an
-    excluded mode is unreachable, recorded in unreachable_targets and geometry_excluded."""
+    excluded mode is unreachable, recorded in unreachable_targets and geometry_excluded. couple_geometry False (the
+    trio, restart §7: the geometry is drawn per session, independent of the target): geometry_forced stays None and
+    geometry_coupling records why."""
     platform = snap["platform"]
     ids = sorted(allowed or matrices)
     states = sorted({s for m in ids for s in matrices[m][0]}, key=int) if platform == "tiktok" else []
@@ -514,6 +518,8 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
         rec["geometry_excluded"] = {"modes": list(excluded_geometries), "unreachable_by_geometry": no_geom}
     if abr:
         rec["abr_only"] = {"rule": ABR_ONLY_RULE, "unreachable_abr_only": abr}
+    if not couple_geometry:
+        rec["geometry_coupling"] = GEOMETRY_UNCOUPLED
     if reserved:
         rec["reserved"] = dict(reserved)
     pm = snap["per_matrix"]
@@ -531,7 +537,7 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
         return {**rec, "matrix": tgt["key"], "target": tgt, "yields": {}, "why": f"schedule floor {FAMILY_FLOOR}"}
     if tgt["kind"] == "class" and tgt["key"] in bands:     # only matrices that reach the class's band
         ids = bands[tgt["key"]]["qualifies"]
-        rec["geometry_forced"] = GEOMETRY_FOR_CLASS.get((platform, tgt["key"]))
+        rec["geometry_forced"] = GEOMETRY_FOR_CLASS.get((platform, tgt["key"])) if couple_geometry else None
     else:                                                  # am. 15 (6): a target-only matrix, only for its targets
         ids = [m for m in ids if drawable(platform, m, tgt["key"])] or ids
     if tgt["kind"] == "entry_state":
@@ -577,11 +583,11 @@ def initial_state_forced(rec: dict, matrices: dict, rng=random) -> dict | None:
 
 
 def choose(data_dir: Path, platform: str, allowed: list[str] | None = None, excluded_geometries: tuple = (),
-           select=None, reserved: dict | None = None) -> dict:
+           select=None, reserved: dict | None = None, couple_geometry: bool = True) -> dict:
     """orchestrate, before each session: the snapshot, the rule's choice for `platform` and, for a tier-class target,
     the forced initial state (Q am. 15 (5))."""
     rec = pick_matrix(snapshot(data_dir, platform, select), PLATFORM_MATRICES[platform], allowed, excluded_geometries,
-                      reserved)
+                      reserved, couple_geometry)
     return {**rec, "initial_state_forced": initial_state_forced(rec, PLATFORM_MATRICES[platform]),
             "taken_at": dt.datetime.now().isoformat(timespec="seconds")}
 

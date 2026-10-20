@@ -280,6 +280,25 @@
   }
  },
  "geometry": {
+  "DRAW_RULE": "restart \u00a77: per session, seeded, equal weights over GEOMETRY_CHOICES minus excluded modes, independent of the steering target; a fullscreen draw while a sibling holds the token is redrawn among the others",
+  "DRAW_WEIGHTS": {
+   "tiktok": {
+    "player:537x880": 1.0,
+    "player:783x604": 1.0,
+    "window:1920x1080": 1.0
+   },
+   "twitch": {
+    "player:1274x717": 1.0,
+    "window:1920x1080": 1.0
+   },
+   "youtube": {
+    "fullscreen:1920x1080": 1.0,
+    "player:1280x720": 1.0,
+    "player:853x480": 1.0,
+    "theater:1920x1080": 1.0,
+    "window:1920x1080": 1.0
+   }
+  },
   "GEOMETRY_CHOICES": {
    "tiktok": [
     "player:783x604",
@@ -298,11 +317,13 @@
     "fullscreen:1920x1080"
    ]
   },
+  "GEOMETRY_UNCOUPLED": "restart \u00a77: geometry drawn per session (geometry.draw_geometry), never forced by the target",
   "MODE_CHROME_ARGS": {
    "fullscreen": [
     "--test-type"
    ]
-  }
+  },
+  "SESSION_DRAW_SEED": 20261021
  },
  "low_state": {
   "_LOW_STATE_THRESHOLD": 3,
@@ -1578,6 +1599,15 @@
    "PLAYING_REF_MIN_PROGRESS": 0.8,
    "PLAYING_REF_S": 30.0
   }
+ },
+ "tw_low_latency": {
+  "KEY": "lowLatencyModeEnabled",
+  "MODE_OFF": "Normal Latency",
+  "MODE_ON": "Low Latency",
+  "P_ON": 0.5,
+  "READ_GAP_S": 1.5,
+  "READ_TRIES": 6,
+  "RULE": "restart \u00a78: per session, seeded, low latency on with p 0.5; set before playback (localStorage lowLatencyModeEnabled, a new-document script), read back once from the Video Stats overlay; a failed set is recorded, never aborted"
  },
  "windows": {
   "EXIT_WINDOW_READ": 10,

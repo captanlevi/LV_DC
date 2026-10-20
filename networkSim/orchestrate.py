@@ -41,6 +41,7 @@ import coverage_report
 import geometry
 import preflight
 import tw_categories
+import tw_latency
 import yt_channels
 
 from data_root import DATA_ROOT as _RUNS_DIR  # noqa: E402  (one setting: data_root.py)
@@ -299,9 +300,13 @@ LAST_COVERAGE: dict[str, dict] = {}       # platform -> the latest coverage reco
 # geometry, reason}; the slot's pick is overridden where given and the session's meta.json records pick_pinned
 TRIO_PINS: dict[str, dict] = {}
 TRIO_RECORD = False      # --trio-record: this run's sessions are of record (counted; record.ERA), steering counts only those
-# t53 (a), default off: the yt slot may go fullscreen when its coverage target couples it (Q_1080p, am. 15 (3)); the
-# geometry rotation still never draws it; the slot's process then runs single mode's fullscreen path with a focus keeper
+# t53 (a), default off: fullscreen is in the yt slots' geometry support (restart §7: the per-session draw; before it, the
+# coverage target's coupling); the slot's process then runs single mode's fullscreen path with a focus keeper. Off: the
+# draw's support excludes it (EXCLUDED_GEOMETRIES) and yt Q_1080p is unreachable (coverage.geometry_excluded)
 TRIO_YT_FULLSCREEN = False
+# restart §7 / §8 (levi's prereg 2026-10-21): each trio session's draws (geometry, twitch low latency) are seeded by
+# f"{SESSION_DRAW_SEED}:{run id}:{slot tag}:{the slot's session number}"; each draw salts it with its own name
+SESSION_DRAW_SEED = 20261021
 # t56 decode_stress (--trio-stress): the run's sessions go under data/_trio_stress (LVDC_TRIO_DIR), never counted, and a
 # pinned state is held for the whole session (exp.py --hold-state)
 TRIO_STRESS = False
@@ -340,17 +345,20 @@ def coupled_geometry(p: str, geom: str | None) -> str | None:
 
 
 def session_matrix(p: str, summary_file: str = coverage_report.SUMMARY_FILE, excluded_geometries: tuple = (),
-                   data_dir: Path | None = None, select=None, reserved: dict | None = None, key: str | None = None) -> str | None:
+                   data_dir: Path | None = None, select=None, reserved: dict | None = None, key: str | None = None,
+                   couple_geometry: bool = True) -> str | None:
     """The session's shaper matrix (MATRIX_RULE). The coverage record goes to data/_summaries/coverage_last.json and
     LVDC_COVERAGE_JSON for exp.py's meta.json; a failure of the rule falls back to MATRIX_IDS, recorded as such.
-    data_dir: the sessions the floors count (the trio: its own root, the sessions of record; levi 00265)."""
+    data_dir: the sessions the floors count (the trio: its own root, the sessions of record; levi 00265).
+    couple_geometry False (the trio, restart §7): no geometry_forced (coverage_report.pick_matrix)."""
     rec = {"platform": p, "rule": "fixed", "matrix": MATRIX_IDS.get(p)}
     root = data_dir or _RUNS_DIR
     if MATRIX_RULE == "coverage" and p in coverage_report.CLASSES:
         try:
             rec = (coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p), excluded_geometries, select=select,
-                                          reserved=reserved)
-                   if excluded_geometries or select or reserved else coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p)))
+                                          reserved=reserved, couple_geometry=couple_geometry)
+                   if excluded_geometries or select or reserved or not couple_geometry
+                   else coverage_report.choose(root, p, COVERAGE_ALLOWED.get(p)))
             print(f"  coverage : matrix {rec['matrix']} (target {(rec['target'] or {}).get('key')}, {rec['why']})")
         except Exception as e:
             rec["rule_error"] = repr(e)
@@ -653,17 +661,13 @@ def free_gb(path: Path) -> float:
 
 
 def _reserved(tag: str, T, running: dict) -> dict:
-    """t56: the classes the running sibling slots of tag's platform already target (one each), and yt Q_1080p while
-    another slot holds the fullscreen layout (one at a time: the keeper can keep one window on top)."""
+    """t56: the classes the running sibling slots of tag's platform already target (one each). Restart §7: the target
+    no longer depends on any geometry (the fullscreen token's Q_1080p reservation is gone with the coupling)."""
     import collections
     p, out = T.SLOTS[tag].platform, collections.Counter()
     for t2, r in running.items():
-        if t2 == tag:
-            continue
-        if T.SLOTS[t2].platform == p and r.get("target"):
+        if t2 != tag and T.SLOTS[t2].platform == p and r.get("target"):
             out[r["target"]] += 1
-        if str(r.get("geom") or "").startswith("fullscreen") and p == "youtube":
-            out["Q_1080p"] += 1000                        # unreachable while the token is held: the next deficit
     return dict(out)
 
 
@@ -718,25 +722,26 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
               f"{json.dumps({k: pf['checks'][k] for k in pf['problems']})}")
         return False
     before, now = accepted_sessions(p, troot, trio_select()), time.time()
-    # the pick and the coverage rule count the trio's own sessions (data/_trio: the sessions of record, levi 00265); trio v1
-    # draws no fullscreen geometry and a class needing one is unreachable (supervisor 2026-10-19)
+    # the pick and the coverage rule count the trio's own sessions (data/_trio: the sessions of record, levi 00265); without
+    # --trio-yt-fullscreen no fullscreen geometry is drawn and a class needing one is unreachable (supervisor 2026-10-19)
     sib = {(r.get("channel") or {}).get("handle") for t2, r in running.items() if t2 != tag and r.get("channel")} - {None}
-    channel, category, geom = _pick(p, not_live, now, rotate_geometry, T.EXCLUDED_GEOMETRIES, troot, siblings=sib)
+    channel, category, _ = _pick(p, not_live, now, False, T.EXCLUDED_GEOMETRIES, troot, siblings=sib)
     import record
     reserved = _reserved(tag, T, running)
     yt_fs = p == "youtube" and TRIO_YT_FULLSCREEN
     mid = session_matrix(p, f"{T.TRIO_DIR}/_summaries/coverage_last_{s.tag}.json",
                          () if yt_fs else T.EXCLUDED_GEOMETRIES, data_dir=troot, select=record.is_record,
-                         reserved=reserved or None, key=tag)
-    forced = coupled_geometry(tag, geom) if rotate_geometry else geom
-    if forced and forced.startswith("fullscreen") and any(str(r.get("geom") or "").startswith("fullscreen")
-                                                           for t2, r in running.items() if t2 != tag):
-        forced = geom                                     # the fullscreen token is held (design v4: one at a time)
-    if forced and forced.split(":")[0] in T.EXCLUDED_GEOMETRIES and not yt_fs:
-        forced = geom
-    if forced != geom:
-        print(f"  geometry {forced} (coupled to the coverage target; rotation drew {geom})")
-        geom = forced
+                         reserved=reserved or None, key=tag, couple_geometry=False)
+    # restart §7: the geometry drawn per session, seeded, independent of the target (geometry.draw_geometry); a
+    # fullscreen draw while a sibling holds the token (design v4: one at a time) is redrawn among the other entries
+    seed = f"{SESSION_DRAW_SEED}:{run_id}:{s.tag}:{started[tag] + 1}"
+    fs_held = any(str(r.get("geom") or "").startswith("fullscreen") for t2, r in running.items() if t2 != tag)
+    gdraw = geometry.draw_geometry(p, seed, () if yt_fs else T.EXCLUDED_GEOMETRIES, fs_held) if rotate_geometry else None
+    geom = (gdraw or {}).get("geometry")
+    if (gdraw or {}).get("token_deferred"):
+        print(f"  geometry {geom} (drew {gdraw['token_deferred']}; a sibling holds the fullscreen token)")
+    # restart §8: twitch's low-latency setting, drawn per session (tw_latency.py), applied before playback by exp.py
+    ll = tw_latency.draw(seed) if p == "twitch" else None
     # Q am. 15 (5), as single mode (run_batch): a tier-class target starts in its band (the merge had kept the balance rule)
     fi = (LAST_COVERAGE.get(tag) or {}).get("initial_state_forced") if MATRIX_RULE == "coverage" else None
     # t53 2026-10-19 (levi; supervisor): the balance start state counts the trio's sessions of record too (00265), as the
@@ -749,6 +754,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         init = pin.get("state") or init
         geom, pin = pin_geometry(pin, geom, running, tag)
         print(f"  PINNED {tag}: {json.dumps(pin)}")
+    if gdraw is not None and geom != gdraw["geometry"]:
+        gdraw = {**gdraw, "pinned": geom}                 # a recorded round pin overrides the draw (pick_pinned too)
     hold = TRIO_STRESS and (pin or {}).get("state")      # decode_stress: the pinned state held for the whole session
     # a schedule's episodes scale with the drawn length (Q am. 17); @fast's episode length is drawn per session
     # (restart §2b, the same key); a held state runs base episodes
@@ -768,6 +775,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         cmd += ["--session-minutes", str(slen["minutes"])]
     if fe:
         cmd += ["--fast-episode-s", str(fe["episode_s"])]
+    if ll is not None:
+        cmd += ["--tw-low-latency", ll["drawn"]]
     if hold:
         cmd += ["--hold-state", pin["state"]]
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
@@ -780,6 +789,10 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     env.pop("LVDC_SESSION_LENGTH", None)
     if slen:
         env["LVDC_SESSION_LENGTH"] = json.dumps(slen)
+    for k, v in (("LVDC_GEOMETRY_DRAW", gdraw), ("LVDC_TW_LOW_LATENCY", ll)):   # restart §7 / §8: meta.json records
+        env.pop(k, None)
+        if v is not None:
+            env[k] = json.dumps(v)
     if (channel or {}).get("pick"):
         env["LVDC_CHANNEL_PICK"] = json.dumps(channel["pick"], default=str)
     elif (category or {}).get("pick"):            # restart prereg §5: the category draw, its floor and seeded tie
@@ -826,10 +839,11 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     """t56: the slots of a composition (`slots` {platform: count}, default the trio's one each; trio_slots.build_slots),
     keyed by tag; each slot refilled when its session ends (A1); targets and accounting per platform, until every platform has its
     target of PASS trio sessions (counted in the trio's own data root, data/_trio/<platform>: single mode never sees
-    them), or `max_per_slot` sessions started per slot (the pilot: 1). Trio v1 draws no fullscreen geometry, and a
-    coverage class that needs one is unreachable (recorded). Per slot exactly as run_batch
-    per session: the pick (_pick), the per-session preflight (rootfs floor raised by A2), the coverage matrix and its
-    coupled geometry, the accounting (_account), the flag report; each slot's coverage / preflight record is its own
+    them), or `max_per_slot` sessions started per slot (the pilot: 1). Without --trio-yt-fullscreen no fullscreen
+    geometry is drawn, and a coverage class that needs one is unreachable (recorded). Per slot as run_batch
+    per session: the pick (_pick), the per-session preflight (rootfs floor raised by A2), the coverage matrix (restart
+    §7: the geometry drawn per session, never coupled to the target; §8: twitch's low-latency draw), the accounting
+    (_account), the flag report; each slot's coverage / preflight record is its own
     file. Started in a pause (no session running): single mode's preclean once, then the shared tree, the unmarked
     remainder's capture, then the slots; no orchestrator-wide preclean while a slot runs (a slot cleans only its own
     pieces, exp.py slot_up). Drain (TRIO_DRAIN_FILE, or SIGINT / SIGTERM, which are also passed to every running

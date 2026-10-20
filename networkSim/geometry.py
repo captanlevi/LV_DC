@@ -23,10 +23,21 @@ meta.json (geometry_target); client_w / client_h per tick are in labels.csv alre
 
 Sessions collected before rotation (pinned sizes) carry only player_pin.target in meta.json; they count as
 player:<target>, so the rotation first evens the other entries out.
+
+Restart §7 (levi's prereg 2026-10-21; supervisor's ask): the trio no longer rotates. Each session's geometry is drawn
+(draw_geometry), seeded per session, from a fixed distribution: equal weights (DRAW_WEIGHTS) over the platform's
+GEOMETRY_CHOICES minus an excluded mode (the trio without --trio-yt-fullscreen: fullscreen), independent of the
+steering target, of every count and of anything observed. yt caps quality by player size, so the draw decorrelates
+resolution from rate exogenously; the yt Q_1080p floor fills at the draw's fullscreen rate (no coupling to the target).
+The one-fullscreen token (one at a time in the trio): a fullscreen draw while a sibling holds it is redrawn by the same
+generator among the support's other entries (weights renormalised), recorded as token_deferred. The record goes to
+meta.json geometry_draw; the geometry the page took (CSS and device px) stays in meta.json geometry / player_pin.
+Single mode keeps the rotation (next_geometry).
 """
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 GEOMETRY_CHOICES: dict[str, list[str]] = {
@@ -128,3 +139,26 @@ def next_geometry(data_dir: Path, platform: str, exclude_modes: tuple = (), sele
         return None
     counts = collected_counts(data_dir, platform, select)
     return min(choices, key=lambda g: (counts[g], choices.index(g)))
+
+
+DRAW_RULE = ("restart §7: per session, seeded, equal weights over GEOMETRY_CHOICES minus excluded modes, independent "
+             "of the steering target; a fullscreen draw while a sibling holds the token is redrawn among the others")
+DRAW_WEIGHTS: dict[str, dict[str, float]] = {p: {g: 1.0 for g in gs} for p, gs in GEOMETRY_CHOICES.items()}
+
+
+def draw_geometry(platform: str, seed: str, exclude_modes: tuple = (), token_held: bool = False) -> dict | None:
+    """Restart §7: the session's geometry from its seed (orchestrate's per-session seed, salted with this draw's name);
+    None for a platform with no entry left. token_held: a sibling holds the one-fullscreen token."""
+    support = [g for g in GEOMETRY_CHOICES.get(platform) or [] if g.split(":")[0] not in exclude_modes]
+    if not support:
+        return None
+    w = DRAW_WEIGHTS[platform]
+    rng = random.Random(f"geometry:{seed}")
+    drawn = rng.choices(support, weights=[w[g] for g in support], k=1)[0]
+    rec = {"rule": DRAW_RULE, "seed": seed, "support": support,
+           "weights": {g: round(w[g] / sum(w[x] for x in support), 6) for g in support},
+           "excluded_modes": list(exclude_modes), "token_held": token_held, "drawn": drawn, "geometry": drawn}
+    rest = [g for g in support if not g.startswith("fullscreen")]
+    if token_held and drawn.startswith("fullscreen") and rest:
+        rec.update(geometry=rng.choices(rest, weights=[w[g] for g in rest], k=1)[0], token_deferred=drawn)
+    return rec

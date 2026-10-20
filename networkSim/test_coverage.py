@@ -216,6 +216,11 @@ def main():
         assert r["matrix"] == "current" and r["why"].startswith("explore"), r
         assert r["bands"]["Q_1080p"]["qualifies"] == ["A", "current"] and r["geometry_forced"] == "fullscreen:1920x1080", r
         assert "geometry_excluded" not in r                                          # single mode: no new key
+        # restart §7: the trio's rule is uncoupled (its geometry is drawn per session): the same pick, no geometry_forced
+        ru = C.pick_matrix(snap, BASE["youtube"], ["A", "B", "current"], couple_geometry=False)
+        assert {k: v for k, v in ru.items() if k not in ("geometry_forced", "geometry_coupling")} == \
+            {k: v for k, v in r.items() if k != "geometry_forced"}, ru
+        assert ru["geometry_forced"] is None and ru["geometry_coupling"] == C.GEOMETRY_UNCOUPLED
         # t53 trio v1 (supervisor 2026-10-19): no fullscreen -> Q_1080p unreachable, recorded; the next deficit drives
         rt = C.pick_matrix(snap, BASE["youtube"], excluded_geometries=("fullscreen",))
         assert "Q_1080p" in rt["unreachable_targets"] and rt["geometry_forced"] is None, rt
