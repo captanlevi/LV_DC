@@ -169,7 +169,7 @@ def test_the_dry_run_phase_reading_and_command(tmp_path=None):
     sp.loader.exec_module(T)
     assert [T.player_proto(k) for k in range(4)] == ["h3", "tcp", "h3", "tcp"]
     a = types.SimpleNamespace(player_python="/v/py", player_url="https://speed.cloudflare.com/__down",
-                              player_fallback_url="http://m/x.iso", state_s=60.0)
+                              player_fallback_url="http://m/x.iso", state_s=60.0, player_state_s=60.0)
     d = Path(tmp_path or tempfile.mkdtemp())
     cmd = T.player_cmd(a, "tw1", 1, {"rate_kbit": 1600}, d / "p.jsonl")
     assert "--platform twitch" in cmd and "--proto tcp" in cmd and "--rate-kbit 1600" in cmd and "--seconds 59.0" in cmd
@@ -189,7 +189,11 @@ def test_the_dry_run_phase_reading_and_command(tmp_path=None):
             "12:00:00.0 IP 104.16.1.1.443 > 192.168.4.50.50001: UDP, length 1200\n" if "a.pcap" in cmd else "")
         r = T.read_player_phase(ph, 60.0)
         st = r["per_slot"]["tw1"][0]
-        assert st["gate"] == "pass" and st["h3"]["gate"] == "pass" and r["gated"]["no_leak"] and r["pass"], r["gated"]
+        assert st["gate"] == "pass" and st["h3"]["gate"] == "pass" and r["gated"]["no_leak"], r["gated"]
+        # restart prereg (short dry runs): one state is below the player's 3 x 60 s support, so the ratio reads
+        # insufficient and the phase is not a pass; h3 (25 attempted >= 20) and no leak (traffic on the slot) pass
+        assert r["status"]["ratio"] == "insufficient" and r["pass"] is False, r["status"]
+        assert r["status"]["h3_exercised"] == "pass" and r["status"]["no_leak"] == "pass", r["status"]
         T.sh = lambda cmd, check=True, capture=False, print_only=False: (
             "12:00:00.0 IP 104.16.1.1.443 > 192.168.4.50.50001: UDP, length 1200\n")   # also on lvi_def: a leak
         assert T.read_player_phase(ph, 60.0)["gated"]["no_leak"] is False

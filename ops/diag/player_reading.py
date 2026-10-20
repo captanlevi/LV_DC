@@ -126,9 +126,18 @@ def fetch_delivery(segs: list[dict], rate_kbit: float, rtt_s: float) -> dict | N
             "share_in_band": round(within, 3)}
 
 
+def _attempted(segs: list[dict]) -> list[dict]:
+    return [s for s in segs if "bytes" in s and "summary" not in s and "start" not in s]
+
+
 def h3_share(segs: list[dict]) -> float | None:
-    att = [s for s in segs if "bytes" in s and "summary" not in s and "start" not in s]
+    att = _attempted(segs)
     return (sum(1 for s in att if s.get("ok") and s.get("alpn") == "h3") / len(att)) if att else None
+
+
+def h3_attempted(segs: list[dict]) -> int:
+    """The attempted segments h3_share is over (the short form's h3 support: >= 20 per slot over its h3 states)."""
+    return len(_attempted(segs))
 
 
 def five_tuples(segs: list[dict]) -> set[tuple]:

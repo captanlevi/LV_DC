@@ -33,6 +33,15 @@ Levi's gate-1 conditions (2026-10-19), each a phase of its own:
     check.json shaper ratios per state ([min, max], n);
   - every state and the goodput run >= 60 s.
 Output: <out>/report.json, <out>/samples.jsonl, <out>/commands.log. --print-only lists the commands and exits.
+The capture-drops segment (--top-capture-s; restart prereg): every slot at the top state under bulk, each slot's IFBs
+captured as a session's (full packets, -B 64 MiB); 0 kernel drops on every capture.
+The short form (--short; LVQoE restart_2026-10-21_prereg_levi.md "Short per-item dry runs", rushi 2026-10-20: 5-10 min
+of box time per item; a short run reads only the items its tip changed): durations from dry_minimums.SHORT (goodput
+35 s, idle ping 10 s per state, bulk states 40 s, player states 65 s, the capture-drops segment 66 s, @fast via
+--fast-segment-s auto at 32 changes per slot) and no single-mode reference unless --single-reference; the nominal seconds
+per phase are printed first and recorded (report.json profile). In either form every gate reader checks its support
+against levi's minimum (dry_minimums.MINIMUMS) first: a pass below it reads "insufficient" (report.json gates, and a
+GATE line on stdout), never a pass; a fail stays a fail. The walk's segment lands with the walk (dry_minimums.walk).
 
     sudo .venv/bin/python ops/diag/trio_dry_run.py --iface wlp0s20f3 --out /tmp/trio_dry_run_$(date +%s)
 
@@ -58,6 +67,8 @@ except ImportError:
     np = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "networkSim"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dry_minimums as M  # noqa: E402  (restart prereg: the short dry runs' minimum support per gate)
 try:
     from utils.shaping import SCENARIOS        # the collector's state semantics (rate / delay / loss ranges)
 except Exception:                               # the container test copies only this script
@@ -99,6 +110,8 @@ def _mgmt_udp() -> int:
 BULK_URL = "http://mirror.aarnet.edu.au/pub/ubuntu/releases/24.04/ubuntu-24.04.5-live-server-amd64.iso"   # ~3 GB
 MARK_BY = "cgroup"  # "uid" only for a test kernel without nft socket cgroupv2 (each session a user lvdc_<p>)
 TOP_STATE_KBIT = 9000.0                                      # SCENARIOS state 10's upper rate limit
+TOP_STATE = "10"                                             # the capture-drops segment's state (every slot at once)
+TCPDUMP_B_KIB = 65536                                        # = trio_slots.TCPDUMP_B_KIB: a session capture's buffer
 
 LOG: list[str] = []
 
@@ -397,11 +410,13 @@ def run(a) -> dict:
             raise RuntimeError(f"P3: IFB offloads not off: {rep['ifb_offloads']}")
         rep["idle_ping_unshaped"] = ping_many([None], a, out, "unshaped")["root"]      # the RTT baseline
         rerun = a.player_rerun                       # levi 00132: the player phase with the bulk's validation only
-        if not rerun:
+        if not rerun and a.goodput:
             rep["goodput"] = gp = goodput(a.iface, a.url, a.goodput_s, a.streams, out)
             need = 1.5 * TOP_STATE_KBIT * len(SESSIONS)
-            rep["goodput_gate"] = {"needed_kbit": need, "measured_kbit": gp["goodput_kbit"],
-                                   "pass": gp["goodput_kbit"] >= need,
+            chk = M.goodput(gp["seconds"])
+            st = M.status(gp["goodput_kbit"] >= need, chk)
+            rep["goodput_gate"] = {"needed_kbit": need, "measured_kbit": gp["goodput_kbit"], "status": st,
+                                   "pass": st == "pass", "support": chk,
                                    "rule": "measured multi-stream goodput >= 1.5 x the summed top-state rate (am. 13)"}
         if not a.no_single_reference and not rerun:
             rep["single_mode_reference"] = single_mode_reference(a, states, out)
@@ -420,7 +435,7 @@ def run(a) -> dict:
         if not rerun:
             rep["cross_class_fetch"] = cross_class_fetch(a, out)
         idle = []                                     # levi (1): every class at each of its states, no bulk anywhere
-        for k in (range(max(len(v) for v in states.values())) if not rerun else ()):
+        for k in (range(max(len(v) for v in states.values())) if not rerun and a.idle_ping else ()):
             for s in SESSIONS:
                 if k < len(states[s]):
                     for c in rate_cmds(a.iface, s, state_params(states[s][k])):
@@ -506,6 +521,12 @@ def run(a) -> dict:
                     fh.write(json.dumps(x) + "\n")
         rep["timeline"] = timeline
         rep["results"] = summarise(samples, timeline, states, a, out, fast=bulk_fast)
+        if a.top_capture_s and not NO_IFB and not rerun:  # restart prereg: the capture-drops segment at the top state
+            ph = top_capture_phase(a, out)
+            rep["top_capture"] = read_top_capture({k: v for k, v in ph.items()})
+            with open(out / "top_capture_samples.jsonl", "w") as fh:
+                for x in ph["samples"]:
+                    fh.write(json.dumps(x) + "\n")
         if a.fast_segment_s and not NO_IFB and not rerun:   # Q am. 17: the @fast segment under the bulk load
             ph = fast_segment_phase(a, out)
             with open(out / "fast_segment.json", "w") as fh:
@@ -517,7 +538,7 @@ def run(a) -> dict:
             ph["base_rtt_s"] = base / 1000 if base else None
             rep["player_load"] = {"timeline": ph["timeline"], "t0_epoch": ph["t0_epoch"],
                                   "rate_stage_validation": (rep.get("results") or {}).get("rate_stage_validation"),
-                                  **read_player_phase(ph, a.state_s)}
+                                  **read_player_phase(ph, a.player_state_s)}
     except Exception as e:
         rep["error"] = repr(e)[:600]
     finally:
@@ -533,7 +554,32 @@ def run(a) -> dict:
         except Exception as e:
             rep["box_record"] = {"error": repr(e)[:300]}
         (out / "commands.log").write_text("\n".join(LOG) + "\n")
+    rep["gates"] = gates_summary(rep)
     return rep
+
+
+def gates_summary(rep: dict) -> dict:
+    """Every gate this run read, its status (pass / fail / insufficient) and support check; a gate not run is absent.
+    The walk's segment lands with the walk (restart prereg §2); its minimum check is dry_minimums.walk."""
+    g = {}
+    if rep.get("goodput_gate"):
+        g["goodput"] = {"status": rep["goodput_gate"]["status"], "support": rep["goodput_gate"]["support"]}
+    if rep.get("top_capture"):
+        g["capture_drops"] = {"status": rep["top_capture"]["status"], "support": rep["top_capture"]["support"]}
+    res = rep.get("results") or {}
+    if res.get("bulk_ratio_support"):
+        g["bulk_ratio"] = {"status": res["bulk_ratio_support"]["status"], "support": res["bulk_ratio_support"]["per_slot"],
+                           "note": "support only: the bulk ratio is levi's read (ratio_to_set per slot-state)"}
+        g["rate_stage_validation"] = {"status": (res.get("rate_stage_validation") or {}).get("status")}
+    if rep.get("fast_segment"):
+        f = rep["fast_segment"]
+        g["fast"] = {"status": f["status"], "support": {s: v["support"] for s, v in f["per_slot"].items()}}
+    if rep.get("player_load"):
+        pl = rep["player_load"]
+        for k in ("ratio", "h3_exercised", "no_leak", "zero_capture_drops"):
+            g[f"player_{k}"] = {"status": pl["status"][k]}
+        g["player_support"] = {"support": pl["support"]}
+    return g
 
 
 def _delta(samples: list[dict], dev: str, cls: str, t0: float, t1: float, key: str = "bytes") -> int:
@@ -687,13 +733,13 @@ def player_proto(k: int) -> str:
 
 def player_cmd(a, s: str, k: int, p: dict, log: Path) -> str:
     return (f"{shlex.quote(str(a.player_python))} {shlex.quote(str(PLAYER))} --platform {platform_of(s)} "
-            f"--rate-kbit {p['rate_kbit']} --proto {player_proto(k)} --seconds {a.state_s - 1} "
+            f"--rate-kbit {p['rate_kbit']} --proto {player_proto(k)} --seconds {a.player_state_s - 1} "
             f"--url {shlex.quote(a.player_url)} --fallback-url {shlex.quote(a.player_fallback_url)} --log {log}")
 
 
 def player_phase(a, states: dict, out: Path) -> dict:
     """Q am. 16's player-shaped load (peter's spec, levi's read 2026-10-20): its own phase on the bulk run's states and
-    timeline (state k for every slot at once, each state a.state_s), the player alone in each slot's class (a ratio read
+    timeline (state k for every slot at once, each state a.player_state_s), the player alone in each slot's class (a ratio read
     beside the bulk would be the bulk's); each slot's ingress and the default class captured at snaplen 96 for the
     5-tuple leak check; per-second class samples as the bulk phase's."""
     procs, caps, pl = [], {}, {s: [] for s in SESSIONS}
@@ -717,7 +763,7 @@ def player_phase(a, states: dict, out: Path) -> dict:
                 pl[s] = [start(in_cgroup(s, player_cmd(a, s, k, p, log)), out / f"player_{s}_{k}.err")]
                 timeline.append({"t": round(time.time() - t0, 2), "k": k, "session": s, "state": states[s][k],
                                  "proto": player_proto(k), **p, "log": str(log)})
-        t_end = time.time() + a.state_s
+        t_end = time.time() + a.player_state_s
         while time.time() < t_end:
             samples.append({"t": round(time.time() - t0, 2), "classes": {d: class_stats(d) for d in devs},
                             "links": {d: link_stats(d) for d in [a.iface, "lvi_def"]}})
@@ -736,7 +782,7 @@ def player_phase(a, states: dict, out: Path) -> dict:
         for x in samples:
             fh.write(json.dumps(x) + "\n")
     return {"t0_epoch": t0, "samples": samples, "fast_samples": fast, "timeline": timeline, "captures": caps,
-            "kernel_drops": drops}
+            "kernel_drops": drops, "state_s": a.player_state_s}
 
 
 def read_player_phase(ph: dict, state_s: float) -> dict:
@@ -763,6 +809,17 @@ def read_player_phase(ph: dict, state_s: float) -> dict:
         except Exception as e:  # noqa: BLE001
             pkts[d] = []
     leak = R.leaks(tuples, pkts)
+    # the short form's support (restart prereg): per slot >= 3 states of >= 60 s, each >= 10 s qualifying (option A),
+    # and the h3-exercised share over >= 20 attempted h3 segments; no leak needs player traffic on every slot
+    support, status = {}, {"ratio": {}, "h3_exercised": {}}
+    for s, rs in rows.items():
+        chk = M.player_a(state_s, [r["qualifying_s"] for r in rs])
+        att = sum(R.h3_attempted(segs_of[(s, e["k"])]) for e in ph["timeline"] if e["session"] == s and e["proto"] == "h3")
+        hchk = M.h3(att)
+        support[s] = {"player_a": chk, "h3_exercised": hchk}
+        status["ratio"][s] = M.status(M.combine([r["gate"] for r in rs]), chk)
+        status["h3_exercised"][s] = M.status(M.combine([(r["h3"] or {}).get("gate", "pass") for r in rs]), hchk)
+    leak_chk = M.no_leak({s: len(t) for s, t in tuples.items()})
     by_proto = {}
     for s, rs in rows.items():
         for r in rs:
@@ -772,9 +829,14 @@ def read_player_phase(ph: dict, state_s: float) -> dict:
              "h3_exercised": all((r["h3"] or {}).get("gate", "pass") == "pass" for rs in rows.values() for r in rs),
              "no_leak": all(n == 0 for row in leak.values() for n in row.values()),
              "zero_capture_drops": all(v in (None, "0") for v in ph["kernel_drops"].values())}
+    st = {"ratio": M.combine(list(status["ratio"].values())),
+          "h3_exercised": M.combine(list(status["h3_exercised"].values())),
+          "no_leak": M.status(gated["no_leak"], leak_chk),
+          "zero_capture_drops": "pass" if gated["zero_capture_drops"] else "fail"}
     return {"per_slot": rows, "leaks": leak, "player_tuples": {s: len(t) for s, t in tuples.items()},
             "capture_kernel_drops": ph["kernel_drops"], "quic_vs_tcp_ratio": {p: R.q(v) for p, v in by_proto.items()},
-            "gated": gated, "pass": all(gated.values()), "notes": R.NOTES,
+            "gated": gated, "status": st, "status_per_slot": status, "support": {**support, "no_leak": leak_chk},
+            "pass": all(gated.values()) and all(v == "pass" for v in st.values()), "notes": R.NOTES,
             "insufficient_states": [(s, r["state"]) for s, rs in rows.items() for r in rs if r["gate"] == "insufficient"]}
 
 
@@ -852,11 +914,77 @@ def read_fast_segment(ph: dict) -> dict:
                   "ratio_non_straddling": F.ratio_non_straddling(ph["samples"], f"lvi_{s}", "1:10", ch, 0.0,
                                                                  float(ph["seconds"])),
                   **F.whole_drop_share(ch)}
-    ok = bool(per) and all(v["change_drops"]["gate"] == "pass" and v["ratio_non_straddling"]["gate"] == "pass"
-                           for v in per.values())
-    return {"per_slot": per, "pass": ok, "seconds": ph["seconds"], "seed": ph["seed"], "notes": F.NOTES,
+    for v in per.values():          # the short form's support (restart prereg): >= 30 changes per slot
+        v["support"] = M.fast(v["changes"])
+        v["status"] = M.status(M.combine([v["change_drops"]["gate"], v["ratio_non_straddling"]["gate"]]), v["support"])
+    st = M.combine([v["status"] for v in per.values()])
+    ok = st == "pass"
+    return {"per_slot": per, "pass": ok, "status": st, "seconds": ph["seconds"], "seed": ph["seed"], "notes": F.NOTES,
             "rule": "Q am. 17: no class drops at change instants beyond the set loss; the ratio in "
                     f"[{F.RATIO_LO}, {F.RATIO_HI}] on backlogged seconds not straddling a change"}
+
+
+def tcpdump_counts(text: str) -> dict:
+    """tcpdump's exit lines: packets captured / received by filter / dropped by kernel (None when absent)."""
+    out = {}
+    for k, pat in (("captured", r"(\d+) packets? captured"), ("received", r"(\d+) packets? received by filter"),
+                   ("kernel_drops", r"(\d+) packets? dropped by kernel")):
+        m = re.findall(pat, text)
+        out[k] = int(m[-1]) if m else None
+    return out
+
+
+def top_capture_phase(a, out: Path, clock=time.time, sleep=time.sleep) -> dict:
+    """The capture-drops segment (restart prereg, short dry runs: >= 60 s with every slot at its top state under bulk):
+    every slot's class at TOP_STATE, the bulk load in every slot, M.TOP_SETTLE_S for the classes to fill, then each slot's
+    ingress and egress IFB captured as a session's are (full packets, -B TCPDUMP_B_KIB, -U) for a.top_capture_s, every
+    device sampled once a second; each capture's kernel drops from tcpdump's exit line. The pcaps stay in the out dir
+    (~ the top rate x the segment per slot)."""
+    p = state_params(TOP_STATE)
+    for s in SESSIONS:
+        for c in rate_cmds(a.iface, s, p):
+            sh(c)
+    bulk = [start(in_cgroup(s, bulk_cmd(a.url, a.top_capture_s + M.TOP_SETTLE_S + 5)), out / f"curl_top_{s}_{i}.log")
+            for s in SESSIONS for i in range(a.bulk_streams)]
+    caps, procs, samples = {}, [], []
+    devs = [f"lvi_{s}" for s in SESSIONS]
+    try:
+        sleep(M.TOP_SETTLE_S)
+        for s in SESSIONS:
+            for d in (f"lvi_{s}", f"lvo_{s}"):
+                caps[d] = str(out / f"top_{d}.pcap")
+                procs.append(start(f"tcpdump -B {TCPDUMP_B_KIB} -i {d} -U -w {caps[d]}", out / f"tcpdump_top_{d}.err"))
+        t0 = clock()
+        while clock() < t0 + a.top_capture_s:
+            samples.append({"t": round(clock() - t0, 2), "classes": {d: class_stats(d) for d in devs}})
+            sleep(1.0)
+        t1 = clock()
+    finally:
+        stop(procs)
+        stop(bulk)
+    sleep(1.0)
+    counts = {}
+    for d in caps:
+        f = out / f"tcpdump_top_{d}.err"
+        counts[d] = tcpdump_counts(f.read_text(errors="ignore")) if f.exists() else tcpdump_counts("")
+    return {"state": TOP_STATE, "set": p, "seconds": round(t1 - t0, 1), "buffer_kib": TCPDUMP_B_KIB,
+            "captures": caps, "counts": counts, "samples": samples}
+
+
+def read_top_capture(ph: dict) -> dict:
+    """The capture-drops gate: 0 kernel drops on every capture (an unread count is a fail), over >= 60 s with every slot
+    at the top state; each slot's shaper-bound share (backlog > 0) reported."""
+    chk = M.capture_drops(ph["seconds"])
+    drops = {d: c["kernel_drops"] for d, c in ph["counts"].items()}
+    reading = bool(drops) and all(v == 0 for v in drops.values())
+    bound = {}
+    for s in SESSIONS:
+        xs = [((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}) for x in ph["samples"]]
+        bound[s] = round(sum(1 for c in xs if c.get("backlog")) / len(xs), 3) if xs else None
+    st = M.status(reading, chk)
+    return {"status": st, "pass": st == "pass", "support": chk, "kernel_drops": drops, "counts": ph["counts"],
+            "shaper_bound_share": bound, "state": ph["state"], "buffer_kib": ph["buffer_kib"],
+            "rule": "0 kernel drops on every slot's ingress and egress capture, every slot at the top state under bulk"}
 
 
 def bulk_cmd(url: str, seconds: float) -> str:
@@ -1084,25 +1212,66 @@ def summarise(samples, timeline, states, a, out, fast=None) -> dict:
                   "egress_class_bytes_total": _delta(samples, a.iface, f"1:{SESSIONS[s]:x}", 0, 1e9),
                   "ping": {"replies": len(pings), "rtt_ms_median": (sorted(r for _, r in pings)[len(pings) // 2]
                                                                     if pings else None)}}
+    # the short form's support (restart prereg): per slot 3 states x >= 30 sampled non-straddling seconds (the window
+    # skips each state's first 3 s, so no second straddles a change); below it the bulk readings are "insufficient"
+    sup = {s: M.bulk_ratio([r["span_s"] for r in res[s]["per_state"]]) for s in SESSIONS}
+    for s in SESSIONS:
+        res[s]["bulk_support"] = sup[s]
+    all_sup = {"sufficient": all(c["sufficient"] for c in sup.values())}
+    ok = bool(valid) and all(v["ok"] for v in valid)
+    res["bulk_ratio_support"] = {"status": "sufficient" if all_sup["sufficient"] else "insufficient", "per_slot": sup}
     res["rate_stage_validation"] = {
         "rule": f"levi 00132: option A on the bulk: >= {R.VALID_MIN_SHARE} of each slot-state's seconds qualify, its ratio "
-                f"within {R.VALID_TOL} of the bulk's own", "ok": bool(valid) and all(v["ok"] for v in valid),
+                f"within {R.VALID_TOL} of the bulk's own", "ok": ok, "status": M.status(ok, all_sup),
         "per_slot_state": valid}
     res["cross_class_note"] = ("each session's curl bytes should be its own class's bytes (within header overhead) and "
                                "no other class should rise from it; the default class carries only the OS remainder")
     return res
 
 
+def resolve_profile(a) -> None:
+    """The durations not given: the short profile's (--short) or the full one's (dry_minimums.SHORT / FULL); the player's
+    state length defaults to the bulk's in the full form; --short skips the single-mode reference unless asked."""
+    prof = M.SHORT if a.short else M.FULL
+    for k in ("state_s", "goodput_s", "ping_s", "top_capture_s"):
+        if getattr(a, k) is None:
+            setattr(a, k, prof[k])
+    if a.player_state_s is None:
+        a.player_state_s = prof["player_state_s"] or a.state_s
+    if a.short and not a.single_reference:
+        a.no_single_reference = True
+
+
+def fast_auto_s(changes: int, seed: int, horizon_s: float = 900.0) -> float:
+    """The @fast segment that gives every slot `changes` changes (its seeded plans over a long horizon)."""
+    F = _fast()
+    return M.fast_seconds({s: F.schedule(platform_of(s), s, horizon_s, seed) for s in SESSIONS}, changes)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--iface", default="wlp0s20f3")
     ap.add_argument("--out", default=f"/tmp/trio_dry_run_{int(time.time())}")
-    ap.add_argument("--state-s", type=float, default=60.0, help="seconds per state (levi: >= 60)")
+    ap.add_argument("--short", action="store_true",
+                    help="the short form (restart prereg, rushi 2026-10-20: 5-10 min of box time per item): durations "
+                         f"{M.SHORT} unless given; no single-mode reference unless --single-reference. A gate below "
+                         f"its minimum support ({M.MINIMUMS}) reads insufficient, never pass, in either form")
+    ap.add_argument("--state-s", type=float, default=None,
+                    help=f"seconds per bulk state (full {M.FULL['state_s']:g}, levi: >= 60; short {M.SHORT['state_s']:g})")
+    ap.add_argument("--player-state-s", type=float, default=None,
+                    help=f"seconds per player-load state (full: --state-s; short {M.SHORT['player_state_s']:g}; levi: >= 60)")
+    ap.add_argument("--top-capture-s", type=float, default=None,
+                    help="seconds of the capture-drops segment, every slot at the top state under bulk, captured as a "
+                         f"session (full 0 = off; short {M.SHORT['top_capture_s']:g}; levi: >= 60)")
+    ap.add_argument("--no-goodput", dest="goodput", action="store_false", help="skip the goodput phase")
+    ap.add_argument("--no-idle-ping", dest="idle_ping", action="store_false", help="skip the idle ping per class phase")
+    ap.add_argument("--single-reference", action="store_true", help="--short: run the single-mode reference phase too")
     ap.add_argument("--slots", default=None, help="t56: the composition, e.g. youtube=2,twitch=2,tiktok=2 (default one each)")
     ap.add_argument("--states", type=lambda x: dict(kv.split("=") for kv in x.split()), default={},
                     help="per session states, e.g. 'yt=3,7,10 tw=5,9,2 tt=8,4,6'")
-    ap.add_argument("--goodput-s", type=float, default=60.0)
-    ap.add_argument("--ping-s", type=float, default=20.0, help="seconds per idle ping (no bulk)")
+    ap.add_argument("--goodput-s", type=float, default=None,
+                    help=f"full {M.FULL['goodput_s']:g} (levi: >= 60), short {M.SHORT['goodput_s']:g} (minimum 30)")
+    ap.add_argument("--ping-s", type=float, default=None, help="seconds per idle ping (no bulk): full 20, short 10")
     ap.add_argument("--ref-state-s", type=float, default=60.0, help="seconds per state in the single-mode reference")
     ap.add_argument("--no-single-reference", action="store_true", help="skip the single-mode tree reference phase")
     ap.add_argument("--no-upload", dest="upload", action="store_false",
@@ -1130,15 +1299,19 @@ def main(argv=None) -> int:
     ap.add_argument("--player-url", default="https://h3.speed.cloudflare.com/__down",
                     help="the size endpoint, h3 and TCP alike (speed.cloudflare.com serves no HTTP/3: TLS alert 40)")
     ap.add_argument("--player-fallback-url", default=BULK_URL, help="TCP only: the HTTP Range fallback")
-    ap.add_argument("--fast-segment-s", type=float, default=0.0,
+    ap.add_argument("--fast-segment-s", default="0",
                     help="Q am. 17: seconds of each slot's @fast plan under the bulk load after the bulk phase (the "
-                         "schedule families' landing dry run: 180); 0 = off")
+                         "schedule families' landing dry run: 180); 0 = off; auto = sized from the seeded plans to "
+                         "--fast-min-changes changes on every slot")
+    ap.add_argument("--fast-min-changes", type=int, default=M.SHORT["fast_changes"],
+                    help="--fast-segment-s auto: changes per slot (levi's minimum 30, plus 2)")
     ap.add_argument("--fast-seed", type=int, default=0, help="the @fast plans' seed (recorded)")
     ap.add_argument("--player-rerun", action="store_true",
                     help="levi 00132: the tree, the bulk phase (option A's validation) and the player phase only; no "
                          "goodput, single-mode reference, cross-class fetch, idle pings, upload or @fast segment")
     a = ap.parse_args(argv)
     a.states = {k: v.split(",") for k, v in a.states.items()}
+    resolve_profile(a)
     global SESSIONS, DEFAULT_STATES
     if a.slots:                                       # t56: the step's composition (--slots youtube=2,twitch=2,tiktok=2)
         comp = {k: int(v) for k, v in (kv.split("=") for kv in a.slots.split(","))}
@@ -1172,8 +1345,19 @@ def main(argv=None) -> int:
             print(f"--player-load: the h3 probe of {a.player_url} failed: {(r.stdout or r.stderr).strip()[-300:]}",
                   file=sys.stderr)
             return 4
-    if a.state_s < 60 or a.goodput_s < 60:
+    if not a.short and (a.state_s < 60 or a.goodput_s < 60):
         print("note: levi's gate-1 condition is >= 60 s per state and for the goodput run", file=sys.stderr)
+    if a.fast_segment_s == "auto":
+        a.fast_segment_s = fast_auto_s(a.fast_min_changes, a.fast_seed)
+    a.fast_segment_s = float(a.fast_segment_s)
+    a.nominal_s = M.short_total_s(
+        {"goodput_s": a.goodput_s, "ping_s": a.ping_s, "state_s": a.state_s, "player_state_s": a.player_state_s,
+         "top_capture_s": a.top_capture_s},
+        max(len(a.states.get(s) or DEFAULT_STATES[s]) for s in SESSIONS),
+        {"goodput": a.goodput and not a.player_rerun, "idle_ping": a.idle_ping and not a.player_rerun,
+         "top_capture": bool(a.top_capture_s) and not a.player_rerun,
+         "fast": a.fast_segment_s if not a.player_rerun else 0, "player": a.player_load or a.player_rerun})
+    print(f"profile {'short' if a.short else 'full'}: nominal seconds per phase {json.dumps(a.nominal_s)}")
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "networkSim"))
     import offloads                                  # t55: the dry runs measure under the collection's offload setting
     off = offloads.ensure_off(a.iface)
@@ -1182,10 +1366,17 @@ def main(argv=None) -> int:
         return 3
     rep = run(a)
     rep["capture_offloads"] = off
+    rep["profile"] = {"short": a.short, "state_s": a.state_s, "player_state_s": a.player_state_s,
+                      "goodput_s": a.goodput_s, "ping_s": a.ping_s, "top_capture_s": a.top_capture_s,
+                      "fast_segment_s": a.fast_segment_s, "nominal_s": a.nominal_s, "minimums": M.MINIMUMS}
     if a.data:
         rep["check_session_reference"] = check_session_reference(a.data, rep.get("states") or {})
     Path(a.out, "report.json").write_text(json.dumps(rep, indent=1, default=str))
     print(json.dumps({k: rep.get(k) for k in ("goodput", "goodput_gate", "error", "aborted", "torn_down")}, default=str))
+    for k, v in (rep.get("gates") or {}).items():
+        if "status" in v:
+            print(f"GATE {k}: {v['status']}" + (f" (support {json.dumps(v.get('support'), default=str)})"
+                                                if v["status"] == "insufficient" else ""))
     print(f"report: {a.out}/report.json")
     return 0 if not rep.get("error") and not rep.get("aborted") else 1
 
