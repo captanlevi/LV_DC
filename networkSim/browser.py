@@ -654,6 +654,14 @@ def _rx_bytes() -> int | None:
     return total if seen else None
 
 
+def reentry_confirm_of(r: dict | None) -> dict:
+    """The re-entry's own confirmation beside room_ended's pre-re-entry sample (boundary bundle item 4; supervisor
+    2026-10-21 after ti_100037, whose room_ended.sample read ended_text False while the reloaded page read True): the
+    navigation / entry times, the confirm reading (dead, rs, ct, ended_text), its samples and outcome."""
+    r = r or {}
+    return {k: r.get(k) for k in ("t_nav", "t_enter", "confirm", "samples", "samples_no_video", "outcome", "room")}
+
+
 class TTRoomWatch:
     """The tt dead-room rule over 1 s player samples (_TT_PLAYER_STATE_JS) (supervisor 2026-10-17, after ti_12 / 13 / 14:
     under shaping tt tears its player down and reconnects for 10-15 s right after a stall, and a fast src_gone cut
@@ -3339,7 +3347,10 @@ class BrowserSession:
                             continue
                         if r["outcome"] == "room_ended":
                             why = "room_ended"
-                            self.room_ended = {**rec, "reason": "ended_page", "after_player_dead_reentry": True}
+                            # bundle item 4 (supervisor 2026-10-21): `sample` stays the pre-re-entry one; what the
+                            # reloaded page showed rides beside it
+                            self.room_ended = {**rec, "reason": "ended_page", "after_player_dead_reentry": True,
+                                               "reentry_confirm": reentry_confirm_of(r)}
                     if why == "player_dead":
                         self.player_dead = {**pd, "reentries": len(self.player_dead_reentries)}
                 else:
@@ -3531,7 +3542,8 @@ class BrowserSession:
                 if r["outcome"] == "continue":
                     return
                 if r["outcome"] == "room_ended":          # tt: the re-entry found the ended banner (the host ended)
-                    self.room_ended = {"reason": "ended_page", "after_frozen_reentry": True, "at": time.time()}
+                    self.room_ended = {"reason": "ended_page", "after_frozen_reentry": True, "at": time.time(),
+                                       "reentry_confirm": reentry_confirm_of(r)}
                     if self.abort_reason is None:
                         self.abort_reason, self.abort_at = "room_ended", time.time()
                     return
