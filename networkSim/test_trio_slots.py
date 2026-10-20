@@ -263,7 +263,7 @@ def test_siblings_and_floor():
         (st / "incoming.pcap").write_bytes(b"x" * 200)
         (st / "outgoing.pcap").write_bytes(b"x" * 100)
         assert T.capture_growing(st)["ok"] is True
-        assert "TCPDUMP_Z=-Z root" in T.capture_vars(st) and T.STAGING.parent.name == "data"
+        assert "TCPDUMP_Z=-Z root" in T.capture_vars(st) and T.STAGING.parent.resolve() == T.DATA.resolve()
 
 
 def _pkt(t, src, dst, proto, sport, dport, n=100, dcid="", sni="", qname="", resp="", ans=""):

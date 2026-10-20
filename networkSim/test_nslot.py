@@ -351,7 +351,7 @@ def test_staging_on_the_data_volume():
     on the data volume (data/_trio_staging) with every staged tcpdump as root (-Z root: the slots', the default class's
     and the DNS capture); exp.py fails a slot loudly when its capture is not growing once playing; the trio's raised
     floor applies to the data volume (orchestrate's preflight), the rootfs keeps single mode's."""
-    assert T.STAGING.name == "_trio_staging" and T.STAGING.parent.name == "data"
+    assert T.STAGING.name == "_trio_staging" and T.STAGING.parent.resolve() == T.DATA.resolve()   # on the data root (data_root.py), any name
     assert "TCPDUMP_Z=-Z root" in T.default_capture_vars(Path("/T"))
     import inspect
     assert "{TCPDUMP_Z}" in inspect.getsource(T.dns_capture_start)
