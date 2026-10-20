@@ -20,7 +20,7 @@ from pathlib import Path
 # it is None nothing is of record (fail closed). The earlier eras (c1f9181 N = 3 t55, 61a852d N = 5 t56, the t57
 # boundary) are stated references, never pooled.
 ERA = "t58-restart-2026-10-21"   # the era this collector writes (capture regime unchanged: GRO / GSO / TSO off)
-RECORD_BOUNDARY: str | None = None
+RECORD_BOUNDARY: str | None = "975a493f7959ce39ce4977f2b91b8b7c9e7e231e"   # the day-1 tip T (restart-tip), gated by shagun, levi
 RECORD_LINES = {ERA: RECORD_BOUNDARY}          # era -> its counted line's boundary sha (None: nothing counts yet)
 RECORD_ERAS = tuple(RECORD_LINES)
 REPO = Path(__file__).resolve().parent.parent

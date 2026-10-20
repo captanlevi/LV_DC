@@ -188,9 +188,11 @@ def test_the_restart_record_definition():
     import record
     assert record.ERA == "t58-restart-2026-10-21"
     assert record.RECORD_ERAS == (record.ERA,) and record.STATED_ERAS == ("t56-nslot-2026-10-19",)
-    assert record.RECORD_BOUNDARY is None and record.RECORD_LINES == {record.ERA: None}     # set after the apply gate
+    # T2 (levi): the boundary is the gated day-1 tip T, set once; T and its descendants count, nothing before it
+    assert record.RECORD_BOUNDARY == "975a493f7959ce39ce4977f2b91b8b7c9e7e231e" and record.RECORD_LINES == {record.ERA: record.RECORD_BOUNDARY}
     t58 = lambda sha: {"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": sha}}
-    assert not record.is_record(t58("844f115")) and not record.is_record(t58(None))         # fail closed
+    assert record.is_record(t58("975a493f7959ce39ce4977f2b91b8b7c9e7e231e"))                    # T itself (the checkout knows it)
+    assert not record.is_record(t58("7de5518")) and not record.is_record(t58(None))         # an ancestor; no sha
     stated = {"concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}}
     assert not record.is_record(stated) and not record.of_record_any_era(stated)          # never, not even not_usable
     assert record.counted_any_era(stated)                     # channel identity spans every era (restart §0)
