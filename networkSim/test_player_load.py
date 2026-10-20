@@ -184,7 +184,8 @@ def test_the_dry_run_phase_reading_and_command(tmp_path=None):
         ph = {"t0_epoch": 1000.0, "samples": _samples([20000] * 60), "kernel_drops": {"lvi_tw1": "0", "lvi_def": "0"},
               "timeline": [{"k": 0, "session": "tw1", "state": "5", "proto": "h3", "rate_kbit": 1600.0, "delay_ms": 40.0,
                             "loss_pct": 0.1, "log": str(log)}],
-              "captures": {"lvi_tw1": "a.pcap", "lvi_def": "b.pcap"}}
+              "captures": {"lvi_tw1": "a.pcap", "lvi_def": "b.pcap"},
+              "capture": {"lvi_tw1": {"ran": True}, "lvi_def": {"ran": True}}}
         T.sh = lambda cmd, check=True, capture=False, print_only=False: (
             "12:00:00.0 IP 104.16.1.1.443 > 192.168.4.50.50001: UDP, length 1200\n" if "a.pcap" in cmd else "")
         r = T.read_player_phase(ph, 60.0)
@@ -197,6 +198,17 @@ def test_the_dry_run_phase_reading_and_command(tmp_path=None):
         T.sh = lambda cmd, check=True, capture=False, print_only=False: (
             "12:00:00.0 IP 104.16.1.1.443 > 192.168.4.50.50001: UDP, length 1200\n")   # also on lvi_def: a leak
         assert T.read_player_phase(ph, 60.0)["gated"]["no_leak"] is False
+        # levi 00317, fail closed: null drops fail; a capture that did not run fails; an empty own capture leaves
+        # no leak insufficient (no packet was there to leak)
+        T.sh = lambda cmd, check=True, capture=False, print_only=False: (
+            "12:00:00.0 IP 104.16.1.1.443 > 192.168.4.50.50001: UDP, length 1200\n" if "a.pcap" in cmd else "")
+        r = T.read_player_phase({**ph, "kernel_drops": {"lvi_tw1": None, "lvi_def": "0"}}, 60.0)
+        assert r["status"]["zero_capture_drops"] == "fail" and not r["pass"], r["status"]
+        r = T.read_player_phase({**ph, "capture": {"lvi_tw1": {"ran": False}, "lvi_def": {"ran": True}}}, 60.0)
+        assert r["status"]["zero_capture_drops"] == "fail" and r["status"]["no_leak"] == "insufficient", r["status"]
+        T.sh = lambda cmd, check=True, capture=False, print_only=False: ""          # empty pcaps
+        r = T.read_player_phase(ph, 60.0)
+        assert r["status"]["no_leak"] == "insufficient" and not r["pass"] and r["own_capture_packets"] == {"tw1": False}
     finally:
         T.SESSIONS = saved
 

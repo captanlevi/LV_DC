@@ -113,6 +113,12 @@ TOP_STATE_KBIT = 9000.0                                      # SCENARIOS state 1
 TOP_STATE = "10"                                             # the capture-drops segment's state (every slot at once)
 BULK_RATIO_LO, BULK_RATIO_HI = 0.9, 1.15     # C5 / Q am. 16 (levi): the bulk byte ratio's band, span-corrected
 TCPDUMP_B_KIB = 65536                                        # = trio_slots.TCPDUMP_B_KIB: a session capture's buffer
+# levi 00317 (T2 hold): the out dir is on the exFAT data volume, where `tcpdump -w FILE` cannot chown its savefile and
+# leaves a bare 24-byte header; every dry-run capture failed so from 2026-10-19 19:28. Every capture is now written as
+# the sessions' are: tcpdump -Z root (TCPDUMP_Z, = trio_slots.TCPDUMP_Z) to stdout, a root shell opening the file
+# (the Makefile's form, t37), tcpdump exec'd so stop()'s SIGINT reaches it and its exit lines land in the err log.
+TCPDUMP_Z = "-Z root"
+PCAP_HEADER_B = 24
 
 LOG: list[str] = []
 
@@ -240,6 +246,49 @@ def stop(procs: list[subprocess.Popen]) -> None:
             p.wait(timeout=10)
         except subprocess.TimeoutExpired:
             os.killpg(p.pid, signal.SIGKILL)
+
+
+def tcpdump_cmd(dev: str, cap: Path, opts: str = "") -> str:
+    """A dry-run capture of dev into cap, as the sessions write theirs (levi 00317): tcpdump -Z root to stdout, the root
+    shell's redirect opening the file (no savefile chown on exFAT); start() sends tcpdump's stderr to the err log."""
+    inner = f"exec tcpdump {TCPDUMP_Z} {opts + ' ' if opts else ''}-i {dev} -U -w - > {shlex.quote(str(cap))}"
+    return f"sh -c {shlex.quote(inner)}"
+
+
+def capture_ran(err_text: str, cap) -> dict:
+    """Whether a capture ran (levi 00317, fail closed): tcpdump's "packets captured" exit line with a count above 0 and
+    a pcap holding more than its header; else why not (a chown failure is named)."""
+    c = tcpdump_counts(err_text or "")
+    try:
+        size = Path(cap).stat().st_size
+    except (OSError, TypeError):
+        size = None
+    why = None
+    if "change ownership of savefile" in (err_text or ""):
+        why = "tcpdump could not chown its savefile (exFAT)"
+    elif c["captured"] is None:
+        why = "no 'packets captured' line"
+    elif c["captured"] == 0:
+        why = "0 packets captured"
+    elif not size or size <= PCAP_HEADER_B:
+        why = "the pcap holds no packet"
+    return {"ran": why is None, "why": why, "captured": c["captured"], "kernel_drops": c["kernel_drops"], "bytes": size}
+
+
+def capture_preflight(out: Path, dev: str = "lo", seconds: float = 1.0, sleep=time.sleep) -> dict:
+    """levi 00317: one 1 s test capture into the out dir, the dry run's own capture form, with a few loopback pings
+    to capture; the dry run aborts before any phase when it did not run."""
+    cap, err = out / "capture_preflight.pcap", out / "capture_preflight.err"
+    p = start(tcpdump_cmd(dev, cap), err)
+    try:
+        sleep(0.3)
+        sh(f"ping -n -c 3 -i 0.2 -W 1 127.0.0.1", check=False)
+        sleep(seconds)
+    finally:
+        stop([p])
+    sleep(0.5)
+    r = capture_ran(err.read_text(errors="ignore") if err.exists() else "", cap)
+    return {"dev": dev, "pcap": str(cap), **r}
 
 
 def rx_bytes(iface: str) -> int:
@@ -390,6 +439,10 @@ def run(a) -> dict:
     if not pf["ok"] and not a.force:
         rep["aborted"] = "preflight failed (root, cgroup v2, tools, interface, no session running)"
         return rep
+    rep["capture_preflight"] = cp = capture_preflight(out)       # levi 00317: never --force'd past
+    if not cp["ran"]:
+        rep["aborted"] = f"capture preflight: the test capture into {out} did not run ({cp['why']})"
+        return rep
     procs: list[subprocess.Popen] = []
     built = False
     # t56 §9: the box record (CPU, swap, OOM, i915 engine busy per second; the PMU, as this runs as root) for the run
@@ -464,7 +517,7 @@ def run(a) -> dict:
             up = {"url": a.upload_url, "udp_sink": sink, "captures": {}}
             for s in SESSIONS:
                 cap = out / f"lvo_{s}.pcap"
-                procs.append(start(f"tcpdump -i lvo_{s} -s 96 -nn -U -w {cap}", out / f"tcpdump_lvo_{s}.err"))
+                procs.append(start(tcpdump_cmd(f"lvo_{s}", cap, "-s 96 -nn"), out / f"tcpdump_lvo_{s}.err"))
                 up["captures"][s] = str(cap)
         for s in SESSIONS:
             secs = a.state_s * len(states[s]) - 1
@@ -512,7 +565,12 @@ def run(a) -> dict:
             up["kernel_drops"] = {s: (re.findall(r"(\d+) packets? dropped by kernel",
                                                  (out / f"tcpdump_lvo_{s}.err").read_text()) or [None])[-1]
                                   for s in SESSIONS if (out / f"tcpdump_lvo_{s}.err").exists()}
-            up["pass"] = all(v["ip_over_1500"] == 0 and v["frames"] > 0 for v in up["oversize"].values())
+            up["capture"] = {s: capture_ran((out / f"tcpdump_lvo_{s}.err").read_text(errors="ignore")
+                                            if (out / f"tcpdump_lvo_{s}.err").exists() else "", c)
+                             for s, c in up["captures"].items()}
+            # levi 00317: fail closed; a capture that did not run, or an unread kernel drop count, is no pass
+            up["pass"] = (all(v["ip_over_1500"] == 0 and v["frames"] > 0 for v in up["oversize"].values())
+                          and all(c["ran"] and c["kernel_drops"] == 0 for c in up["capture"].values()))
             rep["upstream_load"] = up
         bulk_fast = tokens.stop() if tokens is not None else None
         with open(out / "samples.jsonl", "w") as fh:
@@ -768,7 +826,7 @@ def player_phase(a, states: dict, out: Path) -> dict:
     procs, caps, pl = [], {}, {s: [] for s in SESSIONS}
     for d in [f"lvi_{s}" for s in SESSIONS] + ["lvi_def"]:
         cap = out / f"player_{d}.pcap"
-        procs.append(start(f"tcpdump -i {d} -s 96 -nn -U -w {cap}", out / f"tcpdump_player_{d}.err"))
+        procs.append(start(tcpdump_cmd(d, cap, "-s 96 -nn"), out / f"tcpdump_player_{d}.err"))
         caps[d] = str(cap)
     samples, timeline = [], []
     t0 = time.time()
@@ -801,11 +859,13 @@ def player_phase(a, states: dict, out: Path) -> dict:
             fh.write(json.dumps(x) + "\n")
     drops = {d: (re.findall(r"(\d+) packets? dropped by kernel", (out / f"tcpdump_player_{d}.err").read_text())
                  or [None])[-1] for d in caps if (out / f"tcpdump_player_{d}.err").exists()}
+    ran = {d: capture_ran((out / f"tcpdump_player_{d}.err").read_text(errors="ignore")
+                          if (out / f"tcpdump_player_{d}.err").exists() else "", c) for d, c in caps.items()}
     with open(out / "player_samples.jsonl", "w") as fh:
         for x in samples:
             fh.write(json.dumps(x) + "\n")
     return {"t0_epoch": t0, "samples": samples, "fast_samples": fast, "timeline": timeline, "captures": caps,
-            "kernel_drops": drops, "state_s": a.player_state_s}
+            "kernel_drops": drops, "capture": ran, "state_s": a.player_state_s}
 
 
 def read_player_phase(ph: dict, state_s: float) -> dict:
@@ -851,7 +911,9 @@ def read_player_phase(ph: dict, state_s: float) -> dict:
     gated = {"ratio": all(r["gate"] in ("pass", "insufficient") for rs in rows.values() for r in rs),
              "h3_exercised": all((r["h3"] or {}).get("gate", "pass") == "pass" for rs in rows.values() for r in rs),
              "no_leak": all(n == 0 for row in leak.values() for n in row.values()),
-             "zero_capture_drops": all(v in (None, "0") for v in ph["kernel_drops"].values())}
+             # levi 00317: fail closed: every capture ran and its drop count was read as 0 (null is a fail)
+             "zero_capture_drops": (bool(ph["captures"]) and all(ph["kernel_drops"].get(d) == "0" for d in ph["captures"])
+                                    and all((ph.get("capture") or {}).get(d, {}).get("ran") for d in ph["captures"]))}
     st = {"ratio": M.combine(list(status["ratio"].values())),
           "h3_exercised": M.combine(list(status["h3_exercised"].values())),
           "no_leak": M.status(gated["no_leak"], leak_chk),
@@ -859,9 +921,14 @@ def read_player_phase(ph: dict, state_s: float) -> dict:
     # levi on the short form: the player phase gates on h3-exercised and no-leak, every slot; option A's ratio is
     # report-only until a validated rerun (a state under 10 s qualifying reads insufficient, the bulk ratio for that
     # state being the gate in force); the snaplen-96 capture's drops stay its own check
+    # levi 00317: no leak is read on captured packets only: a slot whose own capture holds none reads insufficient
+    own = {s: bool((ph.get("capture") or {}).get(f"lvi_{s}", {}).get("ran")) and len(pkts.get(f"lvi_{s}") or []) > 0
+           for s in SESSIONS}
+    if st["no_leak"] == "pass" and not all(own.values()):
+        st["no_leak"] = "insufficient"
     gating = ("h3_exercised", "no_leak", "zero_capture_drops")
     return {"per_slot": rows, "leaks": leak, "player_tuples": {s: len(t) for s, t in tuples.items()},
-            "capture_kernel_drops": ph["kernel_drops"], "quic_vs_tcp_ratio": {p: R.q(v) for p, v in by_proto.items()},
+            "capture_kernel_drops": ph["kernel_drops"], "capture": ph.get("capture"), "own_capture_packets": own, "quic_vs_tcp_ratio": {p: R.q(v) for p, v in by_proto.items()},
             "gated": {k: gated[k] for k in gating}, "reported": {"ratio": gated["ratio"]},
             "status": st, "status_per_slot": status, "support": {**support, "no_leak": leak_chk},
             "gating": list(gating), "pass": all(gated[k] for k in gating) and all(st[k] == "pass" for k in gating),
@@ -990,7 +1057,7 @@ def top_capture_phase(a, out: Path, clock=time.time, sleep=time.sleep) -> dict:
         for s in SESSIONS:
             for d in (f"lvi_{s}", f"lvo_{s}"):
                 caps[d] = str(out / f"top_{d}.pcap")
-                procs.append(start(f"tcpdump -B {TCPDUMP_B_KIB} -i {d} -U -w {caps[d]}", out / f"tcpdump_top_{d}.err"))
+                procs.append(start(tcpdump_cmd(d, Path(caps[d]), f"-B {TCPDUMP_B_KIB}"), out / f"tcpdump_top_{d}.err"))
         t0 = clock()
         while clock() < t0 + a.top_capture_s:
             samples.append({"t": round(clock() - t0, 2), "classes": {d: class_stats(d) for d in devs}})
@@ -1000,12 +1067,13 @@ def top_capture_phase(a, out: Path, clock=time.time, sleep=time.sleep) -> dict:
         stop(procs)
         stop(bulk)
     sleep(1.0)
-    counts = {}
+    counts, ran = {}, {}
     for d in caps:
         f = out / f"tcpdump_top_{d}.err"
-        counts[d] = tcpdump_counts(f.read_text(errors="ignore")) if f.exists() else tcpdump_counts("")
+        txt = f.read_text(errors="ignore") if f.exists() else ""
+        counts[d], ran[d] = tcpdump_counts(txt), capture_ran(txt, caps[d])
     return {"state": TOP_STATE, "set": p, "seconds": round(t1 - t0, 1), "buffer_kib": TCPDUMP_B_KIB,
-            "captures": caps, "counts": counts, "samples": samples}
+            "captures": caps, "counts": counts, "capture": ran, "samples": samples}
 
 
 def read_top_capture(ph: dict) -> dict:
@@ -1013,13 +1081,19 @@ def read_top_capture(ph: dict) -> dict:
     at the top state; each slot's shaper-bound share (backlog > 0) reported."""
     chk = M.capture_drops(ph["seconds"])
     drops = {d: c["kernel_drops"] for d, c in ph["counts"].items()}
-    reading = bool(drops) and all(v == 0 for v in drops.values())
+    # levi 00317: fail closed: a capture that did not run fails the gate ("capture did not run"), at any support
+    not_run = {d: c["why"] for d, c in (ph.get("capture") or {}).items() if not c["ran"]}
+    if "capture" not in ph:
+        not_run = {d: "not checked" for d in ph["counts"]}
+    reading = (f"fail (capture did not run: {not_run})" if not_run else
+               bool(drops) and all(v == 0 for v in drops.values()))
     bound = {}
     for s in SESSIONS:
         xs = [((x["classes"].get(f"lvi_{s}") or {}).get("1:10") or {}) for x in ph["samples"]]
         bound[s] = round(sum(1 for c in xs if c.get("backlog")) / len(xs), 3) if xs else None
     st = M.status(reading, chk)
     return {"status": st, "pass": st == "pass", "support": chk, "kernel_drops": drops, "counts": ph["counts"],
+            "capture": ph.get("capture"), "capture_did_not_run": not_run,
             "shaper_bound_share": bound, "state": ph["state"], "buffer_kib": ph["buffer_kib"],
             "rule": "0 kernel drops on every slot's ingress and egress capture, every slot at the top state under bulk"}
 
@@ -1296,6 +1370,18 @@ def fast_auto_s(changes: int, seed: int, horizon_s: float = 900.0) -> float:
                            for s in SESSIONS}, changes)
 
 
+def fast_segment_refusal(seconds: float, seed: int) -> str | None:
+    """levi 00317: a @fast segment (seconds > 0) shorter than the one giving every slot the minimum changes is refused
+    (T's full set ran 12 s: 2-4 changes per slot, never a sufficient read); 0 (off) is not refused."""
+    if not seconds:
+        return None
+    need = fast_auto_s(M.MINIMUMS["fast"]["changes"], seed)
+    if seconds < need:
+        return (f"--fast-segment-s {seconds:g} gives fewer than {M.MINIMUMS['fast']['changes']} @fast changes on some "
+                f"slot (needs >= {need:g} s at seed {seed}); use auto")
+    return None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--iface", default="wlp0s20f3")
@@ -1349,7 +1435,8 @@ def main(argv=None) -> int:
     ap.add_argument("--player-fallback-url", default=BULK_URL, help="TCP only: the HTTP Range fallback")
     ap.add_argument("--fast-segment-s", default="0",
                     help="Q am. 17: seconds of each slot's @fast plan under the bulk load after the bulk phase (the "
-                         "schedule families' landing dry run: 180); 0 = off; auto = sized from the seeded plans to "
+                         "slot's episode at restart §2b's law); 0 = off; a length below the minimum's (30 changes on every "
+                         "slot) is refused (levi 00317); auto = sized from the seeded plans to "
                          "--fast-min-changes changes on every slot")
     ap.add_argument("--fast-min-changes", type=int, default=M.SHORT["fast_changes"],
                     help="--fast-segment-s auto: changes per slot (levi's minimum 30, plus 2)")
@@ -1400,9 +1487,16 @@ def main(argv=None) -> int:
             return 4
     if not a.short and (a.state_s < 60 or a.goodput_s < 60):
         print("note: levi's gate-1 condition is >= 60 s per state and for the goodput run", file=sys.stderr)
+    if a.fast_min_changes < M.MINIMUMS["fast"]["changes"]:
+        print(f"--fast-min-changes {a.fast_min_changes} < the minimum {M.MINIMUMS['fast']['changes']}", file=sys.stderr)
+        return 2
     if a.fast_segment_s == "auto":
         a.fast_segment_s = fast_auto_s(a.fast_min_changes, a.fast_seed)
     a.fast_segment_s = float(a.fast_segment_s)
+    refused = None if a.player_rerun else fast_segment_refusal(a.fast_segment_s, a.fast_seed)
+    if refused:
+        print(refused, file=sys.stderr)
+        return 2
     a.nominal_s = M.short_total_s(
         {"goodput_s": a.goodput_s, "ping_s": a.ping_s, "state_s": a.state_s, "player_state_s": a.player_state_s,
          "top_capture_s": a.top_capture_s},

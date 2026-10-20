@@ -10,6 +10,7 @@ No root, no network.
 """
 import importlib.util
 import json
+import shlex
 import os
 import sys
 import tempfile
@@ -113,7 +114,13 @@ def test_fast_auto_sized_from_the_seeded_plans():
         plan = F.schedule(T.platform_of(s), s, secs, 0)
         assert sum(1 for e in plan[1:] if not e.get("walk_step")) >= 32, (s, len(plan), secs)   # re-draws (§2)
         assert plan == F.schedule(T.platform_of(s), s, 900.0, 0)[:len(plan)]     # a prefix of the long horizon
-    assert 32 * 2.4 < secs < 32 * 6.0 + 2.0, secs
+    # restart §2b at the dry run (levi 00317): each slot's episode drawn log-U(12, 48) s, re-draws D/5-D/2
+    assert 32 * 12 / 5 < secs < 32 * 48 / 2 + 2.0, secs
+    for s in T.SESSIONS:
+        fe = {e["fast_episode_s"] for e in F.schedule(T.platform_of(s), s, 60.0, 0)}
+        assert len(fe) == 1 and 12.0 <= fe.pop() <= 48.0
+    assert T.fast_segment_refusal(12.0, 0) and T.fast_segment_refusal(secs - 40.0, 0)      # T's full set ran 12 s
+    assert T.fast_segment_refusal(0.0, 0) is None and T.fast_segment_refusal(secs, 0) is None
     try:
         M.fast_seconds({"x": [{"t": 0.0}, {"t": 3.0}]}, 5)
         raise AssertionError("a short plan must raise")
@@ -133,7 +140,8 @@ def test_top_capture_reading():
                for i in range(60)]
         ph = {"state": "10", "buffer_kib": 65536, "seconds": 60.0, "samples": smp,
               "counts": {d: {"captured": 9, "received": 9, "kernel_drops": 0}
-                         for d in ("lvi_yt1", "lvo_yt1", "lvi_tw1", "lvo_tw1")}}
+                         for d in ("lvi_yt1", "lvo_yt1", "lvi_tw1", "lvo_tw1")},
+              "capture": {d: {"ran": True, "why": None} for d in ("lvi_yt1", "lvo_yt1", "lvi_tw1", "lvo_tw1")}}
         r = T.read_top_capture(ph)
         assert r["status"] == "pass" and r["pass"] and r["shaper_bound_share"] == {"yt1": 1.0, "tw1": 0.0}, r
         r = T.read_top_capture({**ph, "seconds": 59.9})
@@ -142,6 +150,12 @@ def test_top_capture_reading():
         assert T.read_top_capture(bad)["status"] == "fail" and T.read_top_capture({**bad, "seconds": 10.0})["status"] == "fail"
         unread = {**ph, "counts": {**ph["counts"], "lvo_tw1": T.tcpdump_counts("")}}
         assert T.read_top_capture(unread)["status"] == "fail"               # an unread count is never a pass
+        # levi 00317: a capture that did not run (exFAT chown) fails at any support, and an unchecked one too
+        chown = {**ph, "capture": {**ph["capture"], "lvo_tw1": {"ran": False, "why": "tcpdump could not chown its savefile (exFAT)"}}}
+        for x in (chown, {**chown, "seconds": 10.0}):
+            r = T.read_top_capture(x)
+            assert r["status"] == "fail" and "lvo_tw1" in r["capture_did_not_run"], r
+        assert T.read_top_capture({k: v for k, v in ph.items() if k != "capture"})["status"] == "fail"
     finally:
         T.SESSIONS = saved
 
@@ -211,8 +225,9 @@ def test_player_support_three_states():
                 tl.append({"k": k, "session": "tw1", "state": "5", "proto": proto, "rate_kbit": 1600.0, "delay_ms": 40.0,
                            "loss_pct": 0.1, "log": str(log)})
             ph = {"t0_epoch": 1000.0, "samples": P._samples([20000] * 181), "kernel_drops": {"lvi_tw1": "0"},
-                  "timeline": tl, "captures": {"lvi_tw1": "a.pcap"}}
-            T.sh = lambda cmd, check=True, capture=False, print_only=False: ""
+                  "timeline": tl, "captures": {"lvi_tw1": "a.pcap"}, "capture": {"lvi_tw1": {"ran": True}}}
+            T.sh = lambda cmd, check=True, capture=False, print_only=False: (   # the slot's own capture holds packets
+                "12:00:00.0 IP 104.16.1.1.443 > 192.168.4.50.50001: UDP, length 1200\n")
             r = T.read_player_phase(ph, 60.0)
             assert r["status"]["ratio"] == "pass", r["status"]                         # 3 x 60 s, each >= 10 s
             assert r["support"]["tw1"]["h3_exercised"]["support"]["h3_segments"] == 20
@@ -330,6 +345,57 @@ def main() -> int:
             fn()
     print("test_dry_short: ok")
     return 0
+
+def test_captures_written_as_the_sessions_and_fail_closed():
+    """levi 00317: every dry-run capture is tcpdump -Z root to stdout behind a root shell's redirect (the sessions' form:
+    on exFAT `-w FILE` cannot chown its savefile and leaves a 24-byte header); a capture runs only with a "packets
+    captured" line above 0 and a pcap holding a packet; the 1 s preflight capture aborts the run before any phase."""
+    assert T.TCPDUMP_Z == __import__("trio_slots").TCPDUMP_Z == "-Z root"
+    c = T.tcpdump_cmd("lvi_yt1", Path("/d/top lvi_yt1.pcap"), "-B 65536")
+    assert c.startswith("sh -c ") and "exec tcpdump -Z root -B 65536 -i lvi_yt1 -U -w - > " in c, c
+    assert "'/d/top lvi_yt1.pcap'" in shlex.split(c)[2] and " -w /" not in c, c          # stdout, never -w FILE
+    ok = "listening on lvi_yt1\n1200 packets captured\n1210 packets received by filter\n0 packets dropped by kernel\n"
+    with tempfile.TemporaryDirectory() as d:
+        full, hdr = Path(d) / "full.pcap", Path(d) / "hdr.pcap"
+        full.write_bytes(b"\0" * 24 + b"\1" * 200)
+        hdr.write_bytes(b"\0" * 24)                                                    # the exFAT failure's file
+        assert T.capture_ran(ok, full) == {"ran": True, "why": None, "captured": 1200, "kernel_drops": 0, "bytes": 224}
+        chown = "tcpdump: Couldn't change ownership of savefile\n"
+        r = T.capture_ran(chown, hdr)
+        assert not r["ran"] and "exFAT" in r["why"] and r["kernel_drops"] is None, r
+        assert T.capture_ran(ok, hdr)["why"] == "the pcap holds no packet"
+        assert T.capture_ran(ok.replace("1200 packets", "0 packets"), full)["why"] == "0 packets captured"
+        assert T.capture_ran("", full)["why"] == "no 'packets captured' line"
+        assert T.capture_ran(ok, Path(d) / "missing.pcap")["ran"] is False
+        # the preflight: the run's own capture form into the out dir; a failed one is reported, not raised
+        saved = T.start, T.stop, T.sh
+        started = []
+
+        def fake_start(cmd, log, text=chown, body=b"\0" * 24):
+            started.append(cmd)
+            Path(log).write_text(text)
+            Path(d, "capture_preflight.pcap").write_bytes(body)
+            return None
+        try:
+            T.stop, T.sh = (lambda procs: None), (lambda *a, **k: "")
+            T.start = fake_start
+            r = T.capture_preflight(Path(d), sleep=lambda s: None)
+            assert not r["ran"] and "exFAT" in r["why"] and "exec tcpdump -Z root" in started[0], r
+            T.start = lambda cmd, log: fake_start(cmd, log, ok, b"\0" * 24 + b"\1" * 80)
+            assert T.capture_preflight(Path(d), sleep=lambda s: None)["ran"]
+        finally:
+            T.start, T.stop, T.sh = saved
+        # run() aborts before any phase (no tree, no box record), never --force'd past
+        saved = T.preflight, T.capture_preflight
+        try:
+            T.preflight = lambda iface: {"ok": True}
+            T.capture_preflight = lambda out: {"ran": False, "why": "tcpdump could not chown its savefile (exFAT)"}
+            a = types.SimpleNamespace(out=str(Path(d) / "run"), iface="lo", states={}, state_s=40.0, url="u", force=True)
+            rep = T.run(a)
+            assert rep["aborted"].startswith("capture preflight") and "exFAT" in rep["aborted"], rep
+            assert not (Path(d) / "run" / "box_record.jsonl").exists() and "timeline" not in rep
+        finally:
+            T.preflight, T.capture_preflight = saved
 
 
 if __name__ == "__main__":

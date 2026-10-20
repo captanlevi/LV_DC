@@ -2,7 +2,8 @@
 platform's base matrix, the walk's 2 s steps between its 12-30 s re-draws; both segments carry the walk and a delay / loss
 factor per slot, as the collector runs them): each slot's platform's @fast family
 (utils/shaping FAMILY_BASE + "@fast") drives its class for the segment, from a seeded run of the collector's own
-generator (utils/netStat.family_episode_generator: every sub-step is a tc change, 2.4-6 s apart, as exp.py applies it),
+generator (utils/netStat.family_episode_generator: every sub-step is a tc change, as exp.py applies it; the slot's @fast episode
+length drawn at restart §2b's law, log-U(12, 48) s, its re-draws D/5-D/2 apart),
 under the bulk load. Pure functions over the plan, the per-change snapshots and the per-second samples, so they test
 without root.
 
@@ -33,15 +34,20 @@ def schedule(platform: str, slot: str, seconds: float, seed: int = 0, family: st
     it: the walk's steps between re-draws and a delay / loss factor per slot (utils/netStat.session_shaping, seeded by
     the family, seed and slot). Needs networkSim on sys.path."""
     from utils.netStat import family_episode_generator, net_episode_generator, session_shaping
-    from utils.shaping import BASE_EPISODE_S, FAMILY_BASE, PLATFORM_MATRICES, initial_state_stationary, schedule_of
+    from utils.shaping import (BASE_EPISODE_S, FAMILY_BASE, PLATFORM_MATRICES, draw_fast_episode_s,
+                               initial_state_stationary, schedule_of)
     if family not in ("fast", "base"):
         raise ValueError(f"family {family!r}: fast or base")
     mid = f"{FAMILY_BASE[platform]}@fast" if family == "fast" else FAMILY_BASE[platform]
     transitions, cap, _ = PLATFORM_MATRICES[platform][mid]
     walk_rng, rec = session_shaping(f"dry-{family}:{seed}:{slot}")
     f = rec["dl_factor"]["value"]
+    fe = None
     if family == "fast":
-        sc = schedule_of(mid, cap)
+        # restart §2b (levi 00317: the dry run at the @fast law): the slot's episode length drawn as orchestrate draws a
+        # session's, log-U(12, 48) s, keyed by the dry run's seed and slot; its re-draw at D/5-D/2
+        fe = draw_fast_episode_s(f"dry-fast:{seed}:{slot}")["episode_s"]
+        sc = schedule_of(mid, cap, episode_s=fe)
         gen = lambda: family_episode_generator(sc["episode_s"], transitions, sc["redraw_s"], sc["low_cap_s"],  # noqa: E731
                                                sc["self_loops"], initial_state_fn=initial_state_stationary,
                                                walk_rng=walk_rng, dl_factor=f)
@@ -57,7 +63,8 @@ def schedule(platform: str, slot: str, seconds: float, seed: int = 0, family: st
                 break
             plan.append({"t": round(t, 3), "dur": round(ns.duration, 3), "state": ns.state, "rate_kbit": ns.rate,
                          "delay_ms": ns.delay_ms, "loss_pct": ns.loss_pct, "matrix_id": mid,
-                         "redraw_kbit": ns.redraw_kbit, "walk_step": ns.walk_step, "dl_factor": f})
+                         "redraw_kbit": ns.redraw_kbit, "walk_step": ns.walk_step, "dl_factor": f,
+                         **({"fast_episode_s": fe} if fe is not None else {})})
             t += ns.duration
     finally:
         random.setstate(saved)
