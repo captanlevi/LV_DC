@@ -271,11 +271,12 @@ def test_all_top_window_and_reread():
         g = rr["gate"]
         assert g["window"] == [[1060.0, 1100.0], [1120.0, 1420.0]], g["window"]
         assert g["support"]["support"] == {"all_top_state_s": 340.0} and g["status"] == "pass", g
-        assert rr["box_window"] == {"t0": 1060.0, "t1": 1420.0, "spans": [[1060.0, 1100.0], [1120.0, 1420.0]],
-                                    "over": "all-top window (union of spans)"}
+        assert {k: rr["box_window"][k] for k in ("t0", "t1", "spans", "over")} == {
+            "t0": 1060.0, "t1": 1420.0, "spans": [[1060.0, 1100.0], [1120.0, 1420.0]], "over": "all-top window (union of spans)"}
         # startup's and the gap's 95 % outside (over the hull: 10 of 180 rows at 95, p95 95)
         assert rr["box_record"]["cpu_pct"]["p95"] == 50.0 and rr["box_record"]["n"] == 170, rr["box_record"]
         assert g["short_of_headroom"] is False
+        assert rr["box_window"]["oom_kills"] == {"whole": 0, "spans": 0} and rr["box_window"]["counters_over"]["t0"] == 995.0
         tw = g["slots"]["tw1"]["tiers_all_top_s"]
         assert tw == {"720": 289.0, "1080": 50.0} and g["slots"]["tw1"]["top_tier_all_top"] == 1080, tw
         assert g["slots"]["yt1"]["tiers_all_top_s"] == {"720": 338.0}, g["slots"]["yt1"]   # its last tick 1418
@@ -283,6 +284,15 @@ def test_all_top_window_and_reread():
         assert rr["readings"][0]["first_playing_at"] == 1060.0
         assert rr["reread_of"]["gate"] == {"status": "insufficient"}
         assert D.main(["--reread", str(out / "report.json")]) == 0 and (out / "report_reread.json").exists()
+        # levi on fb78845: swap and OOM are counters, read over the whole stress: an OOM kill at startup (before the
+        # window) and swap growing before it still fail, though the window's own rows show neither
+        rows = [dict(r, oom_kill=1 if r["t"] >= 1030 else 0, swap_used_kb=64 if r["t"] >= 1030 else 0) for r in rows]
+        (out / "box_record.jsonl").write_text(json.dumps({"header": True, "gpu_source": "x"}) + "\n"
+                                              + "".join(json.dumps(r) + "\n" for r in rows))
+        rr = D.reread(out / "report.json")
+        assert rr["gate"]["status"] == "fail" and rr["gate"]["fails"] == ["swap grew 64 kB", "1 OOM kill(s)"], rr["gate"]
+        assert rr["box_window"]["oom_kills"] == {"whole": 1, "spans": 0}, rr["box_window"]
+        assert rr["box_window"]["swap_growth_kb"] == {"whole": 64, "spans": 0}, rr["box_window"]
 
 
 if __name__ == "__main__":
