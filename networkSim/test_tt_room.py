@@ -91,11 +91,14 @@ def test_watch():
     check(run([play(i) for i in range(20)] + [frozen] * int(T + 30), state=3, rx=lambda k: 1000)[0] is None,
           "never ended in shaper states 1-4")
     # player_dead (supervisor 2026-10-17, ti_20 / ti_21): readyState 0 with no media appended / decoded ends after
-    # PLAYER_DEAD_MAX_S, whatever the interfaces carry (ti_21: chat and gifts kept rx up) and in any shaper state
+    # PLAYER_DEAD_MAX_S, whatever the interfaces carry (ti_21: chat and gifts kept rx up), outside the low shaper
+    # states; in states 1-4 the clock holds (levi 2026-10-21, t58 w2: the shaping, not a dead page; test_player_dead.py)
     TD = B.TTRoomWatch().t_dead_s
-    for kw in ({"rx": lambda k: 1000}, {"rx": lambda k: 1000 + 5000 * k}, {"state": 3, "rx": lambda k: 1000}):
+    for kw in ({"rx": lambda k: 1000}, {"rx": lambda k: 1000 + 5000 * k}, {"state": 7, "rx": lambda k: 1000}):
         r, t, _ = run([play(i) for i in range(20)] + [dead] * int(T + 30), **kw)
         check(r == "player_dead" and 20 + TD - 1 <= t <= 20 + TD + 2, f"dead player ({kw}): {r} {t}")
+    check(run([play(i) for i in range(20)] + [dead] * int(T + 30), state=3, rx=lambda k: 1000)[0] is None,
+          "dead-looking player in shaper state 3: held, never player_dead")
     # the rendered banner with no player: ended_page after TT_ENDED_FLAT_S
     r, t, _ = run([play(i) for i in range(5)] + [{**dead, "ended_text": True}] * 20)
     check(r == "ended_page" and t <= 5 + B.TT_ENDED_FLAT_S + 1, f"ended banner, no player: {r} {t}")

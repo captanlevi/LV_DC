@@ -59,7 +59,9 @@ def test_ti20_replay():
         if r:
             fired = (r, round(t - t0, 1))
             break
-    assert fired and fired[0] == "player_dead" and 170 <= fired[1] <= 174, fired     # dead run from 111.5 s
+    # dead run from 111.5 s; levi 2026-10-21: the clock holds in states 1-4 (ti_20 sat in 2-4 until 621.6 s) and 30 s
+    # after, so player_dead fires 60 s after 651.6 s (it fired at ~172 s before the hold)
+    assert fired and fired[0] == "player_dead" and 710 <= fired[1] <= 715, fired
     assert SESS["abort_reason"] == "player_frozen"                                   # what happened without the rule
 
 
@@ -87,6 +89,32 @@ def test_recovery_is_a_discontinuity():
     w = B.TTRoomWatch()
     assert not any(w.feed({"has_video": True, "src": True, "rs": 0, "buf_end": float(i), "decoded": None}, 3000.0 + i)
                    for i in range(100))
+
+
+def test_low_state_hold():
+    """levi 2026-10-21 (t58 w2 stop-and-read): in TT_LOW_STATES a readyState-0 player with bytes arriving is the shaping;
+    the player_dead clock holds there and for TT_STALL_GRACE_S after leaving them; a death that persists after the
+    state rises fires once the grace and T have passed; outside the low states nothing changes."""
+    dead = {"has_video": True, "src": True, "rs": 0, "ct": 0, "buf_end": None, "decoded": None, "stall_label": True}
+    w, out = B.TTRoomWatch(), None
+    for i in range(600):                                                # 10 min dead at state 1: no player_dead
+        out = out or w.feed(dead, 1000.0 + i, shaper_state=1)
+    assert out is None, out
+    for st in (2, 3, 4):
+        w = B.TTRoomWatch()
+        assert not any(w.feed(dead, 2000.0 + i, shaper_state=st) for i in range(200)), st
+    w, fired = B.TTRoomWatch(), None
+    for i in range(300):                                                # 100 s at state 2, then state 6, still dead
+        r = w.feed(dead, 3000.0 + i, shaper_state=2 if i < 100 else 6)
+        if r:
+            fired = (r, i)
+            break
+    # the last low sample at i = 99; held to i = 99 + TT_STALL_GRACE_S; T = 60 s after that
+    assert fired and fired[0] == "player_dead" and abs(fired[1] - (99 + B.TT_STALL_GRACE_S + 1 + 60)) <= 1, fired
+    w = B.TTRoomWatch()                                                 # outside the low states: unchanged (62 s)
+    assert next(i for i in range(100) if w.feed(dead, 4000.0 + i, shaper_state=7)) == 61
+    w = B.TTRoomWatch()                                                 # no state known (unshaped): unchanged
+    assert any(w.feed(dead, 5000.0 + i) == "player_dead" for i in range(62))
 
 
 def test_entries_and_class():
@@ -493,6 +521,7 @@ def test_ti37_recovered_reads_normal():
 
 def main() -> int:
     test_ti20_replay()
+    test_low_state_hold()
     test_recovery_is_a_discontinuity()
     test_entries_and_class()
     test_precedence()

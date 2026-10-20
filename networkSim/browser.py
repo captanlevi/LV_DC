@@ -665,13 +665,16 @@ class TTRoomWatch:
     A source drop that comes back is recorded as a discontinuity (meta.json room_discontinuities), not a cut.
     Separately, player_dead (supervisor 2026-10-17, ti_20 / ti_21: 0x0, readyState 0, playhead 0 under the stall label
     for 8-12 min, media not arriving): readyState 0 (or no element) with no media appended or decoded for
-    PLAYER_DEAD_MAX_S["tiktok"] -> "player_dead". No exemption: a reconnecting player gets its first bytes within
-    seconds (old data: every 0x0 run that recovered was <= 20 s); one that recovers inside the limit is a discontinuity."""
+    PLAYER_DEAD_MAX_S["tiktok"] -> "player_dead"; a reconnecting player gets its first bytes within seconds (old data:
+    every 0x0 run that recovered was <= 20 s); one that recovers inside the limit is a discontinuity. Its clock holds in
+    TT_LOW_STATES and for TT_STALL_GRACE_S after leaving them (levi 2026-10-21, t58 w2: below tt's lowest rendition the
+    player sits at readyState 0 under the shaping)."""
 
     def __init__(self, t_max_s: float | None = None) -> None:
         self.t_max_s = t_max_s if t_max_s is not None else FROZEN_PLAYHEAD_MAX_S.get("tiktok", 720)
         self.t_dead_s = PLAYER_DEAD_MAX_S.get("tiktok", 60)
         self.dead_since: float | None = None          # player_dead clock
+        self.last_low: float | None = None            # the last sample in TT_LOW_STATES (the player_dead hold)
         self.last_media: tuple | None = None
         self.flat_since: float | None = None          # banner rule: no progress since
         self.no_progress_since: float | None = None   # rule (b) clock
@@ -728,6 +731,14 @@ class TTRoomWatch:
         media = (s.get("buf_end"), s.get("decoded"))
         dead_now = (not s.get("has_video") or s.get("rs") == 0) and media == self.last_media
         self.last_media = media
+        # levi 2026-10-21 (t58 w2 stop-and-read, peter 00268): in TT_LOW_STATES the rate is below tt's lowest rendition and
+        # the player sits at readyState 0 while bytes arrive at the shaped rate: the shaping, never a dead page. The
+        # player_dead clock holds there and for TT_STALL_GRACE_S after leaving them, as rule (b); a real page death at a
+        # low state is caught once the state rises
+        if shaper_state in TT_LOW_STATES:
+            self.last_low = now
+        if self.last_low is not None and now - self.last_low <= TT_STALL_GRACE_S:
+            dead_now = False
         if not dead_now:
             self.dead_since = None
         elif self.dead_since is None:
