@@ -59,6 +59,13 @@ MIN_SESSION_S = 600.0
 TIER_MIN_S = 10.0
 FPS60_MIN = 50.0
 PLATFORMS = ("youtube", "twitch", "tiktok")
+# levi (shagun's 7de5518 cut): a cut stress tears down its whole tree, and a new one never starts beside a live one.
+# orchestrate runs in its own session (process group); decode_stress's SIGTERM / SIGINT / SIGHUP is forwarded to it as
+# SIGTERM (its own clean drain: sessions finalise, slots and the tree come down); after STOP_GRACE_S its group is
+# killed; the device recorder is always stopped (stop_recorder: sudo kill TERM, then KILL). TREE_FILE records the
+# live tree's pids; a launch is refused while it names a live pid or any orchestrate --trio-stress runs.
+STOP_GRACE_S = 900.0               # = orchestrate's own wait for a session to finalise
+TREE_FILE = DATA / STRESS / "_summaries" / "decode_stress_tree.json"
 
 
 def _f(x) -> float | None:
@@ -274,6 +281,50 @@ def stop_recorder(box, record: Path, run=subprocess.run, wait_s: float = 15.0) -
     return rec
 
 
+def _alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:          # a root-owned pid (the recorder under sudo): alive
+        return True
+    except (TypeError, ValueError, OSError):
+        return False
+    return True
+
+
+def live_tree(tree_file: Path = TREE_FILE, run=subprocess.run) -> list[str]:
+    """What blocks a new launch: the recorded tree's live pids, and any running orchestrate --trio-stress."""
+    out = []
+    try:
+        rec = json.loads(Path(tree_file).read_text())
+    except (OSError, ValueError):
+        rec = {}
+    for k in ("pid", "orchestrate_pid", "box_pid", "recorder_pid"):
+        if rec.get(k) and int(rec[k]) != os.getpid() and _alive(rec[k]):
+            out.append(f"{k} {rec[k]}")
+    try:
+        ps = run(["pgrep", "-af", "orchestrate.py"], capture_output=True, text=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        ps = ""
+    out += [f"orchestrate {ln.split()[0]}" for ln in ps.splitlines() if "--trio-stress" in ln]
+    return out
+
+
+def wait_or_stop(proc, stop: dict, clock=time.time, sleep=time.sleep, grace_s: float = STOP_GRACE_S,
+                 killpg=os.killpg) -> int | None:
+    """Wait for orchestrate; once a stop signal arrived (stop["t"]), give its drain grace_s, then kill its group."""
+    while proc.poll() is None:
+        if stop.get("t") is not None and clock() - stop["t"] > grace_s and not stop.get("killed"):
+            try:
+                killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            stop["killed"] = True
+        sleep(1.0)
+    return proc.returncode
+
+
 def run(a) -> dict:
     os.environ["LVDC_TRIO_DIR"] = STRESS
     sys.path.insert(0, str(NS))
@@ -284,17 +335,44 @@ def run(a) -> dict:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     box_cmd, cmd = commands(a, comp, tags, out)
+    blocking = live_tree()
+    if blocking:
+        raise SystemExit(f"decode_stress: a stress tree is alive ({', '.join(blocking)}); stop it (or read "
+                         f"{TREE_FILE}) before a new launch")
     box = subprocess.Popen((["sudo", "-n"] if os.geteuid() != 0 else []) + box_cmd, stdout=subprocess.DEVNULL,
                            stderr=open(out / "box_record.err", "a"))
     rep: dict = {"what": "t56 decode_stress", "composition": comp, "slots": tags, "state": a.state, "cmd": cmd,
                  "box_cmd": box_cmd, "yt_fullscreen": a.yt_fullscreen, "dpms_off": a.dpms_off}
     t0 = time.time()
+    stop: dict = {"t": None, "signal": None}
+    orch = None
+
+    def on_signal(sig, _frame):      # forwarded to orchestrate's own drain; the recorder stops in the finally
+        stop["t"], stop["signal"] = stop["t"] or time.time(), sig
+        if orch is not None and orch.poll() is None:
+            try:
+                orch.send_signal(signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+    old = {sg: signal.signal(sg, on_signal) for sg in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
     try:
+        TREE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(out / "orchestrate.log", "w") as log:
-            rep["orchestrate_rc"] = subprocess.call(cmd, cwd=NS, stdout=log, stderr=subprocess.STDOUT)
+            orch = subprocess.Popen(cmd, cwd=NS, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            TREE_FILE.write_text(json.dumps({"pid": os.getpid(), "orchestrate_pid": orch.pid, "box_pid": box.pid,
+                                             "out": str(out), "t": t0}))
+            rep["orchestrate_rc"] = wait_or_stop(orch, stop)
     finally:
         t1 = time.time()
         rep["box_record_stop"] = stop_recorder(box, out / "box_record.jsonl")
+        for sg, h in old.items():
+            signal.signal(sg, h)
+        try:
+            TREE_FILE.unlink()
+        except OSError:
+            pass
+        if stop["signal"] is not None:
+            rep["stopped"] = {"signal": int(stop["signal"]), "t": stop["t"], "group_killed": bool(stop.get("killed"))}
     rep["t0"], rep["t1"] = t0, t1
     sessions = [d for p in PLATFORMS for d in sorted((DATA / STRESS / p).glob("*"))
                 if (d / "meta.json").exists() and (json.loads((d / "meta.json").read_text()).get("started_at") or 0) >= t0 - 5]
