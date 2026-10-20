@@ -26,9 +26,11 @@ Short form (--short = --minutes 9; LVQoE restart prereg, short dry runs): each h
 (orchestrate --trio-stress --episodes), the 10 min session rule gives way to the support check, and in either form a
 pass below the minimum reads "insufficient", never a pass (dry_minimums.decode_stress); a fail stays a fail. The minimum
 (levi, LVQoE prereg 40843f81): >= 5 min with every slot at its top shaping state (net_labels.txt rows of the held
-state) and every slot's session running, at whatever tier the ABR holds; each slot reports its seconds per tier over
-those seconds (a slot never reaching its top tier there is stated), and CPU p95, swap and OOM are read over the same
-seconds (the window's span). --reread <report.json> re-reads a finished stress's sessions and device record with it.
+state) and every slot's session running after startup (its first playing tick), at whatever tier the ABR holds; each
+slot reports its seconds per tier over those seconds (a slot never reaching its top tier there is stated); CPU p95 is
+read over the same seconds (the union of the window's spans), swap growth and OOM kills (counters) over the whole
+stress. --reread <report.json> re-reads a
+finished stress's sessions and device record with it.
 The null comes first and is not this script's: the same device-stall definition on the frozen single-mode reference
 sessions (p90 above 2 % stops the gate), the readers' (brad / levi); --read-only reads any session dirs with it.
 
@@ -262,8 +264,8 @@ def overlap_s(readings: list[dict]) -> float | None:
 
 def gate(readings: list[dict], box: dict | None, slots: list[str] | None = None,
          min_session_s: float | None = MIN_SESSION_S) -> dict:
-    """The decode item's verdict: per slot device stalls, the box's swap / OOM / CPU headroom (box: the device record
-    read over the all-top window, run / reread), GPU reported; then the support check (restart prereg, short dry runs;
+    """The decode item's verdict: per slot device stalls, the box's swap / OOM / CPU headroom (box: box_over's reading,
+    CPU over the all-top window, swap / OOM over the whole stress), GPU reported; then the support check (restart prereg, short dry runs;
     levi, prereg 40843f81): >= 5 min with every slot at its top shaping state and every session running, at whatever
     tier the ABR holds, else a pass reads "insufficient". Each slot reports its seconds per tier over those seconds
     (tiers_all_top, filled by with_window_tiers); a slot whose top tier there is below its session's, or that has no
@@ -334,15 +336,16 @@ def with_window_tiers(readings: list[dict], sessions: list, slots: list[str] | N
 
 
 def box_over(record: Path, window: list[list[float]], t0: float | None, t1: float | None) -> tuple[dict | None, dict]:
-    """The device record read over the all-top window's spans, their union only (levi: CPU p95, swap and OOM over the
-    same seconds; the gaps between spans left out), through gpu_record.summary on the record's lines inside them; with
-    no window, over the whole stress [t0, t1], stated."""
+    """The device record for the gate (levi on 0097779 / fb78845): CPU p95 (and the GPU, the slots' CPU) over the
+    all-top window's spans, their union only (the gaps between spans left out), through gpu_record.summary on the
+    record's lines inside them; swap growth and OOM kills, counters (last minus first), over the whole stress [t0, t1],
+    so a kill or swap growth at startup or before the last slot starts still fails. With no window, everything over
+    the whole stress, stated. box_window records both readings of the counters."""
     sys.path.insert(0, str(NS))
     import gpu_record
+    whole = gpu_record.summary(Path(record), t0, t1)
     if not window:
-        w = {"t0": t0, "t1": t1, "spans": [], "over": "the whole stress (no all-top window)"}
-        return gpu_record.summary(Path(record), t0, t1), w
-    w = {"t0": window[0][0], "t1": window[-1][1], "spans": window, "over": "all-top window (union of spans)"}
+        return whole, {"t0": t0, "t1": t1, "spans": [], "over": "the whole stress (no all-top window)"}
     keep = []
     for line in Path(record).read_text().splitlines():
         try:
@@ -354,7 +357,13 @@ def box_over(record: Path, window: list[list[float]], t0: float | None, t1: floa
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl") as fh:
         fh.write("\n".join(keep) + "\n")
         fh.flush()
-        return gpu_record.summary(Path(fh.name)), w
+        box = gpu_record.summary(Path(fh.name))
+    w = {"t0": window[0][0], "t1": window[-1][1], "spans": window, "over": "all-top window (union of spans)",
+         "counters_over": {"t0": t0, "t1": t1, "over": "the whole stress"},
+         "swap_growth_kb": {"whole": whole["swap_growth_kb"], "spans": box["swap_growth_kb"]},
+         "oom_kills": {"whole": whole["oom_kills"], "spans": box["oom_kills"]}}
+    box["swap_growth_kb"], box["oom_kills"] = whole["swap_growth_kb"], whole["oom_kills"]
+    return box, w
 
 
 def commands(a, comp: dict, tags: list[str], out: Path) -> tuple[list[str], list[str]]:
