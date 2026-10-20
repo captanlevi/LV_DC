@@ -4,7 +4,8 @@ changes the experiment). Every value below must equal fixtures/frozen_constants.
 measure (Python and content.js), the stuck rule (T2, rung margin, re-entry windows, recoveries, rung fallbacks), the tt
 dead-player rule and its diagnostics, the classes and their switches, the entry rule, the QA checks, the shaper
 matrices (tables, low-state caps, initial-state rules), the low-state window, the episodes, the coverage rule and
-floors, the per-platform decode path, and the entry-quality exception (Q am. 10; off by default). A deliberate change edits the json in the same commit
+floors, the per-platform decode path, the entry-quality exception (Q am. 10; off by default), the twitch
+category floor (restart prereg §5) and the concurrent path's constants (brad's t58 F-2). A deliberate change edits the json in the same commit
 (`python3 test_frozen_constants.py --write`) with a FROZEN_COLLECTOR.md change-log row.
 
     python3 test_frozen_constants.py            (exit 0 = pass)
@@ -34,6 +35,9 @@ import schedule_occupancy as SO  # noqa: E402
 import yt_channels as YT  # noqa: E402
 import channel_cap as CC  # noqa: E402
 import tw_categories as TC  # noqa: E402
+import gpu_record as GR  # noqa: E402
+import not_usable as NU  # noqa: E402
+import trio_slots as TS  # noqa: E402
 import orchestrate as O  # noqa: E402
 import stuck as S  # noqa: E402
 from utils import netStat as NS, shaping as SH  # noqa: E402
@@ -74,6 +78,9 @@ def current() -> dict:
                                     "PLAYING_REF_MIN_PROGRESS": B.PLAYING_REF_MIN_PROGRESS},
                     "MEDIA_SNAPSHOT_MAX_S": B.MEDIA_SNAPSHOT_MAX_S, "LADDER_PROBE_FROZEN_S": B.LADDER_PROBE_FROZEN_S,
                     "LADDER_PROBE_ATTEMPTS": B.LADDER_PROBE_ATTEMPTS, "MENU_OVERLAY_S": CS.MENU_OVERLAY_S},
+        "player_error": {"ERROR_PAGE_CONFIRM_S": B.ERROR_PAGE_CONFIRM_S, "AD_NO_PLAYER_MAX_S": B.AD_NO_PLAYER_MAX_S,
+                         "AD_FROZEN_MAX_S": B.AD_FROZEN_MAX_S, "AD_FROZEN_TOL_S": B.AD_FROZEN_TOL_S,
+                         "PLAYER_ERROR_PLATFORMS": B.PLAYER_ERROR_PLATFORMS},
         "classes": {"CLASS_PRECEDENCE": E.CLASS_PRECEDENCE, "RECOVERED_DEAD_CLASS": E.RECOVERED_DEAD_CLASS,
                     "RECOVERED_FROZEN_CLASS": E.RECOVERED_FROZEN_CLASS, "RECOVERY_SLACK_S": E.RECOVERY_SLACK_S},
         "entries": {"SUSTAIN_WINDOW_S": E.SUSTAIN_WINDOW_S, "SUSTAIN_RUN_S": E.SUSTAIN_RUN_S,
@@ -99,6 +106,8 @@ def current() -> dict:
                      "RULE_VERSION": CR.RULE_VERSION, "FLOOR_SESSIONS": CR.FLOOR_SESSIONS,
                      "FLOOR_MINUTES": CR.FLOOR_MINUTES, "STALL_FLOOR_ONSETS": CR.STALL_FLOOR_ONSETS,
                      "TT_ENTRY_FLOOR": CR.TT_ENTRY_FLOOR, "EXPLORE_MIN": CR.EXPLORE_MIN,
+                     "EXPLORE_RULE": CR.EXPLORE_RULE, "EXPLORE_SEED": CR.EXPLORE_SEED,
+                     "EXPLORE_REPEAT_CAP": CR.EXPLORE_REPEAT_CAP,
                      "DEFAULT_MATRIX": CR.DEFAULT_MATRIX, "FLAG_AFTER_SESSIONS": CR.FLAG_AFTER_SESSIONS,
                      "STEERING_RULE": CR.STEERING_RULE, "SESSION_EPISODES": CR.SESSION_EPISODES,
                      "STATE_RATE": CR.STATE_RATE, "RUNG_MARGIN": CR.RUNG_MARGIN,
@@ -111,6 +120,15 @@ def current() -> dict:
                      "MATRIX_TARGETS": {f"{p}/{m}": list(v) for (p, m), v in CR.MATRIX_TARGETS.items()}},
         "decode_path": {"PLATFORM_DECODE": DP.PLATFORM_DECODE, "DEFAULT": DP.DEFAULT},
         "geometry": {"GEOMETRY_CHOICES": GEO.GEOMETRY_CHOICES, "MODE_CHROME_ARGS": GEO.MODE_CHROME_ARGS},
+        # brad's t58 F-2 (levi: pins, any time): the concurrent path's constants, unpinned before
+        "concurrent": {"IFB_OFF": OFF.IFB_OFF, "TRIO_STAGGER_S": O.TRIO_STAGGER_S, "TC_SAMPLE_S": TS.TC_SAMPLE_S,
+                       "IW_EVERY": TS.IW_EVERY, "FLAGGED_SHARE_QA": TS.FLAGGED_SHARE_QA, "TCPDUMP_B_KIB": TS.TCPDUMP_B_KIB,
+                       "SWEEPER": {"FAST_S": TS.CgroupSweeper.FAST_S, "FAST_EVERY_S": TS.CgroupSweeper.FAST_EVERY_S,
+                                   "SLOW_EVERY_S": TS.CgroupSweeper.SLOW_EVERY_S},
+                       "GPU_GAP_FACTOR": GR.GAP_FACTOR, "NOT_USABLE_FAILURES": NU.NOT_USABLE_FAILURES,
+                       "resume": {"SELF_PAUSE_HOLD_S": B.SELF_PAUSE_HOLD_S, "SELF_PAUSE_MIN_BUFFER_S": B.SELF_PAUSE_MIN_BUFFER_S,
+                                  "RESUME_BACKOFF_S": B.RESUME_BACKOFF_S, "RESUME_CHECK_S": B.RESUME_CHECK_S,
+                                  "RESUME_RULE": B.RESUME_RULE}},
         "capture_offloads": {"OFF": OFF.OFF}, "record_era": REC.ERA, "record_eras": list(REC.RECORD_ERAS), "record_lines": {k: list(v) for k, v in REC.RECORD_LINES.items()}, "stated_eras": list(REC.STATED_ERAS),
         "shot_origin": {"SHOT_CALIB_MARGIN_PX": B.SHOT_CALIB_MARGIN_PX, "SHOT_CALIB_SCALE": B.SHOT_CALIB_SCALE,
                         "SHOT_CALIB_MAX_RESIDUAL": B.SHOT_CALIB_MAX_RESIDUAL, "SHOT_CALIB_MIN_GAP": B.SHOT_CALIB_MIN_GAP},

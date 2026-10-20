@@ -26,6 +26,35 @@
   "RECOVERED_FROZEN_CLASS": "normal",
   "RECOVERY_SLACK_S": 2.0
  },
+ "concurrent": {
+  "FLAGGED_SHARE_QA": 0.05,
+  "GPU_GAP_FACTOR": 1.5,
+  "IFB_OFF": {
+   "gro": "generic-receive-offload",
+   "gso": "generic-segmentation-offload",
+   "rx-gro-list": "rx-gro-list",
+   "tso": "tcp-segmentation-offload",
+   "tx-gso-partial": "tx-gso-partial",
+   "tx-udp-segmentation": "tx-udp-segmentation"
+  },
+  "IW_EVERY": 5,
+  "NOT_USABLE_FAILURES": 2,
+  "SWEEPER": {
+   "FAST_EVERY_S": 0.5,
+   "FAST_S": 120.0,
+   "SLOW_EVERY_S": 5.0
+  },
+  "TCPDUMP_B_KIB": 65536,
+  "TC_SAMPLE_S": 1.0,
+  "TRIO_STAGGER_S": 30.0,
+  "resume": {
+   "RESUME_BACKOFF_S": 10.0,
+   "RESUME_CHECK_S": 1.0,
+   "RESUME_RULE": "levi 00130 (2026-10-20): no press in a stall; a self-pause pressed at buffer >= 1.5 s held 2 s, 10 s after the last restart",
+   "SELF_PAUSE_HOLD_S": 2.0,
+   "SELF_PAUSE_MIN_BUFFER_S": 1.5
+  }
+ },
  "coverage": {
   "COVERAGE_ALLOWED": {},
   "DEFAULT_MATRIX": {
@@ -34,6 +63,9 @@
    "youtube": "A"
   },
   "EXPLORE_MIN": 2,
+  "EXPLORE_REPEAT_CAP": 2,
+  "EXPLORE_RULE": "t53 2026-10-19: fewest record attempts, seeded tie draw, repeat cap",
+  "EXPLORE_SEED": 0,
   "FLAG_AFTER_SESSIONS": 5,
   "FLOOR_MINUTES": 2.0,
   "FLOOR_SESSIONS": 5,
@@ -1304,6 +1336,16 @@
     }
    }
   }
+ },
+ "player_error": {
+  "AD_FROZEN_MAX_S": 60.0,
+  "AD_FROZEN_TOL_S": 0.05,
+  "AD_NO_PLAYER_MAX_S": 60.0,
+  "ERROR_PAGE_CONFIRM_S": 5.0,
+  "PLAYER_ERROR_PLATFORMS": [
+   "youtube",
+   "twitch"
+  ]
  },
  "qa": {
   "CHECKS": {
