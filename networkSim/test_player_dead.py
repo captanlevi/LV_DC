@@ -131,6 +131,24 @@ def test_room_ended_carries_the_reentry_confirm():
     assert src.count('"reentry_confirm": reentry_confirm_of(r)') == 2       # the player_dead and the frozen re-entry
 
 
+def test_preroll_ad_sustains_the_entry():
+    """bundle item 5 (restart prereg fe48beec, tw_100051): an unpaused advancing ad sustains the stream entry; a paused
+    ad does not; dead_runs' played_at (sustained play, not the entry) still needs non-ad play."""
+    def rows(ad_paused=False):
+        out = []
+        for k in range(120):
+            ad = 3 <= k < 70
+            out.append({"ts": str((1000.0 + k) * 1000), "type": "res_meta", "current_time": str(0 if ad and ad_paused else k),
+                        "is_ad": str(ad), "paused": str(ad and ad_paused), "url": "https://www.twitch.tv/x"})
+        return out
+    meta = {"channel_url": "https://www.twitch.tv/x", "platform": "twitch"}
+    e = E.compute_entries(rows(), meta, [])[0]
+    assert e["sustained_60s"] and e["sustained_at"] == 1006.0, e
+    assert E.sustained_at(rows(), 1000.0) is None                         # the default (not the entry): ads are no play
+    assert not E.compute_entries(rows(ad_paused=True), meta, [])[0]["sustained_60s"]
+    assert E.sustained_at(rows(), 0.0, window_s=float("inf")) == 1075.0    # played_at: non-ad play after the ad
+
+
 def test_entries_and_class():
     meta = {"channel_url": SESS["channel_url"], "room_rotation": SESS["room_rotation"]}
     ents = E.compute_entries(ROWS, meta, SESS["net_labels"])
@@ -537,6 +555,7 @@ def main() -> int:
     test_ti20_replay()
     test_low_state_hold()
     test_room_ended_carries_the_reentry_confirm()
+    test_preroll_ad_sustains_the_entry()
     test_recovery_is_a_discontinuity()
     test_entries_and_class()
     test_precedence()
