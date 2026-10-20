@@ -26,7 +26,8 @@ Short form (--short = --minutes 9; LVQoE restart prereg, short dry runs): each h
 (orchestrate --trio-stress --episodes), the 10 min session rule gives way to the support check, and in either form a
 pass below the minimum reads "insufficient", never a pass (dry_minimums.decode_stress); a fail stays a fail. The minimum
 (levi, LVQoE prereg 40843f81): >= 5 min with every slot at its top shaping state (net_labels.txt rows of the held
-state) and every slot's session running after startup (its first playing tick), at whatever tier the ABR holds; each
+state) and every slot on (levi, prereg 135e8160: the intersection of each slot's on-spans, a consecutive pair of res_meta
+ticks at most 2 s apart being on when both are playing or both are an unpaused ad), at whatever tier the ABR holds; each
 slot reports its seconds per tier over those seconds (a slot never reaching its top tier there is stated); CPU p95 is
 read over the same seconds (the union of the window's spans), swap growth and OOM kills (counters) over the whole
 stress. --reread <report.json> re-reads a
@@ -117,6 +118,26 @@ def _playing(r: dict) -> bool:
     return still is None or still < 1.0
 
 
+def _ad_on(r: dict) -> bool:
+    return r.get("type") == "res_meta" and _b(r.get("is_ad")) is True and _b(r.get("paused")) is False
+
+
+def on_spans(rows: list[dict]) -> list[list[float]]:
+    """levi (prereg 135e8160): the slot's on seconds, a consecutive pair of res_meta ticks at most 2 s apart being on when
+    both are playing or both are an unpaused ad; a stalled, paused or loading stretch is off."""
+    ticks = [r for r in rows if r.get("type") == "res_meta" and _f(r.get("ts")) is not None]
+    out: list[list[float]] = []
+    for a, b in zip(ticks, ticks[1:]):
+        ta, tb = float(a["ts"]) / 1000.0, float(b["ts"]) / 1000.0
+        if not (0.0 < tb - ta <= 2.0 and ((_playing(a) and _playing(b)) or (_ad_on(a) and _ad_on(b)))):
+            continue
+        if out and out[-1][1] == ta:
+            out[-1][1] = tb
+        else:
+            out.append([ta, tb])
+    return [[round(a, 3), round(b, 3)] for a, b in out]
+
+
 def playing_seconds(rows: list[dict]) -> float:
     """Playing res_meta ticks, each weighted by its gap to the next tick (capped at 2 s)."""
     ticks = [r for r in rows if r.get("type") == "res_meta" and _f(r.get("ts")) is not None]
@@ -195,9 +216,8 @@ def intersect(spans: list[list[list[float]]]) -> list[list[float]]:
 
 
 def all_top_window(readings: list[dict], slots: list[str] | None = None) -> list[list[float]]:
-    """The seconds every slot's session is running after startup (its first playing tick to ended_at; levi on 0097779)
-    with its shaper at its top state (levi, prereg 40843f81); empty when any slot is missing, never plays or is never
-    at it."""
+    """The seconds every slot is on (its on_spans; levi, prereg 135e8160) with its shaper at its top state (levi, prereg
+    40843f81); empty when any slot is missing, never on or never at it."""
     by = {r.get("slot"): r for r in readings}
     want = slots or sorted(by)
     if not want or any(t not in by for t in want):
@@ -205,10 +225,10 @@ def all_top_window(readings: list[dict], slots: list[str] | None = None) -> list
     per = []
     for t in want:
         r = by[t]
-        t0, t1 = r.get("first_playing_at"), r.get("ended_at")
-        if not isinstance(t0, (int, float)) or not isinstance(t1, (int, float)):
+        on = r.get("on_spans")
+        if not on:
             return []
-        per.append(intersect([r.get("top_state_spans") or [], [[t0, t1]]]))
+        per.append(intersect([r.get("top_state_spans") or [], on]))
     return intersect(per)
 
 
@@ -240,6 +260,7 @@ def session_reading(sd: Path) -> dict:
     # levi on 0097779: a slot counts toward the all-top seconds from its first playing tick (after startup)
     first = next((float(r["ts"]) / 1000.0 for r in rows if _playing(r) and _f(r.get("ts")) is not None), None)
     rec["first_playing_at"] = round(first, 3) if first is not None else None
+    rec["on_spans"] = on_spans(rows)
     rec["top_state"] = str(meta.get("hold_state") or TOP_STATE)
     rec["top_state_spans"] = top_state_spans(sd, rec["top_state"], t1)
     play_st = [x for x in st if x["cause"] != "load"]

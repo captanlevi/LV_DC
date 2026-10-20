@@ -275,7 +275,8 @@ def test_decode_stress_short():
     def r(tag, top, t0=0.0, t1=420.0, shaped=20.0, plays=10.0):
         return {"slot": tag, "duration_s": t1 - t0, "device_stall_readable": True, "device_stall_share": 0.0,
                 "started_at": t0, "ended_at": t1, "seconds_at_top_tier": top, "top_state_spans": [[t0 + shaped, t1]],
-                "first_playing_at": None if plays is None else t0 + plays}
+                "first_playing_at": None if plays is None else t0 + plays,
+                "on_spans": [] if plays is None else [[t0 + plays, t1]]}
     # levi (prereg 40843f81): the support is the seconds all slots sit at the top state together, at any tier; a slot
     # holding its top tier for only part of them (tw1 at 1080 for 60 s) no longer makes it insufficient
     g = D.gate([r("yt1", 300.0), r("tw1", 60.0)], box, ["yt1", "tw1"], min_session_s=None)
