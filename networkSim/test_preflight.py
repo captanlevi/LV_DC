@@ -60,6 +60,26 @@ def main():
         r = P.check_volume(link, 0.0, sh)
         ok &= check(not r["ok"] and not r["on_external"], "symlinked data/ on the root fs (volume not mounted) -> not ok")
 
+        # the data volume's UUID (supervisor / rushi 2026-10-20): a USB disconnect, a remount-ro, an empty dir on /
+        def fm(line):
+            return lambda cmd, timeout=10.0: (0, line + "\n") if cmd[0] == "findmnt" else (0, "")
+        good = fm("012F-AC14 rw,nosuid,nodev,relatime,uid=1000,errors=remount-ro /media/u/chaoseater")
+        env = {"LVDC_DATA_ROOT_UUID": "012f-ac14"}
+        r = P.check_data_uuid(data, env, good)
+        ok &= check(r["ok"] and r["checked"] and r["writable"] and not list(data.iterdir()), f"expected uuid, rw, writable -> ok ({r})")
+        r = P.check_data_uuid(data, {}, good)
+        ok &= check(r["ok"] and not r["checked"], "no expected uuid -> not checked")
+        for line, why in (("4A1B-0001 rw,relatime /media/u/memories", "another volume"),
+                          ("012F-AC14 ro,relatime,errors=remount-ro /media/u/chaoseater", "remounted ro"),
+                          (" rw,relatime /", "an empty mount dir on the root fs"), ("", "findmnt finds nothing")):
+            r = P.check_data_uuid(data, env, fm(line))
+            ok &= check(not r["ok"], f"{why} -> not ok ({r})")
+        gone = Path(td) / "unplugged"                                     # the mount dir vanished: the probe cannot write
+        r = P.check_data_uuid(gone, env, good)
+        ok &= check(not r["ok"] and r["writable"] is False, f"probe write fails -> not ok ({r.get('write_error')})")
+        pr = P.run(data, 0.0, good)
+        ok &= check("data_uuid" in pr["checks"], "run() carries data_uuid")
+
     ok &= check(P.HELD_PACKAGES == tuple("google-chrome-stable intel-media-va-driver-non-free libva2".split()), "holds: Chrome and the VA-API driver (tt HEVC decode)")
     sh, _ = stub(held="google-chrome-stable intel-media-va-driver-non-free libva2", timers="inactive inactive inactive inactive")
     r = P.check_holds(sh)

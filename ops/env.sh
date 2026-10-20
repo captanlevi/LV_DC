@@ -7,6 +7,9 @@ OPS=${OPS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 : "${LVDC_MOUNT:=/media/$(id -un)/memories}"             # the data volume's mount point
 : "${LVDC_DEVICE:=/dev/sda1}"                            # its block device (resume_after_login.sh remounts it there)
 : "${LVDC_DATA:=$LVDC_MOUNT/LV_DC_v2_data}"              # where data/ resolves
+# the data volume's filesystem UUID (findmnt -o UUID); preflight refuses a session whose data root is not on it, not rw
+# or not writable (a USB disconnect, errors=remount-ro). Empty = not checked; set it in env.local.sh at the cutover
+export LVDC_DATA_ROOT_UUID="${LVDC_DATA_ROOT_UUID:-}"
 : "${LVDC_IFACE:=wlp0s20f3}"                             # the shaped interface
 : "${LVDC_NOIPV6_SYSCTL:=/etc/sysctl.d/99-lvqoe-collection-noipv6.conf}"
 : "${LVDC_BATCH_SPEC:=youtube=100,twitch=80,tiktok=80}"  # default floors; $LVDC_STATE/batch_spec overrides (apply_at_boundary.sh)

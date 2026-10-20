@@ -8,6 +8,9 @@ path (ipv6_media FAIL) before anyone looked. The README's "before every start" l
   volume   the data root resolves to a mounted volume (not the root filesystem when data/ is a symlink) with at least
            MIN_FREE_GB free
   holds    HELD_PACKAGES (Chrome, the VA-API driver) are apt-held and the OS download timers are inactive (Linux / apt only)
+  data_uuid the data root sits on the expected volume (LVDC_DATA_ROOT_UUID, ops/env.sh; findmnt's UUID), mounted rw,
+           and a probe file writes there (supervisor / rushi 2026-10-20, no backup in the 3-4 day run: a USB disconnect
+           of the data volume, errors=remount-ro, or an empty mount dir on / refuses the session); not set -> not checked
   rootfs   the root filesystem (Chrome's per-session profile clones, logs, tmp) has at least ROOT_MIN_FREE_GB free
            (supervisor 2026-10-18: chaos's root fell to 3.3 GB while the data volume had hundreds)
 
@@ -81,6 +84,33 @@ def check_volume(data_dir: Path, min_free_gb: float, sh=_sh) -> dict:
     return out
 
 
+def check_data_uuid(data_dir: Path, env: dict | None = None, sh=_sh) -> dict:
+    """The data root on the volume LVDC_DATA_ROOT_UUID names, rw, writable (a probe file written, fsynced, removed)."""
+    env = os.environ if env is None else env
+    want = (env.get("LVDC_DATA_ROOT_UUID") or "").strip()
+    rp = Path(data_dir).resolve()
+    out: dict = {"expected": want or None, "realpath": str(rp)}
+    if not want:
+        return {**out, "checked": False, "ok": True}
+    rc, txt = sh(["findmnt", "-T", str(rp), "-n", "-o", "UUID,OPTIONS,TARGET"])
+    f = txt.split() if rc == 0 else []
+    out["uuid"], out["options"], out["mount"] = (f + [None] * 3)[:3]
+    out["rw"] = "rw" in (out["options"] or "").split(",")
+    try:
+        probe = rp / f".preflight_probe_{os.getpid()}"
+        with open(probe, "w") as fh:
+            fh.write("1")
+            fh.flush()
+            os.fsync(fh.fileno())
+        probe.unlink()
+        out["writable"] = True
+    except Exception as e:
+        out["writable"], out["write_error"] = False, repr(e)
+    out["ok"] = (str(out["uuid"]).lower() == want.lower() and out["mount"] not in (None, "/") and out["rw"]
+                 and out["writable"])
+    return {**out, "checked": True}
+
+
 def check_holds(sh=_sh) -> dict:
     if not shutil.which("apt-mark") and not Path("/usr/bin/apt-mark").exists():
         return {"applicable": False, "ok": True}
@@ -118,6 +148,7 @@ def run(data_dir: Path, min_free_gb: float, sh=_sh, root_min_free_gb: float | No
     """root_min_free_gb: the trio's raised rootfs floor (t53 A2: its pcaps are staged on the root filesystem)."""
     checks = {"ipv6": check_ipv6(sh), "shaper": check_shaper(sh), "volume": check_volume(data_dir, min_free_gb, sh),
               "holds": check_holds(sh), "data_root": check_data_root(),
+              "data_uuid": check_data_uuid(data_dir, sh=sh),
               "rootfs": check_rootfs() if root_min_free_gb is None else check_rootfs(root_min_free_gb)}
     problems = [k for k, v in checks.items() if not v.get("ok")]
     return {"ok": not problems, "problems": problems, "checks": checks, "at": time.time()}
