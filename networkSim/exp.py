@@ -747,9 +747,9 @@ if __name__ == "__main__":
     if os.environ.get("LVDC_CHANNEL_PICK"):  # the yt channel draw / the twitch category draw (its key "category"), counts, seeded tie
         try:
             channel_pick_start = json.loads(os.environ["LVDC_CHANNEL_PICK"])
-            session_meta.write(session_dir, channel_pick=channel_pick_start)
         except Exception as e:
-            session_meta.write(session_dir, channel_pick={"error": repr(e)})
+            channel_pick_start = {"error": repr(e)}        # kept through the end write's merge
+        session_meta.write(session_dir, channel_pick=channel_pick_start)
     if os.environ.get("LVDC_PICK_PINNED"):   # a recorded t53 round pin (levi 00261: allowed steering if recorded)
         try:
             session_meta.write(session_dir, pick_pinned=json.loads(os.environ["LVDC_PICK_PINNED"]))
