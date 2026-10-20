@@ -660,7 +660,9 @@ def concurrency_record(s: Slot | None, **extra) -> dict:
     return {"mode": "trio", "pool": "per_session", **s.record(), "record": os.environ.get("LVDC_TRIO_RECORD") == "1",
             "era": record.ERA, "n": len(SLOTS), "composition": composition_of(SLOTS),
             "lvdc_commit": session_meta.lvdc_commit(), "mgmt_udp_port": mgmt_udp_port_record(),
-            **({"n_draw": json.loads(os.environ["LVDC_N_DRAW"])} if os.environ.get("LVDC_N_DRAW") else {}), **extra}
+            **({"n_draw": json.loads(os.environ["LVDC_N_DRAW"])} if os.environ.get("LVDC_N_DRAW") else {}),
+            **({"window": json.loads(os.environ["LVDC_TRIO_WINDOW"])} if os.environ.get("LVDC_TRIO_WINDOW") else {}),
+            **extra}
 
 
 def slots_log_append(path: Path, rec: dict) -> None:
@@ -671,13 +673,12 @@ def slots_log_append(path: Path, rec: dict) -> None:
         fh.write(json.dumps(rec) + "\n")
 
 
-def siblings(path: Path, session: str, t0: float, t1: float | None) -> list[dict]:
-    """The other sessions whose slot window overlaps [t0, t1] (t1 None: now), from the slots log, with the overlap in
-    seconds (a sibling still open counts up to t1)."""
+def _spans(path: Path) -> dict[str, dict] | None:
+    """Every session's span in the slots log ({session: {session, slot, start, end, ...}}); None: no log."""
     try:
         lines = path.read_text().splitlines()
     except OSError:
-        return []
+        return None
     spans: dict[str, dict] = {}
     last_of_slot: dict[str, str] = {}
     for line in lines:
@@ -701,6 +702,15 @@ def siblings(path: Path, session: str, t0: float, t1: float | None) -> list[dict
             last_of_slot[r.get("slot")] = str(r.get("session"))
         elif d.get("end") is None:
             d["end"] = r["t"]
+    return spans
+
+
+def siblings(path: Path, session: str, t0: float, t1: float | None) -> list[dict]:
+    """The other sessions whose slot window overlaps [t0, t1] (t1 None: now), from the slots log, with the overlap in
+    seconds (a sibling still open counts up to t1)."""
+    spans = _spans(path)
+    if spans is None:
+        return []
     hi = t1 if t1 is not None else time.time()
     out = []
     for k, d in sorted(spans.items()):
@@ -710,6 +720,36 @@ def siblings(path: Path, session: str, t0: float, t1: float | None) -> list[dict
         if hi2 > lo2:
             out.append({**d, "overlap_s": round(hi2 - lo2, 1)})
     return out
+
+
+def concurrency_over(path: Path, session: str, t0: float, t1: float | None) -> dict | None:
+    """The restart's §10 covariate: the number of sessions running (this one included) over [t0, t1] (t1 None: now),
+    from the slots log, as a step series ([[seconds from t0, n], ...] at every change; per second by construction) and
+    its time-weighted mean, min and max. None: no log."""
+    spans = _spans(path)
+    if spans is None:
+        return None
+    hi = t1 if t1 is not None else time.time()
+    if hi <= t0:
+        return {"mean": 1.0, "min": 1, "max": 1, "steps": [[0.0, 1]], "span_s": 0.0}
+    delta: dict[float, int] = {}
+    for k, d in spans.items():
+        if k == session or d.get("start") is None:
+            continue
+        lo2, hi2 = max(t0, d["start"]), min(hi, d["end"] if d.get("end") is not None else hi)
+        if hi2 > lo2:
+            delta[lo2] = delta.get(lo2, 0) + 1
+            delta[hi2] = delta.get(hi2, 0) - 1
+    times = [t for t in sorted(set(delta) | {t0}) if t < hi]
+    n, steps, area = 1, [], 0.0
+    for i, t in enumerate(times):
+        n += delta.get(t, 0)
+        area += n * ((times[i + 1] if i + 1 < len(times) else hi) - t)
+        if not steps or steps[-1][1] != n:
+            steps.append([round(t - t0, 1), n])
+    ns = [x[1] for x in steps]
+    return {"mean": round(area / (hi - t0), 4), "min": min(ns), "max": max(ns), "steps": steps,
+            "span_s": round(hi - t0, 1)}
 
 
 # ------------------------------------------------------------------------------------------------ DNS per session

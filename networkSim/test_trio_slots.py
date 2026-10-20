@@ -429,7 +429,8 @@ class FakeProc:
 
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
-          xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None, slots=None, coupled=None, n_draw=None):
+          xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None, slots=None, coupled=None, n_draw=None,
+          window_min=None, matrix="A"):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry", "free_gb")}
@@ -442,7 +443,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     O._pick = lambda p, nl, now, rg, ex=(), root=None, siblings=frozenset(), probe=None: \
         calls.append(("pick", p, ex, root, siblings)) and None or (None, None, None)
     O.session_matrix = (lambda p, f=None, ex=(), data_dir=None, select=None, reserved=None, key=None:
-                        calls.append(("matrix", p, f, ex, data_dir, select, reserved, key)) or "A")
+                        calls.append(("matrix", p, f, ex, data_dir, select, reserved, key)) or matrix)
     O.accepted_sessions = lambda p, root=None, select=None: calls.append(("accepted", p, root)) and 0 or 0
     O.report_flags = lambda p, t, root=None, only=None: []
     O._summary = lambda: None
@@ -466,7 +467,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
                         [{"cmd": c, "rc": 0} for c in cmds],
                         make=lambda args: calls.append(("make", args[0])) or 0, sleep=sleep, layout=layout,
                         xrandr=xrandr, offloads=offloads or (lambda iface: {"iface": iface, "ok": True, "after": {}, "calls": []}),
-                        slots=slots, n_draw=n_draw)
+                        slots=slots, n_draw=n_draw, window_min=window_min)
     finally:
         for k, v in saved.items():
             setattr(O, k, v)
@@ -511,6 +512,87 @@ def test_run_trio_records_the_n_draw_and_session_lengths():
                       lambda cmd, env, log: spawned.append((cmd, env)) or FakeProc(1, 0, []))
         ev = json.loads((Path(t) / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()[0])
         assert "n_draw" not in ev and all("LVDC_N_DRAW" not in e for _, e in spawned)
+
+
+def test_fast_episode_length_drawn_per_session():
+    """Restart §2b: an @fast session's episode length is drawn per session (log-U(12, 48) s, the session-length key),
+    passed as --fast-episode-s with the episodes scaled to it and recorded in the session-length record; @slow / base
+    sessions get none."""
+    from utils import shaping
+    with tempfile.TemporaryDirectory() as t:
+        tmp, spawned = Path(t), []
+        rc, _ = _trio(tmp, {"youtube": 5, "twitch": 5}, lambda cmd, env, log: spawned.append((cmd, env)) or
+                      FakeProc(1, 0, []), matrix="A@fast")
+        assert rc == 0 and len(spawned) == 2
+        for cmd, env in spawned:
+            sl = json.loads(env["LVDC_SESSION_LENGTH"])
+            fe = shaping.draw_fast_episode_s(sl["key"])
+            assert sl["fast_episode"] == fe and float(cmd[cmd.index("--fast-episode-s") + 1]) == fe["episode_s"]
+            assert int(cmd[cmd.index("--episodes") + 1]) == max(1, round(sl["minutes"] * 60 / fe["episode_s"]))
+    with tempfile.TemporaryDirectory() as t:
+        spawned = []
+        _trio(Path(t), {"youtube": 5}, lambda cmd, env, log: spawned.append((cmd, env)) or FakeProc(1, 0, []),
+              matrix="A@slow")
+        cmd, env = spawned[0]
+        assert "--fast-episode-s" not in cmd and "fast_episode" not in json.loads(env["LVDC_SESSION_LENGTH"])
+        assert cmd[cmd.index("--episodes") + 1] == "3"
+
+
+def test_window_refill_and_idle():
+    """Restart §10: a window run refills each slot while its next drawn length fits before the deadline; a slot whose
+    next length does not fit idles to the end (window_idle, no truncation, no re-draw); the window is in trio_up and
+    every slot's env (LVDC_TRIO_WINDOW)."""
+    saved = O.draw_session_minutes
+    try:
+        # the first session of each slot is short enough to fit a 0.05 min window, the second never does
+        O.draw_session_minutes = lambda key: {"key": key, "minutes": 0.0001 if key.endswith(":1") else 10.0}
+        with tempfile.TemporaryDirectory() as t:
+            tmp, spawned = Path(t), []
+            rc, _ = _trio(tmp, {"youtube": 9, "twitch": 9, "tiktok": 9},
+                          lambda cmd, env, log: spawned.append((cmd, env)) or FakeProc(1, 0, []),
+                          max_per_slot=None, window_min=0.05)
+            ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
+            up = ev[0]
+            assert rc == 0 and len(spawned) == 3 and up["window"]["min"] == 0.05
+            assert abs(up["window"]["deadline"] - up["window"]["t0"] - 3.0) < 1e-6
+            assert all(json.loads(e["LVDC_TRIO_WINDOW"]) == up["window"] for _, e in spawned)
+            idle = [e for e in ev if e["event"] == "window_idle"]
+            assert sorted(e["slot"] for e in idle) == ["tt1", "tw1", "yt1"] and all(e["minutes"] == 10.0 for e in idle)
+            assert ev[-1]["event"] == "trio_down"
+        with tempfile.TemporaryDirectory() as t:             # a window too short for any first session: none starts
+            tmp, spawned = Path(t), []
+            O.draw_session_minutes = lambda key: {"key": key, "minutes": 10.0}
+            rc, _ = _trio(tmp, {"youtube": 9}, lambda cmd, env, log: spawned.append(cmd) or FakeProc(1, 0, []),
+                          max_per_slot=None, window_min=0.05)
+            assert rc == 0 and not spawned
+    finally:
+        O.draw_session_minutes = saved
+    with tempfile.TemporaryDirectory() as t:                 # no window: nothing recorded, no env
+        spawned = []
+        _trio(Path(t), {"youtube": 5}, lambda cmd, env, log: spawned.append(env) or FakeProc(1, 0, []))
+        ev = json.loads((Path(t) / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()[0])
+        assert "window" not in ev and all("LVDC_TRIO_WINDOW" not in e for e in spawned)
+
+
+def test_concurrency_over():
+    """Restart §10: the sessions running beside a session (itself included), as a step series and its time-weighted
+    mean, from the slots log (a sibling still open counts to t1)."""
+    with tempfile.TemporaryDirectory() as t:
+        log = Path(t) / "s.jsonl"
+        rows = [{"event": "start", "slot": "yt1", "session": "yt_1", "t": 100.0},
+                {"event": "start", "slot": "tw1", "session": "tw_1", "t": 50.0},
+                {"event": "end", "slot": "tw1", "session": "tw_1", "t": 150.0},
+                {"event": "start", "slot": "tt1", "session": "tt_1", "t": 120.0},
+                {"event": "exit", "slot": "tt1", "rc": 0, "t": 160.0},
+                {"event": "start", "slot": "tw1", "session": "tw_2", "t": 180.0}]
+        log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        c = T.concurrency_over(log, "yt_1", 100.0, 200.0)
+        # [100,120) 2; [120,150) 3; [150,160) 2; [160,180) 1; [180,200) 2
+        assert c["steps"] == [[0.0, 2], [20.0, 3], [50.0, 2], [60.0, 1], [80.0, 2]], c
+        assert c["mean"] == round((2 * 20 + 3 * 30 + 2 * 10 + 1 * 20 + 2 * 20) / 100, 4) and c["min"] == 1 and c["max"] == 3
+        assert T.concurrency_over(Path(t) / "none.jsonl", "yt_1", 0, 1) is None
+    src = (HERE / "exp.py").read_text()
+    assert 'TRIO["concurrent"] = trio_slots.concurrency_over(slots_log, session_dir.name, t_start, None)' in src
 
 
 def test_run_trio():

@@ -125,13 +125,19 @@ def test_the_committed_occupancy():
     for p, fams in t["families"].items():
         for m, v in fams.items():
             assert abs(sum(v["occupancy"].values()) - 1.0) < 1e-4
-            assert v["schedule"]["episodes"] == SH.session_episodes(C.SESSION_EPISODES[p], m)
+            # restart §4 / §2b: drawn lengths, U(10, 40) min; @slow 3 episodes, @fast 12-48 s episodes
+            assert 10.0 <= v["session_minutes"]["min"] and v["session_minutes"]["max"] <= 40.0
+            if m.endswith("@slow"):
+                assert v["episodes_per_session"]["min"] == v["episodes_per_session"]["max"] == 3
+            else:
+                assert 12.0 <= v["episode_s"]["min"] and v["episode_s"]["max"] <= 48.0
+                assert v["episodes_per_session"]["min"] >= 12 and v["episodes_per_session"]["max"] <= 200
     pi = SH.stationary_distribution(SH.TWITCH_TRANSITIONS_M)
     occ = SO.occupancy("twitch", "TW-M@slow")
     assert sum(abs(occ[s] - pi[s]) for s in pi) > 0.05          # without self-loops the occupancy is not pi
-    assert SO.dumps(SO.table(C.SESSION_EPISODES)).encode() == raw, "the simulation no longer reproduces the fixture"
+    assert SO.dumps(SO.table()).encode() == raw, "the simulation no longer reproduces the fixture"
     state = random.getstate()
-    SO.simulate("twitch", "TW-M@slow", 23, sessions=3)
+    SO.simulate("twitch", "TW-M@slow", sessions=3)
     assert random.getstate() == state                            # the global random state is restored
 
 
@@ -213,9 +219,11 @@ def test_the_record():
         "matrix_id": "TW-M@slow", "episode_s": 460, "schedule": "slow", "low_cap_s": 120, "episodes": 3, "self_loops": False}
     assert CS.low_cap_s(sh) == 120 and CS.low_cap_s({"low_state_cap": 4, "episode_s": 60}) == 240
     src = (HERE / "exp.py").read_text()
-    assert 'schedule={**SCHEDULE, "episodes": args.episodes}' in src and 'episode_time_in_seconds=SCHEDULE["episode_s"]' in src
+    assert 'schedule={**SCHEDULE, "episodes": args.episodes,' in src and 'episode_time_in_seconds=SCHEDULE["episode_s"]' in src
     osrc = (HERE / "orchestrate.py").read_text()
-    assert osrc.count("session_episodes(EPISODES_V2.get(p, 5), mid)") == 2   # run_batch and the trio refill
+    assert osrc.count("session_episodes(EPISODES_V2.get(p, 5), mid)") == 1   # run_batch (single mode: base length)
+    # the trio refill (restart §4 / §2b): the drawn length and, @fast, the drawn episode length
+    assert 'session_episodes(slen["minutes"], mid, fe["episode_s"] if fe else None)' in osrc
 
 
 def main() -> int:

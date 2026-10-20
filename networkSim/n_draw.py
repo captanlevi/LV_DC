@@ -2,14 +2,18 @@
 """Random N per round (LVQoE restart_2026-10-21_prereg_levi.md §1, rushi GO 2026-10-20): each round's N is drawn from
 {3, 4, 5} with weights 0.2 / 0.3 / 0.5 by a seeded generator, independent of coverage, time and anything observed; the
 composition is fixed per N (3 = 1 / 1 / 1; 4 = 2 / 1 / 1, the doubled platform rotating yt -> tw -> tt across the N = 4
-rounds; 5 = 2 / 2 / 1). An N that fails its scaling gate leaves the support (--n-support) and the weights renormalise.
+rounds; 5: the single platform rotating yt -> tw -> tt across the N = 5 rounds, 1 / 2 / 2, 2 / 1 / 2, 2 / 2 / 1; levi on
+brad's design check 00231). An N that fails its scaling gate leaves the support (--n-support) and the weights
+renormalise; a composition that fails its decode stress leaves its rotation (--n-exclude 4:tiktok,5:youtube: N = 4's
+doubled / N = 5's single platform), stated in every draw, and an N with no composition left leaves the support.
 
 A round is one orchestrate --concurrent run. Its index k is the number of earlier draws of the same era and record
 flag in the trio root's slots log (trio_up events carrying n_draw), so a run that ends before its trio_up re-draws
 the same N, and a pilot never moves the record's sequence. The draw for round k is random.Random("<seed>:<era>:
-<record|pilot>:<k>").random() against the cumulative renormalised weights; the N = 4 rotation index is the count of
-earlier N = 4 draws in that sequence. The draw is recorded in trio_up (n_draw) and in every session's meta.json
-concurrency.n_draw.
+<record|pilot>:<k>").random() against the cumulative renormalised weights; an N's rotation index is the count of
+earlier draws of that N in the sequence (the counters persist per era in the slots log, never per process or day). The
+draw is recorded in trio_up (n_draw) and in every session's meta.json concurrency.n_draw. A window (orchestrate
+--window-min) is a round.
 
     python3 n_draw.py --simulate 200 [--support 3,4,5]     (a simulated sequence of rounds: the draws and rotation)
 """
@@ -24,12 +28,13 @@ from pathlib import Path
 N_SUPPORT = (3, 4, 5)
 N_WEIGHTS = {3: 0.2, 4: 0.3, 5: 0.5}
 N_DRAW_SEED = 0
-N4_ROTATION = ("youtube", "twitch", "tiktok")
-COMPOSITIONS = {3: {"youtube": 1, "twitch": 1, "tiktok": 1}, 5: {"youtube": 2, "twitch": 2, "tiktok": 1}}
-N_DRAW_RULE = ("restart prereg §1: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support; "
-               "round k = the earlier draws of this era and record flag in the slots log; u = random.Random("
-               "'<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1, 5 = 2/2/1, "
-               "4 = 2/1/1 with the doubled platform yt -> tw -> tt by the count of earlier N = 4 draws")
+ROTATION = ("youtube", "twitch", "tiktok")      # N = 4's doubled and N = 5's single platform, in this order
+ROTATING = (4, 5)
+N_DRAW_RULE = ("restart prereg §1: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support "
+               "(an N with no composition left is out); round k = the earlier draws of this era and record flag in the "
+               "slots log; u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative "
+               "weights; 3 = 1/1/1; 4 = 2/1/1 with the doubled platform and 5 = 2/2/1 with the single platform rotating "
+               "yt -> tw -> tt (less any excluded composition) by the count of earlier draws of that N")
 
 
 def parse_support(spec: str | None) -> tuple[int, ...]:
@@ -51,12 +56,34 @@ def weights_of(support: tuple[int, ...]) -> dict[int, float]:
     return {n: N_WEIGHTS[n] / tot for n in support}
 
 
-def composition(n: int, n4_index: int = 0) -> dict[str, int]:
-    """The fixed composition of N (4: the doubled platform by the rotation index)."""
-    if n == 4:
-        doubled = N4_ROTATION[n4_index % len(N4_ROTATION)]
-        return {p: 2 if p == doubled else 1 for p in N4_ROTATION}
-    return dict(COMPOSITIONS[n])
+def parse_exclude(spec: str | None) -> tuple[tuple[int, str], ...]:
+    """'4:tiktok,5:youtube' -> ((4, 'tiktok'), (5, 'youtube')): compositions out of their rotation (N = 4's doubled,
+    N = 5's single platform)."""
+    out = set()
+    for x in (spec or "").split(","):
+        if not x.strip():
+            continue
+        n, _, p = x.strip().partition(":")
+        if not n.isdigit() or int(n) not in ROTATING or p not in ROTATION:
+            raise ValueError(f"--n-exclude {x!r}: <4|5>:<{'|'.join(ROTATION)}>")
+        out.add((int(n), p))
+    return tuple(sorted(out))
+
+
+def rotation(n: int, exclude: tuple = ()) -> tuple[str, ...]:
+    """N's rotation (the rotating platform's order), less the excluded compositions; () for N = 3."""
+    return tuple(p for p in ROTATION if (n, p) not in exclude) if n in ROTATING else ()
+
+
+def composition(n: int, index: int = 0, exclude: tuple = ()) -> dict[str, int]:
+    """The fixed composition of N: 3 = 1/1/1; 4 the rotating platform doubled; 5 the rotating platform single."""
+    if n == 3:
+        return {p: 1 for p in ROTATION}
+    rot = rotation(n, exclude)
+    if not rot:
+        raise ValueError(f"N = {n}: every composition excluded")
+    r = rot[index % len(rot)]
+    return {p: (2 if p == r else 1) if n == 4 else (1 if p == r else 2) for p in ROTATION}
 
 
 def prior_draws(slots_log: Path | None, era: str, record: bool) -> list[dict]:
@@ -77,37 +104,47 @@ def prior_draws(slots_log: Path | None, era: str, record: bool) -> list[dict]:
     return out
 
 
-def draw_at(k: int, n4_index: int, era: str, record: bool, support: tuple[int, ...] = N_SUPPORT,
-            seed: int = N_DRAW_SEED) -> dict:
-    """Round k's draw, given the count of earlier N = 4 draws in the sequence."""
-    w = weights_of(support)
+def draw_at(k: int, index: dict[int, int], era: str, record: bool, support: tuple[int, ...] = N_SUPPORT,
+            seed: int = N_DRAW_SEED, exclude: tuple = ()) -> dict:
+    """Round k's draw, given the count of earlier draws of each N in the sequence (index {n: count})."""
+    eff = tuple(n for n in support if n not in ROTATING or rotation(n, exclude))
+    if not eff:
+        raise ValueError(f"support {support} less the excluded compositions {exclude}: nothing left")
+    w = weights_of(eff)
     u = random.Random(f"{seed}:{era}:{'record' if record else 'pilot'}:{k}").random()
-    acc, n = 0.0, support[-1]
-    for m in support:
+    acc, n = 0.0, eff[-1]
+    for m in eff:
         acc += w[m]
         if u < acc:
             n = m
             break
-    comp = composition(n, n4_index)
+    i = index.get(n, 0)
+    rot = {}
+    if n in ROTATING:
+        r = rotation(n, exclude)
+        rot = {"index": i, "doubled" if n == 4 else "single": r[i % len(r)], "rotation": list(r)}
     return {"rule": N_DRAW_RULE, "seed": seed, "era": era, "record": bool(record), "round": k, "u": round(u, 6),
-            "support": list(support), "weights": {str(m): round(v, 4) for m, v in w.items()}, "n": n,
-            "composition": comp, **({"n4_index": n4_index, "doubled": N4_ROTATION[n4_index % 3]} if n == 4 else {})}
+            "support": list(eff), "weights": {str(m): round(v, 4) for m, v in w.items()}, "n": n,
+            "composition": composition(n, i, exclude), **({"rotation": rot} if rot else {}),
+            **({"excluded": [f"{a}:{b}" for a, b in exclude]} if exclude else {})}
 
 
 def draw(slots_log: Path | None, era: str, record: bool, support: tuple[int, ...] = N_SUPPORT,
-         seed: int = N_DRAW_SEED) -> dict:
-    """This round's draw: k and the N = 4 rotation index from the slots log's earlier draws."""
+         seed: int = N_DRAW_SEED, exclude: tuple = ()) -> dict:
+    """This round's draw: k and each N's rotation index from the slots log's earlier draws."""
     prior = prior_draws(slots_log, era, record)
-    return draw_at(len(prior), sum(1 for d in prior if d.get("n") == 4), era, record, support, seed)
+    idx = {n: sum(1 for d in prior if d.get("n") == n) for n in ROTATING}
+    return draw_at(len(prior), idx, era, record, support, seed, exclude)
 
 
 def simulate(rounds: int, era: str, record: bool = True, support: tuple[int, ...] = N_SUPPORT,
-             seed: int = N_DRAW_SEED) -> list[dict]:
+             seed: int = N_DRAW_SEED, exclude: tuple = ()) -> list[dict]:
     """A simulated sequence of rounds, each appended to the log as run_trio does (the draws and the rotation)."""
-    out, n4 = [], 0
+    out, idx = [], {n: 0 for n in ROTATING}
     for k in range(rounds):
-        d = draw_at(k, n4, era, record, support, seed)
-        n4 += d["n"] == 4
+        d = draw_at(k, idx, era, record, support, seed, exclude)
+        if d["n"] in idx:
+            idx[d["n"]] += 1
         out.append(d)
     return out
 
@@ -127,10 +164,10 @@ def main(argv=None) -> int:
         return 0
     from collections import Counter
     ns = Counter(d["n"] for d in seq)
-    dbl = Counter(d["doubled"] for d in seq if d["n"] == 4)
+    rot = {n: dict(Counter(list(d["rotation"].values())[1] for d in seq if d["n"] == n)) for n in ROTATING}
     print(f"{a.simulate} rounds, era {a.era}, support {list(parse_support(a.support))}: "
-          f"N {dict(sorted(ns.items()))}; N = 4 doubled {dict(dbl)}")
-    print(" ".join(f"{d['n']}{d['doubled'][:2] if d['n'] == 4 else ''}" for d in seq))
+          f"N {dict(sorted(ns.items()))}; N = 4 doubled {rot[4]}; N = 5 single {rot[5]}")
+    print(" ".join(f"{d['n']}{list(d['rotation'].values())[1][:2] if 'rotation' in d else ''}" for d in seq))
     return 0
 
 

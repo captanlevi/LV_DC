@@ -1,4 +1,21 @@
 {
+ "abr_only": {
+  "ABR_ONLY": [
+   [
+    "twitch",
+    "Q_1080p"
+   ],
+   [
+    "youtube",
+    "Q_240p"
+   ],
+   [
+    "youtube",
+    "Q_480p"
+   ]
+  ],
+  "ABR_ONLY_RULE": "restart prereg \u00a72b: tw Q_1080p, yt Q_240p, yt Q_480p are ABR-only (the top tier of no state, or of one): unreachable targets, never steered; a floor not met reads insufficient"
+ },
  "capture_offloads": {
   "OFF": {
    "gro": "generic-receive-offload",
@@ -1306,24 +1323,7 @@
   }
  },
  "n_draw": {
-  "COMPOSITIONS": {
-   "3": {
-    "tiktok": 1,
-    "twitch": 1,
-    "youtube": 1
-   },
-   "5": {
-    "tiktok": 1,
-    "twitch": 2,
-    "youtube": 2
-   }
-  },
-  "N4_ROTATION": [
-   "youtube",
-   "twitch",
-   "tiktok"
-  ],
-  "N_DRAW_RULE": "restart prereg \u00a71: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support; round k = the earlier draws of this era and record flag in the slots log; u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1, 5 = 2/2/1, 4 = 2/1/1 with the doubled platform yt -> tw -> tt by the count of earlier N = 4 draws",
+  "N_DRAW_RULE": "restart prereg \u00a71: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support (an N with no composition left is out); round k = the earlier draws of this era and record flag in the slots log; u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1; 4 = 2/1/1 with the doubled platform and 5 = 2/2/1 with the single platform rotating yt -> tw -> tt (less any excluded composition) by the count of earlier draws of that N",
   "N_DRAW_SEED": 0,
   "N_SUPPORT": [
    3,
@@ -1334,7 +1334,16 @@
    "3": 0.2,
    "4": 0.3,
    "5": 0.5
-  }
+  },
+  "ROTATING": [
+   4,
+   5
+  ],
+  "ROTATION": [
+   "youtube",
+   "twitch",
+   "tiktok"
+  ]
  },
  "qa": {
   "CHECKS": {
@@ -1378,7 +1387,7 @@
    "youtube": "A"
   },
   "FAMILY_FLOOR": 5,
-  "OCCUPANCY_SHA256": "82b38d49337dc25e4e3a66ef0058e0aedf45cfde5774ca3e85b22ee2ecc9061e",
+  "OCCUPANCY_SHA256": "cdf186fc02a1795a0f28d6dfc50cbb744d24428d9d42672af696f230dce312b6",
   "SCHEDULES": {
    "fast": {
     "episode_s": 12,
@@ -1404,6 +1413,11 @@
   "TW_TT_CAP_SHARE": 0.1
  },
  "session_length": {
+  "FAST_EPISODE_RULE": "restart prereg \u00a72b: @fast episode_s = exp(random.Random('<seed>:<key>:fast_episode_s').uniform(ln 12, ln 48)), the session-length key; re-draw at D/5-D/2; episodes = round(minutes x 60 / D)",
+  "FAST_EPISODE_S": [
+   12.0,
+   48.0
+  ],
   "SESSION_LEN_RULE": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
   "SESSION_LEN_SEED": 0,
   "SESSION_MINUTES": [

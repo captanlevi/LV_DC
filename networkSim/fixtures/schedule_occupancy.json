@@ -3,115 +3,178 @@
   "tiktok": {
    "TT-M@fast": {
     "changes_per_session": {
-     "max": 114,
-     "mean": 114.0,
-     "median": 114,
-     "min": 114,
-     "p10": 114,
-     "p90": 114
+     "max": 195,
+     "mean": 66.84,
+     "median": 58,
+     "min": 12,
+     "p10": 27,
+     "p90": 123
+    },
+    "episode_s": {
+     "max": 47.97,
+     "mean": 25.77,
+     "median": 23.51,
+     "min": 12.06,
+     "p10": 13.76,
+     "p90": 41.4
+    },
+    "episodes_per_session": {
+     "max": 196,
+     "mean": 67.68,
+     "median": 58,
+     "min": 13,
+     "p10": 28,
+     "p90": 124
     },
     "occupancy": {
-     "1": 0.04757,
-     "10": 0.064987,
-     "2": 0.062461,
-     "3": 0.108887,
-     "4": 0.137561,
-     "5": 0.140174,
-     "6": 0.116143,
-     "7": 0.109443,
-     "8": 0.110487,
-     "9": 0.102287
+     "1": 0.045404,
+     "10": 0.065514,
+     "2": 0.060556,
+     "3": 0.107488,
+     "4": 0.139183,
+     "5": 0.142034,
+     "6": 0.117323,
+     "7": 0.109222,
+     "8": 0.110978,
+     "9": 0.102298
     },
     "schedule": {
      "base_matrix": "TT-M",
-     "episode_s": 12,
-     "episodes": 115,
+     "episode_s_rule": "restart prereg \u00a72b: @fast episode_s = exp(random.Random('<seed>:<key>:fast_episode_s').uniform(ln 12, ln 48)), the session-length key; re-draw at D/5-D/2; episodes = round(minutes x 60 / D)",
      "low_cap_s": 240,
-     "redraw_s": [
-      2.4,
-      6.0
-     ],
+     "redraw_rule": "D/5-D/2",
      "schedule": "fast",
      "self_loops": false,
+     "session_minutes_rule": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
      "start_rule": "stationary"
     },
     "seed": "0:tiktok:TT-M@fast",
+    "session_minutes": {
+     "max": 39.99,
+     "mean": 24.83,
+     "median": 24.73,
+     "min": 10.09,
+     "p10": 13.03,
+     "p90": 36.92
+    },
     "sessions": 2000
    },
    "TT-M@slow": {
     "changes_per_session": {
      "max": 5,
-     "mean": 2.56,
+     "mean": 2.52,
      "median": 2,
      "min": 2,
      "p10": 2,
      "p90": 4
     },
+    "episode_s": {
+     "max": 799.93,
+     "mean": 498.8,
+     "median": 490.76,
+     "min": 200.88,
+     "p10": 262.03,
+     "p90": 734.44
+    },
+    "episodes_per_session": {
+     "max": 3,
+     "mean": 3.0,
+     "median": 3,
+     "min": 3,
+     "p10": 3,
+     "p90": 3
+    },
     "occupancy": {
-     "1": 0.008087,
-     "10": 0.059,
-     "2": 0.023478,
-     "3": 0.065043,
-     "4": 0.212891,
-     "5": 0.1955,
-     "6": 0.141,
-     "7": 0.104333,
-     "8": 0.1025,
-     "9": 0.088167
+     "1": 0.008195,
+     "10": 0.070388,
+     "2": 0.02111,
+     "3": 0.057058,
+     "4": 0.215075,
+     "5": 0.18411,
+     "6": 0.136875,
+     "7": 0.10052,
+     "8": 0.104305,
+     "9": 0.102364
     },
     "schedule": {
      "base_matrix": "TT-M",
-     "episode_s": 460.0,
-     "episodes": 3,
+     "episode_s_rule": "the session's time / 3",
      "low_cap_s": 240,
-     "redraw_s": [
-      12.0,
-      30.0
-     ],
+     "redraw_rule": "the base's (12-30 s)",
      "schedule": "slow",
      "self_loops": false,
+     "session_minutes_rule": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
      "start_rule": "stationary"
     },
     "seed": "0:tiktok:TT-M@slow",
+    "session_minutes": {
+     "max": 40.0,
+     "mean": 24.94,
+     "median": 24.54,
+     "min": 10.04,
+     "p10": 13.1,
+     "p90": 36.72
+    },
     "sessions": 2000
    }
   },
   "twitch": {
    "TW-M@fast": {
     "changes_per_session": {
-     "max": 114,
-     "mean": 114.0,
-     "median": 114,
-     "min": 114,
-     "p10": 114,
-     "p90": 114
+     "max": 191,
+     "mean": 66.65,
+     "median": 59,
+     "min": 12,
+     "p10": 27,
+     "p90": 119
+    },
+    "episode_s": {
+     "max": 47.95,
+     "mean": 25.97,
+     "median": 24.0,
+     "min": 12.01,
+     "p10": 14.0,
+     "p90": 41.49
+    },
+    "episodes_per_session": {
+     "max": 190,
+     "mean": 66.72,
+     "median": 58,
+     "min": 13,
+     "p10": 28,
+     "p90": 120
     },
     "occupancy": {
-     "1": 0.04453,
-     "10": 0.090596,
-     "2": 0.075096,
-     "3": 0.092348,
-     "4": 0.141861,
-     "5": 0.140643,
-     "6": 0.098726,
-     "7": 0.091974,
-     "8": 0.100687,
-     "9": 0.123539
+     "1": 0.035586,
+     "10": 0.094846,
+     "2": 0.062842,
+     "3": 0.086459,
+     "4": 0.145157,
+     "5": 0.146493,
+     "6": 0.101563,
+     "7": 0.094368,
+     "8": 0.103885,
+     "9": 0.128801
     },
     "schedule": {
      "base_matrix": "TW-M",
-     "episode_s": 12,
-     "episodes": 115,
+     "episode_s_rule": "restart prereg \u00a72b: @fast episode_s = exp(random.Random('<seed>:<key>:fast_episode_s').uniform(ln 12, ln 48)), the session-length key; re-draw at D/5-D/2; episodes = round(minutes x 60 / D)",
      "low_cap_s": 120,
-     "redraw_s": [
-      2.4,
-      6.0
-     ],
+     "redraw_rule": "D/5-D/2",
      "schedule": "fast",
      "self_loops": false,
+     "session_minutes_rule": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
      "start_rule": "stationary"
     },
     "seed": "0:twitch:TW-M@fast",
+    "session_minutes": {
+     "max": 39.99,
+     "mean": 24.83,
+     "median": 24.89,
+     "min": 10.04,
+     "p10": 12.89,
+     "p90": 36.86
+    },
     "sessions": 2000
    },
    "TW-M@slow": {
@@ -123,113 +186,176 @@
      "p10": 2,
      "p90": 4
     },
+    "episode_s": {
+     "max": 799.62,
+     "mean": 496.98,
+     "median": 488.47,
+     "min": 200.18,
+     "p10": 260.14,
+     "p90": 739.81
+    },
+    "episodes_per_session": {
+     "max": 3,
+     "mean": 3.0,
+     "median": 3,
+     "min": 3,
+     "p10": 3,
+     "p90": 3
+    },
     "occupancy": {
-     "1": 0.00413,
-     "10": 0.090167,
-     "2": 0.011652,
-     "3": 0.025087,
-     "4": 0.239297,
-     "5": 0.1875,
-     "6": 0.116,
-     "7": 0.094333,
-     "8": 0.101667,
-     "9": 0.130167
+     "1": 0.003743,
+     "10": 0.09765,
+     "2": 0.011389,
+     "3": 0.022938,
+     "4": 0.247268,
+     "5": 0.186818,
+     "6": 0.107572,
+     "7": 0.087675,
+     "8": 0.098492,
+     "9": 0.136455
     },
     "schedule": {
      "base_matrix": "TW-M",
-     "episode_s": 460.0,
-     "episodes": 3,
+     "episode_s_rule": "the session's time / 3",
      "low_cap_s": 120,
-     "redraw_s": [
-      12.0,
-      30.0
-     ],
+     "redraw_rule": "the base's (12-30 s)",
      "schedule": "slow",
      "self_loops": false,
+     "session_minutes_rule": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
      "start_rule": "stationary"
     },
     "seed": "0:twitch:TW-M@slow",
+    "session_minutes": {
+     "max": 39.98,
+     "mean": 24.85,
+     "median": 24.42,
+     "min": 10.01,
+     "p10": 13.01,
+     "p90": 36.99
+    },
     "sessions": 2000
    }
   },
   "youtube": {
    "A@fast": {
     "changes_per_session": {
-     "max": 104,
-     "mean": 104.0,
-     "median": 104,
-     "min": 104,
-     "p10": 104,
-     "p90": 104
+     "max": 195,
+     "mean": 66.07,
+     "median": 57,
+     "min": 12,
+     "p10": 27,
+     "p90": 120
+    },
+    "episode_s": {
+     "max": 47.99,
+     "mean": 25.82,
+     "median": 23.87,
+     "min": 12.01,
+     "p10": 13.85,
+     "p90": 41.38
+    },
+    "episodes_per_session": {
+     "max": 196,
+     "mean": 66.79,
+     "median": 58,
+     "min": 13,
+     "p10": 28,
+     "p90": 120
     },
     "occupancy": {
-     "1": 0.1044,
-     "10": 0.037119,
-     "2": 0.184224,
-     "3": 0.176405,
-     "4": 0.138548,
-     "5": 0.068967,
-     "6": 0.077438,
-     "7": 0.074529,
-     "8": 0.073795,
-     "9": 0.064576
+     "1": 0.105734,
+     "10": 0.036362,
+     "2": 0.187264,
+     "3": 0.178697,
+     "4": 0.13995,
+     "5": 0.068521,
+     "6": 0.075608,
+     "7": 0.072634,
+     "8": 0.072423,
+     "9": 0.062808
     },
     "schedule": {
      "base_matrix": "A",
-     "episode_s": 12,
-     "episodes": 105,
+     "episode_s_rule": "restart prereg \u00a72b: @fast episode_s = exp(random.Random('<seed>:<key>:fast_episode_s').uniform(ln 12, ln 48)), the session-length key; re-draw at D/5-D/2; episodes = round(minutes x 60 / D)",
      "low_cap_s": 360,
-     "redraw_s": [
-      2.4,
-      6.0
-     ],
+     "redraw_rule": "D/5-D/2",
      "schedule": "fast",
      "self_loops": false,
+     "session_minutes_rule": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
      "start_rule": "stationary"
     },
     "seed": "0:youtube:A@fast",
+    "session_minutes": {
+     "max": 39.97,
+     "mean": 24.76,
+     "median": 24.83,
+     "min": 10.01,
+     "p10": 12.67,
+     "p90": 37.09
+    },
     "sessions": 2000
    },
    "A@slow": {
     "changes_per_session": {
      "max": 5,
-     "mean": 3.41,
+     "mean": 3.19,
      "median": 3,
      "min": 2,
      "p10": 2,
      "p90": 5
     },
+    "episode_s": {
+     "max": 799.88,
+     "mean": 500.07,
+     "median": 495.79,
+     "min": 200.0,
+     "p10": 262.6,
+     "p90": 739.12
+    },
+    "episodes_per_session": {
+     "max": 3,
+     "mean": 3.0,
+     "median": 3,
+     "min": 3,
+     "p10": 3,
+     "p90": 3
+    },
     "occupancy": {
-     "1": 0.028857,
-     "10": 0.032167,
-     "2": 0.146571,
-     "3": 0.228143,
-     "4": 0.147595,
-     "5": 0.129833,
-     "6": 0.102667,
-     "7": 0.070167,
-     "8": 0.058667,
-     "9": 0.055333
+     "1": 0.02906,
+     "10": 0.033333,
+     "2": 0.115933,
+     "3": 0.170258,
+     "4": 0.263862,
+     "5": 0.120798,
+     "6": 0.10046,
+     "7": 0.062744,
+     "8": 0.05192,
+     "9": 0.051632
     },
     "schedule": {
      "base_matrix": "A",
-     "episode_s": 420.0,
-     "episodes": 3,
+     "episode_s_rule": "the session's time / 3",
      "low_cap_s": 360,
-     "redraw_s": [
-      12.0,
-      30.0
-     ],
+     "redraw_rule": "the base's (12-30 s)",
      "schedule": "slow",
      "self_loops": false,
+     "session_minutes_rule": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
      "start_rule": "stationary"
     },
     "seed": "0:youtube:A@slow",
+    "session_minutes": {
+     "max": 39.99,
+     "mean": 25.0,
+     "median": 24.79,
+     "min": 10.0,
+     "p10": 13.13,
+     "p90": 36.96
+    },
     "sessions": 2000
    }
   }
  },
- "rule": "LVQoE prereg Addendum Q am. 17: occupancy from a seeded simulation of the family's exact schedule",
+ "rule": "LVQoE prereg Addendum Q am. 17: occupancy from a seeded simulation of the family's exact schedule; restart \u00a74 / \u00a72b: drawn session and @fast episode lengths",
  "schedules": {
   "fast": {
    "episode_s": 12,

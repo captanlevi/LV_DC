@@ -114,6 +114,12 @@ RUNGS = {
 }
 YT_RUNG_CODEC = "vp9"                           # am. 15 (3): yt's rung is the played codec's (vp9 on chaos)
 TT_RUNG_REGIME = "hevc"                         # tt's rungs are the HEVC ladder's (levi: the regime the rung assumes)
+# restart prereg §2b (levi on brad's design check 00231): classes that are the top tier of no shaper state, or of only
+# one (yt Q_480p at state 5), are ABR-only: listed as unreachable targets, never steered after; their minutes come from
+# ABR behaviour, and a floor not met reads "insufficient" in the report
+ABR_ONLY = (("twitch", "Q_1080p"), ("youtube", "Q_240p"), ("youtube", "Q_480p"))
+ABR_ONLY_RULE = ("restart prereg §2b: tw Q_1080p, yt Q_240p, yt Q_480p are ABR-only (the top tier of no state, or of one): "
+                 "unreachable targets, never steered; a floor not met reads insufficient")
 GEOMETRY_FOR_CLASS = {("youtube", "Q_1080p"): "fullscreen:1920x1080"}   # am. 15 (3) / am. 2: the only yt geometry for it
 SUMMARY_FILE = "_summaries/coverage_last.json"
 INITIAL_STATE_RULE = ("Q am. 15 (5): a tier-class target starts in its band, drawn from the matrix's stationary "
@@ -496,12 +502,16 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
     no_geom = [d["key"] for d in defs if d["kind"] == "class" and d["key"] not in unreachable
                and (GEOMETRY_FOR_CLASS.get((platform, d["key"])) or "").split(":")[0] in excluded_geometries]
     unreachable += no_geom
+    abr = [d["key"] for d in defs if d["kind"] == "class" and (platform, d["key"]) in ABR_ONLY and d["key"] not in unreachable]
+    unreachable += abr                                     # restart §2b: never steered after
     live = [d for d in defs if d["key"] not in unreachable]
     rec = {"platform": platform, "rule": RULE_VERSION, "steering_rule": STEERING_RULE, "deficit_rank": DEFICIT_RANK,
            "allowed": ids, "deficits": defs,
            "snapshot": snap, "bands": bands, "unreachable_targets": unreachable, "default_rotation": False, "geometry_forced": None}
     if excluded_geometries:
         rec["geometry_excluded"] = {"modes": list(excluded_geometries), "unreachable_by_geometry": no_geom}
+    if abr:
+        rec["abr_only"] = {"rule": ABR_ONLY_RULE, "unreachable_abr_only": abr}
     if reserved:
         rec["reserved"] = dict(reserved)
     pm = snap["per_matrix"]
@@ -645,6 +655,17 @@ def regime_flags(data_dir: Path, platform: str) -> list[str]:
             for f, v in sorted(by.items())]
 
 
+def abr_only(snap: dict) -> dict:
+    """The platform's ABR-only classes (restart §2b) with their floor status: met, or insufficient (never a deficit)."""
+    out = {}
+    for p, c in ABR_ONLY:
+        v = (snap.get("classes") or {}).get(c)
+        if p == snap.get("platform") and v is not None:
+            out[c] = {"sessions_ge_min": v["sessions_ge_min"], "floor": FLOOR_SESSIONS, "minutes": v["minutes"],
+                      "status": "met" if v["sessions_ge_min"] >= FLOOR_SESSIONS else "insufficient"}
+    return out
+
+
 def report(data_dir: Path, platforms=("youtube", "twitch", "tiktok")) -> dict:
     """The on-demand / daily coverage report: per platform the snapshot, the deficits and per accepted session its class
     minutes, stall share, buffer quantiles, (twitch) latency, (tt) codec."""
@@ -662,11 +683,14 @@ def report(data_dir: Path, platforms=("youtube", "twitch", "tiktok")) -> dict:
             if p == "tiktok":
                 row["tt_codec"] = (meta.get("tt_stream") or {}).get("codec")
             rows.append(row)
+        abr = abr_only(snap)
         med = [r["buffer_s"]["median"] for r in rows if r["buffer_s"]]
         lat = [r["twitch_latency"]["latency_s"]["median"] for r in rows if (r.get("twitch_latency") or {}).get("latency_s")]
         out["platforms"][p] = {"snapshot": snap,
-                               "deficits": deficits(snap, sorted(snap.get("tt_entries_by_state", {}), key=int),
-                                                    [m for m in PLATFORM_MATRICES[p] if "@" in m]),
+                               "deficits": [d for d in deficits(snap, sorted(snap.get("tt_entries_by_state", {}), key=int),
+                                                                [m for m in PLATFORM_MATRICES[p] if "@" in m])
+                                            if not (d["kind"] == "class" and d["key"] in abr)],
+                               "abr_only": abr,
                                "low_yield": low_yield(snap, PLATFORM_MATRICES[p]),
                                "flags": coverage_flags(snap) + regime_flags(data_dir, p),
                                "buffer_median_s_over_sessions": _q(med), "twitch_latency_median_s_over_sessions": _q(lat),
@@ -696,6 +720,9 @@ def markdown(rep: dict) -> list[str]:
             md += ["", "schedule families, Q_1080p minutes (mean per tier session x tier sessions): " + ", ".join(
                 f"{m} {x['class_minutes_mean'].get('Q_1080p')} x {x['tier_sessions']}" for m, x in sorted(fam.items()))]
         md += ["", "deficits: " + (", ".join(f"{d['key']} {d['deficit']}" for d in v["deficits"]) or "none"),
+               "ABR-only (never steered; restart §2b): " + (", ".join(
+                   f"{c} {x['sessions_ge_min']}/{x['floor']} {x['status']}" for c, x in v.get("abr_only", {}).items())
+                   or "none"),
                f"low_yield (best qualifying matrix < {LOW_YIELD_MIN_PER_SESSION} min / session over >= "
                f"{LOW_YIELD_MIN_SESSIONS} sessions): "
                + (", ".join(f"{x['class']} ({x['best_matrix']}: {x['minutes_per_session']} over {x['sessions']} "

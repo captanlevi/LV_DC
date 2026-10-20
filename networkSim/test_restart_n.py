@@ -25,11 +25,29 @@ def test_weights_and_compositions():
     w = N.weights_of((3, 5))                                   # 4 failed its scaling gate: renormalised
     assert abs(w[3] - 0.2 / 0.7) < 1e-12 and abs(w[5] - 0.5 / 0.7) < 1e-12 and 4 not in w
     assert N.composition(3) == {"youtube": 1, "twitch": 1, "tiktok": 1}
-    assert N.composition(5) == {"youtube": 2, "twitch": 2, "tiktok": 1}
     assert [N.composition(4, k) for k in range(4)] == [
         {"youtube": 2, "twitch": 1, "tiktok": 1}, {"youtube": 1, "twitch": 2, "tiktok": 1},
         {"youtube": 1, "twitch": 1, "tiktok": 2}, {"youtube": 2, "twitch": 1, "tiktok": 1}]
+    # levi on brad's design check 00231: N = 5's single platform rotates yt -> tw -> tt (1/2/2, 2/1/2, 2/2/1)
+    assert [N.composition(5, k) for k in range(4)] == [
+        {"youtube": 1, "twitch": 2, "tiktok": 2}, {"youtube": 2, "twitch": 1, "tiktok": 2},
+        {"youtube": 2, "twitch": 2, "tiktok": 1}, {"youtube": 1, "twitch": 2, "tiktok": 2}]
     assert all(sum(N.composition(n, 1).values()) == n for n in N.N_SUPPORT)
+    # a composition failing its decode stress leaves its rotation; an N with none left leaves the support
+    ex = N.parse_exclude("5:tiktok,4:youtube")
+    assert ex == ((4, "youtube"), (5, "tiktok")) and N.rotation(5, ex) == ("youtube", "twitch")
+    assert [N.composition(5, k, ex)["youtube"] for k in range(3)] == [1, 2, 1]
+    assert [N.composition(4, k, ex) for k in range(2)] == [{"youtube": 1, "twitch": 2, "tiktok": 1},
+                                                           {"youtube": 1, "twitch": 1, "tiktok": 2}]
+    all5 = N.parse_exclude("5:youtube,5:twitch,5:tiktok")
+    d = N.draw_at(0, {}, "e", True, exclude=all5)
+    assert d["support"] == [3, 4] and d["n"] in (3, 4) and d["excluded"] == ["5:tiktok", "5:twitch", "5:youtube"]
+    for bad in ("3:youtube", "5:x", "5"):
+        try:
+            N.parse_exclude(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
     assert N.parse_support(None) == (3, 4, 5) and N.parse_support("5,3") == (3, 5)
     for bad in ("2,3", "x", "6"):
         try:
@@ -45,10 +63,15 @@ def test_seeded_and_rotating():
     assert a == b                                               # seeded: the same sequence every time
     ns = Counter(d["n"] for d in a)
     assert set(ns) == {3, 4, 5} and abs(ns[5] / 300 - 0.5) < 0.08 and abs(ns[4] / 300 - 0.3) < 0.08, ns
-    fours = [d for d in a if d["n"] == 4]
-    assert [d["doubled"] for d in fours[:6]] == ["youtube", "twitch", "tiktok"] * 2      # yt -> tw -> tt
-    assert [d["n4_index"] for d in fours] == list(range(len(fours)))
-    assert all(d["composition"] == N.composition(d["n"], d.get("n4_index", 0)) for d in a)
+    for n, key in ((4, "doubled"), (5, "single")):
+        ds = [d for d in a if d["n"] == n]
+        assert [d["rotation"][key] for d in ds[:6]] == ["youtube", "twitch", "tiktok"] * 2      # yt -> tw -> tt
+        assert [d["rotation"]["index"] for d in ds] == list(range(len(ds)))
+    assert all(d["composition"] == N.composition(d["n"], (d.get("rotation") or {}).get("index", 0)) for d in a)
+    per = Counter()                                             # brad's parity: no platform short by composition
+    for d in a:
+        per.update(d["composition"])
+    assert max(per.values()) - min(per.values()) <= 0.03 * sum(per.values()), per
     pilot = N.simulate(300, era, record=False)
     assert [d["n"] for d in pilot] != [d["n"] for d in a]       # a pilot's sequence is its own
     other = N.simulate(300, "another-era")
@@ -88,13 +111,15 @@ def test_cli_guards():
     r = run("--n-draw")
     assert r.returncode != 0 and "--n-draw needs --concurrent" in r.stderr, r.stderr
     r = run("--concurrent", "--n-support", "3,5")
-    assert r.returncode != 0 and "--n-support needs --n-draw" in r.stderr, r.stderr
+    assert r.returncode != 0 and "--n-support / --n-exclude need --n-draw" in r.stderr, r.stderr
+    r = run("--concurrent", "--n-exclude", "5:youtube")
+    assert r.returncode != 0 and "--n-support / --n-exclude need --n-draw" in r.stderr, r.stderr
 
 
 def test_wiring():
     src = (HERE / "orchestrate.py").read_text()
     assert "nd = n_draw.draw(_RUNS_DIR / trio_slots.TRIO_DIR / trio_slots.SLOTS_LOG, record.ERA, TRIO_RECORD," in src
-    assert 'layout=args.trio_layout, slots=comp, n_draw=nd))' in src
+    assert 'layout=args.trio_layout, slots=comp, n_draw=nd, window_min=args.window_min))' in src
     assert '**({"n_draw": n_draw} if n_draw else {}),' in src                     # trio_up
     import trio_slots as T
     saved = os.environ.get("LVDC_N_DRAW")
@@ -122,13 +147,72 @@ def test_session_length():
     assert S.schedule_of("A@slow", base_episodes=17.4)["episode_s"] == 17.4 * 60 / 3
     assert S.session_episodes(10.0, "TW-M") == 10 and S.session_episodes(40.0, "TT-M@fast") == 200
     src = (HERE / "orchestrate.py").read_text()
-    assert 'slen = None if hold else draw_session_minutes(f"{run_id}:{s.tag}:{started[tag] + 1}")' in src
-    assert 'eps = EPISODES_V2.get(p, 5) if hold else session_episodes(slen["minutes"], mid)' in src
+    assert 'slen = None if held else draw_session_minutes(f"{run_id}:{s.tag}:{started[tag] + 1}")' in src
+    assert 'eps = EPISODES_V2.get(p, 5) if hold else session_episodes(slen["minutes"], mid, fe["episode_s"] if fe else None)' in src
     assert 'cmd += ["--session-minutes", str(slen["minutes"])]' in src
     exp = (HERE / "exp.py").read_text()
     assert ("SCHEDULE = schedule_of(matrix_id, low_cap, args.session_minutes or "
-            "coverage_report.SESSION_EPISODES.get(platform))") in exp
+            "coverage_report.SESSION_EPISODES.get(platform),") in exp
     assert '**({"session_length": SESSION_LEN} if SESSION_LEN else {})},' in exp
+
+
+def test_fast_episode_length():
+    """Restart §2b: @fast's episode length per session, log-U(12, 48) s, seeded on the session-length key; the re-draw
+    D/5-D/2; only @fast takes it."""
+    import math
+    a = S.draw_fast_episode_s("R:yt1:1")
+    assert a == S.draw_fast_episode_s("R:yt1:1") and a["rule"] == S.FAST_EPISODE_RULE and a["seed"] == 0
+    vs = [S.draw_fast_episode_s(f"R:tw1:{k}")["episode_s"] for k in range(3000)]
+    assert 12.0 <= min(vs) and max(vs) <= 48.0
+    lv = [math.log(v / 12) / math.log(4) for v in vs]          # log-uniform: uniform on the log scale
+    assert abs(sum(lv) / len(lv) - 0.5) < 0.02 and abs(sum(x < 0.5 for x in lv) / len(lv) - 0.5) < 0.03
+    assert abs(sum(v < 24 for v in vs) / len(vs) - 0.5) < 0.03  # the median is the geometric mean, 24 s
+    sc = S.schedule_of("TT-M@fast", 4, episode_s=30.0)
+    assert sc["episode_s"] == 30.0 and sc["redraw_s"] == [6.0, 15.0] and sc["low_cap_s"] == 240
+    assert S.session_episodes(20.0, "TT-M@fast", 30.0) == 40 and S.session_episodes(20.0, "TT-M@fast") == 100
+    for mid in ("TT-M@slow", "TT-M"):
+        try:
+            S.schedule_of(mid, 4, 20.0, episode_s=30.0)
+            raise AssertionError(mid)
+        except ValueError:
+            pass
+    exp = (HERE / "exp.py").read_text()
+    assert "episode_s=args.fast_episode_s)" in exp and '"--fast-episode-s",' in exp
+
+
+def test_abr_only_classes():
+    """Restart §2b: tw Q_1080p, yt Q_240p, yt Q_480p are listed as unreachable ABR-only targets and never steered
+    after; the report lists them with met / insufficient, never as a deficit."""
+    import coverage_report as C
+    from utils.shaping import PLATFORM_MATRICES
+    assert set(C.ABR_ONLY) == {("twitch", "Q_1080p"), ("youtube", "Q_240p"), ("youtube", "Q_480p")}
+    cls = {c: {"sessions_ge_min": 5, "minutes": 50} for c in C.CLASSES["youtube"]}
+    snap = {"platform": "youtube", "classes": {**cls, "Q_240p": {"sessions_ge_min": 0, "minutes": 0},
+                                                "Q_480p": {"sessions_ge_min": 1, "minutes": 3}},
+            "per_matrix": {}, "n_sessions": 5, "attempts": {"total": 5}}
+    r = C.pick_matrix(snap, PLATFORM_MATRICES["youtube"], ["A"])
+    assert r["target"] is None and r["default_rotation"], r                    # nothing steered after them
+    assert set(r["unreachable_targets"]) >= {"Q_240p", "Q_480p"}
+    assert sorted(r["abr_only"]["unreachable_abr_only"]) == ["Q_240p", "Q_480p"]
+    assert C.abr_only(snap) == {"Q_240p": {"sessions_ge_min": 0, "floor": 5, "minutes": 0, "status": "insufficient"},
+                                "Q_480p": {"sessions_ge_min": 1, "floor": 5, "minutes": 3, "status": "insufficient"}}
+    tw = {"platform": "twitch", "classes": {c: {"sessions_ge_min": 5, "minutes": 50} for c in C.CLASSES["twitch"]}}
+    assert C.abr_only(tw) == {"Q_1080p": {"sessions_ge_min": 5, "floor": 5, "minutes": 50, "status": "met"}}
+
+
+
+def test_the_committed_simulation():
+    """restart_simulation.py (for brad's design check): the committed fixture reproduces; its stagger is the trio's."""
+    import hashlib
+    import orchestrate as O
+    import restart_simulation as R
+    assert R.STAGGER_S == O.TRIO_STAGGER_S and R.WINDOW_MIN == 120.0
+    raw = R.FIXTURE.read_bytes()
+    assert R.dumps(R.simulate()).encode() == raw, "the simulation no longer reproduces fixtures/restart_simulation.json"
+    s = json.loads(raw)["summary"]
+    assert s["windows"] == sum(s["n_counts"].values()) and s["rotations"]["4"][:3] == ["youtube", "twitch", "tiktok"]
+    assert len(hashlib.sha256(raw).hexdigest()) == 64
+
 
 
 def main() -> int:
@@ -138,6 +222,9 @@ def main() -> int:
     test_cli_guards()
     test_wiring()
     test_session_length()
+    test_fast_episode_length()
+    test_abr_only_classes()
+    test_the_committed_simulation()
     print("test_restart_n: ok")
     return 0
 

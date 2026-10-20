@@ -1,0 +1,1781 @@
+{
+ "rule": {
+  "n_draw": "restart prereg \u00a71: N per round from {3, 4, 5}, weights 0.2 / 0.3 / 0.5 renormalised over the support (an N with no composition left is out); round k = the earlier draws of this era and record flag in the slots log; u = random.Random('<seed>:<era>:<record|pilot>:<k>').random() against the cumulative weights; 3 = 1/1/1; 4 = 2/1/1 with the doubled platform and 5 = 2/2/1 with the single platform rotating yt -> tw -> tt (less any excluded composition) by the count of earlier draws of that N",
+  "session_length": "restart prereg \u00a74: minutes = random.Random('<seed>:<key>').uniform(10, 40), key = <trio run>:<slot tag>:<the slot's session index in the run>; episodes = shaping.session_episodes(minutes, matrix)",
+  "window": "restart \u00a710: a slot runs its next drawn length when it fits before the window's end, else idles to the end (no truncation, no re-draw)"
+ },
+ "summary": {
+  "concurrency_mean_p10_p50_p90": [
+   2.912,
+   3.892,
+   4.875
+  ],
+  "era": "t58-restart-2026-10-21",
+  "hours": 24.0,
+  "length_mean_drawn_law_min": 25.0,
+  "length_mean_min": 24.18,
+  "length_tercile_cuts_min": [
+   20.0,
+   30.0
+  ],
+  "length_tercile_shares": [
+   0.389,
+   0.284,
+   0.327
+  ],
+  "n_counts": {
+   "3": 2,
+   "4": 6,
+   "5": 4
+  },
+  "overhead_s": 300.0,
+  "refill_gap_s": 60.0,
+  "rotations": {
+   "4": [
+    "youtube",
+    "twitch",
+    "tiktok",
+    "youtube",
+    "twitch",
+    "tiktok"
+   ],
+   "5": [
+    "youtube",
+    "twitch",
+    "tiktok",
+    "youtube"
+   ]
+  },
+  "session_minutes_per_platform": {
+   "tiktok": 1725.4,
+   "twitch": 1671.3,
+   "youtube": 1633.7
+  },
+  "sessions": 208,
+  "sessions_per_platform": {
+   "tiktok": 75,
+   "twitch": 65,
+   "youtube": 68
+  },
+  "slot_busy_share_mean": 0.8059,
+  "stagger_s": 30.0,
+  "window_min": 120.0,
+  "windows": 12
+ },
+ "windows": [
+  {
+   "composition": {
+    "tiktok": 2,
+    "twitch": 2,
+    "youtube": 1
+   },
+   "n": 5,
+   "rotation": {
+    "index": 0,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ],
+    "single": "youtube"
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 4.732,
+     "minutes": 33.6446,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.875,
+     "minutes": 23.9832,
+     "platform": "youtube",
+     "start_s": 2078.676,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.814,
+     "minutes": 33.0173,
+     "platform": "youtube",
+     "start_s": 3577.6679999999997,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.448,
+     "minutes": 16.521,
+     "platform": "youtube",
+     "start_s": 5618.706,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.836,
+     "minutes": 24.3846,
+     "platform": "twitch",
+     "start_s": 30.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.813,
+     "minutes": 32.8858,
+     "platform": "twitch",
+     "start_s": 1553.076,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.81,
+     "minutes": 26.2905,
+     "platform": "twitch",
+     "start_s": 3586.224,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.592,
+     "minutes": 12.1146,
+     "platform": "twitch",
+     "start_s": 5223.654,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.877,
+     "minutes": 28.3746,
+     "platform": "twitch",
+     "start_s": 60.0,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.889,
+     "minutes": 18.0555,
+     "platform": "twitch",
+     "start_s": 1822.476,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.73,
+     "minutes": 14.8364,
+     "platform": "twitch",
+     "start_s": 2965.806,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.774,
+     "minutes": 30.9712,
+     "platform": "twitch",
+     "start_s": 3915.99,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.969,
+     "minutes": 15.96,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.835,
+     "minutes": 33.5727,
+     "platform": "tiktok",
+     "start_s": 1107.6,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.797,
+     "minutes": 19.7078,
+     "platform": "tiktok",
+     "start_s": 3181.962,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.91,
+     "minutes": 11.0609,
+     "platform": "tiktok",
+     "start_s": 4424.43,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.658,
+     "minutes": 27.2531,
+     "platform": "tiktok",
+     "start_s": 5148.084000000001,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.901,
+     "minutes": 30.286,
+     "platform": "tiktok",
+     "start_s": 120.0,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 4.89,
+     "minutes": 18.2132,
+     "platform": "tiktok",
+     "start_s": 1997.16,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 4.73,
+     "minutes": 13.104,
+     "platform": "tiktok",
+     "start_s": 3149.952,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 4.923,
+     "minutes": 12.9837,
+     "platform": "tiktok",
+     "start_s": 3996.192,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 4.787,
+     "minutes": 12.7794,
+     "platform": "tiktok",
+     "start_s": 4835.214,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 2.668,
+     "minutes": 24.6823,
+     "platform": "tiktok",
+     "start_s": 5661.978,
+     "tag": "tt2"
+    }
+   ],
+   "slot_busy_share": 0.8235,
+   "t0_h": 0.0,
+   "u": 0.806513,
+   "window": 0
+  },
+  {
+   "composition": {
+    "tiktok": 2,
+    "twitch": 1,
+    "youtube": 2
+   },
+   "n": 5,
+   "rotation": {
+    "index": 1,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ],
+    "single": "twitch"
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 4.756,
+     "minutes": 31.8463,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.867,
+     "minutes": 28.6886,
+     "platform": "youtube",
+     "start_s": 1970.778,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.732,
+     "minutes": 25.0549,
+     "platform": "youtube",
+     "start_s": 3752.094,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.96,
+     "minutes": 13.9152,
+     "platform": "youtube",
+     "start_s": 5315.388,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.82,
+     "minutes": 22.1713,
+     "platform": "youtube",
+     "start_s": 30.0,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 4.865,
+     "minutes": 37.0367,
+     "platform": "youtube",
+     "start_s": 1420.278,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 4.813,
+     "minutes": 23.7985,
+     "platform": "youtube",
+     "start_s": 3702.4800000000005,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.858,
+     "minutes": 16.3065,
+     "platform": "youtube",
+     "start_s": 5190.39,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 4.884,
+     "minutes": 30.0744,
+     "platform": "twitch",
+     "start_s": 60.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.814,
+     "minutes": 14.8972,
+     "platform": "twitch",
+     "start_s": 1924.464,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.889,
+     "minutes": 35.9016,
+     "platform": "twitch",
+     "start_s": 2878.296,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.974,
+     "minutes": 19.1968,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.775,
+     "minutes": 13.3382,
+     "platform": "tiktok",
+     "start_s": 1301.808,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.86,
+     "minutes": 26.9565,
+     "platform": "tiktok",
+     "start_s": 2162.1,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.717,
+     "minutes": 24.1606,
+     "platform": "tiktok",
+     "start_s": 3839.49,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 2.602,
+     "minutes": 29.1553,
+     "platform": "tiktok",
+     "start_s": 5349.126,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.859,
+     "minutes": 33.8176,
+     "platform": "tiktok",
+     "start_s": 120.0,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 4.88,
+     "minutes": 33.4504,
+     "platform": "tiktok",
+     "start_s": 2209.056,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 3.927,
+     "minutes": 37.5682,
+     "platform": "tiktok",
+     "start_s": 4276.08,
+     "tag": "tt2"
+    }
+   ],
+   "slot_busy_share": 0.7957,
+   "t0_h": 2.083,
+   "u": 0.829564,
+   "window": 1
+  },
+  {
+   "composition": {
+    "tiktok": 1,
+    "twitch": 1,
+    "youtube": 2
+   },
+   "n": 4,
+   "rotation": {
+    "doubled": "youtube",
+    "index": 0,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ]
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 3.858,
+     "minutes": 35.2997,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.836,
+     "minutes": 24.4417,
+     "platform": "youtube",
+     "start_s": 2177.982,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.896,
+     "minutes": 19.1973,
+     "platform": "youtube",
+     "start_s": 3704.484,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.797,
+     "minutes": 23.24,
+     "platform": "youtube",
+     "start_s": 4916.322,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.934,
+     "minutes": 22.5692,
+     "platform": "youtube",
+     "start_s": 30.0,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.892,
+     "minutes": 29.4017,
+     "platform": "youtube",
+     "start_s": 1444.1519999999998,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.842,
+     "minutes": 16.9389,
+     "platform": "youtube",
+     "start_s": 3268.254,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.916,
+     "minutes": 11.8542,
+     "platform": "youtube",
+     "start_s": 4344.588,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.821,
+     "minutes": 19.8354,
+     "platform": "youtube",
+     "start_s": 5115.84,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.903,
+     "minutes": 36.1376,
+     "platform": "twitch",
+     "start_s": 60.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.877,
+     "minutes": 32.5926,
+     "platform": "twitch",
+     "start_s": 2288.256,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.881,
+     "minutes": 30.8126,
+     "platform": "twitch",
+     "start_s": 4303.812,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.991,
+     "minutes": 21.7562,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.878,
+     "minutes": 16.3544,
+     "platform": "tiktok",
+     "start_s": 1455.372,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.93,
+     "minutes": 14.2499,
+     "platform": "tiktok",
+     "start_s": 2496.636,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.875,
+     "minutes": 39.9259,
+     "platform": "tiktok",
+     "start_s": 3411.63,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 2.15,
+     "minutes": 16.9299,
+     "platform": "tiktok",
+     "start_s": 5867.184,
+     "tag": "tt1"
+    }
+   ],
+   "slot_busy_share": 0.8231,
+   "t0_h": 4.167,
+   "u": 0.249125,
+   "window": 2
+  },
+  {
+   "composition": {
+    "tiktok": 1,
+    "twitch": 2,
+    "youtube": 1
+   },
+   "n": 4,
+   "rotation": {
+    "doubled": "twitch",
+    "index": 1,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ]
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 3.759,
+     "minutes": 12.4578,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.886,
+     "minutes": 35.0351,
+     "platform": "youtube",
+     "start_s": 807.4680000000001,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.885,
+     "minutes": 17.3582,
+     "platform": "youtube",
+     "start_s": 2969.5739999999996,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.587,
+     "minutes": 34.6301,
+     "platform": "youtube",
+     "start_s": 4071.066,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.881,
+     "minutes": 29.3164,
+     "platform": "twitch",
+     "start_s": 30.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.841,
+     "minutes": 36.8937,
+     "platform": "twitch",
+     "start_s": 1848.9840000000002,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.897,
+     "minutes": 19.3593,
+     "platform": "twitch",
+     "start_s": 4122.606000000001,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.353,
+     "minutes": 29.3828,
+     "platform": "twitch",
+     "start_s": 5344.164000000001,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.885,
+     "minutes": 30.5356,
+     "platform": "twitch",
+     "start_s": 60.0,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.937,
+     "minutes": 31.7053,
+     "platform": "twitch",
+     "start_s": 1952.136,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.723,
+     "minutes": 13.4559,
+     "platform": "twitch",
+     "start_s": 3914.4539999999997,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.043,
+     "minutes": 32.7292,
+     "platform": "twitch",
+     "start_s": 4781.808,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.957,
+     "minutes": 23.1091,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.906,
+     "minutes": 21.1836,
+     "platform": "tiktok",
+     "start_s": 1536.546,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.897,
+     "minutes": 17.226,
+     "platform": "tiktok",
+     "start_s": 2867.562,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.83,
+     "minutes": 11.7336,
+     "platform": "tiktok",
+     "start_s": 3961.122,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.854,
+     "minutes": 13.2979,
+     "platform": "tiktok",
+     "start_s": 4725.138,
+     "tag": "tt1"
+    }
+   ],
+   "slot_busy_share": 0.8188,
+   "t0_h": 6.25,
+   "u": 0.405639,
+   "window": 3
+  },
+  {
+   "composition": {
+    "tiktok": 2,
+    "twitch": 1,
+    "youtube": 1
+   },
+   "n": 4,
+   "rotation": {
+    "doubled": "tiktok",
+    "index": 2,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ]
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 3.851,
+     "minutes": 33.6171,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.878,
+     "minutes": 32.8044,
+     "platform": "youtube",
+     "start_s": 2077.026,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.57,
+     "minutes": 38.2314,
+     "platform": "youtube",
+     "start_s": 4105.29,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.87,
+     "minutes": 34.4912,
+     "platform": "twitch",
+     "start_s": 30.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.906,
+     "minutes": 21.2838,
+     "platform": "twitch",
+     "start_s": 2159.4719999999998,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.909,
+     "minutes": 10.935,
+     "platform": "twitch",
+     "start_s": 3496.5,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.917,
+     "minutes": 23.9866,
+     "platform": "twitch",
+     "start_s": 4212.6,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.962,
+     "minutes": 13.113,
+     "platform": "tiktok",
+     "start_s": 60.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.876,
+     "minutes": 32.3618,
+     "platform": "tiktok",
+     "start_s": 906.78,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.885,
+     "minutes": 25.9972,
+     "platform": "tiktok",
+     "start_s": 2908.4880000000003,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.529,
+     "minutes": 31.3246,
+     "platform": "tiktok",
+     "start_s": 4528.32,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.941,
+     "minutes": 16.9662,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 3.919,
+     "minutes": 24.5492,
+     "platform": "tiktok",
+     "start_s": 1167.972,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 3.861,
+     "minutes": 35.9773,
+     "platform": "tiktok",
+     "start_s": 2700.924,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 3.523,
+     "minutes": 23.353,
+     "platform": "tiktok",
+     "start_s": 4919.562,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 1.056,
+     "minutes": 13.5298,
+     "platform": "tiktok",
+     "start_s": 6380.742,
+     "tag": "tt2"
+    }
+   ],
+   "slot_busy_share": 0.825,
+   "t0_h": 8.333,
+   "u": 0.313165,
+   "window": 4
+  },
+  {
+   "composition": {
+    "tiktok": 1,
+    "twitch": 2,
+    "youtube": 2
+   },
+   "n": 5,
+   "rotation": {
+    "index": 2,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ],
+    "single": "tiktok"
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 4.742,
+     "minutes": 27.1494,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.863,
+     "minutes": 36.4308,
+     "platform": "youtube",
+     "start_s": 1688.964,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.384,
+     "minutes": 34.5645,
+     "platform": "youtube",
+     "start_s": 3934.812,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.796,
+     "minutes": 34.3044,
+     "platform": "youtube",
+     "start_s": 30.0,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 4.869,
+     "minutes": 38.2646,
+     "platform": "youtube",
+     "start_s": 2148.264,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 4.446,
+     "minutes": 15.1914,
+     "platform": "youtube",
+     "start_s": 4504.14,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.824,
+     "minutes": 10.7794,
+     "platform": "youtube",
+     "start_s": 5475.624000000001,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 1.657,
+     "minutes": 13.6334,
+     "platform": "youtube",
+     "start_s": 6182.388000000001,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 4.848,
+     "minutes": 29.6188,
+     "platform": "twitch",
+     "start_s": 60.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.885,
+     "minutes": 17.3973,
+     "platform": "twitch",
+     "start_s": 1897.128,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.901,
+     "minutes": 20.2677,
+     "platform": "twitch",
+     "start_s": 3000.9660000000003,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.826,
+     "minutes": 11.5071,
+     "platform": "twitch",
+     "start_s": 4277.028,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.647,
+     "minutes": 22.2697,
+     "platform": "twitch",
+     "start_s": 5027.454,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.934,
+     "minutes": 22.7125,
+     "platform": "twitch",
+     "start_s": 90.0,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.842,
+     "minutes": 18.9493,
+     "platform": "twitch",
+     "start_s": 1512.75,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.862,
+     "minutes": 36.351,
+     "platform": "twitch",
+     "start_s": 2709.708,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.493,
+     "minutes": 26.4695,
+     "platform": "twitch",
+     "start_s": 4950.768,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 5.0,
+     "minutes": 15.1613,
+     "platform": "tiktok",
+     "start_s": 120.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.813,
+     "minutes": 32.064,
+     "platform": "tiktok",
+     "start_s": 1089.6779999999999,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.847,
+     "minutes": 32.6179,
+     "platform": "tiktok",
+     "start_s": 3073.518,
+     "tag": "tt1"
+    }
+   ],
+   "slot_busy_share": 0.7931,
+   "t0_h": 10.417,
+   "u": 0.965341,
+   "window": 5
+  },
+  {
+   "composition": {
+    "tiktok": 2,
+    "twitch": 2,
+    "youtube": 1
+   },
+   "n": 5,
+   "rotation": {
+    "index": 3,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ],
+    "single": "youtube"
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 4.758,
+     "minutes": 21.1587,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.826,
+     "minutes": 11.5017,
+     "platform": "youtube",
+     "start_s": 1329.522,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.831,
+     "minutes": 29.5143,
+     "platform": "youtube",
+     "start_s": 2079.624,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.682,
+     "minutes": 32.1943,
+     "platform": "youtube",
+     "start_s": 3910.482,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 4.794,
+     "minutes": 38.7487,
+     "platform": "twitch",
+     "start_s": 30.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.909,
+     "minutes": 22.0015,
+     "platform": "twitch",
+     "start_s": 2414.922,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.809,
+     "minutes": 31.1471,
+     "platform": "twitch",
+     "start_s": 3795.0119999999997,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 4.925,
+     "minutes": 20.0323,
+     "platform": "twitch",
+     "start_s": 60.0,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.838,
+     "minutes": 31.5893,
+     "platform": "twitch",
+     "start_s": 1321.9379999999999,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.849,
+     "minutes": 19.8736,
+     "platform": "twitch",
+     "start_s": 3277.2960000000003,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.389,
+     "minutes": 39.8794,
+     "platform": "twitch",
+     "start_s": 4529.712,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 4.884,
+     "minutes": 30.0826,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.846,
+     "minutes": 30.3341,
+     "platform": "tiktok",
+     "start_s": 1954.956,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.894,
+     "minutes": 28.1876,
+     "platform": "tiktok",
+     "start_s": 3835.002,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 4.923,
+     "minutes": 26.1326,
+     "platform": "tiktok",
+     "start_s": 120.0,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 4.86,
+     "minutes": 21.4918,
+     "platform": "tiktok",
+     "start_s": 1747.956,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 4.858,
+     "minutes": 35.1874,
+     "platform": "tiktok",
+     "start_s": 3097.464,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 4.023,
+     "minutes": 10.1015,
+     "platform": "tiktok",
+     "start_s": 5268.708,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 1.84,
+     "minutes": 19.6069,
+     "platform": "tiktok",
+     "start_s": 5934.798,
+     "tag": "tt2"
+    }
+   ],
+   "slot_busy_share": 0.798,
+   "t0_h": 12.5,
+   "u": 0.977788,
+   "window": 6
+  },
+  {
+   "composition": {
+    "tiktok": 1,
+    "twitch": 1,
+    "youtube": 2
+   },
+   "n": 4,
+   "rotation": {
+    "doubled": "youtube",
+    "index": 3,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ]
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 3.729,
+     "minutes": 11.0621,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.871,
+     "minutes": 23.1935,
+     "platform": "youtube",
+     "start_s": 723.726,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.824,
+     "minutes": 34.0026,
+     "platform": "youtube",
+     "start_s": 2175.3360000000002,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.176,
+     "minutes": 25.8385,
+     "platform": "youtube",
+     "start_s": 4275.492,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 1.521,
+     "minutes": 13.8539,
+     "platform": "youtube",
+     "start_s": 5885.802,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.842,
+     "minutes": 15.8142,
+     "platform": "youtube",
+     "start_s": 30.0,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.879,
+     "minutes": 23.734,
+     "platform": "youtube",
+     "start_s": 1038.8519999999999,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.804,
+     "minutes": 10.1999,
+     "platform": "youtube",
+     "start_s": 2522.892,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.937,
+     "minutes": 15.8548,
+     "platform": "youtube",
+     "start_s": 3194.8859999999995,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.596,
+     "minutes": 19.8535,
+     "platform": "youtube",
+     "start_s": 4206.173999999999,
+     "tag": "yt2"
+    },
+    {
+     "concurrency_mean": 3.823,
+     "minutes": 19.8016,
+     "platform": "twitch",
+     "start_s": 60.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.891,
+     "minutes": 27.5899,
+     "platform": "twitch",
+     "start_s": 1308.096,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.877,
+     "minutes": 32.5463,
+     "platform": "twitch",
+     "start_s": 3023.49,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.88,
+     "minutes": 15.6943,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.895,
+     "minutes": 28.6424,
+     "platform": "tiktok",
+     "start_s": 1091.658,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.899,
+     "minutes": 19.7798,
+     "platform": "tiktok",
+     "start_s": 2870.2019999999998,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 2.89,
+     "minutes": 36.702,
+     "platform": "tiktok",
+     "start_s": 4116.99,
+     "tag": "tt1"
+    }
+   ],
+   "slot_busy_share": 0.7483,
+   "t0_h": 14.583,
+   "u": 0.267996,
+   "window": 7
+  },
+  {
+   "composition": {
+    "tiktok": 1,
+    "twitch": 1,
+    "youtube": 1
+   },
+   "n": 3,
+   "sessions": [
+    {
+     "concurrency_mean": 2.924,
+     "minutes": 19.7578,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.928,
+     "minutes": 13.801,
+     "platform": "youtube",
+     "start_s": 1245.468,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.923,
+     "minutes": 38.8673,
+     "platform": "youtube",
+     "start_s": 2133.5280000000002,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.257,
+     "minutes": 36.2277,
+     "platform": "youtube",
+     "start_s": 4525.566000000001,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.95,
+     "minutes": 30.109,
+     "platform": "twitch",
+     "start_s": 30.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.914,
+     "minutes": 34.9082,
+     "platform": "twitch",
+     "start_s": 1896.5400000000002,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.949,
+     "minutes": 19.7496,
+     "platform": "twitch",
+     "start_s": 4051.032,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.127,
+     "minutes": 18.4872,
+     "platform": "twitch",
+     "start_s": 5296.008,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.919,
+     "minutes": 37.0285,
+     "platform": "tiktok",
+     "start_s": 60.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.0,
+     "minutes": 16.4382,
+     "platform": "tiktok",
+     "start_s": 2341.71,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 2.912,
+     "minutes": 34.1552,
+     "platform": "tiktok",
+     "start_s": 3388.002,
+     "tag": "tt1"
+    }
+   ],
+   "slot_busy_share": 0.7987,
+   "t0_h": 16.667,
+   "u": 0.088496,
+   "window": 8
+  },
+  {
+   "composition": {
+    "tiktok": 1,
+    "twitch": 2,
+    "youtube": 1
+   },
+   "n": 4,
+   "rotation": {
+    "doubled": "twitch",
+    "index": 4,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ]
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 3.838,
+     "minutes": 30.8383,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.916,
+     "minutes": 35.7369,
+     "platform": "youtube",
+     "start_s": 1910.298,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.864,
+     "minutes": 14.7107,
+     "platform": "youtube",
+     "start_s": 4114.512,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.905,
+     "minutes": 10.5264,
+     "platform": "youtube",
+     "start_s": 5057.1539999999995,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.879,
+     "minutes": 15.647,
+     "platform": "youtube",
+     "start_s": 5748.737999999999,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.916,
+     "minutes": 17.8694,
+     "platform": "twitch",
+     "start_s": 30.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.898,
+     "minutes": 29.3034,
+     "platform": "twitch",
+     "start_s": 1162.164,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.857,
+     "minutes": 34.9811,
+     "platform": "twitch",
+     "start_s": 2980.368,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.937,
+     "minutes": 15.843,
+     "platform": "twitch",
+     "start_s": 5139.234,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.902,
+     "minutes": 35.5536,
+     "platform": "twitch",
+     "start_s": 60.0,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.91,
+     "minutes": 33.2259,
+     "platform": "twitch",
+     "start_s": 2253.2160000000003,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.801,
+     "minutes": 32.1055,
+     "platform": "twitch",
+     "start_s": 4306.77,
+     "tag": "tw2"
+    },
+    {
+     "concurrency_mean": 3.958,
+     "minutes": 24.0559,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.913,
+     "minutes": 34.451,
+     "platform": "tiktok",
+     "start_s": 1593.354,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.893,
+     "minutes": 18.7336,
+     "platform": "tiktok",
+     "start_s": 3720.4139999999998,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.159,
+     "minutes": 31.7807,
+     "platform": "tiktok",
+     "start_s": 4904.429999999999,
+     "tag": "tt1"
+    }
+   ],
+   "slot_busy_share": 0.8307,
+   "t0_h": 18.75,
+   "u": 0.212452,
+   "window": 9
+  },
+  {
+   "composition": {
+    "tiktok": 2,
+    "twitch": 1,
+    "youtube": 1
+   },
+   "n": 4,
+   "rotation": {
+    "doubled": "tiktok",
+    "index": 5,
+    "rotation": [
+     "youtube",
+     "twitch",
+     "tiktok"
+    ]
+   },
+   "sessions": [
+    {
+     "concurrency_mean": 3.721,
+     "minutes": 10.7704,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.9,
+     "minutes": 10.0083,
+     "platform": "youtube",
+     "start_s": 706.224,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.831,
+     "minutes": 35.4025,
+     "platform": "youtube",
+     "start_s": 1366.7220000000002,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.648,
+     "minutes": 39.3187,
+     "platform": "youtube",
+     "start_s": 3550.8720000000003,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 3.855,
+     "minutes": 17.1975,
+     "platform": "twitch",
+     "start_s": 30.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.82,
+     "minutes": 16.6303,
+     "platform": "twitch",
+     "start_s": 1121.8500000000001,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.856,
+     "minutes": 27.8453,
+     "platform": "twitch",
+     "start_s": 2179.6679999999997,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.876,
+     "minutes": 16.1337,
+     "platform": "twitch",
+     "start_s": 3910.3859999999995,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.858,
+     "minutes": 24.5863,
+     "platform": "twitch",
+     "start_s": 4938.407999999999,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 3.843,
+     "minutes": 28.6831,
+     "platform": "tiktok",
+     "start_s": 60.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.841,
+     "minutes": 12.6175,
+     "platform": "tiktok",
+     "start_s": 1840.9859999999999,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.865,
+     "minutes": 22.1435,
+     "platform": "tiktok",
+     "start_s": 2658.036,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.865,
+     "minutes": 22.1995,
+     "platform": "tiktok",
+     "start_s": 4046.6459999999997,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.874,
+     "minutes": 23.8137,
+     "platform": "tiktok",
+     "start_s": 90.0,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 3.824,
+     "minutes": 11.3821,
+     "platform": "tiktok",
+     "start_s": 1578.8220000000001,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 3.926,
+     "minutes": 13.4306,
+     "platform": "tiktok",
+     "start_s": 2321.748,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 3.81,
+     "minutes": 15.7733,
+     "platform": "tiktok",
+     "start_s": 3187.584,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 3.927,
+     "minutes": 13.7166,
+     "platform": "tiktok",
+     "start_s": 4193.982,
+     "tag": "tt2"
+    },
+    {
+     "concurrency_mean": 2.907,
+     "minutes": 20.8475,
+     "platform": "tiktok",
+     "start_s": 5076.978,
+     "tag": "tt2"
+    }
+   ],
+   "slot_busy_share": 0.765,
+   "t0_h": 20.833,
+   "u": 0.469047,
+   "window": 10
+  },
+  {
+   "composition": {
+    "tiktok": 1,
+    "twitch": 1,
+    "youtube": 1
+   },
+   "n": 3,
+   "sessions": [
+    {
+     "concurrency_mean": 2.91,
+     "minutes": 16.7059,
+     "platform": "youtube",
+     "start_s": 0.0,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.908,
+     "minutes": 32.516,
+     "platform": "youtube",
+     "start_s": 1062.354,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.963,
+     "minutes": 27.3858,
+     "platform": "youtube",
+     "start_s": 3073.314,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.674,
+     "minutes": 24.4985,
+     "platform": "youtube",
+     "start_s": 4776.4619999999995,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.0,
+     "minutes": 10.0207,
+     "platform": "youtube",
+     "start_s": 6306.371999999999,
+     "tag": "yt1"
+    },
+    {
+     "concurrency_mean": 2.929,
+     "minutes": 21.0475,
+     "platform": "twitch",
+     "start_s": 30.0,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.909,
+     "minutes": 32.9333,
+     "platform": "twitch",
+     "start_s": 1352.85,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.932,
+     "minutes": 29.4098,
+     "platform": "twitch",
+     "start_s": 3388.848,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.918,
+     "minutes": 12.2333,
+     "platform": "twitch",
+     "start_s": 5213.436,
+     "tag": "tw1"
+    },
+    {
+     "concurrency_mean": 2.923,
+     "minutes": 26.0154,
+     "platform": "tiktok",
+     "start_s": 60.0,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 3.0,
+     "minutes": 13.5233,
+     "platform": "tiktok",
+     "start_s": 1680.924,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 2.923,
+     "minutes": 39.0598,
+     "platform": "tiktok",
+     "start_s": 2552.322,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 2.933,
+     "minutes": 14.9776,
+     "platform": "tiktok",
+     "start_s": 4955.91,
+     "tag": "tt1"
+    },
+    {
+     "concurrency_mean": 1.867,
+     "minutes": 18.5583,
+     "platform": "tiktok",
+     "start_s": 5914.566,
+     "tag": "tt1"
+    }
+   ],
+   "slot_busy_share": 0.8504,
+   "t0_h": 22.917,
+   "u": 0.076428,
+   "window": 11
+  }
+ ]
+}

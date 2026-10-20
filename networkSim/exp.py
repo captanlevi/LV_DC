@@ -529,6 +529,13 @@ if __name__ == "__main__":
              "the platform's base length (coverage_report.SESSION_EPISODES).",
     )
     parser.add_argument(
+        "--fast-episode-s",
+        type=float,
+        default=None,
+        help="Restart prereg §2b (orchestrate's draw, log-U(12, 48) s): an @fast matrix's episode length for this "
+             "session (its re-draw D/5-D/2). Only with an @fast matrix.",
+    )
+    parser.add_argument(
         "--auto",
         action="store_true",
         help="Auto-navigate to a live stream and handle ads (default: manual — you navigate yourself).",
@@ -695,7 +702,11 @@ if __name__ == "__main__":
     # Q am. 17: the matrix id's schedule (base, or a "<m>@slow|fast" family: its episode length, self-loop rule, re-draw
     # and low-state cap in seconds, the base matrix's cap x 60 s); recorded in meta.json shaper
     # restart §4: a drawn session length (--session-minutes) replaces the platform's base length in @slow's division
-    SCHEDULE = schedule_of(matrix_id, low_cap, args.session_minutes or coverage_report.SESSION_EPISODES.get(platform))
+    try:
+        SCHEDULE = schedule_of(matrix_id, low_cap, args.session_minutes or coverage_report.SESSION_EPISODES.get(platform),
+                               episode_s=args.fast_episode_s)
+    except ValueError as e:
+        sys.exit(f"--fast-episode-s: {e}")
     SESSION_LEN = None
     if args.session_minutes is not None:
         try:
@@ -957,9 +968,10 @@ if __name__ == "__main__":
                 TRIO["cgroup_sweeper"] = sweeper.stop() if sweeper is not None else None
                 TRIO["tc"] = tc_sampler.stop()
                 TRIO["socket_owner_end"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
-                TRIO["siblings"] = trio_slots.siblings(slots_log, session_dir.name,
-                                                       json.loads((session_dir / "meta.json").read_text())["started_at"],
-                                                       None)
+                t_start = json.loads((session_dir / "meta.json").read_text())["started_at"]
+                TRIO["siblings"] = trio_slots.siblings(slots_log, session_dir.name, t_start, None)
+                # restart §10: the sessions running beside this one, per second, and its time-weighted mean
+                TRIO["concurrent"] = trio_slots.concurrency_over(slots_log, session_dir.name, t_start, None)
             except Exception as e:
                 TRIO["record_error"] = repr(e)
             meta_extra["concurrency"] = TRIO

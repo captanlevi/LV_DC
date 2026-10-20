@@ -60,7 +60,7 @@ EXIT_PREFLIGHT = 8    # orchestrate.py's own exit code when the per-session pref
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
-from utils.shaping import session_episodes, draw_session_minutes  # noqa: E402  (Q am. 17; restart §4)
+from utils.shaping import session_episodes, draw_session_minutes, draw_fast_episode_s  # noqa: E402  (Q am. 17; restart)
 
 # --batch (t37, week-long run): stop before a session when the data volume has less than this share free; pause a
 # platform after this many consecutive sessions without a PASS; a yt channel that failed to start is skipped this long
@@ -667,10 +667,24 @@ def pin_geometry(pin: dict, geom: str | None, running: dict, tag: str) -> tuple[
 
 def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, paused: dict, not_live: dict,
                  rotate_geometry: bool, yt_matrix: str, capacity_kbit: float | None, run_id: str, summaries: Path,
-                 spawn, floor: dict | None = None, stop_signal: list | None = None) -> bool:
-    """Start the next session in slot `tag` (run_trio); False when its preflight failed (the trio drains)."""
+                 spawn, floor: dict | None = None, stop_signal: list | None = None, window: dict | None = None,
+                 idle: set | None = None) -> bool:
+    """Start the next session in slot `tag` (run_trio); False when its preflight failed (the trio drains). In a window
+    (restart §10) the slot draws its next session's length first and, when it does not fit before the window's
+    deadline, idles to the window's end (added to `idle`, a window_idle event): no truncation, no re-draw."""
     s, troot = T.SLOTS[tag], _RUNS_DIR / T.TRIO_DIR
     p = s.platform
+    # restart prereg §4: the session's length is drawn first (U(10, 40) min, seeded by the run, the slot and its session
+    # index); a held state (decode_stress) runs base episodes (exp.py: hold is base)
+    held = TRIO_STRESS and (TRIO_PINS.get(tag) or TRIO_PINS.get(p) or {}).get("state")
+    slen = None if held else draw_session_minutes(f"{run_id}:{s.tag}:{started[tag] + 1}")
+    if window and slen and time.time() + slen["minutes"] * 60 > window["deadline"]:
+        T.slots_log_append(troot / T.SLOTS_LOG, {"event": "window_idle", "slot": tag, "run": run_id, "t": time.time(),
+                                                 "minutes": slen["minutes"], "deadline": window["deadline"]})
+        print(f"  TRIO {tag}: the next session's {slen['minutes']:.1f} min does not fit the window: idle to its end")
+        if idle is not None:
+            idle.add(tag)
+        return True
     gb = free_gb(_RUNS_DIR)
     if gb < MIN_FREE_GB:
         print(f"\n  Data volume {gb:.0f} GB free < {MIN_FREE_GB} GB: draining the trio.")
@@ -717,15 +731,19 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         geom, pin = pin_geometry(pin, geom, running, tag)
         print(f"  PINNED {tag}: {json.dumps(pin)}")
     hold = TRIO_STRESS and (pin or {}).get("state")      # decode_stress: the pinned state held for the whole session
-    # restart prereg §4: the session's length is drawn (U(10, 40) min, seeded by the run, the slot and its session
-    # index) and a schedule's episodes scale with it (Q am. 17); a held state runs base episodes (exp.py: hold is base)
-    slen = None if hold else draw_session_minutes(f"{run_id}:{s.tag}:{started[tag] + 1}")
-    eps = EPISODES_V2.get(p, 5) if hold else session_episodes(slen["minutes"], mid)
+    # a schedule's episodes scale with the drawn length (Q am. 17); @fast's episode length is drawn per session
+    # (restart §2b, the same key); a held state runs base episodes
+    fe = draw_fast_episode_s(slen["key"]) if slen and (mid or "").partition("@")[2] == "fast" else None
+    if fe:
+        slen = {**slen, "fast_episode": fe}
+    eps = EPISODES_V2.get(p, 5) if hold else session_episodes(slen["minutes"], mid, fe["episode_s"] if fe else None)
     cmd = _collection_cmd(p, initial_state=init, episodes=eps, auto=True, yt_matrix=yt_matrix,
                           channel=channel, geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
     if slen:
         cmd += ["--session-minutes", str(slen["minutes"])]
+    if fe:
+        cmd += ["--fast-episode-s", str(fe["episode_s"])]
     if hold:
         cmd += ["--hold-state", pin["state"]]
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
@@ -778,7 +796,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
              capacity_kbit: float | None = None, max_per_slot: int | None = None,
              stagger_s: float = TRIO_STAGGER_S, poll_s: float = TRIO_POLL_S, layout: str = "cdp",
              spawn=_spawn, apply=None, make=_make, sleep=time.sleep, xrandr=None, offloads=None,
-             slots: dict | None = None, n_draw: dict | None = None) -> int:
+             slots: dict | None = None, n_draw: dict | None = None, window_min: float | None = None) -> int:
     """t56: the slots of a composition (`slots` {platform: count}, default the trio's one each; trio_slots.build_slots),
     keyed by tag; each slot refilled when its session ends (A1); targets and accounting per platform, until every platform has its
     target of PASS trio sessions (counted in the trio's own data root, data/_trio/<platform>: single mode never sees
@@ -796,6 +814,9 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     t55: the capture offloads off on iface before anything starts (offloads: the ensure function, tests).
     n_draw: the round's N draw (n_draw.draw; restart prereg §1), whose composition `slots` is: recorded in trio_up and,
     through LVDC_N_DRAW, in every session's meta.json concurrency.n_draw.
+    window_min (restart §10): the run is a window of this many minutes from its trio_up; each slot refills while its
+    next drawn length fits before the deadline and idles to the end otherwise (_trio_refill); recorded in trio_up
+    window and meta.json concurrency.window (LVDC_TRIO_WINDOW).
     Returns the exit code: 0, or EXIT_STOPPED / EXIT_LOW_DISK / EXIT_PREFLIGHT / EXIT_OFFLOADS when that ended it."""
     import signal
     import trio_slots as T
@@ -806,6 +827,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     os.environ.pop("LVDC_N_DRAW", None)
     if n_draw:
         os.environ["LVDC_N_DRAW"] = json.dumps(n_draw)
+    os.environ.pop("LVDC_TRIO_WINDOW", None)
+    window, idle = None, set()
     apply = apply or T.apply
     try:
         _offloads_or_exit(iface, offloads)
@@ -887,11 +910,16 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
         dstage.mkdir(parents=True, exist_ok=True)
         ddir = troot / T.DEFAULT_CAPTURE / run_id
         make(["start-capture", f"SESSION_DIR={ddir}"] + T.default_capture_vars(dstage))
+        if window_min:                                    # restart §10: the window runs from here
+            t_up = time.time()
+            window = {"min": window_min, "t0": t_up, "deadline": t_up + window_min * 60}
+            os.environ["LVDC_TRIO_WINDOW"] = json.dumps(window)
         T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
                                        "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
                                        "slots": {k: s.record() for k, s in T.SLOTS.items()},
                                        "composition": T.composition_of(T.SLOTS),
                                        **({"n_draw": n_draw} if n_draw else {}),
+                                       **({"window": window} if window else {}),
                                        "conntrack_timeouts_before": ct_before, "conntrack_timeouts": T.conntrack_timeouts(),
                                        "conntrack_set": ct_set[0], "resolver_cache_flushed": flush[0],
                                        "layout": layout, "screen": screen, "framebuffer": fb, "ifb_offloads": ifb_off})
@@ -920,7 +948,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
             draining = bool(stop_signal) or end_rc != 0 or drain_path.exists()
             done = {p: accepted_sessions(p, troot, trio_select()) >= targets[p] for p in targets}
             todo = [tag for p in BATCH_ORDER for tag, s in T.SLOTS.items() if s.platform == p and p in targets
-                    and p not in paused and (max_per_slot is None or started[tag] < max_per_slot) and not done[p]]
+                    and p not in paused and (max_per_slot is None or started[tag] < max_per_slot) and not done[p]
+                    and tag not in idle]
             if not running and (draining or not todo):
                 break
             for tag in ([] if draining else todo):
@@ -928,7 +957,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                     continue
                 try:
                     if not _trio_refill(tag, T, targets, started, running, paused, not_live, rotate_geometry, yt_matrix,
-                                        capacity_kbit, run_id, summaries, spawn, floor, stop_signal):
+                                        capacity_kbit, run_id, summaries, spawn, floor, stop_signal, window, idle):
                         end_rc = end_rc or EXIT_PREFLIGHT
                         break
                 except _TrioStop as e:
@@ -938,7 +967,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                     print(f"  TRIO {tag} slot could not start a session ({e!r}): draining the trio")
                     end_rc = end_rc or 1
                     break
-                last_start = time.time()
+                if tag not in idle:                   # a window-idle slot started nothing
+                    last_start = time.time()
             sleep(poll_s)
     finally:
         for tag, r in running.items():      # only after an unexpected error: every session finalises before the teardown
@@ -1070,6 +1100,14 @@ if __name__ == "__main__":
     parser.add_argument("--n-support", default=None, metavar="3,4,5",
                         help="--n-draw: the support (an N that failed its scaling gate is left out; the weights "
                              "renormalise). Default 3,4,5.")
+    parser.add_argument("--n-exclude", default=None, metavar="4:tiktok,5:youtube",
+                        help="--n-draw: compositions that failed their decode stress, out of their rotation (N = 4's "
+                             "doubled / N = 5's single platform); stated in every draw. Default none.")
+    parser.add_argument("--window-min", type=float, default=None, metavar="120",
+                        help="--concurrent (restart prereg §10): the run is a window of this many minutes (the round "
+                             "for every per-round gate; N drawn and held for it with --n-draw); each slot refills while "
+                             "its next session's drawn length fits before the window's end and idles to the end "
+                             "otherwise (no truncation, no re-draw). Default off: refill until targets / --max-per-slot.")
     parser.add_argument("--trio-pin", action="append", default=[], metavar="PLATFORM|TAG:k=v,...",
                         help="--concurrent: a recorded pin of a slot's pick (levi 00261; default off), e.g. "
                              "'twitch:channel=gothamchess,state=10,geometry=window:1920x1080' (keys: category, channel "
@@ -1132,8 +1170,10 @@ if __name__ == "__main__":
             sys.exit("--trio-record needs --n-draw (the record's N is drawn per round, restart prereg §1)")
         if args.n_draw and (args.slots or not args.concurrent):
             sys.exit("--n-draw needs --concurrent and no --slots (the draw fixes the composition)")
-        if args.n_support and not args.n_draw:
-            sys.exit("--n-support needs --n-draw")
+        if (args.n_support or args.n_exclude) and not args.n_draw:
+            sys.exit("--n-support / --n-exclude need --n-draw")
+        if args.window_min is not None and (not args.concurrent or args.window_min <= 0):
+            sys.exit("--window-min needs --concurrent and a positive length")
         TRIO_RECORD = bool(args.trio_record)
         if args.trio_pin and (not args.concurrent or not args.trio_pin_reason):
             sys.exit("--trio-pin needs --concurrent and --trio-pin-reason")
@@ -1161,7 +1201,7 @@ if __name__ == "__main__":
                     import n_draw
                     import record
                     nd = n_draw.draw(_RUNS_DIR / trio_slots.TRIO_DIR / trio_slots.SLOTS_LOG, record.ERA, TRIO_RECORD,
-                                     n_draw.parse_support(args.n_support))
+                                     n_draw.parse_support(args.n_support), exclude=n_draw.parse_exclude(args.n_exclude))
                     comp = nd["composition"]
                     print(f"  N DRAW: round {nd['round']} ({'record' if nd['record'] else 'pilot'}, era {nd['era']}): "
                           f"N = {nd['n']}, {comp} (u {nd['u']}, support {nd['support']})")
@@ -1172,7 +1212,7 @@ if __name__ == "__main__":
                 sys.exit(str(e))
             sys.exit(run_trio(targets, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry,
                               iface=args.iface, capacity_kbit=args.link_capacity_kbit, max_per_slot=args.max_per_slot,
-                              layout=args.trio_layout, slots=comp, n_draw=nd))
+                              layout=args.trio_layout, slots=comp, n_draw=nd, window_min=args.window_min))
         run_batch(targets, auto=True, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry)
         sys.exit(0)
 

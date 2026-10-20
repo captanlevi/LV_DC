@@ -1,3 +1,4 @@
+import math
 import random
 
 """
@@ -367,13 +368,17 @@ for _p, _table in PLATFORM_MATRICES.items():
         _table[f"{FAMILY_BASE[_p]}@{_s}"] = _table[FAMILY_BASE[_p]]
 
 
-def schedule_of(matrix_id: str | None, cap_episodes: int | None = None, base_episodes: int | None = None) -> dict:
+def schedule_of(matrix_id: str | None, cap_episodes: int | None = None, base_episodes: float | None = None,
+                episode_s: float | None = None) -> dict:
     """A matrix id's schedule: "base" (BASE_EPISODE_S episodes, self-loops, the re-draw at D/5-D/2, the cap in episodes)
     or its family's (am. 17). cap_episodes: the matrix's cap in base episodes (its low_cap_s = cap x BASE_EPISODE_S);
-    base_episodes: the platform's base episodes per session (EPISODES_V2), which @slow's episode length divides."""
+    base_episodes: the platform's base episodes per session (EPISODES_V2), or the drawn session's minutes, which @slow's
+    episode length divides; episode_s: @fast's drawn episode length (restart §2b), its re-draw at D/5-D/2."""
     base, _, fam = (matrix_id or "").partition("@")
     low_cap_s = cap_episodes * BASE_EPISODE_S if cap_episodes is not None else None
     if not fam:
+        if episode_s is not None:
+            raise ValueError(f"{matrix_id!r}: a drawn episode length is @fast's only (restart §2b)")
         return {"schedule": "base", "base_matrix": base or None, "episode_s": BASE_EPISODE_S, "self_loops": True,
                 "redraw_s": [BASE_EPISODE_S / 5, BASE_EPISODE_S / 2], "low_cap_s": low_cap_s}
     if fam not in SCHEDULES:
@@ -381,15 +386,22 @@ def schedule_of(matrix_id: str | None, cap_episodes: int | None = None, base_epi
     s = SCHEDULES[fam]
     if "episodes" in s and base_episodes is None:
         raise ValueError(f"{matrix_id!r}: its episode length is the session's time / {s['episodes']}: base_episodes needed")
+    if episode_s is not None:
+        if "episode_s" not in s:
+            raise ValueError(f"{matrix_id!r}: a drawn episode length is @fast's only (restart §2b)")
+        return {"schedule": fam, "base_matrix": base, "episode_s": episode_s, "self_loops": s["self_loops"],
+                "redraw_s": [episode_s / 5, episode_s / 2], "low_cap_s": low_cap_s}
     ep_s = s["episode_s"] if "episode_s" in s else base_episodes * BASE_EPISODE_S / s["episodes"]
     return {"schedule": fam, "base_matrix": base, "episode_s": ep_s, "self_loops": s["self_loops"],
             "redraw_s": list(s["redraw_s"]), "low_cap_s": low_cap_s}
 
 
-def session_episodes(base_episodes: float, matrix_id: str | None) -> int:
+def session_episodes(base_episodes: float, matrix_id: str | None, episode_s: float | None = None) -> int:
     """am. 17: the session time held: a family's episodes = round(base episodes x BASE_EPISODE_S / its episode_s).
-    base_episodes may be a drawn session's minutes (restart §4; BASE_EPISODE_S is a minute)."""
-    return int(round(base_episodes * BASE_EPISODE_S / schedule_of(matrix_id, base_episodes=base_episodes)["episode_s"]))
+    base_episodes may be a drawn session's minutes (restart §4; BASE_EPISODE_S is a minute); episode_s: @fast's drawn
+    episode length (restart §2b)."""
+    sc = schedule_of(matrix_id, base_episodes=base_episodes, episode_s=episode_s)
+    return max(1, int(round(base_episodes * BASE_EPISODE_S / sc["episode_s"])))
 
 
 # LVQoE restart_2026-10-21_prereg_levi.md §4 (rushi GO 2026-10-20): each trio session's length is drawn, U(10, 40) min,
@@ -406,6 +418,21 @@ def draw_session_minutes(key: str, seed: int = SESSION_LEN_SEED) -> dict:
     """A session's drawn length (restart §4), with its seed and key (meta.json shaper.session_length)."""
     m = random.Random(f"{seed}:{key}").uniform(*SESSION_MINUTES)
     return {"rule": SESSION_LEN_RULE, "seed": seed, "key": key, "range_min": list(SESSION_MINUTES), "minutes": round(m, 4)}
+
+
+# restart prereg §2b (levi on brad's design check 00231): @fast's episode length is drawn per session, log-U(12, 48) s,
+# seeded, recorded (it fills the change-frequency gap between base and @fast); its re-draw stays D/5-D/2. @slow keeps 3
+# episodes, so its dwell scales with the drawn length.
+FAST_EPISODE_S = (12.0, 48.0)
+FAST_EPISODE_RULE = ("restart prereg §2b: @fast episode_s = exp(random.Random('<seed>:<key>:fast_episode_s').uniform("
+                     "ln 12, ln 48)), the session-length key; re-draw at D/5-D/2; episodes = round(minutes x 60 / D)")
+
+
+def draw_fast_episode_s(key: str, seed: int = SESSION_LEN_SEED) -> dict:
+    """A session's @fast episode length (restart §2b), with its seed and key (meta.json shaper.session_length)."""
+    lo, hi = FAST_EPISODE_S
+    v = math.exp(random.Random(f"{seed}:{key}:fast_episode_s").uniform(math.log(lo), math.log(hi)))
+    return {"rule": FAST_EPISODE_RULE, "seed": seed, "key": key, "range_s": list(FAST_EPISODE_S), "episode_s": round(v, 3)}
 
 
 def next_state_no_self(curr: str, transition_dict: dict[str, dict[str, float]], rng=random) -> str:
