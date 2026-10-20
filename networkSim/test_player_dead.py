@@ -179,8 +179,10 @@ def test_precedence():
     assert C("tiktok", "FAIL", None, ok, 30, 60, 800, 720) == "player_frozen"
     assert C("youtube", "FAIL", None, ok, None, None, 10, 180) == "qa_fail"
     assert C("youtube", "PASS", None, ok, None, None, 10, 180) == "normal"
+    assert C("youtube", "FAIL", "stream_ended", ok, None, None, None, None) == "stream_ended"   # bundle item 3
+    assert C("youtube", "FAIL", "stream_ended", bad, None, None, None, None) == "startup_failure"
     assert list(E.CLASS_PRECEDENCE) == ["not_live", "login_wall", "interrupted", "startup_failure", "room_ended",
-                                        "player_dead", "player_dead_recovered", "player_frozen",
+                                        "stream_ended", "player_dead", "player_dead_recovered", "player_frozen",
                                         "player_frozen_recovered", "qa_fail", "normal"]
     assert E.RECOVERED_DEAD_CLASS == "normal"          # levi (a); player_dead_recovered is read only under option (b)
 

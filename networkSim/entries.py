@@ -14,7 +14,7 @@ SUSTAIN_RUN_S = 5.0
 # (a covariate); the entry still counts as failed in startup_rates (levi)
 SLOW_START_MAX_STATE = 2
 NOT_LIVE_MARK = "Failed to navigate to a live"     # browser.py's start failure (yt / twitch: no live stream to enter)
-CLASS_PRECEDENCE = ("not_live", "login_wall", "interrupted", "startup_failure", "room_ended", "player_dead",
+CLASS_PRECEDENCE = ("not_live", "login_wall", "interrupted", "startup_failure", "room_ended", "stream_ended", "player_dead",
                     "player_dead_recovered", "player_frozen", "player_frozen_recovered", "qa_fail", "normal")
 # levi 2026-10-18 ruling (a) on the tt player_dead re-entry (peter's ti_37-39 read): the dead run that contains an
 # outcome-continue re-entry's t_nav is not the player_dead verdict / class; it is reported as recovered_dead_s with its
@@ -212,7 +212,8 @@ def frozen_over_t(run_s: float | None, t: float | None) -> bool:
 def session_class(platform: str, verdict: str, abort_reason: str | None, entries: list[dict],
                   dead_run_s: float | None, dead_t: float | None, frozen_s: float | None, frozen_t: float | None,
                   recovered_dead: bool = False, recovered_frozen: bool = False) -> str:
-    """levi's precedence (Q am. 12): not_live > login_wall > interrupted > startup_failure > room_ended > player_dead >
+    """levi's precedence (Q am. 12): not_live > login_wall > interrupted > startup_failure > room_ended > stream_ended
+    (boundary bundle item 3) > player_dead >
     (player_dead_recovered) > player_frozen > (player_frozen_recovered) > qa_fail > normal; the recovered classes only
     when their RECOVERED_*_CLASS switch is not "normal". Boundaries: dead at >= T, frozen at > T (Q am. 12). A start failure is not_live on yt / twitch (no live stream to enter) and a
     startup_failure on tt (live rooms were found but none played)."""
@@ -229,6 +230,8 @@ def session_class(platform: str, verdict: str, abort_reason: str | None, entries
         return "startup_failure"
     if ab == "room_ended":
         return "room_ended"
+    if ab == "stream_ended":               # boundary bundle item 3: yt / twitch, the tab left its live stream
+        return "stream_ended"
     if ab in ("player_dead", "player_error") or dead_over_t(dead_run_s, dead_t):   # player_error: yt / twitch (t56)
         return "player_dead"
     if recovered_dead and RECOVERED_DEAD_CLASS != "normal":

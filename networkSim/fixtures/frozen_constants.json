@@ -32,6 +32,7 @@
    "interrupted",
    "startup_failure",
    "room_ended",
+   "stream_ended",
    "player_dead",
    "player_dead_recovered",
    "player_frozen",
@@ -1553,6 +1554,18 @@
  "stated_eras": [
   "t56-nslot-2026-10-19"
  ],
+ "stream_ended": {
+  "STREAM_ENDED_PLATFORMS": [
+   "youtube",
+   "twitch"
+  ],
+  "STREAM_FIXED_N": 10,
+  "STREAM_FIXED_TOL_S": 1.0,
+  "STREAM_RESET_DROP_S": 60.0,
+  "STREAM_RESET_TO_S": 10.0,
+  "STREAM_VOD_PLAY_S": 5.0,
+  "STREAM_VOD_WITHIN": 60
+ },
  "stuck": {
   "FALLBACK_RUNG_KBIT": {
    "tiktok": 1800.0,

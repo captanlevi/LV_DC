@@ -111,6 +111,7 @@ EXIT_STOPPED = 130    # exp.py exit code when the operator stopped the session (
 EXIT_PLAYER_FROZEN = 5   # the player froze in a stall past T (addendum N); not a failure of the batch's 5-fail rule
 EXIT_ROOM_ENDED = 6      # tt: the room died mid-session (browser.py TTRoomWatch); not a failure either, the next re-picks
 EXIT_PLAYER_DEAD = 7     # tt: readyState 0 with no media for PLAYER_DEAD_MAX_S (TTRoomWatch); not a failure, room re-picked
+EXIT_STREAM_ENDED = 12   # yt / twitch: the tab left its live stream (browser.StreamEndedWatch); not a failure, re-picked
 
 
 # v2 (LVQoE t37, rushi 2026-10-16): each session's profile is a CLONE of a per-platform template (a Chrome user-data-dir,
@@ -960,6 +961,7 @@ if __name__ == "__main__":
                               video_stats=browser.video_stats, geometry_target=browser.geometry_target,
                               login_state=browser.login_state, room_rotation=browser.room_rotation,
                               tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
+                              stream_ended=browser.stream_ended,
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
                               player_errors=browser.player_errors, ad_wait=browser.error_watch.exposure(),
@@ -1103,5 +1105,7 @@ if __name__ == "__main__":
         sys.exit(EXIT_ROOM_ENDED)      # orchestrate.py re-picks a room next session (the ended one is now recent)
     if abort_reason == "player_dead":
         sys.exit(EXIT_PLAYER_DEAD)     # likewise: the dead room is now recent, the next session re-picks
+    if abort_reason == "stream_ended":
+        sys.exit(EXIT_STREAM_ENDED)    # the broadcast ended (or the page moved channel): the next session re-picks
     if abort_reason:
         sys.exit(1)               # e.g. the channel was not live: orchestrate.py moves on to the next channel

@@ -982,6 +982,8 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
         why.append("room_ended (tt: the room died mid-session; browser.py TTRoomWatch)")
     elif abort_reason == "player_dead":
         why.append("player_dead (tt: readyState 0 with no media for T; browser.py TTRoomWatch)")
+    elif abort_reason == "stream_ended":
+        why.append("stream_ended (yt / twitch: the tab left its live stream; browser.py StreamEndedWatch)")
     elif abort_reason == "player_error":
         why.append("player_error (yt / twitch: an error page or an ad with no live player, not recovered by the one "
                    "re-entry; browser.py PlayerErrorWatch)")

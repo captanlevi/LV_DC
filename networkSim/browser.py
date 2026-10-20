@@ -18,6 +18,7 @@ Usage from exp.py:
 import collections
 import json
 import os
+import math
 import re
 import time
 import threading
@@ -2230,9 +2231,119 @@ class PlayerErrorWatch:
                 "ad_frozen_max_s": self.frozen_s}
 
 
+# boundary bundle item 3 (levi f2fb3ee7 + brad / levi 03:35, the reader's stream_ended rule in LVQoE checkpoint_session_list,
+# applied live): a yt / twitch tab that left its live stream (the broadcast ended and the page fell back to the recording,
+# or twitch raided / hosted another channel) aborts the session "stream_ended". Signs, as the reader's:
+#   U  the url's page leaves the channel page (after a sample has shown it): on twitch alone; on yt only with the
+#      recording confirmed after it (VOD below);
+#   P  the non-ad playhead falls by > STREAM_RESET_DROP_S to <= STREAM_RESET_TO_S, with the recording confirmed after it.
+# VOD: the next STREAM_FIXED_N non-ad samples carry a finite duration fixed within STREAM_FIXED_TOL_S and not the one
+# before, and the playhead advances >= STREAM_VOD_PLAY_S from the reset within STREAM_VOD_WITHIN samples, staying below
+# STREAM_RESET_DROP_S (a reload that jumps back to the live position, or sits stuck at 0, is no sign; yt_100052).
+STREAM_RESET_DROP_S, STREAM_RESET_TO_S = 60.0, 10.0
+STREAM_FIXED_N, STREAM_FIXED_TOL_S = 10, 1.0
+STREAM_VOD_PLAY_S, STREAM_VOD_WITHIN = 5.0, 60
+STREAM_ENDED_PLATFORMS = ("youtube", "twitch")
+_STREAM_STATE_JS = """
+(function() {
+    const vs = [...document.querySelectorAll('video')].filter(v => v.getClientRects().length);
+    const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
+    const d = document.documentElement.dataset;
+    return JSON.stringify({url: location.href, ct: v ? v.currentTime : null,
+                           dur: v ? (isFinite(v.duration) ? v.duration : 'inf') : null, ad: d.lvqoeAd === '1'});
+})()
+"""
+
+
+def stream_page(url: str | None) -> str:
+    """The url's page: yt watch:<id>, else the path (/@ch/live, /<channel>), lower-cased (LVQoE page_of)."""
+    u = url or ""
+    m = re.search(r"[?&]v=([^&]+)", u)
+    if m:
+        return f"watch:{m.group(1)}"
+    return re.sub(r"https?://([a-z]+\.)?(youtube|twitch)\.(com|tv)", "", u.split("?")[0]).rstrip("/").lower()
+
+
+class StreamEndedWatch:
+    """The stream_ended rule over 1 s samples ({url, ct, dur, ad}); feed() -> a trigger record once a sign is confirmed,
+    else None. The sign's own time (sign_t) is recorded: the reader cuts at the earliest sign, not at the trigger."""
+
+    def __init__(self, platform: str, channel_url: str | None):
+        self.platform, self.ref = platform, stream_page(channel_url) if channel_url else None
+        self.seen_ref = False
+        self.samples: list[tuple[float, float | None, float | None]] = []     # non-ad (t, ct, dur)
+        self.pending: list[dict] = []
+        self.fired: dict | None = None
+
+    @staticmethod
+    def _dur(x) -> float | None:
+        if x in (None, "inf"):
+            return math.inf if x == "inf" else None
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
+
+    def _vod(self, i: int) -> bool | None:
+        """True / False once decided, None while the samples after index i are too few."""
+        ct = [c for _, c, _ in self.samples]
+        du = [d for _, _, d in self.samples]
+        after = du[i + 1:i + 1 + STREAM_FIXED_N]
+        if any(d is None or not math.isfinite(d) for d in after):
+            return False
+        if len(after) < STREAM_FIXED_N:
+            return None
+        if max(after) - min(after) > STREAM_FIXED_TOL_S:
+            return False
+        b = du[i - 1] if i >= 1 else None
+        if not (b is None or not math.isfinite(b) or abs(b - after[-1]) > STREAM_FIXED_TOL_S):
+            return False
+        c0 = ct[i] if ct[i] is not None else 0.0
+        for c, d in zip(ct[i + 1:i + 1 + STREAM_VOD_WITHIN], du[i + 1:i + 1 + STREAM_VOD_WITHIN]):
+            if c is None or c >= STREAM_RESET_DROP_S or d is None or not math.isfinite(d) or abs(d - after[-1]) > STREAM_FIXED_TOL_S:
+                return False
+            if c - c0 >= STREAM_VOD_PLAY_S:
+                return True
+        return None if len(ct) - (i + 1) < STREAM_VOD_WITHIN else False
+
+    def feed(self, s: dict | None, now: float) -> dict | None:
+        if self.fired is not None or not s:
+            return None
+        page = stream_page(s.get("url")) if s.get("url") else None
+        if self.ref is None and page:
+            self.ref = page
+        if page == self.ref:
+            self.seen_ref = True
+        if s.get("ad"):
+            return None
+        ct = s.get("ct") if isinstance(s.get("ct"), (int, float)) else None
+        self.samples.append((now, ct, self._dur(s.get("dur"))))
+        i = len(self.samples) - 1
+        if page and self.seen_ref and page != self.ref and not any(p["sign"] == "U" for p in self.pending):
+            if self.platform == "twitch":
+                return self._fire({"sign": "U", "sign_t": now, "i": i, "from_page": self.ref, "to_page": page}, now)
+            self.pending.append({"sign": "U", "sign_t": now, "i": i, "from_page": self.ref, "to_page": page})
+        if i >= 1 and ct is not None and self.samples[i - 1][1] is not None \
+                and self.samples[i - 1][1] - ct > STREAM_RESET_DROP_S and ct <= STREAM_RESET_TO_S:
+            self.pending.append({"sign": "P", "sign_t": now, "i": i, "ct_before": self.samples[i - 1][1]})
+        for p in list(self.pending):
+            v = self._vod(p["i"])
+            if v is True:
+                return self._fire(p, now)
+            if v is False:
+                self.pending.remove(p)
+        return None
+
+    def _fire(self, p: dict, now: float) -> dict:
+        self.fired = {"reason": "stream_ended", "t_trigger": now, **{k: v for k, v in p.items() if k != "i"},
+                      "dur_after": self.samples[-1][2] if self.samples else None}
+        return self.fired
+
+
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
                      on_wall=None, on_frozen=None, on_stuck=None, on_player_error=None,
-                     error_watch: PlayerErrorWatch | None = None, resumer: "SelfPauseResumer | None" = None) -> None:
+                     error_watch: PlayerErrorWatch | None = None, resumer: "SelfPauseResumer | None" = None,
+                     on_stream_ended=None, stream_watch: "StreamEndedWatch | None" = None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
     Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
     calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table); passes the
@@ -2287,6 +2398,16 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 except Exception as exc:
                     print(f"[browser] player-error recovery failed: {exc!r}", flush=True)
                 error_watch.reset()
+        if on_stream_ended is not None and stream_watch is not None:    # boundary bundle item 3: stream_ended
+            try:
+                trig = stream_watch.feed(json.loads(page.eval(_STREAM_STATE_JS) or "null"), time.time())
+            except Exception:
+                trig = None
+            if trig is not None:
+                try:
+                    on_stream_ended(trig)
+                except Exception as exc:
+                    print(f"[browser] stream_ended abort failed: {exc!r}", flush=True)
         if on_wall is not None and not walled:
             try:
                 if page.eval(_WALL_JS):
@@ -2908,6 +3029,7 @@ class BrowserSession:
         self.tt_room_choice: dict | None = None   # tt: candidates, tries and the chosen room (meta.json)
         self.channel_pick: dict | None = None     # twitch / tt: the channel cap's state at the pick (meta.json channel_pick)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
+        self.stream_ended: dict | None = None     # yt / twitch: the stream_ended abort's detail (meta.json)
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
@@ -3193,7 +3315,8 @@ class BrowserSession:
             args=(self._page, self.platform, self._stop, log_path, self._on_wall, self._on_frozen,
                   self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
                   self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch,
-                  self.resumer),
+                  self.resumer, self._stream_ended if self.platform in STREAM_ENDED_PLATFORMS else None,
+                  StreamEndedWatch(self.platform, self.channel_url) if self.platform in STREAM_ENDED_PLATFORMS else None),
             daemon=True,
             name="ad-watcher",
         )
@@ -3555,6 +3678,16 @@ class BrowserSession:
             self.abort_reason, self.abort_at = "player_frozen", time.time()
         print(f"[browser] PLAYER FROZEN (stuck-player rule, {why}): censored at {self.censored['t']:.0f}, shaper "
               f"{rec['shaper']} — aborting the session", flush=True)
+
+    def _stream_ended(self, trig: dict) -> None:
+        """StreamEndedWatch's trigger (boundary bundle item 3): the tab left its live stream; abort "stream_ended" (no
+        re-entry: the broadcast is over, or the page moved to another channel). meta.json stream_ended records it."""
+        if self.abort_reason is not None:
+            return
+        self.stream_ended = trig
+        self.abort_reason, self.abort_at = "stream_ended", time.time()
+        print(f"[browser] STREAM ENDED ({trig.get('sign')}: {trig.get('from_page')} -> {trig.get('to_page')}) — "
+              f"aborting the session", flush=True)
 
     def _player_error(self, trig: dict) -> None:
         """PlayerErrorWatch's trigger: the session's one recovery as a re-entry (player_dead_reentries), else abort
