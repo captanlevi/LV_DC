@@ -121,6 +121,12 @@ slow:
 		sudo tc qdisc change dev $(IFACE) parent $(EGRESS_CLASS) netem delay $(DELAY) loss $(PLR)
 	@echo "✅ Network shaping applied: $(BANDWIDTH), $(DELAY), loss $(PLR)"
 
+# restart §2 (levi on 80af314): a walk step changes only the HTB rate, both directions; netem (delay, loss) changes only at
+# the sub-step's re-draw (make slow), where it is constant anyway. The classes exist (a walk step never comes first).
+rate:
+	@sudo tc class change dev $(IFB_INGRESS) parent 1: classid 1:10 htb rate $(BANDWIDTH)
+	@sudo tc class change dev $(IFACE) parent 1: classid $(EGRESS_CLASS) htb rate $(BANDWIDTH)
+
 
 disable:
 	@echo "🧹 Cleaning up traffic shaping and virtual interfaces..."

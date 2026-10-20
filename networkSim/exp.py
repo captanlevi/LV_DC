@@ -292,6 +292,9 @@ def _apply_net_stat(net_stat : NetStat):
     global CURRENT_NET_STAT
     print(f"Currently shaping {net_stat}")
     CURRENT_NET_STAT = net_stat
+    if net_stat.walk_step:      # restart §2 (levi on 80af314): a walk step changes only the HTB rate (make rate)
+        run(["make", "rate", f"BANDWIDTH={net_stat.rate}kbit"] + SLOT_VARS)
+        return
     run(
             [
                 "make",

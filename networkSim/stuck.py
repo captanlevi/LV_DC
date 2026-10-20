@@ -54,18 +54,25 @@ def _ts(n) -> float | None:
         return None
 
 
+def _t2_rate(n) -> float | None:
+    """The rate the T2 clock reads: the sub-step's re-draw (redraw_kbit) where the row has one, so restart §2's walk
+    steps leave the stuck rule's calibration as it was (levi on 80af314); else the row's rate (rows before §2)."""
+    r = n.redraw_kbit if hasattr(n, "redraw_kbit") else (n.get("redraw_kbit") if isinstance(n, dict) else None)
+    return float(r) if r is not None else _rate(n)
+
+
 def above_since(net_labels: list, rung_kbit: float | None, now: float, margin: float = RUNG_MARGIN) -> float | None:
-    """Start (s) of the current stretch of shaper labels with rate >= margin x rung_kbit, or None when the label in
-    force at `now` is below it, there is none, or the rung is unknown."""
+    """Start (s) of the current stretch of shaper labels with rate (_t2_rate: the sub-step's re-draw) >= margin x
+    rung_kbit, or None when the label in force at `now` is below it, there is none, or the rung is unknown."""
     if not rung_kbit:
         return None
     floor = margin * rung_kbit
     labs = sorted([n for n in net_labels or [] if _ts(n) is not None and _ts(n) <= now], key=_ts)
-    if not labs or (_rate(labs[-1]) or 0) < floor:
+    if not labs or (_t2_rate(labs[-1]) or 0) < floor:
         return None
     t = _ts(labs[-1])
     for n in reversed(labs):
-        if (_rate(n) or 0) < floor:
+        if (_t2_rate(n) or 0) < floor:
             break
         t = _ts(n)
     return t

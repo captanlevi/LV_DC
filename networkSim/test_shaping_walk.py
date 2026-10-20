@@ -224,6 +224,43 @@ def test_the_committed_simulation():
             assert ca > cb and abs(sum(v["occupancy"].values()) - 1) < 1e-4, (p, m)
 
 
+def test_a_walk_step_changes_the_htb_rate_only():
+    """levi on 80af314: a walk step changes only the HTB rate (exp.py: make rate, both directions); netem changes only
+    at the sub-step's re-draw (make slow); the dry run applies the same command forms."""
+    import subprocess
+    out = subprocess.run(["make", "-n", "rate", "BANDWIDTH=1234kbit", "IFB_INGRESS=lvi_tw1", "IFACE=eth9",
+                          "EGRESS_CLASS=1:12"], cwd=HERE, capture_output=True, text=True).stdout.splitlines()
+    assert out == ["sudo tc class change dev lvi_tw1 parent 1: classid 1:10 htb rate 1234kbit",
+                   "sudo tc class change dev eth9 parent 1: classid 1:12 htb rate 1234kbit"], out
+    src = (HERE / "exp.py").read_text()
+    assert 'run(["make", "rate", f"BANDWIDTH={net_stat.rate}kbit"] + SLOT_VARS)' in src
+    assert src.index("if net_stat.walk_step:") < src.index('"slow",')
+    spec = importlib.util.spec_from_file_location("trio_dry_run_w", HERE.parent / "ops" / "diag" / "trio_dry_run.py")
+    D = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(D)
+    p = {"rate_kbit": 900, "delay_ms": 40, "loss_pct": 0.1}
+    full = D.rate_cmds("eth9", "yt1", {**p, "walk_step": 0})
+    walk = D.rate_cmds("eth9", "yt1", {**p, "walk_step": 3})
+    assert sum("netem" in c for c in full) == (1 if D.NO_IFB else 2) and not any("netem" in c for c in walk)
+    assert [c for c in full if "class" in c] == walk
+
+
+def test_the_t2_clock_reads_the_redraw():
+    """levi on 80af314 (2a): the stuck rule's T2 clock reads the sub-step's re-draw, so a walk dip below the rung
+    margin does not reset it; rows without a re-draw (before §2) read their rate."""
+    import stuck
+    rung, floor = 1000.0, stuck.RUNG_MARGIN * 1000.0
+    rows = [{"timestamp": 0.0, "speed": int(floor + 50), "state": "7", "redraw_kbit": int(floor + 50), "walk_step": 0},
+            {"timestamp": 2.0, "speed": int(floor - 50), "state": "7", "redraw_kbit": int(floor + 50), "walk_step": 1},
+            {"timestamp": 4.0, "speed": int(floor + 10), "state": "7", "redraw_kbit": int(floor + 50), "walk_step": 2}]
+    assert stuck.above_since(rows, rung, 5.0) == 0.0                    # the dip at 2 s does not reset it
+    old = [{k: v for k, v in r.items() if k in ("timestamp", "speed", "state")} for r in rows]
+    assert stuck.above_since(old, rung, 5.0) == 4.0                     # no re-draw field: the row's rate, as before
+    labs = [NetLabel(timestamp=r["timestamp"], speed=r["speed"], state=r["state"], redraw_kbit=r["redraw_kbit"],
+                     walk_step=r["walk_step"]) for r in rows]
+    assert stuck.above_since(labs, rung, 5.0) == 0.0
+
+
 def main() -> int:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

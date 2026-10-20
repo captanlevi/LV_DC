@@ -182,13 +182,15 @@ def tree_up_cmds(iface: str) -> list[str]:
 
 
 def rate_cmds(iface: str, s: str, p: dict) -> list[str]:
-    """One session's state: its ingress IFB class and its egress class, as single mode's `make slow` does."""
+    """One session's state: its ingress IFB class and its egress class, as single mode's `make slow` does; a walk step
+    (p walk_step > 0, restart §2) changes the HTB classes only, as exp.py's `make rate` does (levi on 80af314)."""
     m = SESSIONS[s]
     r, d, l = f"{p['rate_kbit']}kbit", f"{p['delay_ms']}ms", f"{p['loss_pct']}%"
-    return ([] if NO_IFB else [f"tc class replace dev lvi_{s} parent 1: classid 1:10 htb rate {r}",
-                               f"tc qdisc replace dev lvi_{s} parent 1:10 handle 10: netem delay {d} loss {l}"]) + [
-            f"tc class replace dev {iface} parent 1: classid 1:{m:x} htb rate {r}",
-            f"tc qdisc replace dev {iface} parent 1:{m:x} handle {m:x}0: netem delay {d} loss {l}"]
+    walk = bool(p.get("walk_step"))
+    return ([] if NO_IFB else [f"tc class replace dev lvi_{s} parent 1: classid 1:10 htb rate {r}"] + (
+                [] if walk else [f"tc qdisc replace dev lvi_{s} parent 1:10 handle 10: netem delay {d} loss {l}"])) + [
+            f"tc class replace dev {iface} parent 1: classid 1:{m:x} htb rate {r}"] + (
+            [] if walk else [f"tc qdisc replace dev {iface} parent 1:{m:x} handle {m:x}0: netem delay {d} loss {l}"])
 
 
 def tree_down_cmds(iface: str) -> list[str]:
