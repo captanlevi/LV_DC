@@ -161,7 +161,8 @@ def test_the_restart_pair_is_broken_by_the_seeded_tie():
     RetroWorld, LofiGirl, everybodychillradio, SBC-TV1, ScottishWildlifeGarden, one each) left AlJazeera, dwnews,
     MonsterJam, FUELTVMoto and BeanBoltTV at 0, and list order drew AlJazeera + dwnews, the pair that opened every era.
     Under the full rule the floor keeps the 0-count channels, dwnews (drawn last in the stated run) goes behind the
-    never-drawn four, and their seeded tie (seed 24) draws MonsterJam + AlJazeera."""
+    never-drawn four, and their seeded tie (seed 24) draws MonsterJam + AlJazeera. Restart §0: the trio's yt pick counts
+    identity over every era (record.counted_any_era), so the stated run's dwnews sessions count too: the same pair."""
     import record
     with tempfile.TemporaryDirectory() as d:
         tr = Path(d) / "_trio"
@@ -174,10 +175,11 @@ def test_the_restart_pair_is_broken_by_the_seeded_tie():
             else:
                 meta(tr, f"youtube/yt_{100001 + i}", channel_handle="@dwnews", started_at=float(i),
                      concurrency={"mode": "trio", "record": True, "era": "t56-nslot-2026-10-19"})   # a stated run
-        a = Y.next_channel(tr, select=record.is_record)
+        a = Y.next_channel(tr, select=record.counted_any_era)
         assert Y.LAST_PICK["seed"] == 24 and Y.LAST_PICK["stages"] == ["floor"] and Y.LAST_PICK["tied"] == sorted(
             ["@AlJazeeraEnglish", "@MonsterJam", "@FUELTVMoto", "@BeanBoltTV"]), Y.LAST_PICK
-        b = Y.next_channel(tr, exclude={a["handle"]}, select=record.is_record)
+        assert Y.LAST_PICK["n_record"] == 24 and Y.LAST_PICK["distinct_record"] == 6
+        b = Y.next_channel(tr, exclude={a["handle"]}, select=record.counted_any_era)
         assert (a["handle"], b["handle"]) == ("@MonsterJam", "@AlJazeeraEnglish"), (a, b)
 
 
