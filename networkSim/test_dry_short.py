@@ -96,7 +96,8 @@ def test_resolve_profile():
     assert a.state_s == 50.0 and a.no_single_reference is False                          # given values stand
     a = ns()
     T.resolve_profile(a)
-    assert (a.state_s, a.goodput_s, a.ping_s, a.top_capture_s, a.player_state_s) == (60.0, 60.0, 20.0, 0.0, 60.0)
+    # levi: the full set runs the capture-drops segment at every N
+    assert (a.state_s, a.goodput_s, a.ping_s, a.top_capture_s, a.player_state_s) == (60.0, 60.0, 20.0, 66.0, 60.0)
     assert a.no_single_reference is False
     a = ns(state_s=75.0)
     T.resolve_profile(a)
@@ -218,7 +219,9 @@ def test_player_support_three_states():
             assert r["status"]["h3_exercised"] == "pass" and r["status"]["no_leak"] == "pass", r["status"]
             assert r["pass"], r["status"]
             r = T.read_player_phase(ph, 59.0)                                           # a 59 s state: below 60
-            assert r["status"]["ratio"] == "insufficient" and not r["pass"], r["status"]
+            # levi: option A's ratio is report-only; the phase gates on h3-exercised and no-leak
+            assert r["status"]["ratio"] == "insufficient" and r["pass"], r["status"]
+            assert r["gating"] == ["h3_exercised", "no_leak", "zero_capture_drops"] and "ratio" in r["reported"]
             for k in (0, 2):                                                           # 18 h3 segments: below 20
                 p = Path(tl[k]["log"])
                 p.write_text("".join(p.read_text().splitlines(keepends=True)[:9]))
@@ -232,11 +235,32 @@ def test_gates_summary():
     rep = {"goodput_gate": {"status": "insufficient", "support": M.goodput(20.0)},
            "top_capture": {"status": "pass", "support": M.capture_drops(66.0)},
            "results": {"bulk_ratio_support": {"status": "sufficient", "per_slot": {}},
+                       "bulk_ratio_gate": {"status": "fail", "rule": "C5", "per_slot_state": {}},
                        "rate_stage_validation": {"status": "pass"}},
-           "fast_segment": {"status": "insufficient", "per_slot": {"yt1": {"support": M.fast(12)}}}}
+           "fast_segment": {"status": "insufficient", "per_slot": {"yt1": {"support": M.fast(12)}}},
+           "walk_segment": {"status": "pass", "per_slot": {"yt1": {"support": M.walk(130.0, 60, 40.0)}}}}
     g = T.gates_summary(rep)
     assert g["goodput"]["status"] == "insufficient" and g["capture_drops"]["status"] == "pass"
-    assert g["bulk_ratio"]["status"] == "sufficient" and g["fast"]["status"] == "insufficient" and "player_ratio" not in g
+    assert g["bulk_ratio"]["status"] == "fail" and g["fast"]["status"] == "insufficient" and "player_ratio" not in g
+    assert g["walk"]["status"] == "pass" and g["walk"]["support"]["yt1"]["sufficient"]
+
+
+def test_the_bulk_ratio_gates():
+    """levi (C5, Q am. 16): each slot-state's span-corrected ratio in [0.9, 1.15] is the shaping gate; a ratio
+    outside fails at any support, a missing ratio or a slot below its support reads insufficient."""
+    ok_sup, low_sup = M.bulk_ratio([35.0] * 3), M.bulk_ratio([35.0, 35.0, 20.0])
+    row = lambda st, r: {"state": st, "ratio_to_set": r}
+    g = T.bulk_ratio_gate({"yt1": [row("3", 0.95), row("7", 1.0), row("10", 1.15)],
+                           "tw1": [row("1", 0.9), row("2", 0.99), row("9", 1.02)]}, {"yt1": ok_sup, "tw1": ok_sup})
+    assert g["status"] == "pass" and (T.BULK_RATIO_LO, T.BULK_RATIO_HI) == (0.9, 1.15), g
+    g = T.bulk_ratio_gate({"yt1": [row("3", 0.89), row("7", 1.0), row("10", 1.0)]}, {"yt1": low_sup})
+    assert g["status"] == "fail" and g["per_slot_state"]["yt1"][0]["gate"] == "fail"       # a fail stays a fail
+    g = T.bulk_ratio_gate({"yt1": [row("3", 0.95), row("7", 1.0), row("10", 1.0)]}, {"yt1": low_sup})
+    assert g["status"] == "insufficient"                                                   # below the support
+    g = T.bulk_ratio_gate({"yt1": [row("3", None), row("7", 1.0), row("10", 1.0)]}, {"yt1": ok_sup})
+    assert g["status"] == "insufficient"
+    g = T.bulk_ratio_gate({"yt1": [row("3", 1.16), row("7", 1.0), row("10", 1.0)]}, {"yt1": ok_sup})
+    assert g["status"] == "fail"
 
 
 def test_decode_stress_short():

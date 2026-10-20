@@ -191,8 +191,8 @@ def test_the_dry_run_phase_reading_and_command(tmp_path=None):
         st = r["per_slot"]["tw1"][0]
         assert st["gate"] == "pass" and st["h3"]["gate"] == "pass" and r["gated"]["no_leak"], r["gated"]
         # restart prereg (short dry runs): one state is below the player's 3 x 60 s support, so the ratio reads
-        # insufficient and the phase is not a pass; h3 (25 attempted >= 20) and no leak (traffic on the slot) pass
-        assert r["status"]["ratio"] == "insufficient" and r["pass"] is False, r["status"]
+        # insufficient; levi: the ratio is report-only, so the phase passes on h3 (25 attempted >= 20) and no leak
+        assert r["status"]["ratio"] == "insufficient" and r["pass"] is True, r["status"]
         assert r["status"]["h3_exercised"] == "pass" and r["status"]["no_leak"] == "pass", r["status"]
         T.sh = lambda cmd, check=True, capture=False, print_only=False: (
             "12:00:00.0 IP 104.16.1.1.443 > 192.168.4.50.50001: UDP, length 1200\n")   # also on lvi_def: a leak

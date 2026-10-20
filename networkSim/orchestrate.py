@@ -1245,6 +1245,9 @@ if __name__ == "__main__":
             sys.exit("--window-min needs --concurrent and a positive length")
         if args.trio_record and args.window_min != RECORD_WINDOW_MIN:     # §10 (levi 00138): the record's window
             sys.exit(f"--trio-record needs --window-min {RECORD_WINDOW_MIN:g} (restart prereg §10)")
+        if args.trio_record and not args.trio_yt_fullscreen:      # §7 (levi on 2e666b0): yt's support has fullscreen
+            sys.exit("--trio-record needs --trio-yt-fullscreen (restart prereg §7: yt's geometry support includes "
+                     "fullscreen)")
         if args.window_min is not None and args.max_per_slot is not None:
             sys.exit("--max-per-slot does not apply inside a window (a window runs to time)")
         if args.session_range:

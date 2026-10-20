@@ -32,8 +32,8 @@ MINIMUMS = {
 # outside its 63 s read; @fast is sized from its seeded plan to FAST_CHANGES changes per slot (levi's 30 plus 2).
 SHORT = {"goodput_s": 35.0, "ping_s": 10.0, "state_s": 40.0, "player_state_s": 65.0, "top_capture_s": 66.0,
          "fast_changes": 32, "walk_s": 130.0}
-FULL = {"goodput_s": 60.0, "ping_s": 20.0, "state_s": 60.0, "player_state_s": None, "top_capture_s": 0.0,
-        "fast_changes": None, "walk_s": 0.0}
+FULL = {"goodput_s": 60.0, "ping_s": 20.0, "state_s": 60.0, "player_state_s": None, "top_capture_s": 66.0,
+        "fast_changes": None, "walk_s": 0.0}     # levi: the full set runs the capture-drops segment at every N
 TOP_SETTLE_S = 3.0
 DECODE_SHORT_MINUTES = 7          # base episodes of 60 s held at the top state: >= 5 min at the top tier after startup
 

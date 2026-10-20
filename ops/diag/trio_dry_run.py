@@ -111,6 +111,7 @@ BULK_URL = "http://mirror.aarnet.edu.au/pub/ubuntu/releases/24.04/ubuntu-24.04.5
 MARK_BY = "cgroup"  # "uid" only for a test kernel without nft socket cgroupv2 (each session a user lvdc_<p>)
 TOP_STATE_KBIT = 9000.0                                      # SCENARIOS state 10's upper rate limit
 TOP_STATE = "10"                                             # the capture-drops segment's state (every slot at once)
+BULK_RATIO_LO, BULK_RATIO_HI = 0.9, 1.15     # C5 / Q am. 16 (levi): the bulk byte ratio's band, span-corrected
 TCPDUMP_B_KIB = 65536                                        # = trio_slots.TCPDUMP_B_KIB: a session capture's buffer
 
 LOG: list[str] = []
@@ -565,26 +566,41 @@ def run(a) -> dict:
     return rep
 
 
+def bulk_ratio_gate(per_state: dict[str, list[dict]], sup: dict[str, dict]) -> dict:
+    """levi on the short form (C5, Q am. 16): the shaping gate is each slot-state's span-corrected byte ratio to the set
+    rate (ratio_to_set) in [BULK_RATIO_LO, BULK_RATIO_HI]; a state with no ratio reads insufficient; a slot below its
+    support (dry_minimums.bulk_ratio) reads insufficient unless it failed; over slots, any fail is a fail."""
+    per = {s: [{"state": r["state"], "ratio_to_set": r["ratio_to_set"],
+                "gate": ("insufficient" if r["ratio_to_set"] is None else
+                         "pass" if BULK_RATIO_LO <= r["ratio_to_set"] <= BULK_RATIO_HI else "fail")}
+               for r in rows] for s, rows in per_state.items()}
+    return {"rule": f"C5 / Q am. 16: the bulk byte ratio (span-corrected) per slot-state in [{BULK_RATIO_LO}, "
+                    f"{BULK_RATIO_HI}]",
+            "status": M.combine([M.status(M.combine([x["gate"] for x in per[s]]), sup[s]) for s in per]),
+            "per_slot_state": per}
+
+
 def gates_summary(rep: dict) -> dict:
     """Every gate this run read, its status (pass / fail / insufficient) and support check; a gate not run is absent.
-    The walk's segment lands with the walk (restart prereg §2); its minimum check is dry_minimums.walk."""
+    The walk segment (restart prereg §2, --walk-segment-s) reads with dry_minimums.walk."""
     g = {}
     if rep.get("goodput_gate"):
         g["goodput"] = {"status": rep["goodput_gate"]["status"], "support": rep["goodput_gate"]["support"]}
     if rep.get("top_capture"):
         g["capture_drops"] = {"status": rep["top_capture"]["status"], "support": rep["top_capture"]["support"]}
     res = rep.get("results") or {}
-    if res.get("bulk_ratio_support"):
-        g["bulk_ratio"] = {"status": res["bulk_ratio_support"]["status"], "support": res["bulk_ratio_support"]["per_slot"],
-                           "note": "support only: the bulk ratio is levi's read (ratio_to_set per slot-state)"}
+    if res.get("bulk_ratio_gate"):
+        g["bulk_ratio"] = {"status": res["bulk_ratio_gate"]["status"], "rule": res["bulk_ratio_gate"]["rule"],
+                           "support": res["bulk_ratio_support"]["per_slot"]}
         g["rate_stage_validation"] = {"status": (res.get("rate_stage_validation") or {}).get("status")}
-    if rep.get("fast_segment"):
-        f = rep["fast_segment"]
-        g["fast"] = {"status": f["status"], "support": {s: v["support"] for s, v in f["per_slot"].items()}}
+    for key, name in (("fast_segment", "fast"), ("walk_segment", "walk")):
+        if rep.get(key):
+            f = rep[key]
+            g[name] = {"status": f["status"], "support": {s: v["support"] for s, v in f["per_slot"].items()}}
     if rep.get("player_load"):
         pl = rep["player_load"]
         for k in ("ratio", "h3_exercised", "no_leak", "zero_capture_drops"):
-            g[f"player_{k}"] = {"status": pl["status"][k]}
+            g[f"player_{k}"] = {"status": pl["status"][k], **({} if k in pl.get("gating", ()) else {"report_only": True})}
         g["player_support"] = {"support": pl["support"]}
     return g
 
@@ -840,10 +856,16 @@ def read_player_phase(ph: dict, state_s: float) -> dict:
           "h3_exercised": M.combine(list(status["h3_exercised"].values())),
           "no_leak": M.status(gated["no_leak"], leak_chk),
           "zero_capture_drops": "pass" if gated["zero_capture_drops"] else "fail"}
+    # levi on the short form: the player phase gates on h3-exercised and no-leak, every slot; option A's ratio is
+    # report-only until a validated rerun (a state under 10 s qualifying reads insufficient, the bulk ratio for that
+    # state being the gate in force); the snaplen-96 capture's drops stay its own check
+    gating = ("h3_exercised", "no_leak", "zero_capture_drops")
     return {"per_slot": rows, "leaks": leak, "player_tuples": {s: len(t) for s, t in tuples.items()},
             "capture_kernel_drops": ph["kernel_drops"], "quic_vs_tcp_ratio": {p: R.q(v) for p, v in by_proto.items()},
-            "gated": gated, "status": st, "status_per_slot": status, "support": {**support, "no_leak": leak_chk},
-            "pass": all(gated.values()) and all(v == "pass" for v in st.values()), "notes": R.NOTES,
+            "gated": {k: gated[k] for k in gating}, "reported": {"ratio": gated["ratio"]},
+            "status": st, "status_per_slot": status, "support": {**support, "no_leak": leak_chk},
+            "gating": list(gating), "pass": all(gated[k] for k in gating) and all(st[k] == "pass" for k in gating),
+            "notes": R.NOTES,
             "insufficient_states": [(s, r["state"]) for s, rs in rows.items() for r in rs if r["gate"] == "insufficient"]}
 
 
@@ -1241,6 +1263,7 @@ def summarise(samples, timeline, states, a, out, fast=None) -> dict:
     all_sup = {"sufficient": all(c["sufficient"] for c in sup.values())}
     ok = bool(valid) and all(v["ok"] for v in valid)
     res["bulk_ratio_support"] = {"status": "sufficient" if all_sup["sufficient"] else "insufficient", "per_slot": sup}
+    res["bulk_ratio_gate"] = bulk_ratio_gate({s: res[s]["per_state"] for s in SESSIONS}, sup)
     res["rate_stage_validation"] = {
         "rule": f"levi 00132: option A on the bulk: >= {R.VALID_MIN_SHARE} of each slot-state's seconds qualify, its ratio "
                 f"within {R.VALID_TOL} of the bulk's own", "ok": ok, "status": M.status(ok, all_sup),

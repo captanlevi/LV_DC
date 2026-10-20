@@ -155,13 +155,16 @@ def test_cli_guards():
     for w in ((), ("--window-min", "90")):                       # levi 00138: the record's window is 120 min
         r = run("--concurrent", "--trio-record", "--n-draw", *w)
         assert r.returncode != 0 and "--trio-record needs --window-min 120" in r.stderr, r.stderr
+    r = run("--concurrent", "--trio-record", "--n-draw", "--window-min", "120")     # levi on 2e666b0: §7 fullscreen
+    assert r.returncode != 0 and "--trio-record needs --trio-yt-fullscreen" in r.stderr, r.stderr
     r = run("--concurrent", "--window-min", "120", "--max-per-slot", "1")
     assert r.returncode != 0 and "--max-per-slot does not apply inside a window" in r.stderr, r.stderr
     r = run("--concurrent", "--window-min", "0")
     assert r.returncode != 0 and "--window-min needs --concurrent and a positive length" in r.stderr, r.stderr
     r = run("--window-min", "30")
     assert r.returncode != 0 and "--window-min needs --concurrent" in r.stderr, r.stderr
-    r = run("--concurrent", "--trio-record", "--n-draw", "--window-min", "120", "--session-range", "4,8")
+    r = run("--concurrent", "--trio-record", "--n-draw", "--window-min", "120", "--trio-yt-fullscreen",
+            "--session-range", "4,8")
     assert r.returncode != 0 and "--session-range is for an uncounted" in r.stderr, r.stderr
     for bad in ("4", "8,4", "x,y"):
         r = run("--concurrent", "--session-range", bad)
