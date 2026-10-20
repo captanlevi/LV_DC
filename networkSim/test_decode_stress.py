@@ -126,7 +126,7 @@ def _r(tag, share, readable=True, dur=700.0, tt60=None, top_s=None):
     # restart prereg (short dry runs): the gate's support, >= 300 s at every slot's top tier with every session at once
     return {"slot": tag, "duration_s": dur, "device_stall_readable": readable, "device_stall_share": share,
             "started_at": 0.0, "ended_at": dur, "seconds_at_top_tier": dur - 60.0 if top_s is None else top_s,
-            "top_state_spans": [[20.0, dur]], "first_playing_at": 10.0,
+            "top_state_spans": [[20.0, dur]], "first_playing_at": 10.0, "on_spans": [[10.0, dur]],
             **({"tt_60fps_tier": tt60} if tt60 else {})}
 
 
@@ -269,16 +269,18 @@ def test_all_top_window_and_reread():
         (out / "report.json").write_text(json.dumps(rep))
         rr = D.reread(out / "report.json")
         g = rr["gate"]
-        assert g["window"] == [[1060.0, 1100.0], [1120.0, 1420.0]], g["window"]
-        assert g["support"]["support"] == {"all_top_state_s": 340.0} and g["status"] == "pass", g
+        # levi (prereg 135e8160): yt1 is on from its first playing tick to its last (1418), tw1 from 1031 to 1448
+        assert rr["readings"][0]["on_spans"] == [[1060.0, 1418.0]], rr["readings"][0]["on_spans"]
+        assert g["window"] == [[1060.0, 1100.0], [1120.0, 1418.0]], g["window"]
+        assert g["support"]["support"] == {"all_top_state_s": 338.0} and g["status"] == "pass", g
         assert {k: rr["box_window"][k] for k in ("t0", "t1", "spans", "over")} == {
-            "t0": 1060.0, "t1": 1420.0, "spans": [[1060.0, 1100.0], [1120.0, 1420.0]], "over": "all-top window (union of spans)"}
+            "t0": 1060.0, "t1": 1418.0, "spans": [[1060.0, 1100.0], [1120.0, 1418.0]], "over": "all-top window (union of spans)"}
         # startup's and the gap's 95 % outside (over the hull: 10 of 180 rows at 95, p95 95)
-        assert rr["box_record"]["cpu_pct"]["p95"] == 50.0 and rr["box_record"]["n"] == 170, rr["box_record"]
+        assert rr["box_record"]["cpu_pct"]["p95"] == 50.0 and rr["box_record"]["n"] == 169, rr["box_record"]
         assert g["short_of_headroom"] is False
         assert rr["box_window"]["oom_kills"] == {"whole": 0, "spans": 0} and rr["box_window"]["counters_over"]["t0"] == 995.0
         tw = g["slots"]["tw1"]["tiers_all_top_s"]
-        assert tw == {"720": 289.0, "1080": 50.0} and g["slots"]["tw1"]["top_tier_all_top"] == 1080, tw
+        assert tw == {"720": 287.0, "1080": 50.0} and g["slots"]["tw1"]["top_tier_all_top"] == 1080, tw
         assert g["slots"]["yt1"]["tiers_all_top_s"] == {"720": 338.0}, g["slots"]["yt1"]   # its last tick 1418
         assert any(n.startswith("tw1: top tier 1080 held 50.0 s") for n in g["notes"]), g["notes"]
         assert rr["readings"][0]["first_playing_at"] == 1060.0
@@ -293,6 +295,31 @@ def test_all_top_window_and_reread():
         assert rr["gate"]["status"] == "fail" and rr["gate"]["fails"] == ["swap grew 64 kB", "1 OOM kill(s)"], rr["gate"]
         assert rr["box_window"]["oom_kills"] == {"whole": 1, "spans": 0}, rr["box_window"]
         assert rr["box_window"]["swap_growth_kb"] == {"whole": 64, "spans": 0}, rr["box_window"]
+
+
+def test_on_spans():
+    """levi (prereg 135e8160): a pair of res_meta ticks <= 2 s apart is on when both play or both are an unpaused ad; a
+    slot stalled mid-window (playhead still) shrinks the all-top window, a slot on an unpaused ad keeps it."""
+    def rows(ticks):
+        return [dict(zip(COLS, t)) for t in ticks]
+    play = _ticks(1000, 101, 720, 30.0)
+    stall = [t[:5] + ["3.0"] + t[6:] if 1040 <= float(t[0]) / 1000 < 1060 else t for t in play]     # still 1040-1059
+    ad = [t[:6] + ["True"] + t[7:] if 1040 <= float(t[0]) / 1000 < 1060 else t for t in play]       # an ad 1040-1059
+    paused_ad = [t[:4] + ["True", t[5], "True"] + t[7:] if 1040 <= float(t[0]) / 1000 < 1060 else t for t in play]
+    gap = [t for t in play if not 1050 < float(t[0]) / 1000 < 1054]                                  # 4 s without ticks
+    assert D.on_spans(rows(play)) == [[1000.0, 1100.0]]
+    assert D.on_spans(rows(stall)) == [[1000.0, 1039.0], [1060.0, 1100.0]]
+    assert D.on_spans(rows(ad)) == [[1000.0, 1039.0], [1040.0, 1059.0], [1060.0, 1100.0]]
+    assert D.on_spans(rows(paused_ad)) == [[1000.0, 1039.0], [1060.0, 1100.0]]
+    assert D.on_spans(rows(gap)) == [[1000.0, 1050.0], [1054.0, 1100.0]]
+    rd = lambda tag, on: {"slot": tag, "top_state_spans": [[1000.0, 1100.0]], "on_spans": on}
+    base = D.all_top_window([rd("yt1", D.on_spans(rows(play))), rd("tw1", D.on_spans(rows(play)))])
+    assert D.span_s(base) == 100.0
+    stalled = D.all_top_window([rd("yt1", D.on_spans(rows(play))), rd("tw1", D.on_spans(rows(stall)))])
+    assert stalled == [[1000.0, 1039.0], [1060.0, 1100.0]] and D.span_s(stalled) == 79.0, stalled
+    on_ad = D.all_top_window([rd("yt1", D.on_spans(rows(play))), rd("tw1", D.on_spans(rows(ad)))])
+    assert D.span_s(on_ad) == 98.0, on_ad              # only the two 1 s play / ad seams drop out
+    assert D.all_top_window([rd("yt1", D.on_spans(rows(play))), rd("tw1", [])]) == []
 
 
 if __name__ == "__main__":
