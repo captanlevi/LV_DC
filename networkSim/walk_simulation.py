@@ -40,7 +40,7 @@ DL_SAMPLES = 20000
 REF_SUBSTEP_S = (21.0, 23.0)       # [lo, hi): the sub-steps with exactly WALK_REF_STEPS steps
 CALIB_SUBSTEPS = 20000            # per state
 FIXTURE = HERE / "fixtures" / "walk_simulation.json"
-WALK_SIM_SHA256 = "92724ddef31a495154ab9b7f8362518beb90aed4a259bdef11b2c85704616781"
+WALK_SIM_SHA256 = "9dbbf8e56d8d6057d73865d0c4c5272e4911da7f3c974314bc5f604f9276ddea"
 
 
 def _q(xs: list[float], ps=(0.1, 0.5, 0.9)) -> dict:
@@ -96,6 +96,7 @@ def simulate(platform: str, matrix_id: str, base_episodes: int, sessions: int = 
     occ = collections.Counter()
     before, after, steps_per_sub, span, span_ref = [], [], [], [], []
     real_t, redraw_t, dur_t = collections.Counter(), collections.Counter(), collections.Counter()
+    subs_n = collections.Counter()        # levi (brad's walk parity): each state's support behind its ratio
     real_mid, redraw_mid = [], []
     session_s = None
 
@@ -103,6 +104,7 @@ def simulate(platform: str, matrix_id: str, base_episodes: int, sessions: int = 
         if not sub:
             return
         st = sub[0].state
+        subs_n[st] += 1
         lw = SCENARIOS[st].rate_max - SCENARIOS[st].rate_min
         xs = [r.rate for r in sub]
         steps_per_sub.append(len(sub) - 1)
@@ -152,6 +154,8 @@ def simulate(platform: str, matrix_id: str, base_episodes: int, sessions: int = 
                                                **_q(span_ref)},
                      "realised_over_redraw_by_state": {s: round(real_t[s] / redraw_t[s], 4)
                                                        for s in sorted(dur_t, key=int)},
+                     "support_by_state": {s: {"substeps": subs_n[s], "seconds": round(dur_t[s], 1)}
+                                          for s in sorted(dur_t, key=int)},
                      "realised_over_midpoint": _wq(real_mid), "redraw_over_midpoint": _wq(redraw_mid)},
             "sessions": sessions, "seed": f"{seed}:{platform}:{matrix_id}"}
 
