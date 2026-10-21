@@ -239,37 +239,46 @@ def open_dead_run_held_s(rows: list[dict], net_labels: list) -> float | None:
     return (seg[-1] - seg[0]) if seg else 0.0
 
 
-def unresolved_dead_runs(rows: list[dict], open_clocks: list[dict], low_spans: list, t_dead: float | None
-                         ) -> tuple[list[dict], list[tuple[float, float]]]:
-    """levi 03:58: for each dead clock left unresolved (end None), the raw dead run it belongs to (the dead-tick run
-    holding the clock's start, else the first run starting after it; onset to its last dead tick, the session's end
-    when it is open there). (provisional runs to censor, hard runs): a run >= t_dead with no low span (watch
-    low_spans, + grace) inside it is hard (player_dead as before, not exported), every other one provisional, as brad's
-    cuts loader reads it (03:58): {onset, end (epoch s; None = open at the session's end), raw_s, low_span}."""
+def unresolved_dead_runs(rows: list[dict], open_clocks: list[dict], low_spans: list, t_dead: float | None,
+                         net_labels: list | None = None) -> tuple[list[dict], list[tuple[float, float]]]:
+    """levi 03:58 / 04:06 (final, (H)): for each dead clock left unresolved (end None), the raw dead run it belongs to
+    (dead_tick_runs: the run holding the clock's start, else the first run starting after it) and, as the mask, that
+    run's HELD parts (held_dead_runs: the parts outside the low-state hold, states 1-4 + grace, the measure check's
+    dead class uses): the held-out ticks are a labelled STALL by the hold's rule, so only the parts the collector's clock
+    should have counted are uncertain. (provisional runs, hard runs): a raw run >= t_dead with no low span (watch
+    low_spans, + grace) inside it is hard (player_dead as before, not exported); every other one exports each held part
+    as {onset, end, held_s, raw_onset, raw_end, raw_s, low_span}. Times are epoch seconds (labels.csv ts / 1000, the
+    clock the net labels and meta use), never slot indices; end / raw_end None = open at the session's last tick.
+    brad's cuts loader masks every slot overlapping [onset, end) of each item, on its own slot grid."""
     import stuck
     runs = dead_tick_runs(rows)
+    parts = held_dead_runs(rows, net_labels or [])
     last_tick = max((float(r["ts"]) / 1000.0 for r, _ in tick_states(rows) if _f(r.get("ts")) is not None), default=None)
+    open_end = dead_open_at_end(rows)
     prov, hard, seen = [], [], set()
     for c in open_clocks:
         t = c.get("start")
         if not isinstance(t, (int, float)):
             continue
         run = next((x for x in runs if x[0] - 1.0 <= t <= x[-1] + 1.0), None) or next((x for x in runs if x[0] >= t), None)
-        if run is None:
+        if run is None or (run[0], run[-1]) in seen:
             continue
+        seen.add((run[0], run[-1]))
         a, b = run[0], run[-1]
-        open_end = run is runs[-1] and dead_open_at_end(rows)
-        if open_end and last_tick is not None:
-            b = max(b, last_tick)
-        if (a, b) in seen:
+        is_open = open_end and run is runs[-1]
+        raw_b = max(b, last_tick) if is_open and last_tick is not None else b
+        low_inside = any(lo <= raw_b and a <= hi + stuck.LOW_HOLD_GRACE_S for lo, hi in low_spans)
+        if t_dead is not None and raw_b - a >= t_dead and not low_inside:
+            hard.append((a, raw_b))
             continue
-        seen.add((a, b))
-        low_inside = any(lo <= b and a <= hi + stuck.LOW_HOLD_GRACE_S for lo, hi in low_spans)
-        if t_dead is not None and b - a >= t_dead and not low_inside:
-            hard.append((a, b))
-        else:
-            prov.append({"onset": round(a, 3), "end": None if open_end else round(b, 3), "raw_s": round(b - a, 3),
-                         "low_span": low_inside})
+        for pa, pb in parts:
+            if a <= pa and pb <= b:
+                end_open = is_open and pb == b
+                pe = raw_b if end_open else pb
+                prov.append({"onset": round(pa, 3), "end": None if end_open else round(pb, 3),
+                             "held_s": round(pe - pa, 3), "raw_onset": round(a, 3),
+                             "raw_end": None if is_open else round(b, 3), "raw_s": round(raw_b - a, 3),
+                             "low_span": low_inside})
     return prov, hard
 
 

@@ -236,64 +236,65 @@ def test_check_defers_to_the_fired_clock():
 
 
 def test_open_run_is_measured_on_its_own():
-    """levi 03:51 (ti_100084, w9 stop): an 85 s dead run after a state-1 span's grace that the collector never counted
-    to T (its watch was rebuilt), then live play, then a ~5 s dead run open at the room end. Before: open_at_end sent the
-    class to the session's longest run (85 s >= T: player_dead). Now the open run counts on its own held length (5 s):
-    class 0, the disagreement and its margin recorded; the unresolved clock entries make it provisional, never raw.
-    An open run itself >= T still classes player_dead; an open run inside the hold counts 0."""
+    """levi 03:51 / 03:58 / 04:06 (H), on ti_100084's real timeline (shagun 04:06, t+ from started_at): readyState 0 from
+    t+121 to t+262; a state-1 span t+88 -> t+148 (+ 30 s grace to t+178, where the collector's clock started and was
+    left unresolved: its watch was rebuilt); then play; then a ~5 s dead run open at the room end, also unresolved.
+    The class: the open run counts on its own held length (5 s < T): 0, the disagreement recorded, provisional. The mask
+    export: each unresolved clock's run as its HELD parts (t+179 -> t+262 here, not the part inside the span), with the
+    raw run beside it; times in epoch seconds. A raw run itself >= T with no low span: player_dead, not exported."""
     import check_session as CS
-    t0 = 1000.0
+    t0 = 1_792_000_000.0
 
     def rows(spans, total=800):
         return [{"ts": str((t0 + k) * 1000), "type": "res_meta", "current_time": str(k), "is_ad": "False",
                  "paused": "False", "ready_state": "0" if any(a <= k < b for a, b in spans) else "4", "video_w": "720"}
                 for k in range(total)]
-    labels = [{"timestamp": t0 + 200, "speed": 300, "state": "1"}, {"timestamp": t0 + 260, "speed": 900, "state": "5"}]
-    pdw = {"low_spans": [[t0 + 200, t0 + 260]],
-           "dead_clocks": [{"start": t0 + 290, "end": None, "how": None}, {"start": t0 + 795, "end": None, "how": None}]}
-    r = rows([(290, 376), (795, 800)])                                  # 85 s, then ~5 s open at the end
-    lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
+    labels = [{"timestamp": t0 + 88, "speed": 300, "state": "1"}, {"timestamp": t0 + 148, "speed": 900, "state": "5"}]
+    pdw = {"low_spans": [[t0 + 88, t0 + 148]],
+           "dead_clocks": [{"start": t0 + 178, "end": None, "how": None}, {"start": t0 + 795, "end": None, "how": None}]}
+    r = rows([(121, 263), (795, 800)])
+    lab = {"dead_player_max_s": 83.0, "dead_player_T_s": 60.0}
     CS.dead_clock_of_record(lab, r, "tiktok", pdw, labels)
     d = lab["dead_clock_of_record"]
     assert lab["dead_player_class_s"] == 0.0 and d["open_at_end"] and d["open_run_held_s"] == 4.0, d
-    assert d["disagrees"] and d["margin_s"] == 25.0 and d["provisional"] == "held clock unknown" and d["unresolved_clocks"] == 2
-    # levi 03:58: the unresolved clocks' raw runs, exported for the labels of record to censor (brad's interface)
-    assert lab["provisional_runs"] == [{"onset": t0 + 290, "end": t0 + 375, "raw_s": 85.0, "low_span": True},
-                                       {"onset": t0 + 795, "end": None, "raw_s": 4.0, "low_span": False}], lab
-    # the exception: an unresolved run itself >= T with no low span inside it reads player_dead, not provisional
-    lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
-    CS.dead_clock_of_record(lab, rows([(500, 586)]), "tiktok",
-                            {"low_spans": [[t0 + 200, t0 + 260]], "dead_clocks": [{"start": t0 + 500, "end": None, "how": None}]},
-                            labels)
-    assert lab["dead_player_class_s"] == 85.0 and lab["provisional_runs"] == [] and lab["dead_clock_of_record"]["provisional"] is None
-    # levi 04:00 (1): the verdict and the class read the class field: the provisional session has no player_dead reason
-    # and stays counted (PASS / normal on its other reasons), the flag beside it; the exception still fails
+    assert d["disagrees"] and d["margin_s"] == 23.0 and d["provisional"] == "held clock unknown" and d["unresolved_clocks"] == 2
+    assert lab["provisional_runs"] == [
+        {"onset": t0 + 179, "end": t0 + 262, "held_s": 83.0, "raw_onset": t0 + 121, "raw_end": t0 + 262, "raw_s": 141.0,
+         "low_span": True},
+        {"onset": t0 + 795, "end": None, "held_s": 4.0, "raw_onset": t0 + 795, "raw_end": None, "raw_s": 4.0,
+         "low_span": False}], lab["provisional_runs"]
+    import stuck as S
+    assert all(t0 + 148 + S.LOW_HOLD_GRACE_S < x["onset"] for x in lab["provisional_runs"])   # nothing inside the hold
+    # levi 04:00 (1): the provisional session is counted: no player_dead reason, PASS / normal, the flag beside it
     net = {"pcap": True, "packets": 1, "ssl_keys": True}
     base = {"n_res_meta": 100, "tick_presence": 1.0, "v2_columns": True, "dead_player_T_s": 60.0}
-    prov = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
-    CS.dead_clock_of_record(prov, rows([(290, 376), (795, 800)]), "tiktok", pdw, labels)
-    v, why = CS.verdict({**base, **prov}, net, {}, [], 0.0)
+    v, why = CS.verdict({**base, **lab}, net, {}, [], 0.0)
     assert v == "PASS" and not any("player_dead" in w for w in why), why
-    assert prov["dead_clock_of_record"]["provisional"] and prov["provisional_runs"]
-    assert E.session_class("tiktok", v, None, [], prov["dead_player_class_s"], 60.0, None, None) == "normal"
-    v, why = CS.verdict({**base, **lab}, net, {}, [], 0.0)               # the exception (lab above): player_dead
-    assert v == "FAIL" and any("player_dead" in w for w in why)
-    assert E.session_class("tiktok", v, None, [], lab["dead_player_class_s"], 60.0, None, None) == "player_dead"
-    # (2) the other way: the same >= T run overlapping a low span (+ grace) is provisional, not player_dead
-    near = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
-    CS.dead_clock_of_record(near, rows([(500, 586)]), "tiktok",
-                            {"low_spans": [[t0 + 450, t0 + 480]], "dead_clocks": [{"start": t0 + 510, "end": None, "how": None}]},
+    assert E.session_class("tiktok", v, None, [], lab["dead_player_class_s"], 60.0, None, None) == "normal"
+    # (2) the exception: an unresolved raw run >= T with no low span inside reads player_dead, nothing exported
+    hard = {"dead_player_max_s": 86.0, "dead_player_T_s": 60.0}
+    CS.dead_clock_of_record(hard, rows([(500, 586)]), "tiktok",
+                            {"low_spans": [[t0 + 88, t0 + 148]], "dead_clocks": [{"start": t0 + 500, "end": None, "how": None}]},
                             labels)
-    assert near["dead_player_class_s"] == 0.0 and [r["onset"] for r in near["provisional_runs"]] == [t0 + 500]
-    lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}           # an open run of its own >= T: player_dead
-    CS.dead_clock_of_record(lab, rows([(290, 376), (700, 800)]), "tiktok", {"low_spans": [], "dead_clocks": []}, labels)
+    assert hard["dead_player_class_s"] == 85.0 and hard["provisional_runs"] == [] and hard["dead_clock_of_record"]["provisional"] is None
+    v, why = CS.verdict({**base, **hard}, net, {}, [], 0.0)
+    assert v == "FAIL" and any("player_dead" in w for w in why)
+    # ... and the same >= T run with a low span inside it is provisional (its held parts exported)
+    near_labels = [{"timestamp": t0 + 480, "speed": 300, "state": "2"}, {"timestamp": t0 + 520, "speed": 900, "state": "6"}]
+    near = {"dead_player_max_s": 36.0, "dead_player_T_s": 60.0}
+    CS.dead_clock_of_record(near, rows([(500, 586)]), "tiktok",
+                            {"low_spans": [[t0 + 480, t0 + 520]], "dead_clocks": [{"start": t0 + 550, "end": None, "how": None}]},
+                            near_labels)
+    assert near["dead_player_class_s"] == 0.0 and [(x["onset"], x["end"]) for x in near["provisional_runs"]] == [(t0 + 551, t0 + 585)]
+    # an open run itself >= T still classes player_dead; an open run inside the hold counts 0
+    lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
+    CS.dead_clock_of_record(lab, rows([(700, 800)]), "tiktok", {"low_spans": [], "dead_clocks": []}, labels)
     assert lab["dead_player_class_s"] == 99.0 and not lab["dead_clock_of_record"]["disagrees"]
-    held = [{"timestamp": t0 + 700, "speed": 300, "state": "2"}]          # the open run inside the hold: 0
+    held = [{"timestamp": t0 + 690, "speed": 300, "state": "2"}]
     lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
     CS.dead_clock_of_record(lab, rows([(700, 800)]), "tiktok", {"low_spans": [], "dead_clocks": []}, held)
     assert lab["dead_clock_of_record"]["open_run_held_s"] == 0.0 and lab["dead_player_class_s"] == 0.0
     assert "E.read_net_labels(sd))" in (HERE / "check_session.py").read_text()
-
 
 def test_entries_and_class():
     meta = {"channel_url": SESS["channel_url"], "room_rotation": SESS["room_rotation"]}

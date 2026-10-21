@@ -1052,11 +1052,11 @@ def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw, 
     T, measure = lab.get("dead_player_T_s"), lab.get("dead_player_max_s")
     unresolved = sum(1 for c in clocks if c.get("end") is None)
     cls = measure if fired else (open_s if open_end and E.dead_over_t(open_s, T) else 0.0)
-    # levi 03:58: an unresolved clock's raw readyState-0 run (onset to its last dead tick, or the session's end) is
-    # exported for the labels of record to censor (-1, as censored_end); a run that is itself >= T with no low span
-    # inside it (no hold could apply) reads player_dead as before, and is not provisional
+    # levi 03:58 / 04:06 (H): an unresolved clock's run is exported as its HELD parts (the parts outside the low-state
+    # hold; the held-out ticks are a STALL by the hold's rule) for the labels of record to censor (-1, as censored_end);
+    # a raw run itself >= T with no low span inside it (no hold could apply) reads player_dead as before, not provisional
     prov, hard = E.unresolved_dead_runs(label_rows, [c for c in clocks if c.get("end") is None], pdw.get("low_spans") or [],
-                                        T) if not fired else ([], [])
+                                        T, net_labels) if not fired else ([], [])
     if hard:
         cls = max(cls, max(b - a for a, b in hard))
     disagree = E.dead_over_t(measure, T) and not E.dead_over_t(cls, T)
