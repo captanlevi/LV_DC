@@ -2419,12 +2419,7 @@ class StreamEndedWatch:
 
     def timing(self) -> dict:
         """The reads' timing summary for meta.json stream_read_timing: n, mean / p50 / p95 / max ms."""
-        v = sorted(self.call_ms)
-        if not v:
-            return {"n": 0}
-        pick = lambda q: round(v[min(len(v) - 1, int(q * (len(v) - 1) + 0.5))], 3)
-        return {"n": len(v), "mean_ms": round(sum(v) / len(v), 3), "p50_ms": pick(0.5), "p95_ms": pick(0.95),
-                "max_ms": round(v[-1], 3)}
+        return _timing(self.call_ms)
 
     def _fire(self, p: dict, now: float) -> dict:
         self.fired = {"reason": "stream_ended", "t_trigger": now, **{k: v for k, v in p.items() if k != "i"},
@@ -2432,10 +2427,76 @@ class StreamEndedWatch:
         return self.fired
 
 
+# levi 16:26 / 16:27 (record-only, the 10-22 tip): yt's ladder from what the page already holds: the player response's
+# streamingData.adaptiveFormats (the source stuck.YT_FORMATS_JS reads for the lowest rung) and the player API's
+# getAvailableQualityLevels(), a read that never sets a quality (no request, no click, no menu, no playback change).
+# Read every YT_LADDER_EVERY_S, written to meta.json yt_ladder only when it changed; each read's wall time goes to
+# meta.json stream_read_timing.yt_ladder (item 3's per-call timing). No decision reads it.
+YT_LADDER_EVERY_S = 30.0
+YT_LADDER_JS = """(() => { try {
+  const p = document.querySelector('#movie_player');
+  const r = (p && p.getPlayerResponse && p.getPlayerResponse()) || window.ytInitialPlayerResponse || {};
+  const f = ((r.streamingData || {}).adaptiveFormats || []).map(x => ({itag: x.itag, mimeType: x.mimeType,
+      bitrate: x.bitrate, width: x.width, height: x.height, qualityLabel: x.qualityLabel, fps: x.fps}));
+  const levels = (p && p.getAvailableQualityLevels) ? p.getAvailableQualityLevels() : null;
+  return JSON.stringify({formats: f, levels: levels, ad: document.documentElement.dataset.lvqoeAd === '1'});
+} catch (e) { return null; } })()"""
+
+
+def _timing(call_ms: list) -> dict:
+    """n, mean / p50 / p95 / max ms of a reader's per-call wall times (stream_read_timing's form)."""
+    v = sorted(call_ms)
+    if not v:
+        return {"n": 0}
+    pick = lambda q: round(v[min(len(v) - 1, int(q * (len(v) - 1) + 0.5))], 3)
+    return {"n": len(v), "mean_ms": round(sum(v) / len(v), 3), "p50_ms": pick(0.5), "p95_ms": pick(0.95),
+            "max_ms": round(v[-1], 3)}
+
+
+class YtLadderRecorder:
+    """meta.json yt_ladder: the reads that changed ({t, formats (itag, mimeType with its codecs, bitrate, width, height,
+    qualityLabel, fps), levels, ad}, at most WATCH_LOG_MAX), n_reads, n_null."""
+
+    def __init__(self, every_s: float = YT_LADDER_EVERY_S):
+        self.every_s, self.next_at = every_s, 0.0
+        self.reads: list[dict] = []
+        self.n_reads = self.n_null = 0
+        self.call_ms: list[float] = []
+        self._last = None
+
+    def due(self, now: float) -> bool:
+        return now >= self.next_at
+
+    def feed(self, value: str | None, now: float, ms: float | None = None) -> None:
+        self.next_at, self.n_reads = now + self.every_s, self.n_reads + 1
+        if ms is not None:
+            self.call_ms.append(ms)
+        try:
+            v = json.loads(value) if value else None
+        except ValueError:
+            v = None
+        if not v or not (v.get("formats") or v.get("levels")):
+            self.n_null += 1
+            return
+        key = json.dumps(v, sort_keys=True)
+        if key != self._last and len(self.reads) < WATCH_LOG_MAX:
+            self.reads.append({"t": now, "formats": v.get("formats") or [], "levels": v.get("levels"),
+                               "ad": bool(v.get("ad"))})       # brad 16:27: an ad's player response is marked
+        self._last = key
+
+    def timing(self) -> dict:
+        return _timing(self.call_ms)
+
+    def record(self) -> dict:
+        return {"every_s": self.every_s, "n_reads": self.n_reads, "n_null": self.n_null, "reads": self.reads,
+                "rule": "levi 16:27: record-only; page-held formats + getAvailableQualityLevels, written on change"}
+
+
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
                      on_wall=None, on_frozen=None, on_stuck=None, on_player_error=None,
                      error_watch: PlayerErrorWatch | None = None, resumer: "SelfPauseResumer | None" = None,
-                     on_stream_ended=None, stream_watch: "StreamEndedWatch | None" = None) -> None:
+                     on_stream_ended=None, stream_watch: "StreamEndedWatch | None" = None,
+                     yt_ladder: "YtLadderRecorder | None" = None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
     Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
     calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table); passes the
@@ -2503,6 +2564,13 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                     on_stream_ended(trig)
                 except Exception as exc:
                     print(f"[browser] stream_ended abort failed: {exc!r}", flush=True)
+        if yt_ladder is not None and yt_ladder.due(time.time()):           # levi 16:27: record-only, timed
+            try:
+                t_call = time.perf_counter()
+                val = page.eval(YT_LADDER_JS)
+                yt_ladder.feed(val, time.time(), (time.perf_counter() - t_call) * 1000.0)
+            except Exception:
+                yt_ladder.feed(None, time.time())
         if on_wall is not None and not walled:
             try:
                 if page.eval(_WALL_JS):
@@ -3089,6 +3157,8 @@ class BrowserSession:
                  first_url: str | None = None, geometry: str | None = None, room_rotation_s: float | None = None,
                  entry_quality: dict | None = None, tw_low_latency: str | None = None):
         self.platform = platform
+        # levi 16:27: yt's ladder, record-only, one recorder for the session (re-entries included)
+        self.yt_ladder: "YtLadderRecorder | None" = YtLadderRecorder() if platform == "youtube" else None
         # restart §8: twitch's drawn low-latency setting ("on" / "off"; None = the profile's own, untouched), set before
         # the first navigation and read back once (tw_latency.py); its record goes to meta.json tw_low_latency
         self.tw_low_latency = tw_low_latency if platform == "twitch" else None
@@ -3417,7 +3487,7 @@ class BrowserSession:
                   self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
                   self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch,
                   self.resumer, self._stream_ended if self.platform in STREAM_ENDED_PLATFORMS else None,
-                  self._stream_watch()),
+                  self._stream_watch(), self.yt_ladder),
             daemon=True,
             name="ad-watcher",
         )
