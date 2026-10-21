@@ -346,6 +346,17 @@ def test_flow_overlap_linklocal():
     assert sorted(x[-1] for x in t["flows_also_in_default_list"]) == ["linklocal", "unicast"]
 
 
+
+def test_window_fits_edges():
+    """Restart §10 at the edge (hardening stop): a session whose length + the allowance ends exactly at the deadline
+    fits; a microsecond more idles; the allowance counts (levi 00138: 180 s)."""
+    d = 10_000.0
+    assert O.window_fits(d - 600 - 180, 10.0, d) and not O.window_fits(d - 600 - 180 + 1e-6, 10.0, d)
+    assert O.window_fits(d - 600, 10.0, d, allowance_s=0.0) and not O.window_fits(d - 600, 10.0, d)
+    assert O.WINDOW_ALLOWANCE_S == 180.0 and not O.window_fits(d, 0.0, d)        # no time left: nothing starts
+    src = (HERE / "orchestrate.py").read_text()
+    assert 'not window_fits(time.time(), slen["minutes"], window["deadline"])' in src
+
 def test_dns_answers():
     txt = "rr1---sn-x.googlevideo.com\t142.250.1.1,142.250.1.2\t\nwww.youtube.com\t142.250.1.1\t\n\t\t\nnoans.com\t\t\n"
     assert T.parse_dns(txt) == {"142.250.1.1": ["rr1---sn-x.googlevideo.com", "www.youtube.com"],

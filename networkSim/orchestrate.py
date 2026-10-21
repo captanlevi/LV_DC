@@ -664,6 +664,12 @@ TRIO_STAGGER_S = 30.0     # at least this long between two slot starts (Chrome l
 # a slot's next session fits when now + its drawn length + WINDOW_ALLOWANCE_S (startup + teardown) <= the deadline
 RECORD_WINDOW_MIN = 120.0
 WINDOW_ALLOWANCE_S = 180.0
+
+
+def window_fits(now: float, minutes: float, deadline: float, allowance_s: float | None = None) -> bool:
+    """Restart §10: a session of `minutes` started at `now` fits when now + its length + the allowance <= the deadline
+    (a session ending exactly at the deadline fits)."""
+    return now + minutes * 60 + (WINDOW_ALLOWANCE_S if allowance_s is None else allowance_s) <= deadline
 SESSION_RANGE: tuple | None = None     # --session-range (dry runs only, never the record): the length law's bounds
 TRIO_POLL_S = 2.0
 # under the trio root (data/_trio, trio_slots.TRIO_DIR)
@@ -732,7 +738,7 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         lo, hi = SESSION_RANGE
         slen = {**slen, "session_range": [lo, hi],
                 "minutes": round(lo + (hi - lo) * (slen["minutes"] - 10.0) / 30.0, 4)}
-    if window and slen and time.time() + slen["minutes"] * 60 + WINDOW_ALLOWANCE_S > window["deadline"]:
+    if window and slen and not window_fits(time.time(), slen["minutes"], window["deadline"]):
         T.slots_log_append(troot / T.SLOTS_LOG, {"event": "window_idle", "slot": tag, "run": run_id, "t": time.time(),
                                                  "reason": "does not fit", "minutes": slen["minutes"],
                                                  "allowance_s": WINDOW_ALLOWANCE_S, "deadline": window["deadline"]})
