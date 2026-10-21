@@ -119,6 +119,19 @@ def low_hold_end(net_labels: list, t: float) -> float | None:
     return end
 
 
+def player_error_held(errors: list | None, net_labels: list) -> bool:
+    """levi 02:57: the session's aborting player error (the last record with an "abort", else the last) began inside the
+    low-state hold (states 1-4 + LOW_HOLD_GRACE_S) at its onset (since, else t_trigger). Unshaped (no label by then), past
+    the grace, or no error: False (the accounting as before)."""
+    errs = [e for e in errors or [] if isinstance(e, dict)]
+    e = next((x for x in reversed(errs) if x.get("abort")), errs[-1] if errs else None)
+    t = (e or {}).get("since") if isinstance((e or {}).get("since"), (int, float)) else (e or {}).get("t_trigger")
+    if not isinstance(t, (int, float)):
+        return False
+    he = low_hold_end(net_labels, float(t))
+    return he is not None and float(t) <= he
+
+
 def low_spans(net_labels: list) -> list[tuple[float, float]]:
     """The shaper's stretches in LOW_HOLD_STATES: (first low label's time, the next label's time; inf if none)."""
     labs = sorted([n for n in net_labels or [] if _ts(n) is not None], key=_ts)

@@ -53,8 +53,11 @@ EXIT_ROOM_ENDED = 6      # exp.py's exit code when a tt room died mid-session (r
 EXIT_PLAYER_DEAD = 7     # exp.py's exit code when the tt player sat at readyState 0 with no media (player_dead)
 # aborts that are not failures of the platform: they do not count toward MAX_CONSECUTIVE_FAIL
 EXIT_STREAM_ENDED = 12   # exp.py's exit code when a yt / twitch tab left its live stream (stream_ended; bundle item 3)
+EXIT_PLAYER_ERROR_HELD = 13   # exp.py's code for a yt / twitch player error begun in the low-state hold (levi 02:57)
+# levi 02:57: a player error our low-state shaping explains is re-picked like tt's player_dead (no failure streak, no
+# not-live mark); one outside the hold (state >= 5, or unshaped past startup) still exits 1: a failure, channel marked
 NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended", EXIT_PLAYER_DEAD: "player_dead",
-                 EXIT_STREAM_ENDED: "stream_ended"}
+                 EXIT_STREAM_ENDED: "stream_ended", EXIT_PLAYER_ERROR_HELD: "player_error (low-state hold)"}
 
 TRIO_SHOT_SOURCE = {"cdp": "cdp", "fb": "x11", "composite": "composite"}   # trio layout -> LVQOE_SHOT_SOURCE
 EXIT_LOW_DISK = 4     # orchestrate.py's own exit code when the data volume has less than MIN_FREE_GB free

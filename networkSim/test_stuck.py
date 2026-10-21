@@ -570,6 +570,35 @@ def test_not_live_mark_matches_the_start_failure():
         msg = raised[0].replace("{self.platform}", p)
         assert E.session_class(p, "FAIL", msg, [], None, None, None, None) == "not_live"
 
+
+def test_player_error_accounting(tmp_path):
+    """levi 02:57 (a named defect: orchestrate and session_class read player_error two ways; marking channels that err
+    under our own low-state shaping not-live biases selection away from stall-rich content): an aborting player error
+    begun in the low-state hold exits EXIT_PLAYER_ERROR_HELD, a NOT_A_FAILURE code (no failure streak, no not-live
+    mark); one at state >= 5, unshaped, or at startup exits 1 as today (failure streak + not-live mark)."""
+    import orchestrate as O
+    t0 = 1_800_000_000.0
+    err = lambda t, abort=True: [{"reason": "error_page", "since": t, "t_trigger": t + 5, **({"abort": "x"} if abort else {})}]  # noqa: E731
+    assert S.player_error_held(err(t0 + 100), nl((t0, 300, 2)))                       # state 2: held
+    assert S.player_error_held(err(t0 + 100), nl((t0, 300, 4), (t0 + 80, 900, 7)))    # left 20 s ago: in the grace
+    assert not S.player_error_held(err(t0 + 100), nl((t0, 300, 2), (t0 + 50, 900, 7)))  # 50 s after leaving: past it
+    assert not S.player_error_held(err(t0 + 100), nl((t0, 900, 7)))                   # state 7
+    assert not S.player_error_held(err(t0 + 100), [])                                  # unshaped
+    assert not S.player_error_held(err(t0 + 100), nl((t0 + 200, 300, 1)))             # startup: before the first label
+    assert not S.player_error_held([], nl((t0, 300, 1))) and not S.player_error_held(None, [])
+    two = err(t0 + 10, abort=False) + err(t0 + 500)                                    # the aborting one decides
+    assert not S.player_error_held(two, nl((t0, 300, 1), (t0 + 100, 900, 7)))
+    assert O.NOT_A_FAILURE[O.EXIT_PLAYER_ERROR_HELD].startswith("player_error") and O.EXIT_PLAYER_ERROR_HELD == 13
+    ch = {"handle": "@c"}
+    paused, fails, frozen, not_live = {}, {"tw1": 0}, {"tw1": 0}, {}
+    O._account("twitch", O.EXIT_PLAYER_ERROR_HELD, 0, ch, None, 5.0, paused, fails, frozen, not_live, tmp_path,
+               key="tw1", passed=False)
+    assert fails == {"tw1": 0} and not_live == {} and frozen == {"tw1": 1}             # no mark, no failure streak
+    O._account("twitch", 1, 0, ch, None, 6.0, paused, fails, frozen, not_live, tmp_path, key="tw1", passed=False)
+    assert fails == {"tw1": 1} and not_live == {"@c": 6.0}                              # state >= 5 / startup: as today
+    exp = (HERE / "exp.py").read_text()
+    assert "EXIT_PLAYER_ERROR_HELD = 13" in exp and "_stuck.player_error_held(browser.player_errors," in exp
+
 def test_lowstate_error_page_does_not_use_the_recovery():
     import time
     now = time.time()

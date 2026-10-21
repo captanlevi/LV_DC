@@ -112,6 +112,7 @@ EXIT_PLAYER_FROZEN = 5   # the player froze in a stall past T (addendum N); not 
 EXIT_ROOM_ENDED = 6      # tt: the room died mid-session (browser.py TTRoomWatch); not a failure either, the next re-picks
 EXIT_PLAYER_DEAD = 7     # tt: readyState 0 with no media for PLAYER_DEAD_MAX_S (TTRoomWatch); not a failure, room re-picked
 EXIT_STREAM_ENDED = 12   # yt / twitch: the tab left its live stream (browser.StreamEndedWatch); not a failure, re-picked
+EXIT_PLAYER_ERROR_HELD = 13   # yt / twitch (levi 02:57): a player error begun in the low-state hold; not a failure, re-picked
 
 
 # v2 (LVQoE t37, rushi 2026-10-16): each session's profile is a CLONE of a per-platform template (a Chrome user-data-dir,
@@ -1149,6 +1150,10 @@ if __name__ == "__main__":
     if abort_reason == "player_dead":
         sys.exit(EXIT_PLAYER_DEAD)     # likewise: the dead room is now recent, the next session re-picks
     if abort_reason == "stream_ended":
-        sys.exit(EXIT_STREAM_ENDED)    # the broadcast ended (or the page moved channel): the next session re-picks
+        sys.exit(EXIT_STREAM_ENDED)
+    import stuck as _stuck
+    if abort_reason == "player_error" and browser is not None and _stuck.player_error_held(browser.player_errors,
+                                                                                            net_labels):
+        sys.exit(EXIT_PLAYER_ERROR_HELD)   # our own low-state shaping explains it: no failure, no not-live mark    # the broadcast ended (or the page moved channel): the next session re-picks
     if abort_reason:
         sys.exit(1)               # e.g. the channel was not live: orchestrate.py moves on to the next channel
