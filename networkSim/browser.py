@@ -2274,6 +2274,7 @@ class StreamEndedWatch:
         self.samples: list[tuple[float, float | None, float | None]] = []     # non-ad (t, ct, dur)
         self.pending: list[dict] = []
         self.fired: dict | None = None
+        self.call_ms: list[float] = []
 
     @staticmethod
     def _dur(x) -> float | None:
@@ -2333,6 +2334,20 @@ class StreamEndedWatch:
             if v is False:
                 self.pending.remove(p)
         return None
+
+    def note_call(self, ms: float) -> None:
+        """One _STREAM_STATE_JS read's wall time (ms), the item's cost measure (levi 11:22: the read's own per-call
+        timing, not slot CPU, which content dominates)."""
+        self.call_ms.append(ms)
+
+    def timing(self) -> dict:
+        """The reads' timing summary for meta.json stream_read_timing: n, mean / p50 / p95 / max ms."""
+        v = sorted(self.call_ms)
+        if not v:
+            return {"n": 0}
+        pick = lambda q: round(v[min(len(v) - 1, int(q * (len(v) - 1) + 0.5))], 3)
+        return {"n": len(v), "mean_ms": round(sum(v) / len(v), 3), "p50_ms": pick(0.5), "p95_ms": pick(0.95),
+                "max_ms": round(v[-1], 3)}
 
     def _fire(self, p: dict, now: float) -> dict:
         self.fired = {"reason": "stream_ended", "t_trigger": now, **{k: v for k, v in p.items() if k != "i"},
@@ -2400,7 +2415,10 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 error_watch.reset()
         if on_stream_ended is not None and stream_watch is not None:    # boundary bundle item 3: stream_ended
             try:
-                trig = stream_watch.feed(json.loads(page.eval(_STREAM_STATE_JS) or "null"), time.time())
+                t_call = time.perf_counter()
+                sample = json.loads(page.eval(_STREAM_STATE_JS) or "null")
+                stream_watch.note_call((time.perf_counter() - t_call) * 1000.0)   # levi 11:22 (7): its own cost
+                trig = stream_watch.feed(sample, time.time())
             except Exception:
                 trig = None
             if trig is not None:
@@ -3030,6 +3048,7 @@ class BrowserSession:
         self.channel_pick: dict | None = None     # twitch / tt: the channel cap's state at the pick (meta.json channel_pick)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.stream_ended: dict | None = None     # yt / twitch: the stream_ended abort's detail (meta.json)
+        self.stream_watch: "StreamEndedWatch | None" = None
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
@@ -3316,7 +3335,7 @@ class BrowserSession:
                   self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
                   self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch,
                   self.resumer, self._stream_ended if self.platform in STREAM_ENDED_PLATFORMS else None,
-                  StreamEndedWatch(self.platform, self.channel_url) if self.platform in STREAM_ENDED_PLATFORMS else None),
+                  self._stream_watch()),
             daemon=True,
             name="ad-watcher",
         )
@@ -3678,6 +3697,12 @@ class BrowserSession:
             self.abort_reason, self.abort_at = "player_frozen", time.time()
         print(f"[browser] PLAYER FROZEN (stuck-player rule, {why}): censored at {self.censored['t']:.0f}, shaper "
               f"{rec['shaper']} — aborting the session", flush=True)
+
+    def _stream_watch(self) -> "StreamEndedWatch | None":
+        """The session's StreamEndedWatch (yt / twitch), kept for meta.json stream_read_timing."""
+        self.stream_watch = StreamEndedWatch(self.platform, self.channel_url) if self.platform in STREAM_ENDED_PLATFORMS \
+            else None
+        return self.stream_watch
 
     def _stream_ended(self, trig: dict) -> None:
         """StreamEndedWatch's trigger (boundary bundle item 3): the tab left its live stream; abort "stream_ended" (no
