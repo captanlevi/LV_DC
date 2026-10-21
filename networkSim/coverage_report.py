@@ -462,11 +462,25 @@ def _ranked(defs: list[dict], seed: int | None = None) -> list[dict]:
     return sorted(defs, key=lambda d: (-d["share"], keys[(d["kind"], str(d["key"]))]))
 
 
+# prereg d32a48ce (label diversity at the 10-22 tip, item 5): with --trio-steer the balancer's class deficits are the
+# declared targets in counted minutes (steering.TARGETS_S: 2 h per deliverable tier, 1 h STALL), share = missing /
+# target, instead of the session floors; None (the default) keeps Addendum Q's floors. Set by orchestrate.
+TARGET_MINUTES: dict[str, dict[str, float]] | None = None
+
+
 def deficits(snap: dict, states: list[str] = (), families: list[str] = (), seed: int | None = None) -> list[dict]:
     """The floors' shortfalls, ranked by share (DEFICIT_RANK). families: the schedule family ids whose FAMILY_FLOOR
-    counts (accepted sessions of record per family id)."""
+    counts (accepted sessions of record per family id). With TARGET_MINUTES (the steering targets), a class's deficit
+    is its missing counted minutes against the target (kind "class", floor = the target in minutes)."""
     out = []
+    targets = (TARGET_MINUTES or {}).get(snap.get("platform"))
     for i, (c, v) in enumerate(snap["classes"].items()):
+        if targets is not None:
+            t = targets.get(c)
+            if t and v.get("minutes", 0.0) < t:
+                out.append({"kind": "class", "key": c, "deficit": round(t - float(v.get("minutes") or 0.0), 3),
+                            "floor": t, "order": i, "target": "minutes (prereg d32a48ce)"})
+            continue
         if v["sessions_ge_min"] < FLOOR_SESSIONS:
             out.append({"kind": "class", "key": c, "deficit": float(FLOOR_SESSIONS - v["sessions_ge_min"]),
                         "floor": FLOOR_SESSIONS, "order": i})

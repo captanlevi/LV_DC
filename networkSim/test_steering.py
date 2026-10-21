@@ -107,12 +107,31 @@ def test_no_within_session_input():
                    for ln in after.splitlines()), "the matrix is reassigned after the draw"
 
 
+def test_balancer_targets():
+    """Item 5: with TARGET_MINUTES (set by --trio-steer) the balancer's class deficits are the targets' missing counted
+    minutes, ranked by share; a met class pulls nothing; unset, Addendum Q's session floors as before."""
+    import coverage_report as CR
+    snap = {"platform": "twitch", "classes": {"STALL": {"sessions_ge_min": 9, "minutes": 30.0},
+                                             "Q_360p": {"sessions_ge_min": 9, "minutes": 150.0},
+                                             "Q_1080p": {"sessions_ge_min": 9, "minutes": 0.0}}}
+    saved = CR.TARGET_MINUTES
+    try:
+        CR.TARGET_MINUTES = {p: {c: v / 60.0 for c, v in t.items()} for p, t in S.TARGETS_S.items()}
+        d = CR.deficits(snap)
+        assert [(x["key"], x["share"]) for x in d] == [("Q_1080p", 1.0), ("STALL", 0.5)], d   # Q_360p met: no pull
+        CR.TARGET_MINUTES = None
+        assert CR.deficits(snap) == []                                           # session floors (all >= 5): none
+    finally:
+        CR.TARGET_MINUTES = saved
+
+
 def main() -> int:
     test_constants()
     test_deficits_and_weights()
     test_extreme_single_unmet_tier()
     test_steer_and_fallback()
     test_no_within_session_input()
+    test_balancer_targets()
     print("test_steering: ok")
     return 0
 

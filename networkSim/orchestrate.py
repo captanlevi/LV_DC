@@ -1297,6 +1297,10 @@ if __name__ == "__main__":
             sys.exit("--trio-yt-fullscreen needs --trio-layout composite (the fullscreen keeper runs only there)")
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
         TRIO_STEER = bool(args.trio_steer)
+        if TRIO_STEER:                                   # prereg d32a48ce item 5: the balancer steers to the targets
+            import steering
+            coverage_report.TARGET_MINUTES = {p: {c: v / 60.0 for c, v in t.items()}
+                                              for p, t in steering.TARGETS_S.items()}
         if args.concurrent:
             import trio_slots
             nd = None
