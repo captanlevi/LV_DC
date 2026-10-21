@@ -424,6 +424,91 @@ def test_watcher_loop_asks_on_frozen_again_while_held():
         assert got == [400.0] * 3, (content_js, pause, got)
 
 
+def _frozen_rows(t0, frozen_from, frozen_to, total):
+    """res_meta ticks each second from t0; the stall label on and the playhead still in [frozen_from, frozen_to)."""
+    out = [{"type": "start", "ts": str(t0 * 1000)}]
+    ct = 0.0
+    for k in range(total):
+        if k == frozen_from:
+            out.append({"type": "stall", "ts": str((t0 + k) * 1000)})
+        if k == frozen_to:
+            out.append({"type": "start", "ts": str((t0 + k) * 1000)})
+        if not frozen_from <= k < frozen_to:
+            ct += 1.0
+        out.append({"type": "res_meta", "ts": str((t0 + k) * 1000), "current_time": str(ct), "is_ad": "False"})
+    return out
+
+
+def _collector_aborts(platform, run, labels, monkeypatch):
+    """Replay the collector's addendum-N clock (browser._on_frozen, 032f6d31) each second of a frozen run: its abort time
+    or None."""
+    s = _session(platform)
+    s.net_labels = labels
+    a, b = run
+    T = CS.FROZEN_PLAYHEAD_MAX_S[platform]
+    for k in range(int(b - a) + 1):
+        t = a + k
+        if k <= T:                                        # the loop calls on_frozen only once the raw run passes T
+            continue
+        monkeypatch.setattr(B.time, "time", lambda t=t: t)
+        if s._on_frozen(float(k)) is not False:
+            return t
+    return None
+
+
+def test_frozen_clock_of_record(monkeypatch):
+    """levi 00:59: check_session's yt / twitch frozen class follows the collector's held addendum-N clock on sessions
+    from a holding collector (FROZEN_HOLD_COLLECTORS or meta frozen_clock_hold): a held run > T by the labels is not
+    player_frozen, the disagreement flagged with its margin; a run past the release counts from release + grace; a
+    pre-fix collector, no net labels, or tt: as before. Parity: the held measure exceeds T exactly when the replayed
+    collector clock aborts."""
+    t0 = 1_000_000.0
+    G = S.LOW_HOLD_GRACE_S
+    held_sha = sorted(CS.FROZEN_HOLD_COLLECTORS)[0]
+
+    def run(rows, labels, platform="youtube", meta=None):
+        lab = CS.label_checks(rows, platform, None, [], None, None, labels)
+        CS.frozen_clock_of_record(lab, rows, platform, labels, meta if meta is not None else
+                                  {"lvdc_commit": {"sha": held_sha}})
+        return lab
+    rows = _frozen_rows(t0, 100, 400, 500)                        # a 299 s frozen run, t0+100 .. t0+399
+    low = nl((t0, 300, 1))                                        # state 1 the whole session
+    lab = run(rows, low)
+    assert lab["frozen_playhead_max_s"] == 299.0 and lab["frozen_playhead_class_s"] == 0.0
+    assert lab["frozen_clock_of_record"] == {"held": True, "held_s": 0.0, "raw_s": 299.0, "disagrees": True,
+                                             "margin_s": 119.0}
+    assert CS.E.session_class("youtube", "PASS", None, [], 0.0, 60.0, lab["frozen_playhead_class_s"], 180) == "normal"
+    rel = nl((t0, 300, 1), (t0 + 150, 900, 7))                    # released at +150: counts from +180 to +399 = 219 s
+    lab = run(rows, rel)
+    assert lab["frozen_playhead_class_s"] == 219.0 and not lab["frozen_clock_of_record"]["disagrees"]
+    lab = run(rows, nl((t0, 300, 4), (t0 + 250, 900, 7)))          # state 4 held; 399 - 280 = 119 s: under T
+    assert lab["frozen_playhead_class_s"] == 119.0 and lab["frozen_clock_of_record"]["disagrees"]
+    lab = run(rows, nl((t0, 300, 2), (t0 + 20, 900, 7)))           # released before the run: its own 299 s
+    assert lab["frozen_playhead_class_s"] == 299.0
+    for meta, labels, plat in (({"lvdc_commit": {"sha": "49d5a19f1bb25e542c97edeba118e75981caa7a8"}}, low, "youtube"),
+                               ({"lvdc_commit": {"sha": held_sha}}, [], "youtube"),
+                               ({"lvdc_commit": {"sha": held_sha}}, low, "tiktok")):
+        lab = run(rows, labels, plat, meta)                       # pre-fix collector / no labels / tt: as before
+        assert lab["frozen_playhead_class_s"] == lab["frozen_playhead_max_s"] and lab["frozen_clock_of_record"] is None
+    lab = run(rows, low, "twitch", {"lvdc_commit": {"sha": "f" * 40}, "frozen_clock_hold": True})   # the meta marker
+    assert lab["frozen_clock_of_record"]["held"] and lab["frozen_playhead_class_s"] == 0.0
+    lab = CS.label_checks(rows, "youtube", None, [], None, None, low)   # a recovered run stays out of both measures
+    lab["recovered_frozen"] = {"window": [t0 + 100, t0 + 399]}
+    CS.frozen_clock_of_record(lab, rows, "youtube", low, {"lvdc_commit": {"sha": held_sha}})
+    assert lab["frozen_playhead_class_s"] == 0.0
+    # parity with the collector's clock (yt 180, twitch 660), grace edges included
+    for plat, n in (("youtube", 500), ("twitch", 1200)):
+        T = CS.FROZEN_PLAYHEAD_MAX_S[plat]
+        rows = _frozen_rows(t0, 100, n - 1, n)
+        a, b = t0 + 100, t0 + n - 2
+        for labels in (nl((t0, 300, 1)), nl((t0, 900, 7)), nl((t0, 300, 3), (t0 + 150, 900, 6)),
+                       nl((t0, 300, 1), (b - G - T - 1, 900, 6)), nl((t0, 300, 1), (b - G - T + 1, 900, 6)),
+                       nl((t0, 300, 1), (b - G - T, 900, 6)), nl((t0, 900, 7), (a + T - 5, 300, 2))):
+            lab = run(rows, labels, plat)
+            fired = _collector_aborts(plat, (a, b), labels, monkeypatch)
+            assert (fired is not None) == CS.E.frozen_over_t(lab["frozen_playhead_class_s"], T), (plat, labels, fired, lab)
+
+
 def test_lowstate_error_page_does_not_use_the_recovery():
     import time
     now = time.time()

@@ -206,6 +206,21 @@ def held_dead_runs(rows: list[dict], net_labels: list) -> list[tuple[float, floa
     return out
 
 
+def held_frozen_s(runs: list[tuple[float, float]], net_labels: list, step_s: float = 1.0) -> float:
+    """The longest frozen run as the collector's held addendum-N clock counts it (browser._on_frozen from 032f6d31, levi
+    gate 49d (C)): at each second t of a run (first, last tick) the clock reads 0 while stuck.low_hold_end(t) holds (states
+    1-4 + stuck.LOW_HOLD_GRACE_S), else min(t - first, t - hold end); the maximum over every run and second."""
+    import stuck
+    best = 0.0
+    for a, b in runs:
+        ts = [a + k * step_s for k in range(int((b - a) / step_s) + 1)] + [b]
+        for t in ts:
+            he = stuck.low_hold_end(net_labels, t)
+            c = t - a if he is None else (0.0 if t <= he else min(t - a, t - he))
+            best = max(best, c)
+    return best
+
+
 def dead_runs(rows: list[dict]) -> list[tuple[float, float]]:
     """Runs (first, last dead tick, s) of res_meta ticks with no media at all, after playback had been sustained once:
     readyState 0 (ready_state column, from the 2026-10-17 extension) or, on older ticks, a 0x0 video at playhead 0."""

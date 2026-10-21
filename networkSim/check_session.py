@@ -1010,7 +1010,7 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
             why.append(f"current_time advancing in {a:.2f} of playing ticks < {CHECKS['advancing_share_min']}")
         if not lab.get("v2_columns"):
             why.append("labels.csv lacks the v2 columns (old extension loaded?)")
-        fz, T = lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s")
+        fz, T = lab.get("frozen_playhead_class_s", lab.get("frozen_playhead_max_s")), lab.get("frozen_playhead_T_s")
         if E.frozen_over_t(fz, T) and abort_reason != "player_frozen":
             why.append(f"player_frozen: playhead frozen {fz:.0f} s in a stall > T {T} s (addendum N)")
         dr, DT = lab.get("dead_player_class_s", lab.get("dead_player_max_s")), lab.get("dead_player_T_s")
@@ -1052,6 +1052,32 @@ def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw) 
         lab["dead_player_class_s"] = 0.0
 
 
+# levi gate 49d (C) / 00:59: the collectors whose yt / twitch addendum-N clock holds in the low states (browser._on_frozen
+# from 032f6d31); sessions from later collectors carry meta.json frozen_clock_hold instead
+FROZEN_HOLD_COLLECTORS = frozenset({"032f6d317785f723c4b16fc1e90d1f195274c54c",
+                                    "0309d76e2f31f627c531ec316119712f31aee1dd"})
+
+
+def frozen_clock_of_record(lab: dict, label_rows: list[dict], platform: str, net_labels: list, meta: dict) -> None:
+    """levi 00:59 (the yt / twitch analogue of dead_clock_of_record): on a yt / twitch session from a collector whose
+    addendum-N clock holds (FROZEN_HOLD_COLLECTORS or meta.json frozen_clock_hold) and with live net labels (without
+    them the collector's hold never applies), the class of record is the frozen run as that clock counts it
+    (E.held_frozen_s over the runs the measure keeps: a recovered run stays out). The raw measure stays beside it, the
+    disagreement and its margin recorded. Otherwise: as before. Sets lab frozen_playhead_class_s / frozen_clock_of_record."""
+    lab["frozen_playhead_class_s"], lab["frozen_clock_of_record"] = lab.get("frozen_playhead_max_s"), None
+    sha = str(((meta or {}).get("lvdc_commit") or {}).get("sha") or "")
+    if platform not in ("youtube", "twitch") or not net_labels or lab.get("frozen_playhead_max_s") is None or not (
+            sha in FROZEN_HOLD_COLLECTORS or (meta or {}).get("frozen_clock_hold") is True):
+        return
+    rec = (lab.get("recovered_frozen") or {}).get("window")
+    runs = [r for r in frozen_runs(label_rows) if not rec or list(r) != list(rec)]
+    held, raw, T = E.held_frozen_s(runs, net_labels), lab["frozen_playhead_max_s"], lab.get("frozen_playhead_T_s")
+    disagree = E.frozen_over_t(raw, T) and not E.frozen_over_t(held, T)
+    lab["frozen_playhead_class_s"] = round(held, 3)
+    lab["frozen_clock_of_record"] = {"held": True, "held_s": round(held, 3), "raw_s": raw, "disagrees": disagree,
+                                     "margin_s": round(raw - T, 3) if disagree else None}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session_dir", type=Path)
@@ -1071,6 +1097,7 @@ def main() -> int:
                        entry_window(ents, win), E.read_net_labels(sd))
     lab["shot_effects"] = shot_effects(label_rows, sd)
     dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"))
+    frozen_clock_of_record(lab, label_rows, platform, E.read_net_labels(sd), meta)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
     net = traffic_checks(sd, platform)
@@ -1116,7 +1143,8 @@ def main() -> int:
         v, why = "FAIL", why + [f"entry_quality: Auto not restored ({eq['qa_fail']})"]
     # levi 2026-10-17: one session class by the fixed precedence (entries above); only `normal` counts toward quotas
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_class_s", lab.get("dead_player_max_s")),
-                              lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"),
+                              lab.get("dead_player_T_s"), lab.get("frozen_playhead_class_s", lab.get("frozen_playhead_max_s")),
+                              lab.get("frozen_playhead_T_s"),
                               recovered_dead=bool(lab.get("recovered_dead")),
                               recovered_frozen=bool(lab.get("recovered_frozen")))
     slow_start = E.slow_start_shaped(ents)
@@ -1160,6 +1188,8 @@ def main() -> int:
           f"| Addendum D: tier changes with src_changed within ± 2 s | {lab.get('tier_changes_with_swap_within_2s_share')} (of {lab.get('tier_changes')}) |",
           f"| stall share | {lab.get('stall_share')} |",
           f"| longest stall-only frozen-playhead run (stall label on, non-ad, playhead within 1 s of its first tick), s / T (FAIL above; addendum N) | {lab.get('frozen_playhead_max_s')} / {lab.get('frozen_playhead_T_s')} |",
+          f"| the same run as the collector's held clock counts it (yt / twitch from 032f6d31; the class of record) | "
+          f"{lab.get('frozen_playhead_class_s')} ({json.dumps(lab.get('frozen_clock_of_record'))}) |",
           f"| stall loops (stall / play alternations, plays < {STALL_LOOP_PLAY_MAX_S:.0f} s): n / s (covariate) | {lab.get('stall_loops')} / {lab.get('stall_loop_s')} |",
           f"| paused while labelled playing (share of playing ticks; suspicious > {PAUSED_WHILE_PLAYING_MAX}) | {lab.get('paused_while_playing_share')} |",
           f"| I10: stall ticks with the playhead advancing (FAIL > {STALL_ADVANCING_SHARE_MAX}; >= {I10_MIN_STALL_TICKS} stall ticks) | {lab.get('stall_advancing_share')} |",
