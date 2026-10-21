@@ -251,6 +251,20 @@ def shared_up_cmds(iface: str = IFACE_DEFAULT) -> list[str]:
     return c
 
 
+UPLINK_CAP_PRIO = 6          # after the management bypass (1) and the connmark restore (5), before the slots (10 + k)
+UPLINK_CAP_BURST_S = 0.05    # the policer's bucket: 50 ms at the cap (>= 64 KiB), a short drop-tail "link buffer"
+
+
+def uplink_cap_cmds(iface: str, kbit: int) -> list[str]:
+    """levi 02:48 (the positive control for brad's uplink-bound detector; diag only, --trio-stress): every download on the
+    interface but management passes one policer at kbit before any slot or the default class sees it, as a slower
+    house link would. A policer, not a queue: excess is dropped, never delayed beyond the bucket (disclosed). The
+    ingress qdisc's removal (shared_down_cmds) removes it."""
+    burst = max(65536, int(kbit * 1000 / 8 * UPLINK_CAP_BURST_S))
+    return [f"tc filter add dev {iface} parent ffff: protocol all prio {UPLINK_CAP_PRIO} matchall action police "
+            f"rate {int(kbit)}kbit burst {burst} mtu 64kb conform-exceed drop/continue"]
+
+
 def shared_down_cmds(iface: str = IFACE_DEFAULT) -> list[str]:
     """Also the trio's preclean (before shared_up): each is idempotent when run with check off."""
     return [f"tc qdisc del dev {iface} root", f"tc qdisc del dev {iface} ingress", f"nft delete table inet {NFT_TABLE}",

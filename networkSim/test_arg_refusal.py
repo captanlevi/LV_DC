@@ -65,12 +65,15 @@ def test_each_refusal():
         (without(RECORD, "--trio-steer-platforms") + ["--trio-steer-platforms", ""], "unknown or empty"),
         (without(RECORD, "--trio-steer-platforms") + ["--trio-steer-platforms", " , "], "unknown or empty"),
         (without(RECORD, "--trio-steer-platforms") + ["--trio-steer-platforms", "youtube,vimeo"], "unknown or empty"),
+        (RECORD + ["--uplink-cap-kbit", "40000"], "--uplink-cap-kbit needs --trio-stress"),
+        (["--batch", "youtube=1", "--concurrent", "--trio-stress", "--uplink-cap-kbit", "0"], "positive rate"),
     ]
     for argv, want in cases:
         got = refusal(argv)
         assert got and want in got, (argv, got)
     assert "LVDC_DATA_ROOT_UUID" in refusal(RECORD, {}) and "LVDC_DATA_ROOT_UUID" in refusal(RECORD, {"LVDC_DATA_ROOT_UUID": " "})
     assert refusal(["--concurrent", "--platform", "youtube"]) == "--concurrent needs --batch"
+    assert refusal(["--batch", "youtube=2,twitch=2,tiktok=1", "--concurrent", "--trio-stress", "--uplink-cap-kbit", "40000"]) is None
 
 
 def test_main_refuses_first():

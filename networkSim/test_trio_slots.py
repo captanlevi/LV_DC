@@ -357,6 +357,25 @@ def test_window_fits_edges():
     src = (HERE / "orchestrate.py").read_text()
     assert 'not window_fits(time.time(), slen["minutes"], window["deadline"])' in src
 
+
+def test_uplink_cap():
+    """levi 02:48 (diag only): the uplink cap is one ingress policer after the management bypass and the connmark restore
+    and before every slot filter and the default class, dropping the excess and continuing classification for the rest;
+    its bucket is 50 ms at the cap (>= 64 KiB); orchestrate applies it after the shared tree and records it in trio_up;
+    the flag needs --trio-stress."""
+    c = T.uplink_cap_cmds("wlp0s20f3", 40000)
+    assert c == ["tc filter add dev wlp0s20f3 parent ffff: protocol all prio 6 matchall action police rate 40000kbit "
+                 "burst 250000 mtu 64kb conform-exceed drop/continue"], c
+    assert "burst 65536 " in T.uplink_cap_cmds("x", 1000)[0]
+    up = " ".join(T.shared_up_cmds("wlp0s20f3"))
+    prios = [int(x) for x in __import__("re").findall(r"parent ffff: protocol \w+ prio (\d+)", up)]
+    assert min(prios) == 1 and 5 in prios and all(p < T.UPLINK_CAP_PRIO for p in prios if p <= 5)
+    assert all(p > T.UPLINK_CAP_PRIO for p in prios if p > 5)                    # orphan drop 40, default 50
+    assert T.SLOTS == {} or all(s.prio > T.UPLINK_CAP_PRIO for s in T.SLOTS.values())
+    assert all(10 + k > T.UPLINK_CAP_PRIO for k in range(T.MAX_SLOTS))
+    src = (HERE / "orchestrate.py").read_text()
+    assert src.index("apply(T.shared_up_cmds(iface))") < src.index("apply(uplink_cap[\"cmds\"])") < src.index('"uplink_cap": uplink_cap')
+
 def test_dns_answers():
     txt = "rr1---sn-x.googlevideo.com\t142.250.1.1,142.250.1.2\t\nwww.youtube.com\t142.250.1.1\t\n\t\t\nnoans.com\t\t\n"
     assert T.parse_dns(txt) == {"142.250.1.1": ["rr1---sn-x.googlevideo.com", "www.youtube.com"],

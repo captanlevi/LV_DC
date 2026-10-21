@@ -320,6 +320,7 @@ SESSION_DRAW_SEED = 20261021
 # t56 decode_stress (--trio-stress): the run's sessions go under data/_trio_stress (LVDC_TRIO_DIR), never counted, and a
 # pinned state is held for the whole session (exp.py --hold-state)
 TRIO_STRESS = False
+UPLINK_CAP_KBIT: int | None = None        # --uplink-cap-kbit (levi 02:48, diag only): trio_slots.uplink_cap_cmds
 TRIO_STRESS_EPISODES: int | None = None   # --trio-stress --episodes: a held session's base episodes (decode_stress --short)
 
 
@@ -965,6 +966,10 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
     screen = fb = dstage = ddir = ct_before = None
     try:
         apply(T.shared_up_cmds(iface))
+        uplink_cap = None
+        if UPLINK_CAP_KBIT:                          # levi 02:48: the uplink-bound positive control (stress runs only)
+            uplink_cap = {"kbit": UPLINK_CAP_KBIT, "cmds": T.uplink_cap_cmds(iface, UPLINK_CAP_KBIT)}
+            apply(uplink_cap["cmds"])
         # P3 (levi 00120): the default class's capture IFBs with their segmentation / coalescing offloads off, as every
         # slot's (exp.py); refused: no session starts (the tree comes down in the finally)
         import offloads as _off
@@ -1003,7 +1008,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                                        **({"window": window} if window else {}),
                                        "conntrack_timeouts_before": ct_before, "conntrack_timeouts": T.conntrack_timeouts(),
                                        "conntrack_set": ct_set[0], "resolver_cache_flushed": flush[0],
-                                       "layout": layout, "screen": screen, "framebuffer": fb, "ifb_offloads": ifb_off})
+                                       "layout": layout, "screen": screen, "framebuffer": fb, "ifb_offloads": ifb_off,
+                                       "uplink_cap": uplink_cap})
         print(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M}] TRIO {run_id} up: {targets}, max per slot {max_per_slot}, "
               f"layout {layout}")
         while True:
@@ -1226,6 +1232,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trio-record", action="store_true",
                         help="--concurrent: a counted run: its sessions are of record (meta concurrency.record, era "
                              "record.ERA); steering counts only such sessions. Pilots and re-runs: leave it off.")
+    parser.add_argument("--uplink-cap-kbit", type=int, default=None,
+                        help="--trio-stress only (levi 02:48): police all non-management downloads on the interface at "
+                             "this rate before the slots, a slower house link (trio_slots.uplink_cap_cmds); in trio_up.")
     parser.add_argument("--trio-stress", action="store_true",
                         help="--concurrent, t56 decode_stress: sessions under data/_trio_stress (never counted; not with "
                              "--trio-record); a --trio-pin state is held for the whole session (exp.py --hold-state).")
@@ -1263,6 +1272,8 @@ def arg_refusal(args, environ) -> str | None:
         return "--concurrent needs --batch"
     if args.trio_stress and (not args.concurrent or args.trio_record):
         return "--trio-stress needs --concurrent and never --trio-record"
+    if args.uplink_cap_kbit is not None and (not args.trio_stress or args.uplink_cap_kbit <= 0):
+        return "--uplink-cap-kbit needs --trio-stress and a positive rate (a diag arm, never the record)"
     if not args.batch:
         return None
     targets = {k.strip(): v for k, v in (x.split("=") for x in args.batch.split(","))}
@@ -1347,6 +1358,7 @@ if __name__ == "__main__":
         trio_slots.TRIO_DIR, trio_slots.TRIO_NAME_FLOOR = trio_slots.STRESS_DIR, 900000
         TRIO_STRESS = True
         TRIO_STRESS_EPISODES = args.episodes
+        UPLINK_CAP_KBIT = args.uplink_cap_kbit
     if args.batch:
         targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
         if args.session_range:                         # arg_refusal checked it
