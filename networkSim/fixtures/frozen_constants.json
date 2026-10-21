@@ -66,9 +66,11 @@
   "TC_SAMPLE_S": 1.0,
   "TRIO_STAGGER_S": 30.0,
   "resume": {
+   "PAUSE_DEADLOCK_S": 30.0,
+   "PAUSE_GROWTH_EPS_S": 0.1,
    "RESUME_BACKOFF_S": 10.0,
    "RESUME_CHECK_S": 1.0,
-   "RESUME_RULE": "levi 00130 (2026-10-20): no press in a stall; a self-pause pressed at buffer >= 1.5 s held 2 s, 10 s after the last restart",
+   "RESUME_RULE": "levi 00130 (2026-10-20): no press in a stall; a self-pause pressed at buffer >= 1.5 s held 2 s, 10 s after the last restart; levi w6 (2026-10-21): paused outside a stall label with no buffer growth for 30 s -> one press, still paused 30 s later -> a stuck player",
    "SELF_PAUSE_HOLD_S": 2.0,
    "SELF_PAUSE_MIN_BUFFER_S": 1.5
   }

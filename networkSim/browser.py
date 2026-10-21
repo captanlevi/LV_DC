@@ -1721,7 +1721,8 @@ _PLAYER_STATE_JS = """
         if (v.buffered.start(i) <= v.currentTime + 0.05 && v.currentTime <= v.buffered.end(i)) buf = v.buffered.end(i) - v.currentTime;
     }
     return JSON.stringify({paused: v.paused, rs: v.readyState, ended: v.ended, ad: d.lvqoeAd === '1',
-                           stall: d.lvqoeStall === '1', buf: Math.round(buf * 1000) / 1000});
+                           stall: d.lvqoeStall === '1', buf: Math.round(buf * 1000) / 1000,
+                           ct: Math.round(v.currentTime * 1000) / 1000});
 })()
 """
 _PLAY_JS = """
@@ -1745,7 +1746,17 @@ SELF_PAUSE_HOLD_S = 2.0
 SELF_PAUSE_MIN_BUFFER_S = 1.5
 RESUME_BACKOFF_S = 10.0
 RESUME_RULE = ("levi 00130 (2026-10-20): no press in a stall; a self-pause pressed at buffer >= 1.5 s held 2 s, "
-               "10 s after the last restart")
+               "10 s after the last restart; levi w6 (2026-10-21): paused outside a stall label with no buffer growth for "
+               "30 s -> one press, still paused 30 s later -> a stuck player")
+# levi w6 (15:38, tw_100079): 00130's buffer floor deadlocks a live player that paused itself: paused, it stops
+# fetching, so the buffer never reaches the floor, nothing presses, and the frozen watchdog (content.js) skips paused
+# ticks. A pause whose polls are held for "buffer" (levi / supervisor 15:40: never "stall"; the twitch startup
+# rebuffer, readyState 2 under a stall label, never trips it) with the buffer flat and the playhead still
+# (PAUSE_GROWTH_EPS_S) for PAUSE_DEADLOCK_S gets one press (logged, reason paused_no_buffer_growth); still paused PAUSE_DEADLOCK_S after it, the pause is fed to the
+# stuck-player rule as a frozen run from the pause's start (stuck_frozen_s): re-entry / abort by the normal rules, the
+# low-state hold applying there.
+PAUSE_DEADLOCK_S = 30.0
+PAUSE_GROWTH_EPS_S = 0.1
 # t53 (supervisor, peter's tw_100005 / tw_100006 read): after a state-1 underrun Twitch's own controller stays "paused" and
 # undoes a video.play() at once (start re-paused in the same ms, every press). On twitch a press re-paused within
 # RESUME_CHECK_S is retried through Twitch's play button (a click, or a pause / play cycle when the button says
@@ -1789,10 +1800,52 @@ class SelfPauseResumer:
         self.restart_at = None        # the last paused -> playing transition observed
         self.presses = 0
         self.held: collections.Counter = collections.Counter()   # paused polls not pressed, by reason
+        self.buf_peak = None          # the current pause's highest buffer ahead
+        self.flat_since = None        # the last time the buffer grew (or the pause began)
+        self.deadlock_press_at = None # this pause's deadlock press (once per pause)
+        self.ct_last = None           # the last poll's playhead
+        self.deadlocks: list[dict] = []   # meta.json self_pause_resume.deadlocks (capped)
 
     def record(self) -> dict:
         return {"rule": RESUME_RULE, "hold_s": self.hold_s, "min_buffer_s": self.min_buffer_s,
-                "backoff_s": self.backoff_s, "presses": self.presses, "held_polls": dict(sorted(self.held.items()))}
+                "backoff_s": self.backoff_s, "presses": self.presses, "held_polls": dict(sorted(self.held.items())),
+                "deadlock_s": PAUSE_DEADLOCK_S, "deadlocks": self.deadlocks[:WATCH_LOG_MAX]}
+
+    def stuck_frozen_s(self, now: float) -> float:
+        """The pause as a frozen run for the stuck-player rule once the deadlock press has not taken within
+        PAUSE_DEADLOCK_S (seconds since the pause began), else 0."""
+        if self.deadlock_press_at is None or self.paused_since is None or not self.was_paused:
+            return 0.0
+        return now - self.paused_since if now - self.deadlock_press_at >= PAUSE_DEADLOCK_S else 0.0
+
+    def _deadlock(self, state: dict, now: float) -> dict | None:
+        """levi / supervisor 15:40 (the row's wording): one press when the paused poll is held for "buffer" (never
+        "stall": not an ad, not ended, no stall label, readyState >= 3, the buffer under the floor) and the buffer is
+        flat AND the playhead still for PAUSE_DEADLOCK_S. Any other poll restarts the clock (the startup rebuffer:
+        readyState 2 under a stall label)."""
+        buf, ct = state.get("buf"), state.get("ct")
+        if (state.get("ad") or state.get("ended") or state.get("stall") or (state.get("rs") or 0) < 3
+                or (buf is not None and buf >= self.min_buffer_s)):
+            self.flat_since, self.buf_peak, self.ct_last = now, buf, ct
+            return None
+        grew = buf is not None and (self.buf_peak is None or buf > self.buf_peak + PAUSE_GROWTH_EPS_S)
+        moved = ct is not None and self.ct_last is not None and abs(ct - self.ct_last) > PAUSE_GROWTH_EPS_S
+        if grew or moved:
+            self.flat_since = now
+        if grew:
+            self.buf_peak = buf
+        if ct is not None:
+            self.ct_last = ct
+        if self.flat_since is None:
+            self.flat_since = now
+        if self.deadlock_press_at is not None or now - self.flat_since < PAUSE_DEADLOCK_S:
+            return None
+        self.deadlock_press_at = now
+        self.presses += 1
+        rec = {"action": "resume_after_self_pause", "reason": "paused_no_buffer_growth", "buffer_s": buf,
+               "paused_s": round(now - self.paused_since, 3), "flat_s": round(now - self.flat_since, 3)}
+        self.deadlocks.append({"t": now, "paused_since": self.paused_since, "buffer_s": buf})
+        return rec
 
     def note_button_fail(self) -> None:
         self.button_fails += 1
@@ -1805,13 +1858,19 @@ class SelfPauseResumer:
                 self.restart_at = now
             self.was_paused = paused
         if not paused:
+            if self.deadlock_press_at is not None and self.deadlocks and self.paused_since is not None:
+                self.deadlocks[-1]["resumed_at"] = now
             self.paused_since = self.eligible_since = None
             self.button_fails, self.gave_up = 0, False
-            return None
-        if self.gave_up:
+            self.buf_peak = self.flat_since = self.deadlock_press_at = self.ct_last = None
             return None
         if self.paused_since is None:
             self.paused_since = now
+        dl = self._deadlock(state, now)
+        if dl is not None:
+            return dl
+        if self.gave_up:
+            return None
         buf = state.get("buf")
         why = ("ad" if state.get("ad") else "ended" if state.get("ended") else "stall" if state.get("stall")
                else "waiting" if (state.get("rs") or 0) < 3
@@ -2456,6 +2515,8 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 frozen_s = float(page.eval(_FROZEN_JS) or 0)
             except Exception:
                 frozen_s = 0.0
+            # levi w6: a deadlocked pause the press did not take counts as a frozen run (content.js skips paused)
+            frozen_s = max(frozen_s, resumer.stuck_frozen_s(time.time()))
             if on_stuck is not None:
                 try:
                     on_stuck(frozen_s)

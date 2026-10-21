@@ -53,6 +53,39 @@ def S(paused=True, rs=4, stall=False, ad=False, ended=False, buf=2.0):
     return {"paused": paused, "rs": rs, "stall": stall, "ad": ad, "ended": ended, "buf": buf}
 
 
+def test_pause_deadlock():
+    """levi / supervisor 15:40 (the row's wording): one press when the paused polls are held for "buffer" (no stall
+    label, readyState >= 3, under the floor, not an ad, not ended) with the buffer flat AND the playhead still for 30 s;
+    still paused 30 s after it, the pause feeds the stuck-player rule as a frozen run from the pause's start. Fixtures:
+    tw_100079's shape (held "buffer" for the whole pause) -> press; brad's twitch startup-rebuffer shape (readyState 2,
+    buffered ahead ~0, held "stall", 62-172 s, resumes itself) -> no press."""
+    assert (B.PAUSE_DEADLOCK_S, B.PAUSE_GROWTH_EPS_S) == (30.0, 0.1)
+
+    def T(buf=0.4, ct=105.0, **k):
+        return {**S(buf=buf, **k), "ct": ct}
+    r = B.SelfPauseResumer()
+    seq = [(t, T()) for t in range(100, 200)]                             # tw_100079: playhead ~105 s, buffer flat
+    p = [(t, x) for t, st in seq if (x := r.step(st, t))]
+    assert [(t, x["reason"], x["flat_s"]) for t, x in p] == [(130, "paused_no_buffer_growth", 30)], p
+    assert r.stuck_frozen_s(159) == 0.0 and r.stuck_frozen_s(160) == 60.0 and r.stuck_frozen_s(199) == 99.0
+    rec = r.record()
+    assert rec["deadlocks"] == [{"t": 130, "paused_since": 100, "buffer_s": 0.4}] and rec["presses"] == 1
+    r.step(S(paused=False), 200)                                           # resumed: cleared, the resume stamped
+    assert r.stuck_frozen_s(260) == 0.0 and r.record()["deadlocks"][0]["resumed_at"] == 200
+    # brad's startup rebuffer: readyState 2, buffered ahead ~0, under a stall label, 172 s, then resumes by itself
+    r = B.SelfPauseResumer()
+    seq = [(t, T(buf=0.0, ct=0.0, rs=2, stall=True)) for t in range(13, 185)] + [(185, S(paused=False))]
+    assert [t for t, st in seq if r.step(st, t)] == [] and r.stuck_frozen_s(184) == 0.0
+    for st in (T(rs=2), T(stall=True), T(ad=True), T(ended=True)):       # each part of the signature is needed
+        r = B.SelfPauseResumer()
+        assert [t for t in range(0, 120) if (x := r.step(st, t)) and x["reason"] == "paused_no_buffer_growth"] == [], st
+    # growth resets the clock (buffer, or the playhead moving): 25 s flat, then a change, then flat -> press at change + 30
+    for later in (T(buf=0.9), T(ct=106.0)):
+        r = B.SelfPauseResumer()
+        seq = [(t, T()) for t in range(0, 25)] + [(t, later) for t in range(25, 70)]
+        assert [t for t, st in seq if (x := r.step(st, t)) and x["reason"] == "paused_no_buffer_growth"] == [55], later
+
+
 def test_decision():
     assert (B.SELF_PAUSE_HOLD_S, B.SELF_PAUSE_MIN_BUFFER_S, B.RESUME_BACKOFF_S) == (2.0, 1.5, 10.0)
     # a self-pause with the buffer: eligible from 10, held 2 s, pressed at 12, its buffer and the pause duration logged
@@ -60,8 +93,11 @@ def test_decision():
     assert p == [(12, {"action": "resume_after_self_pause", "reason": "self_pause", "buffer_s": 2.0, "paused_s": 2})], p
     assert presses([(t, S()) for t in range(10, 12)]) == []                      # 1 s: not yet
     # never in a stall, whatever the buffer (levi 00130: the after_stall press is gone), nor under the floor
-    for st in (S(stall=True, buf=8.0), S(rs=2, stall=True), S(buf=1.4), S(buf=None)):
-        assert presses([(t, st) for t in range(10, 60)]) == [], st
+    for st in (S(stall=True, buf=8.0), S(rs=2, stall=True)):
+        assert presses([(t, st) for t in range(10, 120)]) == [], st      # levi 15:40: a pause in a stall never
+    for st in (S(buf=1.4), S(buf=None)):                                  # under the floor: no self_pause press (the
+        p = presses([(t, st) for t in range(10, 120)])                    # deadlock press, test_pause_deadlock, once)
+        assert [x["reason"] for t, x in p] == ["paused_no_buffer_growth"], (st, p)
     # the floor reached and held: pressed 2 s after it
     seq = [(10, S(buf=0.5)), (11, S(buf=1.0)), (12, S(buf=1.6)), (13, S(buf=1.7)), (14, S(buf=1.8))]
     assert [t for t, _ in presses(seq)] == [14]
@@ -86,7 +122,7 @@ def test_decision():
 
 def test_js():
     st = js(B._PLAYER_STATE_JS, stall=True, ad=True, paused=True, rs=3)
-    assert json.loads(st["r"]) == {"paused": True, "rs": 3, "ended": False, "ad": True, "stall": True, "buf": 2.0}, st
+    assert json.loads(st["r"]) == {"paused": True, "rs": 3, "ended": False, "ad": True, "stall": True, "buf": 2.0, "ct": 100}, st
     assert json.loads(js(B._PLAYER_STATE_JS, buf_end=100.4)["r"])["buf"] == 0.4      # the playhead's own range
     assert js(B._PLAY_JS) == {"r": "pressed", "played": 1}                         # the largest visible video
     assert js(B._PLAY_JS, paused=False) == {"r": None, "played": 0}
@@ -102,7 +138,7 @@ def test_real_twitch_self_pause_fixture():
     stall = str((fx.get("lvqoe") or {}).get("lvqoeStall", "0")) == "1"
     st = json.loads(js(B._PLAYER_STATE_JS, stall=stall, ad=bool(fx["ad"]), paused=bool(fx["paused"]), rs=int(fx["rs"]),
                        ended=bool(fx.get("ended")))["r"])
-    assert st == {"paused": True, "rs": 4, "ended": False, "ad": False, "stall": False, "buf": 2.0}, st
+    assert st == {"paused": True, "rs": 4, "ended": False, "ad": False, "stall": False, "buf": 2.0, "ct": 100}, st
     r, made = B.SelfPauseResumer(), []
     for t in range(60):                               # the element plays once pressed
         if (p := r.step(st, 1000.0 + t)):
@@ -204,6 +240,7 @@ def test_button_js_on_the_fixture():
 
 
 def main() -> int:
+    test_pause_deadlock()
     test_decision()
     test_tw_100010_replay_no_press_in_the_loops()
     test_twitch_resume_through_the_button()
