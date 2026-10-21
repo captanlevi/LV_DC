@@ -266,6 +266,25 @@ def test_open_run_is_measured_on_its_own():
                             {"low_spans": [[t0 + 200, t0 + 260]], "dead_clocks": [{"start": t0 + 500, "end": None, "how": None}]},
                             labels)
     assert lab["dead_player_class_s"] == 85.0 and lab["provisional_runs"] == [] and lab["dead_clock_of_record"]["provisional"] is None
+    # levi 04:00 (1): the verdict and the class read the class field: the provisional session has no player_dead reason
+    # and stays counted (PASS / normal on its other reasons), the flag beside it; the exception still fails
+    net = {"pcap": True, "packets": 1, "ssl_keys": True}
+    base = {"n_res_meta": 100, "tick_presence": 1.0, "v2_columns": True, "dead_player_T_s": 60.0}
+    prov = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
+    CS.dead_clock_of_record(prov, rows([(290, 376), (795, 800)]), "tiktok", pdw, labels)
+    v, why = CS.verdict({**base, **prov}, net, {}, [], 0.0)
+    assert v == "PASS" and not any("player_dead" in w for w in why), why
+    assert prov["dead_clock_of_record"]["provisional"] and prov["provisional_runs"]
+    assert E.session_class("tiktok", v, None, [], prov["dead_player_class_s"], 60.0, None, None) == "normal"
+    v, why = CS.verdict({**base, **lab}, net, {}, [], 0.0)               # the exception (lab above): player_dead
+    assert v == "FAIL" and any("player_dead" in w for w in why)
+    assert E.session_class("tiktok", v, None, [], lab["dead_player_class_s"], 60.0, None, None) == "player_dead"
+    # (2) the other way: the same >= T run overlapping a low span (+ grace) is provisional, not player_dead
+    near = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
+    CS.dead_clock_of_record(near, rows([(500, 586)]), "tiktok",
+                            {"low_spans": [[t0 + 450, t0 + 480]], "dead_clocks": [{"start": t0 + 510, "end": None, "how": None}]},
+                            labels)
+    assert near["dead_player_class_s"] == 0.0 and [r["onset"] for r in near["provisional_runs"]] == [t0 + 500]
     lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}           # an open run of its own >= T: player_dead
     CS.dead_clock_of_record(lab, rows([(290, 376), (700, 800)]), "tiktok", {"low_spans": [], "dead_clocks": []}, labels)
     assert lab["dead_player_class_s"] == 99.0 and not lab["dead_clock_of_record"]["disagrees"]
