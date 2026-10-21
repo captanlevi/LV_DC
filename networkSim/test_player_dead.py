@@ -117,6 +117,30 @@ def test_low_state_hold():
     assert any(w.feed(dead, 5000.0 + i) == "player_dead" for i in range(62))
 
 
+
+def test_open_clock_closed_on_rebuild_and_end():
+    """levi 03:51 (ti_100084: two dead-clock entries read end None): a running clock's entry is closed "replaced" when the
+    loop rebuilds the watch (room grace / re-entry) and "session_end" at the loop's exit; reset and fired as before;
+    the rebuilt watch shares the log and starts its own entry."""
+    dead = {"has_video": True, "src": True, "rs": 0, "ct": 0, "buf_end": None, "decoded": None, "stall_label": True}
+    log = {"low_spans": [], "dead_clocks": []}
+    w = B.TTRoomWatch(log=log)
+    for i in range(30):                                                  # 30 s dead at state 7: a clock runs
+        assert w.feed(dead, 1000.0 + i, shaper_state=7) is None
+    w.close_open(1030.0, "replaced")
+    assert log["dead_clocks"] == [{"start": 1001.0, "end": 1030.0, "how": "replaced"}], log
+    w.close_open(1031.0, "replaced")                                     # nothing running: no change
+    assert len(log["dead_clocks"]) == 1
+    w = B.TTRoomWatch(log=log)
+    for i in range(10):
+        w.feed(dead, 2000.0 + i, shaper_state=7)
+    w.close_open(2010.0, "session_end")
+    assert log["dead_clocks"][-1] == {"start": 2001.0, "end": 2010.0, "how": "session_end"}, log
+    assert all(c["end"] is not None for c in log["dead_clocks"])
+    src = (HERE / "browser.py").read_text()
+    loop = src[src.index("def _room_watch_loop"):src.index("def _media_snapshot")]
+    assert loop.count('w.close_open(time.time(), "replaced")') == 2 and loop.count('w.close_open(time.time(), "session_end")') == 2
+
 def test_room_ended_carries_the_reentry_confirm():
     """bundle item 4 (supervisor 2026-10-21, ti_100037): room_ended after a re-entry keeps the pre-re-entry sample and
     carries the re-entry's own confirmation beside it, on both re-entry paths."""
@@ -199,15 +223,48 @@ def test_check_defers_to_the_fired_clock():
         return lab
     lab = run(r, {"low_spans": [[1300.0, 1499.0]], "dead_clocks": [{"start": 1531.0, "end": 1540.0, "how": "reset"}]})
     assert lab["dead_player_class_s"] == 0.0 and not E.dead_over_t(lab["dead_player_class_s"], 60.0)
-    assert lab["dead_clock_of_record"] == {"watch": True, "fired": False, "open_at_end": False, "disagrees": True,
-                                           "margin_s": 28.0}
+    assert lab["dead_clock_of_record"] == {"watch": True, "fired": False, "open_at_end": False, "open_run_held_s": None,
+                                           "disagrees": True, "margin_s": 28.0, "provisional": None,
+                                           "unresolved_clocks": 0}
     lab = run(r, {"low_spans": [], "dead_clocks": [{"start": 1531.0, "end": 1591.0, "how": "fired"}]})
     assert lab["dead_player_class_s"] == 88.0 and not lab["dead_clock_of_record"]["disagrees"]
-    lab = run(rows(800, 900), {"low_spans": [], "dead_clocks": []})
-    assert lab["dead_player_class_s"] == 88.0 and lab["dead_clock_of_record"]["open_at_end"]
+    lab = run(rows(800, 900), {"low_spans": [], "dead_clocks": []})    # open at the end and itself >= T: its own length
+    assert lab["dead_player_class_s"] == 99.0 and lab["dead_clock_of_record"]["open_at_end"]
     for pdw, plat in ((None, "tiktok"), ({"dead_clocks": []}, "youtube")):          # older sessions / not tt: as before
         lab = run(r, pdw, plat)
         assert lab["dead_player_class_s"] == 88.0 and lab["dead_clock_of_record"] is None
+
+
+def test_open_run_is_measured_on_its_own():
+    """levi 03:51 (ti_100084, w9 stop): an 85 s dead run after a state-1 span's grace that the collector never counted
+    to T (its watch was rebuilt), then live play, then a ~5 s dead run open at the room end. Before: open_at_end sent the
+    class to the session's longest run (85 s >= T: player_dead). Now the open run counts on its own held length (5 s):
+    class 0, the disagreement and its margin recorded; the unresolved clock entries make it provisional, never raw.
+    An open run itself >= T still classes player_dead; an open run inside the hold counts 0."""
+    import check_session as CS
+    t0 = 1000.0
+
+    def rows(spans, total=800):
+        return [{"ts": str((t0 + k) * 1000), "type": "res_meta", "current_time": str(k), "is_ad": "False",
+                 "paused": "False", "ready_state": "0" if any(a <= k < b for a, b in spans) else "4", "video_w": "720"}
+                for k in range(total)]
+    labels = [{"timestamp": t0 + 200, "speed": 300, "state": "1"}, {"timestamp": t0 + 260, "speed": 900, "state": "5"}]
+    pdw = {"low_spans": [[t0 + 200, t0 + 260]],
+           "dead_clocks": [{"start": t0 + 290, "end": None, "how": None}, {"start": t0 + 795, "end": None, "how": None}]}
+    r = rows([(290, 376), (795, 800)])                                  # 85 s, then ~5 s open at the end
+    lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
+    CS.dead_clock_of_record(lab, r, "tiktok", pdw, labels)
+    d = lab["dead_clock_of_record"]
+    assert lab["dead_player_class_s"] == 0.0 and d["open_at_end"] and d["open_run_held_s"] == 4.0, d
+    assert d["disagrees"] and d["margin_s"] == 25.0 and d["provisional"] == "held clock unknown" and d["unresolved_clocks"] == 2
+    lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}           # an open run of its own >= T: player_dead
+    CS.dead_clock_of_record(lab, rows([(290, 376), (700, 800)]), "tiktok", {"low_spans": [], "dead_clocks": []}, labels)
+    assert lab["dead_player_class_s"] == 99.0 and not lab["dead_clock_of_record"]["disagrees"]
+    held = [{"timestamp": t0 + 700, "speed": 300, "state": "2"}]          # the open run inside the hold: 0
+    lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
+    CS.dead_clock_of_record(lab, rows([(700, 800)]), "tiktok", {"low_spans": [], "dead_clocks": []}, held)
+    assert lab["dead_clock_of_record"]["open_run_held_s"] == 0.0 and lab["dead_player_class_s"] == 0.0
+    assert "E.read_net_labels(sd))" in (HERE / "check_session.py").read_text()
 
 
 def test_entries_and_class():

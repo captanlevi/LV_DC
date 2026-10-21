@@ -221,6 +221,24 @@ def held_frozen_s(runs: list[tuple[float, float]], net_labels: list, step_s: flo
     return best
 
 
+def open_dead_run_held_s(rows: list[dict], net_labels: list) -> float | None:
+    """levi 03:51 (ti_100084): the length of the dead run still open at the last tick, as the collector's clock counts
+    it: its final part outside the low-state hold (states 1-4 + grace), first to last dead tick; None when no run is
+    open at the end. The session's other, earlier runs never enter it."""
+    if not dead_open_at_end(rows):
+        return None
+    import stuck
+    spans = stuck.low_spans(net_labels or [])
+    run = dead_tick_runs(rows)[-1]
+    seg: list[float] = []
+    for t in run:
+        if any(a <= t <= b + stuck.LOW_HOLD_GRACE_S for a, b in spans):
+            seg = []
+        else:
+            seg.append(t)
+    return (seg[-1] - seg[0]) if seg else 0.0
+
+
 def dead_runs(rows: list[dict]) -> list[tuple[float, float]]:
     """Runs (first, last dead tick, s) of res_meta ticks with no media at all, after playback had been sustained once:
     readyState 0 (ready_state column, from the 2026-10-17 extension) or, on older ticks, a 0x0 video at playhead 0."""

@@ -1034,22 +1034,30 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
     return ("FAIL" if why else "PASS"), why
 
 
-def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw) -> None:
+def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw, net_labels: list | None = None) -> None:
     """levi 09:54 / 12:04: on a tt session carrying meta.json player_dead_watch, the collector's live clock is the class
-    of record: dead_over_t only when a dead clock fired or a dead run is still open at the last tick. The check's own
-    (held) measure stays beside it, the disagreement and its margin recorded. Without the watch (older sessions): as
-    before. Sets lab dead_player_class_s / dead_clock_of_record."""
+    of record: dead_over_t when a dead clock fired (the check's held measure), or when the dead run still open at the
+    last tick is itself >= T (levi 03:51, ti_100084: its own held length, E.open_dead_run_held_s; before, an open run of
+    any length sent the class to the session's longest run). A clock entry left unresolved (end None, from collectors
+    before the close fix) makes the record provisional ("held clock unknown"), never the raw measure. Without the watch
+    (older sessions): as before. Sets lab dead_player_class_s / dead_clock_of_record."""
     lab["dead_player_class_s"], lab["dead_clock_of_record"] = lab.get("dead_player_max_s"), None
     if platform != "tiktok" or not isinstance(pdw, dict):
         return
-    fired = any(c.get("how") == "fired" for c in pdw.get("dead_clocks") or [])
-    open_end = E.dead_open_at_end(label_rows)
+    clocks = pdw.get("dead_clocks") or []
+    fired = any(c.get("how") == "fired" for c in clocks)
+    open_s = E.open_dead_run_held_s(label_rows, net_labels or [])
+    open_end = open_s is not None
     T, measure = lab.get("dead_player_T_s"), lab.get("dead_player_max_s")
-    disagree = not (fired or open_end) and E.dead_over_t(measure, T)
-    lab["dead_clock_of_record"] = {"watch": True, "fired": fired, "open_at_end": open_end, "disagrees": disagree,
-                                   "margin_s": round(measure - T, 3) if disagree else None}
-    if not (fired or open_end):
-        lab["dead_player_class_s"] = 0.0
+    unresolved = sum(1 for c in clocks if c.get("end") is None)
+    cls = measure if fired else (open_s if open_end and E.dead_over_t(open_s, T) else 0.0)
+    disagree = E.dead_over_t(measure, T) and not E.dead_over_t(cls, T)
+    lab["dead_clock_of_record"] = {"watch": True, "fired": fired, "open_at_end": open_end,
+                                   "open_run_held_s": None if open_s is None else round(open_s, 3),
+                                   "disagrees": disagree, "margin_s": round(measure - T, 3) if disagree else None,
+                                   "provisional": "held clock unknown" if unresolved and not fired else None,
+                                   "unresolved_clocks": unresolved}
+    lab["dead_player_class_s"] = cls
 
 
 # levi gate 49d (C) / 00:59: the collectors whose yt / twitch addendum-N clock holds in the low states (browser._on_frozen
@@ -1096,7 +1104,7 @@ def main() -> int:
     lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
                        entry_window(ents, win), E.read_net_labels(sd))
     lab["shot_effects"] = shot_effects(label_rows, sd)
-    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"))
+    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), E.read_net_labels(sd))
     frozen_clock_of_record(lab, label_rows, platform, E.read_net_labels(sd), meta)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])

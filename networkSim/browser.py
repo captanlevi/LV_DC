@@ -712,6 +712,14 @@ class TTRoomWatch:
             return None
         return (win[-1][1] - win[0][1]) * 8 / 1000 / (win[-1][0] - win[0][0])
 
+    def close_open(self, now: float, how: str) -> None:
+        """levi 03:51 (ti_100084, record only): a running dead clock's log entry closed when this watch stops counting
+        for another reason than media back (reset) or T (fired): "replaced" (the loop rebuilds the watch: a room grace,
+        a re-entry) or "session_end"; before, such entries stayed end None."""
+        if self.dead_since is not None and self.log["dead_clocks"] and self.log["dead_clocks"][-1].get("end") is None:
+            self.log["dead_clocks"][-1].update(end=round(now, 3), how=how)
+        self.dead_since = None
+
     def feed(self, s: dict | None, now: float, shaper_state: int | None = None, rx_bytes: int | None = None,
              shaped_rx_bytes: int | None = None) -> str | None:
         s = s or {}
@@ -3645,6 +3653,7 @@ class BrowserSession:
         w = TTRoomWatch(log=self.player_dead_watch)
         while not self._stop.wait(timeout=1):
             if time.time() < self._room_grace_until:
+                w.close_open(time.time(), "replaced")
                 w = TTRoomWatch(log=self.player_dead_watch)
                 continue
             s = _tt_state(self._page)
@@ -3683,6 +3692,7 @@ class BrowserSession:
                     if r is not None:
                         print(f"[browser] PLAYER_DEAD: re-entered the room ({r['outcome']})", flush=True)
                         if r["outcome"] == "continue":
+                            w.close_open(time.time(), "replaced")
                             w = TTRoomWatch(log=self.player_dead_watch)
                             continue
                         if r["outcome"] == "room_ended":
@@ -3698,7 +3708,9 @@ class BrowserSession:
                 if self.abort_reason is None:
                     self.abort_reason, self.abort_at = why, time.time()
                 print(f"[browser] {why.upper()} ({dead}) — aborting the session", flush=True)
+                w.close_open(time.time(), "session_end")
                 return
+        w.close_open(time.time(), "session_end")
 
     def _media_snapshot(self) -> dict:
         """At a tt dead trigger (recording only): every <video>'s error and state, Chrome's video-decode status and the
