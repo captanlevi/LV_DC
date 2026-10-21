@@ -2125,6 +2125,7 @@ AD_NO_PLAYER_MAX_S = 60.0
 AD_FROZEN_MAX_S = 60.0
 AD_FROZEN_TOL_S = 0.05
 PLAYER_ERROR_PLATFORMS = ("youtube", "twitch")
+LOWSTATE_FREE_MAX = 3      # levi 11:48: at most this many low-state error_page re-entries skip the one recovery
 _PLAYER_ERROR_JS = """
 (function() {
     const vis = (el) => !!el && el.offsetParent !== null && el.getClientRects().length > 0;
@@ -3051,6 +3052,7 @@ class BrowserSession:
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.stream_ended: dict | None = None     # yt / twitch: the stream_ended abort's detail (meta.json)
         self.stream_watch: "StreamEndedWatch | None" = None
+        self.lowstate_hold_available: bool | None = None   # yt / twitch: False when a hold check found no net labels
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
@@ -3669,7 +3671,7 @@ class BrowserSession:
                 print(f"[browser] t2_skipped_rung_unknown: frozen {frozen_s:.0f} s, rung {rung.get('source')}", flush=True)
             return
         if self.platform in PLAYER_ERROR_PLATFORMS:     # levi 10:27: the clock holds in the low states + grace
-            he = stuck.low_hold_end(labels, now)
+            he = self._low_hold_end(now)
             if he is not None:
                 if now <= he:
                     return
@@ -3728,9 +3730,20 @@ class BrowserSession:
         levi 10:27)."""
         return sum(1 for r in self.player_dead_reentries + self.frozen_reentries if not r.get("lowstate_free"))
 
+    def _low_hold_end(self, t: float) -> float | None:
+        """stuck.low_hold_end on the session's live net labels; with none (None or empty) the hold never applies (the
+        old behaviour), recorded for meta.json lowstate_hold_available (levi 11:48)."""
+        labels = getattr(self, "net_labels", None) or []
+        if not labels:
+            self.lowstate_hold_available = False
+            return None
+        if getattr(self, "lowstate_hold_available", None) is None:
+            self.lowstate_hold_available = True
+        return stuck.low_hold_end(labels, t)
+
     def _lowstate_held(self, t: float) -> bool:
-        """The shaper's low-state hold runs at t (stuck.low_hold_end on the session's net labels)."""
-        he = stuck.low_hold_end(getattr(self, "net_labels", None) or [], t)
+        """The shaper's low-state hold runs at t."""
+        he = self._low_hold_end(t)
         return he is not None and t <= he
 
     def _player_error(self, trig: dict) -> None:
@@ -3745,8 +3758,9 @@ class BrowserSession:
         rec = {**trig, "url": url or self.channel_url}
         # levi 10:27: an error page that began in the low-state hold keeps its re-entry (a viewer reloads an error page)
         # but does not consume the session's one recovery
+        n_free = sum(1 for r in self.player_dead_reentries + self.frozen_reentries if r.get("lowstate_free"))
         free = trig.get("reason") == "error_page" and isinstance(trig.get("since"), (int, float)) \
-            and self._lowstate_held(float(trig["since"]))
+            and n_free < LOWSTATE_FREE_MAX and self._lowstate_held(float(trig["since"]))   # levi 11:48: bounded
         with self._recovery_lock:
             used = self._recoveries_used()
             if free or stuck.action(used) == "reenter":

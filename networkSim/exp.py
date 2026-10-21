@@ -963,6 +963,7 @@ if __name__ == "__main__":
                               tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
                               stream_ended=browser.stream_ended,
                               stream_read_timing=browser.stream_watch.timing() if browser.stream_watch else None,
+                              lowstate_hold_available=browser.lowstate_hold_available,
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
                               player_errors=browser.player_errors, ad_wait=browser.error_watch.exposure(),

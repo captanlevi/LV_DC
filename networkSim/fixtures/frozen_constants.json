@@ -1628,6 +1628,7 @@
   "WINDOW_ALLOWANCE_S": 180.0
  },
  "yt_tw_low_hold": {
+  "LOWSTATE_FREE_MAX": 3,
   "LOW_HOLD_GRACE_S": 30.0,
   "LOW_HOLD_STATES": [
    1,

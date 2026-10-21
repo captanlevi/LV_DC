@@ -306,6 +306,7 @@ def main() -> int:
     test_stuck_tick()
     test_low_state_hold()
     test_lowstate_error_page_does_not_use_the_recovery()
+    test_free_reentries_bounded_and_hold_availability()
     print("test_stuck: ok")
     return 0
 
@@ -374,6 +375,35 @@ def test_lowstate_error_page_does_not_use_the_recovery():
     s.net_labels = nl((now - 500, 600, 7))                        # out of the hold: the next error aborts
     s._player_error({"reason": "error_page", "since": now - 2, "t_trigger": now, "error": {"code": "2000"}})
     assert s.abort_reason == "player_error"
+
+
+def test_free_reentries_bounded_and_hold_availability():
+    """levi 11:48: at most LOWSTATE_FREE_MAX free re-entries (each recorded with since / t_nav), then the normal rule;
+    with no live net labels the hold never applies and lowstate_hold_available reads False."""
+    import time
+    now = time.time()
+    s = _session()
+    s.net_labels = nl((now - 900, 300, 1))
+    s.player_errors = []
+    s.lowstate_hold_available = None
+    s._reenter_error = types.MethodType(lambda self, rec: (self.player_dead_reentries.append(r := {**rec,
+                                        "t_nav": time.time(), "outcome": "continue", "method": "reload"}) or r), s)
+    for k in range(B.LOWSTATE_FREE_MAX):
+        s._player_error({"reason": "error_page", "since": now - 60 + k, "t_trigger": now - 55 + k, "error": {}})
+    free = [r for r in s.player_dead_reentries if r.get("lowstate_free")]
+    assert len(free) == B.LOWSTATE_FREE_MAX and all("since" in r and "t_nav" in r for r in free)
+    assert s.abort_reason is None and s._recoveries_used() == 0 and s.lowstate_hold_available is True
+    s._player_error({"reason": "error_page", "since": now - 10, "t_trigger": now - 5, "error": {}})
+    assert s.abort_reason is None and s._recoveries_used() == 1      # the 4th: the normal one recovery
+    s._player_error({"reason": "error_page", "since": now - 2, "t_trigger": now, "error": {}})
+    assert s.abort_reason == "player_error"                          # then the abort, as before
+    s2 = _session()
+    s2.net_labels = []
+    s2.lowstate_hold_available = None
+    calls = []
+    s2._reenter_frozen = types.MethodType(lambda self, rec: (calls.append(rec), self.frozen_reentries.append(
+        {**rec, "outcome": "continue"}))[0] or {**rec, "outcome": "continue"}, s2)
+    assert s2._lowstate_held(now) is False and s2.lowstate_hold_available is False
 
 
 if __name__ == "__main__":
