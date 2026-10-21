@@ -1626,5 +1626,14 @@
   "EXIT_WINDOW_READ": 10,
   "RECORD_WINDOW_MIN": 120.0,
   "WINDOW_ALLOWANCE_S": 180.0
+ },
+ "yt_tw_low_hold": {
+  "LOW_HOLD_GRACE_S": 30.0,
+  "LOW_HOLD_STATES": [
+   1,
+   2,
+   3,
+   4
+  ]
  }
 }

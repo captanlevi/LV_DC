@@ -157,7 +157,7 @@ def _session(platform="twitch"):
     s._master = types.SimpleNamespace(latest={"kbit": 230.0, "t": 0, "path": "/api/v2/channel/hls/chan.m3u8"})
     import time
     now = time.time()
-    s.net_labels = nl((now - 500, 600, 4))
+    s.net_labels = nl((now - 500, 600, 5))     # above the low-state hold (levi 10:27): the T2 rule as before
     return s
 
 
@@ -200,7 +200,7 @@ def test_stuck_tick():
     # the freeze and however high the shaper; one t2_skipped_rung_unknown record per frozen run (supervisor 2026-10-18)
     s5 = _session()
     s5._master = types.SimpleNamespace(latest=None)
-    s5.net_labels = nl((time.time() - 500, 930, 4))
+    s5.net_labels = nl((time.time() - 500, 930, 5))
     s5._reenter_frozen = types.MethodType(fake_reenter, s5)
     calls.clear()
     t0 = time.time()
@@ -304,8 +304,76 @@ def main() -> int:
     test_check_recovered_and_censored()
     test_entries()
     test_stuck_tick()
+    test_low_state_hold()
+    test_lowstate_error_page_does_not_use_the_recovery()
     print("test_stuck: ok")
     return 0
+
+
+def test_low_state_hold():
+    """levi 10:27 (t58 w4, twitch's state-1 fire): on yt / twitch the stuck-player clock holds in states 1-4 and for 30 s
+    after leaving them (the frozen run counts only after the hold), the ad_frozen clock restarts while held, and an
+    error page that began in the hold re-enters without consuming the one recovery; tt's stuck rule is unchanged."""
+    import time
+    now = time.time()
+    assert S.LOW_HOLD_STATES == set(B.TT_LOW_STATES) and S.LOW_HOLD_GRACE_S == B.TT_STALL_GRACE_S   # tt's hold
+    assert S.low_hold_end(nl((now - 500, 600, 7)), now) is None
+    assert S.low_hold_end(nl((now - 500, 300, 2)), now) == now + S.LOW_HOLD_GRACE_S           # still low: held
+    assert S.low_hold_end(nl((now - 500, 300, 2), (now - 100, 600, 6)), now) == now - 100 + S.LOW_HOLD_GRACE_S
+    calls = []
+
+    def fake_reenter(self, rec, outcome="continue"):
+        calls.append(rec)
+        r = {**rec, "outcome": outcome}
+        self.frozen_reentries.append(r)
+        return r
+    s = _session()
+    s.net_labels = nl((now - 500, 600, 3))                       # in state 3 (above the 230 rung): held
+    s._reenter_frozen = types.MethodType(fake_reenter, s)
+    s._stuck_tick(400)
+    assert not calls and s.abort_reason is None
+    s.net_labels = nl((now - 500, 600, 3), (now - 100, 600, 6))   # left state 3 100 s ago: counts from 30 s after
+    s._stuck_tick(400)                                           # 70 s counted: under T2
+    assert not calls
+    s.net_labels = nl((now - 500, 600, 3), (now - 130, 600, 6))   # 100 s counted: T2 -> the re-entry
+    s._stuck_tick(400)
+    assert len(calls) == 1 and calls[0]["frozen_s"] <= 101
+    tt = _session("tiktok")                                      # tt: unchanged (its own player_dead hold):
+    asked = []                                                   # the hold is never consulted
+    real = S.low_hold_end
+    S.low_hold_end = lambda *a: asked.append(a) or real(*a)
+    try:
+        tt.net_labels = nl((now - 500, 2400, 3))
+        tt._reenter_frozen = types.MethodType(fake_reenter, tt)
+        tt._stuck_tick(100)
+        assert asked == []
+    finally:
+        S.low_hold_end = real
+    # the ad_frozen clock: held -> it restarts each tick; unheld -> it fires after AD_FROZEN_MAX_S
+    w = B.PlayerErrorWatch(frozen_s=10)
+    w.held_fn = lambda t: True
+    st = {"ad": True, "video": True, "rs": 4, "ct": 5.0, "cd": "0:21"}
+    assert not any(w.step(None, st, 1000.0 + k) for k in range(60))
+    w2 = B.PlayerErrorWatch(frozen_s=10)
+    w2.held_fn = lambda t: False
+    assert any(w2.step(None, st, 1000.0 + k) for k in range(60))
+
+
+def test_lowstate_error_page_does_not_use_the_recovery():
+    import time
+    now = time.time()
+    s = _session()
+    s.net_labels = nl((now - 500, 300, 1))
+    s.player_errors = []
+    s.frozen_reentries = [{"outcome": "continue"}]               # the one recovery is already used
+    s._reenter_error = types.MethodType(lambda self, rec: (self.player_dead_reentries.append(r := {**rec,
+                                        "outcome": "continue", "method": "reload"}) or r), s)
+    s._player_error({"reason": "error_page", "since": now - 10, "t_trigger": now - 5, "error": {"code": "2000"}})
+    assert s.abort_reason is None and s.player_dead_reentries[-1]["lowstate_free"] is True
+    assert s._recoveries_used() == 1                             # the free re-entry does not count
+    s.net_labels = nl((now - 500, 600, 7))                        # out of the hold: the next error aborts
+    s._player_error({"reason": "error_page", "since": now - 2, "t_trigger": now, "error": {"code": "2000"}})
+    assert s.abort_reason == "player_error"
 
 
 if __name__ == "__main__":

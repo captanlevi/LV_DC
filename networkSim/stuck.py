@@ -96,6 +96,29 @@ def t2_rung(rung: dict | None) -> float | None:
     return rung.get("kbit")
 
 
+# levi 10:27 (t58 w4, twitch's state-1 fire): on yt / twitch the stuck-player and ad_frozen clocks hold while the shaper is
+# in the lowest states and for a grace after leaving them, as tt's player_dead clock does (browser TT_LOW_STATES /
+# TT_STALL_GRACE_S, bd4bebf): a frozen player under those rates is the shaping, not something to intervene on
+LOW_HOLD_STATES = frozenset({1, 2, 3, 4})
+LOW_HOLD_GRACE_S = 30.0
+
+
+def low_hold_end(net_labels: list, t: float) -> float | None:
+    """The time the low-state hold in force at t ends (the end of the shaper's last stretch in LOW_HOLD_STATES up to t,
+    plus LOW_HOLD_GRACE_S; a stretch still running at t ends at t), or None when no such stretch began by t. Held at t
+    iff t <= the returned time."""
+    labs = sorted([n for n in net_labels or [] if _ts(n) is not None and _ts(n) <= t], key=_ts)
+    end = None
+    for a, b in zip(labs, labs[1:] + [None]):
+        try:
+            low = int(a.state if hasattr(a, "state") else a.get("state")) in LOW_HOLD_STATES
+        except (TypeError, ValueError):
+            low = False
+        if low:
+            end = (_ts(b) if b is not None else t) + LOW_HOLD_GRACE_S
+    return end
+
+
 def action(recoveries_used: int) -> str:
     """At T2: 'reenter' while a recovery remains this session, else 'censor'."""
     return "reenter" if recoveries_used < RECOVERIES_PER_SESSION else "censor"
