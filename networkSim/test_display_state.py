@@ -52,6 +52,19 @@ def test_display_state():
         M._run = saved
 
 
+def test_display_change():
+    """Hardening stop: a forced-off start and an On end is a wake; Off -> Off, On -> On and an unreadable side are not;
+    exp.py records it beside display_end."""
+    off, on = {"monitor": "Off", "dpms_enabled": True}, {"monitor": "On", "dpms_enabled": True}
+    assert M.display_change(off, on) == {"monitor": ["Off", "On"], "woke": True, "dpms_enabled": [True, True]}
+    assert not M.display_change(off, off)["woke"] and not M.display_change(on, on)["woke"]
+    assert not M.display_change({"monitor": None}, on)["woke"] and not M.display_change(None, None)["woke"]
+    assert M.display_change({"monitor": "in Standby"}, on)["woke"]
+    src = (Path(__file__).resolve().parent / "exp.py").read_text()
+    assert 'meta_extra["display_change"] = session_meta.display_change(_display_start, meta_extra["display_end"])' in src
+
+
 if __name__ == "__main__":
     test_display_state()
+    test_display_change()
     print("test_display_state: ok")

@@ -239,6 +239,15 @@ def display_state(drm_root: str = "/sys/class/drm") -> dict:
     return out
 
 
+def display_change(start: dict | None, end: dict | None) -> dict:
+    """Hardening stop: the monitor's state at the session's start and end (display_state) side by side, and woke = it was
+    not On at the start (--dpms-off forced it off) and is On at the end. A wake the keeper re-blanked before the end is
+    not visible here (keep_display_off.sh's log is that record); an unreadable state is None, never a wake."""
+    a, b = (start or {}).get("monitor"), (end or {}).get("monitor")
+    return {"monitor": [a, b], "woke": a is not None and b is not None and a != "On" and b == "On",
+            "dpms_enabled": [(start or {}).get("dpms_enabled"), (end or {}).get("dpms_enabled")]}
+
+
 def shaper_config(platform: str, transitions: dict, episode_s: int, **extra) -> dict:
     from utils.shaping import SCENARIOS
     scen = {k: {kk: vv for kk, vv in vars(v).items()} for k, v in SCENARIOS.items()}

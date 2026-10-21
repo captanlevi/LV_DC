@@ -900,6 +900,7 @@ if __name__ == "__main__":
 
     browser = None
     abort_reason = None
+    _display_start = None                 # set once the browser runs; display_change reads it at the end
     try:
         # inside the try: a failed start (e.g. the channel is not live) still runs the finalise path below, which stops
         # tcpdump and the shaper (they were left running before, writing into the dead session's pcap)
@@ -944,8 +945,8 @@ if __name__ == "__main__":
                 session_meta.write(session_dir, dpms_forced_off={**rec, "at": time.time()})
             # decision A (levi 00271 item 4): the monitor's DPMS state and the display topology, read at the start (after
             # any forced off) and at the end; both change GPU load (reverse PRIME's copy)
-            session_meta.write(session_dir, display_start={**session_meta.display_state(),
-                                                           "dpms_off_requested": bool(args.dpms_off)})
+            _display_start = {**session_meta.display_state(), "dpms_off_requested": bool(args.dpms_off)}
+            session_meta.write(session_dir, display_start=_display_start)
         else:
             # Manual mode (default): wait for Chrome to be reachable, then hand off.
             from browser import _wait_for_cdp
@@ -1045,6 +1046,7 @@ if __name__ == "__main__":
                 meta_extra["fullscreen_keeper"] = browser.fs_keeper
             meta_extra["media_decoders"] = browser.media_decoders       # decision A item 3 (every platform)
             meta_extra["display_end"] = session_meta.display_state()   # decision A item 4
+            meta_extra["display_change"] = session_meta.display_change(_display_start, meta_extra["display_end"])
         else:
             # Export labels from extension storage directly
             from browser import _export_via_service_worker
