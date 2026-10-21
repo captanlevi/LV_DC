@@ -168,6 +168,17 @@ def test_held_dead_measure_and_watch_log():
     r2 = rows(450, 620)                                                      # held to 1530, then 1531 .. 1619 = 88 s
     assert E.held_dead_runs(r2, net) == [(1531.0, 1619.0)] and E.dead_player(r2, None, net)["max_s"] == 88.0
     assert E.held_dead_runs(r, [{"timestamp": 1000.0, "state": "8"}]) == E.dead_runs(r)   # no low state: unchanged
+    log = {"low_spans": [], "dead_clocks": []}
+    w = B.TTRoomWatch(log=log)
+    dead = {"has_video": True, "src": True, "rs": 0, "ct": 0, "buf_end": None, "decoded": None, "stall_label": True}
+    for i in range(20):
+        w.feed(dead, 2000.0 + i, shaper_state=2)                             # held: no clock, one low span
+    fired = None
+    for i in range(20, 200):
+        fired = fired or w.feed(dead, 2000.0 + i, shaper_state=7)
+    assert fired == "player_dead"
+    assert log["low_spans"] == [[2000.0, 2019.0]], log
+    assert log["dead_clocks"] == [{"start": 2050.0, "end": 2110.0, "how": "fired"}], log   # grace to 2049, T 60
 
 
 def test_entries_and_class():

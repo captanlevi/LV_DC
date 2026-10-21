@@ -560,6 +560,7 @@ def recent_tt_rooms(session_dir: Path | None, n: int = TT_RECENT_ROOMS_N) -> lis
 TT_STALL_GRACE_S = 30          # src drops within this long after a stall label are the player reconnecting
 TT_RX_IDLE_BYTES = 60_000      # "no media bytes": less than this received over the last TT_RX_WINDOW_S
 TT_RX_WINDOW_S = 60
+WATCH_LOG_MAX = 500            # player_dead_watch: at most this many low spans / dead clocks per session (record only)
 TT_LOW_STATES = {1, 2, 3, 4}   # shaper states in which a dead-looking player is the shaping, never a dead room
 
 
@@ -679,7 +680,10 @@ class TTRoomWatch:
     TT_LOW_STATES and for TT_STALL_GRACE_S after leaving them (levi 2026-10-21, t58 w2: below tt's lowest rendition the
     player sits at readyState 0 under the shaping)."""
 
-    def __init__(self, t_max_s: float | None = None) -> None:
+    def __init__(self, t_max_s: float | None = None, log: dict | None = None) -> None:
+        # record only (levi 09:54, the end-of-day-2 tip): the hold's low spans and each dead clock as THIS watch saw
+        # them, so the reader can match the collector exactly (meta.json player_dead_watch; shared across re-entries)
+        self.log = log if log is not None else {"low_spans": [], "dead_clocks": []}
         self.t_max_s = t_max_s if t_max_s is not None else FROZEN_PLAYHEAD_MAX_S.get("tiktok", 720)
         self.t_dead_s = PLAYER_DEAD_MAX_S.get("tiktok", 60)
         self.dead_since: float | None = None          # player_dead clock
@@ -746,13 +750,24 @@ class TTRoomWatch:
         # low state is caught once the state rises
         if shaper_state in TT_LOW_STATES:
             self.last_low = now
+            spans = self.log["low_spans"]
+            if spans and now - spans[-1][1] <= 2.0:
+                spans[-1][1] = round(now, 3)
+            elif len(spans) < WATCH_LOG_MAX:
+                spans.append([round(now, 3), round(now, 3)])
         if self.last_low is not None and now - self.last_low <= TT_STALL_GRACE_S:
             dead_now = False
         if not dead_now:
+            if self.dead_since is not None and self.log["dead_clocks"] and self.log["dead_clocks"][-1].get("end") is None:
+                self.log["dead_clocks"][-1].update(end=round(now, 3), how="reset")
             self.dead_since = None
         elif self.dead_since is None:
             self.dead_since = now
+            if len(self.log["dead_clocks"]) < WATCH_LOG_MAX:
+                self.log["dead_clocks"].append({"start": round(now, 3), "end": None, "how": None})
         elif now - self.dead_since >= self.t_dead_s:
+            if self.log["dead_clocks"] and self.log["dead_clocks"][-1].get("end") is None:
+                self.log["dead_clocks"][-1].update(end=round(now, 3), how="fired")
             return "player_dead"
         # (a) the banner with no player or no progress
         if progressed:
@@ -3053,6 +3068,7 @@ class BrowserSession:
         self.stream_ended: dict | None = None     # yt / twitch: the stream_ended abort's detail (meta.json)
         self.stream_watch: "StreamEndedWatch | None" = None
         self.lowstate_hold_available: bool | None = None   # yt / twitch: False when a hold check found no net labels
+        self.player_dead_watch: dict = {"low_spans": [], "dead_clocks": []}   # tt: TTRoomWatch's own view (record)
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
@@ -3449,10 +3465,10 @@ class BrowserSession:
     def _room_watch_loop(self) -> None:
         """tt: abort the session with reason room_ended when the room dies mid-session, or player_dead when the player
         sits at readyState 0 with no media (TTRoomWatch)."""
-        w = TTRoomWatch()
+        w = TTRoomWatch(log=self.player_dead_watch)
         while not self._stop.wait(timeout=1):
             if time.time() < self._room_grace_until:
-                w = TTRoomWatch()
+                w = TTRoomWatch(log=self.player_dead_watch)
                 continue
             s = _tt_state(self._page)
             labels = getattr(self, "net_labels", None)
@@ -3490,7 +3506,7 @@ class BrowserSession:
                     if r is not None:
                         print(f"[browser] PLAYER_DEAD: re-entered the room ({r['outcome']})", flush=True)
                         if r["outcome"] == "continue":
-                            w = TTRoomWatch()
+                            w = TTRoomWatch(log=self.player_dead_watch)
                             continue
                         if r["outcome"] == "room_ended":
                             why = "room_ended"
