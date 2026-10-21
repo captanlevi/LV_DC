@@ -31,7 +31,8 @@ TOP = {"session": str, "platform": str, "verdict": str, "session_class": str, "e
        "lowest_rung": (dict, NONE), "decode_path": (dict, NONE), "decode_hevc": (dict, NONE),
        "template_note": (str, NONE), "entry_quality": (dict, NONE)}
 LABELS = ["ad_span_seconds", "ad_spans_per_signal", "ad_spans_span_type_set", "ad_ticks_per_signal",
-          "advancing_share_while_playing", "dead_player_T_s", "dead_player_max_all_s", "dead_player_max_s",
+          "advancing_share_while_playing", "dead_clock_of_record", "dead_player_T_s", "dead_player_class_s",
+          "dead_player_max_all_s", "dead_player_max_s",
           "duration_s", "entry_tick_presence", "frozen_playhead_T_s", "frozen_playhead_max_all_s", "frozen_playhead_max_s",
           "login_wall_text_ticks", "login_wall_ticks", "n_res_meta", "paused_while_playing_share",
           "quality_countdown_ticks", "recovered_dead", "recovered_dead_runs", "recovered_frozen", "shot_effects",

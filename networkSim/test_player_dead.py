@@ -181,6 +181,35 @@ def test_held_dead_measure_and_watch_log():
     assert log["dead_clocks"] == [{"start": 2050.0, "end": 2110.0, "how": "fired"}], log   # grace to 2049, T 60
 
 
+def test_check_defers_to_the_fired_clock():
+    """levi 12:04: with player_dead_watch on tt, dead_over_t only on a fired clock or a run open at the last tick; a held
+    run >= T by the labels alone is not player_dead, the disagreement flagged with its margin; no watch: as before."""
+    import check_session as CS
+
+    def rows(dead_from, dead_to, total=900, t0=1000.0):
+        return [{"ts": str((t0 + k) * 1000), "type": "res_meta", "current_time": str(k), "is_ad": "False",
+                 "paused": "False", "ready_state": "0" if dead_from <= k < dead_to else "4", "video_w": "720"}
+                for k in range(total)]
+    r = rows(450, 620)
+    assert not E.dead_open_at_end(r) and E.dead_open_at_end(rows(800, 900)) and not E.dead_open_at_end(rows(0, 0))
+
+    def run(rs, pdw, platform="tiktok"):
+        lab = {"dead_player_max_s": 88.0, "dead_player_T_s": 60.0}
+        CS.dead_clock_of_record(lab, rs, platform, pdw)
+        return lab
+    lab = run(r, {"low_spans": [[1300.0, 1499.0]], "dead_clocks": [{"start": 1531.0, "end": 1540.0, "how": "reset"}]})
+    assert lab["dead_player_class_s"] == 0.0 and not E.dead_over_t(lab["dead_player_class_s"], 60.0)
+    assert lab["dead_clock_of_record"] == {"watch": True, "fired": False, "open_at_end": False, "disagrees": True,
+                                           "margin_s": 28.0}
+    lab = run(r, {"low_spans": [], "dead_clocks": [{"start": 1531.0, "end": 1591.0, "how": "fired"}]})
+    assert lab["dead_player_class_s"] == 88.0 and not lab["dead_clock_of_record"]["disagrees"]
+    lab = run(rows(800, 900), {"low_spans": [], "dead_clocks": []})
+    assert lab["dead_player_class_s"] == 88.0 and lab["dead_clock_of_record"]["open_at_end"]
+    for pdw, plat in ((None, "tiktok"), ({"dead_clocks": []}, "youtube")):          # older sessions / not tt: as before
+        lab = run(r, pdw, plat)
+        assert lab["dead_player_class_s"] == 88.0 and lab["dead_clock_of_record"] is None
+
+
 def test_entries_and_class():
     meta = {"channel_url": SESS["channel_url"], "room_rotation": SESS["room_rotation"]}
     ents = E.compute_entries(ROWS, meta, SESS["net_labels"])

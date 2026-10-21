@@ -1013,7 +1013,7 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
         fz, T = lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s")
         if E.frozen_over_t(fz, T) and abort_reason != "player_frozen":
             why.append(f"player_frozen: playhead frozen {fz:.0f} s in a stall > T {T} s (addendum N)")
-        dr, DT = lab.get("dead_player_max_s"), lab.get("dead_player_T_s")
+        dr, DT = lab.get("dead_player_class_s", lab.get("dead_player_max_s")), lab.get("dead_player_T_s")
         if E.dead_over_t(dr, DT) and abort_reason != "player_dead":
             why.append(f"player_dead: no media (readyState 0) for {dr:.0f} s after playback >= T {DT} s")
         sa = lab.get("stall_advancing_share")
@@ -1034,6 +1034,24 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
     return ("FAIL" if why else "PASS"), why
 
 
+def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw) -> None:
+    """levi 09:54 / 12:04: on a tt session carrying meta.json player_dead_watch, the collector's live clock is the class
+    of record: dead_over_t only when a dead clock fired or a dead run is still open at the last tick. The check's own
+    (held) measure stays beside it, the disagreement and its margin recorded. Without the watch (older sessions): as
+    before. Sets lab dead_player_class_s / dead_clock_of_record."""
+    lab["dead_player_class_s"], lab["dead_clock_of_record"] = lab.get("dead_player_max_s"), None
+    if platform != "tiktok" or not isinstance(pdw, dict):
+        return
+    fired = any(c.get("how") == "fired" for c in pdw.get("dead_clocks") or [])
+    open_end = E.dead_open_at_end(label_rows)
+    T, measure = lab.get("dead_player_T_s"), lab.get("dead_player_max_s")
+    disagree = not (fired or open_end) and E.dead_over_t(measure, T)
+    lab["dead_clock_of_record"] = {"watch": True, "fired": fired, "open_at_end": open_end, "disagrees": disagree,
+                                   "margin_s": round(measure - T, 3) if disagree else None}
+    if not (fired or open_end):
+        lab["dead_player_class_s"] = 0.0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session_dir", type=Path)
@@ -1052,6 +1070,7 @@ def main() -> int:
     lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
                        entry_window(ents, win), E.read_net_labels(sd))
     lab["shot_effects"] = shot_effects(label_rows, sd)
+    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"))
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
     net = traffic_checks(sd, platform)
@@ -1096,7 +1115,7 @@ def main() -> int:
     if eq and eq["qa_fail"]:      # Q am. 10: a restore not verified from state is QA-flagged
         v, why = "FAIL", why + [f"entry_quality: Auto not restored ({eq['qa_fail']})"]
     # levi 2026-10-17: one session class by the fixed precedence (entries above); only `normal` counts toward quotas
-    s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_max_s"),
+    s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_class_s", lab.get("dead_player_max_s")),
                               lab.get("dead_player_T_s"), lab.get("frozen_playhead_max_s"), lab.get("frozen_playhead_T_s"),
                               recovered_dead=bool(lab.get("recovered_dead")),
                               recovered_frozen=bool(lab.get("recovered_frozen")))

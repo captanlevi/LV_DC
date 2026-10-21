@@ -175,6 +175,15 @@ def dead_tick_runs(rows: list[dict]) -> list[list[float]]:
     return runs
 
 
+def dead_open_at_end(rows: list[dict]) -> bool:
+    """A dead run with no live res_meta tick after it: the page never came back before the session ended."""
+    runs = dead_tick_runs(rows)
+    if not runs:
+        return False
+    last = runs[-1][-1]
+    return not any(_f(r.get("ts")) is not None and float(r["ts"]) / 1000.0 > last for r, _ in tick_states(rows))
+
+
 def held_dead_runs(rows: list[dict], net_labels: list) -> list[tuple[float, float]]:
     """The dead runs with the parts the collector's player_dead clock holds left out (bd4bebf: shaper states 1-4 and
     stuck.LOW_HOLD_GRACE_S after leaving them; the clock restarts after the hold): (first, last tick) per remaining
