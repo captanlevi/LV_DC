@@ -309,6 +309,11 @@ TRIO_YT_FULLSCREEN = False
 # prereg d32a48ce (label diversity at the 10-22 tip, item 2): --trio-steer hands each trio session the deficit table's
 # path (LVDC_STEER_TABLE = <trio root>/_summaries/coverage_joint.json); exp.py draws the dwell weights at session start
 TRIO_STEER = False
+# levi 20:57 / 20:58 (tt failed the table's direction criterion): --trio-steer-platforms names the platforms steered; an
+# unlisted one gets the base matrix, the base start rule, no TARGET_MINUTES, and meta.json steering_fallback "platform not
+# steered". None (no list) = every platform, as signed at 057760cd.
+TRIO_STEER_PLATFORMS: set[str] | None = None
+STEER_SKIPPED = "platform not steered"
 # restart §7 / §8 (levi's prereg 2026-10-21): each trio session's draws (geometry, twitch low latency) are seeded by
 # f"{SESSION_DRAW_SEED}:{run id}:{slot tag}:{the slot's session number}"; each draw salts it with its own name
 SESSION_DRAW_SEED = 20261021
@@ -316,6 +321,28 @@ SESSION_DRAW_SEED = 20261021
 # pinned state is held for the whole session (exp.py --hold-state)
 TRIO_STRESS = False
 TRIO_STRESS_EPISODES: int | None = None   # --trio-stress --episodes: a held session's base episodes (decode_stress --short)
+
+
+def steer_env(platform: str, troot) -> dict:
+    """The steering env one trio session gets (prereg d32a48ce; levi 20:58): the table's path for a steered platform,
+    LVDC_STEER_SKIPPED for one --trio-steer-platforms leaves out (the base schedule, logged), nothing without --trio-steer."""
+    if not TRIO_STEER:
+        return {}
+    if TRIO_STEER_PLATFORMS is None or platform in TRIO_STEER_PLATFORMS:
+        import steering
+        return {"LVDC_STEER_TABLE": str(Path(troot) / "_summaries" / steering.TABLE_NAME)}
+    return {"LVDC_STEER_SKIPPED": STEER_SKIPPED}
+
+
+def steer_balancer(platforms: set[str] | None) -> None:
+    """--trio-steer's balancer side (items 4 / 5; levi 20:58): TARGET_MINUTES for the steered platforms only, and TW-H in
+    twitch's candidates only when twitch is steered (an explicit --coverage-allowed list stands)."""
+    import steering
+    coverage_report.TARGET_MINUTES = {p: {c: v / 60.0 for c, v in t.items()} for p, t in steering.TARGETS_S.items()
+                                      if platforms is None or p in platforms}
+    if "twitch" not in COVERAGE_ALLOWED and (platforms is None or "twitch" in platforms):
+        from utils.shaping import PLATFORM_MATRICES as _PM
+        COVERAGE_ALLOWED["twitch"] = sorted(_PM["twitch"])
 
 
 def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
@@ -804,9 +831,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         env["LVDC_CHANNEL_PICK"] = json.dumps({"category": category["pick"]}, default=str)
     env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
     env.pop("LVDC_STEER_TABLE", None)
-    if TRIO_STEER:
-        import steering
-        env["LVDC_STEER_TABLE"] = str(Path(troot) / "_summaries" / steering.TABLE_NAME)
+    env.pop("LVDC_STEER_SKIPPED", None)
+    env.update(steer_env(p, troot))
     env.pop("LVDC_TRIO_YT_FULLSCREEN", None)
     if yt_fs:
         env["LVDC_TRIO_YT_FULLSCREEN"] = "1"
@@ -1197,6 +1223,9 @@ if __name__ == "__main__":
     parser.add_argument("--trio-stress", action="store_true",
                         help="--concurrent, t56 decode_stress: sessions under data/_trio_stress (never counted; not with "
                              "--trio-record); a --trio-pin state is held for the whole session (exp.py --hold-state).")
+    parser.add_argument("--trio-steer-platforms", default=None,
+                        help="with --trio-steer (levi 20:58): comma list of the platforms steered (youtube, twitch, "
+                             "tiktok); the rest run the base schedule, logged. Default: every platform")
     parser.add_argument("--trio-steer", action="store_true",
                         help="--concurrent (prereg d32a48ce; default off): each session's shaper dwell weights drawn at "
                              "session start from <trio root>/_summaries/coverage_joint.json (the last post's deficit)")
@@ -1297,14 +1326,15 @@ if __name__ == "__main__":
             sys.exit("--trio-yt-fullscreen needs --trio-layout composite (the fullscreen keeper runs only there)")
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
         TRIO_STEER = bool(args.trio_steer)
-        if TRIO_STEER:                                   # prereg d32a48ce item 5: the balancer steers to the targets
-            import steering
-            coverage_report.TARGET_MINUTES = {p: {c: v / 60.0 for c, v in t.items()}
-                                              for p, t in steering.TARGETS_S.items()}
-            # item 4: TW-H joins twitch's candidates under --trio-steer (an explicit --coverage-allowed list stands)
-            if "twitch" not in COVERAGE_ALLOWED:          # every candidate as before, plus the opt-in TW-H
-                from utils.shaping import PLATFORM_MATRICES as _PM
-                COVERAGE_ALLOWED["twitch"] = sorted(_PM["twitch"])
+        if args.trio_steer_platforms is not None:
+            if not TRIO_STEER:
+                sys.exit("--trio-steer-platforms needs --trio-steer")
+            TRIO_STEER_PLATFORMS = {x.strip() for x in args.trio_steer_platforms.split(",") if x.strip()}
+            bad = TRIO_STEER_PLATFORMS - {"youtube", "twitch", "tiktok"}
+            if bad or not TRIO_STEER_PLATFORMS:
+                sys.exit(f"--trio-steer-platforms: unknown or empty {sorted(bad)}")
+        if TRIO_STEER:                                   # prereg d32a48ce items 4 / 5; levi 20:58: per platform
+            steer_balancer(TRIO_STEER_PLATFORMS)
         if args.concurrent:
             import trio_slots
             nd = None

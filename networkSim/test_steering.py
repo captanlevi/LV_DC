@@ -131,6 +131,45 @@ def test_balancer_targets():
         CR.TARGET_MINUTES = saved
 
 
+def test_steer_platforms():
+    """levi 20:58: --trio-steer-platforms youtube,twitch. An unlisted platform (tt) gets no table (exp.py never calls
+    steer: base matrix, base start rule), LVDC_STEER_SKIPPED -> meta steering_fallback "platform not steered", and no
+    TARGET_MINUTES (its balancer deficits are exactly a no-steer session's); listed platforms are as at 057760cd."""
+    import coverage_report as CR
+    import orchestrate as O
+    saved = (O.TRIO_STEER, O.TRIO_STEER_PLATFORMS, CR.TARGET_MINUTES, dict(O.COVERAGE_ALLOWED))
+    try:
+        O.TRIO_STEER, O.TRIO_STEER_PLATFORMS = False, None
+        assert O.steer_env("tiktok", "/r") == {}
+        O.TRIO_STEER = True
+        assert O.steer_env("tiktok", "/r") == {"LVDC_STEER_TABLE": "/r/_summaries/" + S.TABLE_NAME}   # no list: all
+        O.TRIO_STEER_PLATFORMS = {"youtube", "twitch"}
+        assert O.steer_env("tiktok", "/r") == {"LVDC_STEER_SKIPPED": "platform not steered"}
+        assert O.steer_env("twitch", "/r") == {"LVDC_STEER_TABLE": "/r/_summaries/" + S.TABLE_NAME}
+        # the balancer: tt's deficits under the switch == a no-steer session's; yt's == the all-platform steering's
+        snap = lambda pf: {"platform": pf, "classes": {c: {"sessions_ge_min": 2, "minutes": 30.0}  # noqa: E731
+                                                        for c in S.TARGETS_S[pf]}}
+        CR.TARGET_MINUTES = None
+        base_tt = CR.deficits(snap("tiktok"))
+        O.COVERAGE_ALLOWED.clear()
+        O.steer_balancer(None)
+        all_yt, all_allowed = CR.deficits(snap("youtube")), dict(O.COVERAGE_ALLOWED)
+        O.COVERAGE_ALLOWED.clear()
+        O.steer_balancer({"youtube", "twitch"})
+        assert "tiktok" not in CR.TARGET_MINUTES and CR.deficits(snap("tiktok")) == base_tt
+        assert CR.deficits(snap("youtube")) == all_yt and dict(O.COVERAGE_ALLOWED) == all_allowed   # TW-H as signed
+        O.COVERAGE_ALLOWED.clear()
+        O.steer_balancer({"youtube"})
+        assert "twitch" not in O.COVERAGE_ALLOWED                                 # twitch unsteered: no TW-H opt-in
+    finally:
+        O.TRIO_STEER, O.TRIO_STEER_PLATFORMS, CR.TARGET_MINUTES = saved[:3]
+        O.COVERAGE_ALLOWED.clear(); O.COVERAGE_ALLOWED.update(saved[3])
+    # exp.py: the draw needs LVDC_STEER_TABLE (absent for an unlisted platform), and the skip is logged in meta
+    exp = (HERE / "exp.py").read_text()
+    assert 'if os.environ.get("LVDC_STEER_TABLE") is not None and args.hold_state is None:' in exp
+    assert 'steering_fallback=os.environ["LVDC_STEER_SKIPPED"]' in exp
+
+
 def main() -> int:
     test_constants()
     test_deficits_and_weights()
@@ -138,6 +177,7 @@ def main() -> int:
     test_steer_and_fallback()
     test_no_within_session_input()
     test_balancer_targets()
+    test_steer_platforms()
     print("test_steering: ok")
     return 0
 
