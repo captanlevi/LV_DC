@@ -1134,6 +1134,9 @@ if __name__ == "__main__":
             trio_slots.slots_log_append(slots_log, {"event": "end", "slot": SLOT.tag, "session": session_dir.name,
                                                     "t": time.time()})
 
+    # hardening stop (coverage audit): the exit code reads the reason meta.json records (the browser's first, else the
+    # session's own), so an abort the browser set after the episodes ended exits as recorded
+    abort_reason = (browser.abort_reason if browser is not None else None) or abort_reason
     if abort_reason == "login_wall":
         # orchestrate.py stops the platform on this code: every further logged-out session would hit the same wall
         sys.exit(EXIT_LOGIN_WALL)

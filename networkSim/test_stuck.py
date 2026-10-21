@@ -541,6 +541,22 @@ def test_hold_edges_every_state(monkeypatch):
     w.feed(dead, 1000.0, shaper_state=2)
     assert w.last_low == 1000.0 and B.TT_STALL_GRACE_S == G
 
+
+def test_first_abort_stands():
+    """Hardening stop (coverage audit: _on_wall overwrote): a login wall seen after another abort leaves that abort;
+    alone it aborts login_wall. exp.py's exit code reads the same reason meta.json records."""
+    s = _session("youtube")
+    s.abort_reason, s.abort_at = "player_frozen", 1.0
+    s._on_wall()
+    assert (s.abort_reason, s.abort_at) == ("player_frozen", 1.0)
+    s = _session("youtube")
+    s._on_wall()
+    assert s.abort_reason == "login_wall"
+    exp = (HERE / "exp.py").read_text()
+    rule = "(browser.abort_reason if browser is not None else None) or abort_reason"
+    assert exp.count(rule) == 2 and exp.index('meta_extra["abort_reason"] = ' + rule) < exp.index(
+        "abort_reason = " + rule + "\n    if abort_reason == \"login_wall\"")
+
 def test_lowstate_error_page_does_not_use_the_recovery():
     import time
     now = time.time()

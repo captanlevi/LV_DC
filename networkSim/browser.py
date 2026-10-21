@@ -4083,6 +4083,8 @@ class BrowserSession:
         return out
 
     def _on_wall(self) -> None:
+        if self.abort_reason is not None:     # hardening stop (coverage audit): the first abort stands, as every setter
+            return
         self.abort_reason, self.abort_at = "login_wall", time.time()
         print("[browser] LOGIN WALL detected (content.js login_wall) — aborting the session", flush=True)
 
