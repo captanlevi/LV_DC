@@ -781,13 +781,12 @@ if __name__ == "__main__":
                        profile_template=profile_template, shaping=SHAPING_REC)
     if args.hold_state is not None:
         session_meta.write(session_dir, hold_state=args.hold_state)
-    if os.environ.get("LVDC_STEER_SKIPPED") and STEERING is None:   # levi 20:58: an unlisted platform, the base schedule
-        session_meta.write(session_dir, steering_fallback=os.environ["LVDC_STEER_SKIPPED"])
     if STEERING is not None:
         session_meta.write(session_dir, steering=STEERING)
-        if not STEERING.get("applied"):           # levi 16:43: never silent; era_report counts these per window
-            session_meta.write(session_dir, steering_fallback=STEERING.get("table", {}).get("error")
-                               or STEERING.get("fallback") or "not applied")
+    import steering as _steering           # levi 16:43 / 20:58 / 00:41: a session that is not steered says why, never silent
+    _fb = _steering.fallback_of(os.environ, args.hold_state, STEERING)
+    if _fb is not None:
+        session_meta.write(session_dir, steering_fallback=_fb)
     if SLOT is None:
         session_meta.write(session_dir, concurrency={"mode": "single"})
     else:

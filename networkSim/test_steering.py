@@ -167,12 +167,27 @@ def test_steer_platforms():
     # exp.py: the draw needs LVDC_STEER_TABLE (absent for an unlisted platform), and the skip is logged in meta
     exp = (HERE / "exp.py").read_text()
     assert 'if os.environ.get("LVDC_STEER_TABLE") is not None and args.hold_state is None:' in exp
-    assert 'steering_fallback=os.environ["LVDC_STEER_SKIPPED"]' in exp
+    assert "_steering.fallback_of(os.environ, args.hold_state, STEERING)" in exp
+
+
+def test_fallback_of():
+    """Every non-steered session names why (levi 16:43 / 20:58 / 00:41): unlisted platform, a held (pinned) state under
+    a table, a table that did not apply (its error, else its fallback, else "not applied"); steered or steering off: None."""
+    tab = {"LVDC_STEER_TABLE": "/r/t.json"}
+    assert S.fallback_of({}, None, None) is None and S.fallback_of({}, "1", None) is None          # steering off
+    assert S.fallback_of({"LVDC_STEER_SKIPPED": "platform not steered"}, None, None) == "platform not steered"
+    assert S.fallback_of({"LVDC_STEER_SKIPPED": "platform not steered"}, "1", None) == "platform not steered"
+    assert S.fallback_of(tab, "1", None) == S.PINNED == "pinned"
+    assert S.fallback_of(tab, None, {"applied": True}) is None
+    assert S.fallback_of(tab, None, {"applied": False, "table": {"error": "missing"}}) == "missing"
+    assert S.fallback_of(tab, None, {"applied": False, "table": {}, "fallback": "no deficit"}) == "no deficit"
+    assert S.fallback_of(tab, None, {"applied": False}) == "not applied"
 
 
 def main() -> int:
     test_constants()
     test_deficits_and_weights()
+    test_fallback_of()
     test_extreme_single_unmet_tier()
     test_steer_and_fallback()
     test_no_within_session_input()

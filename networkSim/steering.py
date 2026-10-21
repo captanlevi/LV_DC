@@ -124,3 +124,20 @@ def steer(platform: str, transition: dict[str, dict[str, float]], table_path: st
     rec.update(applied=True, deficits=deficits(table, platform), pulls={s: round(p, 6) for s, p in pulls.items()},
                weights=w, start_state=start, table_list_sha=table.get("list_sha"), table_code=table.get("code"))
     return steered, start, rec
+
+
+PINNED = "pinned"
+
+
+def fallback_of(env, hold_state: str | None, rec: dict | None) -> str | None:
+    """meta.json steering_fallback for one session (exp.py), None when it was steered or steering was off: an unlisted
+    platform's LVDC_STEER_SKIPPED (levi 20:58); "pinned" for a held state under a steering table (levi 00:41, gate 7b:
+    --hold-state replaces the matrix, so nothing is drawn); a table that did not apply, its error / fallback (levi 16:43)."""
+    if rec is not None:
+        return None if rec.get("applied") else ((rec.get("table") or {}).get("error") or rec.get("fallback")
+                                                or "not applied")
+    if env.get("LVDC_STEER_SKIPPED"):
+        return env["LVDC_STEER_SKIPPED"]
+    if env.get("LVDC_STEER_TABLE") is not None and hold_state is not None:
+        return PINNED
+    return None

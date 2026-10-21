@@ -1101,7 +1101,7 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
 # CLI
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Orchestrate QoE data collection with automatic balance targeting"
     )
@@ -1246,7 +1246,83 @@ if __name__ == "__main__":
         action="store_true",
         help="Print balance report without collecting.",
     )
+    return parser
+
+
+def arg_refusal(args, environ) -> str | None:
+    """The command line's refusals (hardening stop: one pure function, tested without starting a run): the message
+    orchestrate exits with, else None. The checks that need trio_slots (a pin's geometry mode) stay where it is imported,
+    after the stress root is set."""
+    if args.concurrent and not args.batch:
+        return "--concurrent needs --batch"
+    if args.trio_stress and (not args.concurrent or args.trio_record):
+        return "--trio-stress needs --concurrent and never --trio-record"
+    if not args.batch:
+        return None
+    targets = {k.strip(): v for k, v in (x.split("=") for x in args.batch.split(","))}
+    unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
+    if unknown:
+        return f"unknown platform(s) in --batch: {unknown}"
+    if args.trio_record and not args.concurrent:
+        return "--trio-record needs --concurrent"
+    if args.trio_record and not args.n_draw:          # restart prereg §1: the record's N is drawn per round
+        return "--trio-record needs --n-draw (the record's N is drawn per round, restart prereg §1)"
+    if args.n_draw and (args.slots or not args.concurrent):
+        return "--n-draw needs --concurrent and no --slots (the draw fixes the composition)"
+    if (args.n_support or args.n_exclude or args.n_change_sign) and not args.n_draw:
+        return "--n-support / --n-exclude / --n-change-sign need --n-draw"
+    if args.window_min is not None and (not args.concurrent or args.window_min <= 0):
+        return "--window-min needs --concurrent and a positive length"
+    if args.trio_record and args.window_min != RECORD_WINDOW_MIN:     # §10 (levi 00138): the record's window
+        return f"--trio-record needs --window-min {RECORD_WINDOW_MIN:g} (restart prereg §10)"
+    if args.trio_record and not args.trio_yt_fullscreen:      # §7 (levi on 2e666b0): yt's support has fullscreen
+        return ("--trio-record needs --trio-yt-fullscreen (restart prereg §7: yt's geometry support includes "
+                "fullscreen)")
+    if args.window_min is not None and args.max_per_slot is not None:
+        return "--max-per-slot does not apply inside a window (a window runs to time)"
+    if args.session_range:
+        if args.trio_record or not args.concurrent:
+            return "--session-range is for an uncounted --concurrent run only (never the record)"
+        try:
+            lo, hi = (float(x) for x in args.session_range.split(","))
+        except ValueError:
+            return "--session-range LO,HI (minutes)"
+        if not 0 < lo <= hi:
+            return "--session-range LO,HI with 0 < LO <= HI"
+    # levi on a2f0cac (bundle item 6): a counted run never runs with the data volume check off; preflight's
+    # check_data_uuid is "not checked" when LVDC_DATA_ROOT_UUID is unset, so the record refuses that here
+    if args.trio_record and not (environ.get("LVDC_DATA_ROOT_UUID") or "").strip():
+        return ("--trio-record needs LVDC_DATA_ROOT_UUID (the data volume's filesystem UUID; ops/env.sh / "
+                "env.local.sh): preflight's data volume check must run for the record")
+    if args.trio_pin and (not args.concurrent or not args.trio_pin_reason):
+        return "--trio-pin needs --concurrent and --trio-pin-reason"
+    if args.trio_pin and args.trio_record:        # hardening stop (levi 00:41, 7b): a pin is gate / diag only
+        return "--trio-pin is gate / diag only: never with --trio-record"
+    for spec in args.trio_pin:
+        try:
+            parse_pin(spec, args.trio_pin_reason)
+        except ValueError as e:
+            return str(e)
+    if args.trio_yt_fullscreen and not args.concurrent:
+        return "--trio-yt-fullscreen needs --concurrent"
+    if args.trio_yt_fullscreen and args.trio_layout != "composite":      # t58 N-7: the keeper needs the composite
+        return "--trio-yt-fullscreen needs --trio-layout composite (the fullscreen keeper runs only there)"
+    if args.trio_steer_platforms is not None:
+        if not args.trio_steer:
+            return "--trio-steer-platforms needs --trio-steer"
+        names = {x.strip() for x in args.trio_steer_platforms.split(",") if x.strip()}
+        bad = names - {"youtube", "twitch", "tiktok"}
+        if bad or not names:
+            return f"--trio-steer-platforms: unknown or empty {sorted(bad)}"
+    return None
+
+
+if __name__ == "__main__":
+    parser = build_parser()
     args = parser.parse_args()
+    _refused = arg_refusal(args, os.environ)
+    if _refused:
+        sys.exit(_refused)
 
     DPMS_OFF = args.dpms_off
     ENTRY_QUALITY = args.entry_quality
@@ -1259,11 +1335,7 @@ if __name__ == "__main__":
         bad = {k: v for k, v in COVERAGE_ALLOWED.items() if k not in PLATFORM_MATRICES or set(v) - set(PLATFORM_MATRICES[k])}
         if bad:
             sys.exit(f"unknown platform / matrix in --coverage-allowed: {bad}")
-    if args.concurrent and not args.batch:
-        sys.exit("--concurrent needs --batch")
     if args.trio_stress:                                   # before any trio_slots import: the stress root, not data/_trio
-        if not args.concurrent or args.trio_record:
-            sys.exit("--trio-stress needs --concurrent and never --trio-record")
         os.environ["LVDC_TRIO_DIR"] = "_trio_stress"
         import trio_slots
         trio_slots.TRIO_DIR, trio_slots.TRIO_NAME_FLOOR = trio_slots.STRESS_DIR, 900000
@@ -1271,68 +1343,21 @@ if __name__ == "__main__":
         TRIO_STRESS_EPISODES = args.episodes
     if args.batch:
         targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
-        unknown = [k for k in targets if k not in PLATFORM_TRANSITIONS]
-        if unknown:
-            sys.exit(f"unknown platform(s) in --batch: {unknown}")
-        if args.trio_record and not args.concurrent:
-            sys.exit("--trio-record needs --concurrent")
-        if args.trio_record and not args.n_draw:          # restart prereg §1: the record's N is drawn per round
-            sys.exit("--trio-record needs --n-draw (the record's N is drawn per round, restart prereg §1)")
-        if args.n_draw and (args.slots or not args.concurrent):
-            sys.exit("--n-draw needs --concurrent and no --slots (the draw fixes the composition)")
-        if (args.n_support or args.n_exclude or args.n_change_sign) and not args.n_draw:
-            sys.exit("--n-support / --n-exclude / --n-change-sign need --n-draw")
-        if args.window_min is not None and (not args.concurrent or args.window_min <= 0):
-            sys.exit("--window-min needs --concurrent and a positive length")
-        if args.trio_record and args.window_min != RECORD_WINDOW_MIN:     # §10 (levi 00138): the record's window
-            sys.exit(f"--trio-record needs --window-min {RECORD_WINDOW_MIN:g} (restart prereg §10)")
-        if args.trio_record and not args.trio_yt_fullscreen:      # §7 (levi on 2e666b0): yt's support has fullscreen
-            sys.exit("--trio-record needs --trio-yt-fullscreen (restart prereg §7: yt's geometry support includes "
-                     "fullscreen)")
-        if args.window_min is not None and args.max_per_slot is not None:
-            sys.exit("--max-per-slot does not apply inside a window (a window runs to time)")
-        if args.session_range:
-            if args.trio_record or not args.concurrent:
-                sys.exit("--session-range is for an uncounted --concurrent run only (never the record)")
-            try:
-                lo, hi = (float(x) for x in args.session_range.split(","))
-            except ValueError:
-                sys.exit("--session-range LO,HI (minutes)")
-            if not 0 < lo <= hi:
-                sys.exit("--session-range LO,HI with 0 < LO <= HI")
-            SESSION_RANGE = (lo, hi)
-        # levi on a2f0cac (bundle item 6): a counted run never runs with the data volume check off; preflight's
-        # check_data_uuid is "not checked" when LVDC_DATA_ROOT_UUID is unset, so the record refuses that here
-        if args.trio_record and not (os.environ.get("LVDC_DATA_ROOT_UUID") or "").strip():
-            sys.exit("--trio-record needs LVDC_DATA_ROOT_UUID (the data volume's filesystem UUID; ops/env.sh / "
-                     "env.local.sh): preflight's data volume check must run for the record")
+        if args.session_range:                         # arg_refusal checked it
+            SESSION_RANGE = tuple(float(x) for x in args.session_range.split(","))
         TRIO_RECORD = bool(args.trio_record)
-        if args.trio_pin and (not args.concurrent or not args.trio_pin_reason):
-            sys.exit("--trio-pin needs --concurrent and --trio-pin-reason")
         for spec in args.trio_pin:
-            try:
-                plat, pin = parse_pin(spec, args.trio_pin_reason)
-            except ValueError as e:
-                sys.exit(str(e))
+            plat, pin = parse_pin(spec, args.trio_pin_reason)      # arg_refusal checked it
             import trio_slots
             mode = (pin.get("geometry") or "").split(":")[0]
             yt_key = plat == "youtube" or plat.startswith("yt")
             if mode in trio_slots.EXCLUDED_GEOMETRIES and not (mode == "fullscreen" and yt_key and args.trio_yt_fullscreen):
                 sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1 (yt fullscreen needs --trio-yt-fullscreen)")
             TRIO_PINS[plat] = pin
-        if args.trio_yt_fullscreen and not args.concurrent:
-            sys.exit("--trio-yt-fullscreen needs --concurrent")
-        if args.trio_yt_fullscreen and args.trio_layout != "composite":      # t58 N-7: the keeper needs the composite
-            sys.exit("--trio-yt-fullscreen needs --trio-layout composite (the fullscreen keeper runs only there)")
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
         TRIO_STEER = bool(args.trio_steer)
-        if args.trio_steer_platforms is not None:
-            if not TRIO_STEER:
-                sys.exit("--trio-steer-platforms needs --trio-steer")
+        if args.trio_steer_platforms is not None:          # arg_refusal checked the names
             TRIO_STEER_PLATFORMS = {x.strip() for x in args.trio_steer_platforms.split(",") if x.strip()}
-            bad = TRIO_STEER_PLATFORMS - {"youtube", "twitch", "tiktok"}
-            if bad or not TRIO_STEER_PLATFORMS:
-                sys.exit(f"--trio-steer-platforms: unknown or empty {sorted(bad)}")
         if TRIO_STEER:                                   # prereg d32a48ce items 4 / 5; levi 20:58: per platform
             steer_balancer(TRIO_STEER_PLATFORMS)
         if args.concurrent:
