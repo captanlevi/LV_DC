@@ -2184,6 +2184,7 @@ class PlayerErrorWatch:
         self.err_since = self.np_since = self.ad_since = None
         self.fz_since, self.fz_ct, self.fz_cd = None, None, None   # the frozen-ad run: since, playhead, countdown
         self.ad_runs: list[list[float]] = []
+        self.held_fn = None          # yt / twitch (levi 10:27): now -> True while the shaper's low-state hold runs
 
     def step(self, err: dict | None, st: dict | None, now: float) -> dict | None:
         ad = bool((st or {}).get("ad"))
@@ -2210,7 +2211,8 @@ class PlayerErrorWatch:
             self.np_since = None
         ct, cd = (st or {}).get("ct"), (st or {}).get("cd")
         if ad and not no_player and isinstance(ct, (int, float)):     # an unread playhead is no evidence of a freeze
-            moved = (self.fz_since is None or cd != self.fz_cd or self.fz_ct is None
+            held = bool(self.held_fn and self.held_fn(now))       # levi 10:27: the ad_frozen clock holds in low states
+            moved = (held or self.fz_since is None or cd != self.fz_cd or self.fz_ct is None
                      or abs(ct - self.fz_ct) > AD_FROZEN_TOL_S)
             if moved:                                         # the countdown or the playhead moved: the run starts here
                 self.fz_since, self.fz_ct, self.fz_cd = now, ct, cd
@@ -2274,6 +2276,7 @@ class StreamEndedWatch:
         self.samples: list[tuple[float, float | None, float | None]] = []     # non-ad (t, ct, dur)
         self.pending: list[dict] = []
         self.fired: dict | None = None
+        self.call_ms: list[float] = []
 
     @staticmethod
     def _dur(x) -> float | None:
@@ -2333,6 +2336,20 @@ class StreamEndedWatch:
             if v is False:
                 self.pending.remove(p)
         return None
+
+    def note_call(self, ms: float) -> None:
+        """One _STREAM_STATE_JS read's wall time (ms), the item's cost measure (levi 11:22: the read's own per-call
+        timing, not slot CPU, which content dominates)."""
+        self.call_ms.append(ms)
+
+    def timing(self) -> dict:
+        """The reads' timing summary for meta.json stream_read_timing: n, mean / p50 / p95 / max ms."""
+        v = sorted(self.call_ms)
+        if not v:
+            return {"n": 0}
+        pick = lambda q: round(v[min(len(v) - 1, int(q * (len(v) - 1) + 0.5))], 3)
+        return {"n": len(v), "mean_ms": round(sum(v) / len(v), 3), "p50_ms": pick(0.5), "p95_ms": pick(0.95),
+                "max_ms": round(v[-1], 3)}
 
     def _fire(self, p: dict, now: float) -> dict:
         self.fired = {"reason": "stream_ended", "t_trigger": now, **{k: v for k, v in p.items() if k != "i"},
@@ -2400,7 +2417,10 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 error_watch.reset()
         if on_stream_ended is not None and stream_watch is not None:    # boundary bundle item 3: stream_ended
             try:
-                trig = stream_watch.feed(json.loads(page.eval(_STREAM_STATE_JS) or "null"), time.time())
+                t_call = time.perf_counter()
+                sample = json.loads(page.eval(_STREAM_STATE_JS) or "null")
+                stream_watch.note_call((time.perf_counter() - t_call) * 1000.0)   # levi 11:22 (7): its own cost
+                trig = stream_watch.feed(sample, time.time())
             except Exception:
                 trig = None
             if trig is not None:
@@ -3030,10 +3050,12 @@ class BrowserSession:
         self.channel_pick: dict | None = None     # twitch / tt: the channel cap's state at the pick (meta.json channel_pick)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.stream_ended: dict | None = None     # yt / twitch: the stream_ended abort's detail (meta.json)
+        self.stream_watch: "StreamEndedWatch | None" = None
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
         self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
+        self.error_watch.held_fn = self._lowstate_held
         self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
@@ -3316,7 +3338,7 @@ class BrowserSession:
                   self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
                   self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch,
                   self.resumer, self._stream_ended if self.platform in STREAM_ENDED_PLATFORMS else None,
-                  StreamEndedWatch(self.platform, self.channel_url) if self.platform in STREAM_ENDED_PLATFORMS else None),
+                  self._stream_watch()),
             daemon=True,
             name="ad-watcher",
         )
@@ -3461,7 +3483,7 @@ class BrowserSession:
                           "dead_window": dead_window(w.srx, rate, w.playing_kbps(w.dead_since)),
                           "media": self._media_snapshot()}
                     with self._recovery_lock:
-                        used = len(self.player_dead_reentries) + len(self.frozen_reentries)
+                        used = self._recoveries_used()
                         r = self._reenter_room(pd) if dead_action(used) == "reenter" else None
                     if r is not None:
                         print(f"[browser] PLAYER_DEAD: re-entered the room ({r['outcome']})", flush=True)
@@ -3646,6 +3668,12 @@ class BrowserSession:
                                         "frozen_s": round(frozen_s, 1), "rung": rung, "shaper": stuck.shaper_at(labels, now)})
                 print(f"[browser] t2_skipped_rung_unknown: frozen {frozen_s:.0f} s, rung {rung.get('source')}", flush=True)
             return
+        if self.platform in PLAYER_ERROR_PLATFORMS:     # levi 10:27: the clock holds in the low states + grace
+            he = stuck.low_hold_end(labels, now)
+            if he is not None:
+                if now <= he:
+                    return
+                frozen_s = min(frozen_s, now - he)           # the frozen run counts only after the hold
         t2, t2_start = stuck.t2_clock(frozen_s, now, labels, read)
         if t2 is None or t2 < stuck.T2_S:
             return
@@ -3657,7 +3685,7 @@ class BrowserSession:
                "t2_s": round(t2, 1), "t2_window": [t2_start, now], "rung": rung, "shaper": stuck.shaper_at(labels, now),
                "url": url or self.channel_url}
         with self._recovery_lock:
-            used = len(self.player_dead_reentries) + len(self.frozen_reentries)
+            used = self._recoveries_used()
             if stuck.action(used) == "reenter":
                 r = self._reenter_frozen(rec)
                 print(f"[browser] STUCK PLAYER: frozen {frozen_s:.0f} s, {t2:.0f} s above the lowest rung "
@@ -3679,6 +3707,12 @@ class BrowserSession:
         print(f"[browser] PLAYER FROZEN (stuck-player rule, {why}): censored at {self.censored['t']:.0f}, shaper "
               f"{rec['shaper']} — aborting the session", flush=True)
 
+    def _stream_watch(self) -> "StreamEndedWatch | None":
+        """The session's StreamEndedWatch (yt / twitch), kept for meta.json stream_read_timing."""
+        self.stream_watch = StreamEndedWatch(self.platform, self.channel_url) if self.platform in STREAM_ENDED_PLATFORMS \
+            else None
+        return self.stream_watch
+
     def _stream_ended(self, trig: dict) -> None:
         """StreamEndedWatch's trigger (boundary bundle item 3): the tab left its live stream; abort "stream_ended" (no
         re-entry: the broadcast is over, or the page moved to another channel). meta.json stream_ended records it."""
@@ -3688,6 +3722,16 @@ class BrowserSession:
         self.abort_reason, self.abort_at = "stream_ended", time.time()
         print(f"[browser] STREAM ENDED ({trig.get('sign')}: {trig.get('from_page')} -> {trig.get('to_page')}) — "
               f"aborting the session", flush=True)
+
+    def _recoveries_used(self) -> int:
+        """The session's re-entries that count against its one recovery (a low-state error_page re-entry does not;
+        levi 10:27)."""
+        return sum(1 for r in self.player_dead_reentries + self.frozen_reentries if not r.get("lowstate_free"))
+
+    def _lowstate_held(self, t: float) -> bool:
+        """The shaper's low-state hold runs at t (stuck.low_hold_end on the session's net labels)."""
+        he = stuck.low_hold_end(getattr(self, "net_labels", None) or [], t)
+        return he is not None and t <= he
 
     def _player_error(self, trig: dict) -> None:
         """PlayerErrorWatch's trigger: the session's one recovery as a re-entry (player_dead_reentries), else abort
@@ -3699,10 +3743,16 @@ class BrowserSession:
         except Exception:
             url = None
         rec = {**trig, "url": url or self.channel_url}
+        # levi 10:27: an error page that began in the low-state hold keeps its re-entry (a viewer reloads an error page)
+        # but does not consume the session's one recovery
+        free = trig.get("reason") == "error_page" and isinstance(trig.get("since"), (int, float)) \
+            and self._lowstate_held(float(trig["since"]))
         with self._recovery_lock:
-            used = len(self.player_dead_reentries) + len(self.frozen_reentries)
-            if stuck.action(used) == "reenter":
+            used = self._recoveries_used()
+            if free or stuck.action(used) == "reenter":
                 r = self._reenter_error(rec)
+                if free:
+                    r["lowstate_free"] = rec["lowstate_free"] = True
                 rec["reentry"] = {k: r.get(k) for k in ("t_nav", "method", "ok", "outcome")}
                 self.player_errors.append(rec)
                 print(f"[browser] PLAYER ERROR ({trig['reason']}: {(trig.get('error') or {}).get('text')}): "

@@ -72,6 +72,16 @@ def test_no_fire():
     assert run("twitch", TW, entry + live)[0] is None
 
 
+def test_read_timing():
+    """levi 11:22 (7): each _STREAM_STATE_JS read's own wall time, summarised for meta.json stream_read_timing."""
+    w = B.StreamEndedWatch("twitch", TW)
+    assert w.timing() == {"n": 0}
+    for ms in (1.0, 2.0, 3.0, 4.0, 100.0):
+        w.note_call(ms)
+    t = w.timing()
+    assert t == {"n": 5, "mean_ms": 22.0, "p50_ms": 3.0, "p95_ms": 100.0, "max_ms": 100.0}, t
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
