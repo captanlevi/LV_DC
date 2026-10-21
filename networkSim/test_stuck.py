@@ -509,6 +509,38 @@ def test_frozen_clock_of_record(monkeypatch):
             assert (fired is not None) == CS.E.frozen_over_t(lab["frozen_playhead_class_s"], T), (plat, labels, fired, lab)
 
 
+
+def test_hold_edges_every_state(monkeypatch):
+    """Hardening stop: on yt and twitch, at every shaper state 1-10, the hold (_lowstate_held, which the T2 stuck clock
+    reads too) and the addendum-N clock agree on the grace edge: held while now <= the last low stretch's end +
+    LOW_HOLD_GRACE_S (the edge itself included), released 1 s after; after the release T counts from the edge (T
+    counted: no abort; T + 1: the abort); states 5+ never hold; tt's hold uses the same grace."""
+    import time
+    G = S.LOW_HOLD_GRACE_S
+    for plat in ("youtube", "twitch"):
+        T = CS.FROZEN_PLAYHEAD_MAX_S[plat]
+        for st in range(1, 11):
+            for d, edge in ((0.0, "at"), (1.0, "after"), (-1.0, "before")):
+                now = 1_800_000_000.0
+                monkeypatch.setattr(B.time, "time", lambda: now)
+                s = _session(plat)
+                rel = now - G - d                                  # the stretch ended at rel; hold end = now - d
+                s.net_labels = nl((now - 2000, 300, st), (rel, 900, 7))
+                held = st <= 4 and d <= 0
+                assert s._lowstate_held(now) is held, (plat, st, edge)
+                s2 = _session(plat)
+                s2.net_labels = s.net_labels
+                # addendum N: held, or released d s ago (T counts from the release): no abort; never low: the abort
+                assert (s2._on_frozen(T + 1500.0) is False) is (st <= 4), (plat, st, edge)
+                for k, aborts in ((0, st > 4), (1, True)):          # T + k s counted since release + grace: > T aborts
+                    s3 = _session(plat)
+                    s3.net_labels = nl((now - 2000, 300, st), (now - G - T - k, 900, 7))
+                    assert s3._on_frozen(T + 1500.0) is aborts, (plat, st, edge, k)
+    w = B.TTRoomWatch()                                            # tt: held to last low sample + TT_STALL_GRACE_S
+    dead = {"has_video": True, "src": True, "rs": 0, "ct": 0, "buf_end": None, "decoded": None, "stall_label": True}
+    w.feed(dead, 1000.0, shaper_state=2)
+    assert w.last_low == 1000.0 and B.TT_STALL_GRACE_S == G
+
 def test_lowstate_error_page_does_not_use_the_recovery():
     import time
     now = time.time()
