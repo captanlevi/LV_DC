@@ -239,6 +239,40 @@ def open_dead_run_held_s(rows: list[dict], net_labels: list) -> float | None:
     return (seg[-1] - seg[0]) if seg else 0.0
 
 
+def unresolved_dead_runs(rows: list[dict], open_clocks: list[dict], low_spans: list, t_dead: float | None
+                         ) -> tuple[list[dict], list[tuple[float, float]]]:
+    """levi 03:58: for each dead clock left unresolved (end None), the raw dead run it belongs to (the dead-tick run
+    holding the clock's start, else the first run starting after it; onset to its last dead tick, the session's end
+    when it is open there). (provisional runs to censor, hard runs): a run >= t_dead with no low span (watch
+    low_spans, + grace) inside it is hard (player_dead as before, not exported), every other one provisional, as brad's
+    cuts loader reads it (03:58): {onset, end (epoch s; None = open at the session's end), raw_s, low_span}."""
+    import stuck
+    runs = dead_tick_runs(rows)
+    last_tick = max((float(r["ts"]) / 1000.0 for r, _ in tick_states(rows) if _f(r.get("ts")) is not None), default=None)
+    prov, hard, seen = [], [], set()
+    for c in open_clocks:
+        t = c.get("start")
+        if not isinstance(t, (int, float)):
+            continue
+        run = next((x for x in runs if x[0] - 1.0 <= t <= x[-1] + 1.0), None) or next((x for x in runs if x[0] >= t), None)
+        if run is None:
+            continue
+        a, b = run[0], run[-1]
+        open_end = run is runs[-1] and dead_open_at_end(rows)
+        if open_end and last_tick is not None:
+            b = max(b, last_tick)
+        if (a, b) in seen:
+            continue
+        seen.add((a, b))
+        low_inside = any(lo <= b and a <= hi + stuck.LOW_HOLD_GRACE_S for lo, hi in low_spans)
+        if t_dead is not None and b - a >= t_dead and not low_inside:
+            hard.append((a, b))
+        else:
+            prov.append({"onset": round(a, 3), "end": None if open_end else round(b, 3), "raw_s": round(b - a, 3),
+                         "low_span": low_inside})
+    return prov, hard
+
+
 def dead_runs(rows: list[dict]) -> list[tuple[float, float]]:
     """Runs (first, last dead tick, s) of res_meta ticks with no media at all, after playback had been sustained once:
     readyState 0 (ready_state column, from the 2026-10-17 extension) or, on older ticks, a 0x0 video at playhead 0."""

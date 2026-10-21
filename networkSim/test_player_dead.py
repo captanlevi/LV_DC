@@ -257,6 +257,15 @@ def test_open_run_is_measured_on_its_own():
     d = lab["dead_clock_of_record"]
     assert lab["dead_player_class_s"] == 0.0 and d["open_at_end"] and d["open_run_held_s"] == 4.0, d
     assert d["disagrees"] and d["margin_s"] == 25.0 and d["provisional"] == "held clock unknown" and d["unresolved_clocks"] == 2
+    # levi 03:58: the unresolved clocks' raw runs, exported for the labels of record to censor (brad's interface)
+    assert lab["provisional_runs"] == [{"onset": t0 + 290, "end": t0 + 375, "raw_s": 85.0, "low_span": True},
+                                       {"onset": t0 + 795, "end": None, "raw_s": 4.0, "low_span": False}], lab
+    # the exception: an unresolved run itself >= T with no low span inside it reads player_dead, not provisional
+    lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
+    CS.dead_clock_of_record(lab, rows([(500, 586)]), "tiktok",
+                            {"low_spans": [[t0 + 200, t0 + 260]], "dead_clocks": [{"start": t0 + 500, "end": None, "how": None}]},
+                            labels)
+    assert lab["dead_player_class_s"] == 85.0 and lab["provisional_runs"] == [] and lab["dead_clock_of_record"]["provisional"] is None
     lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}           # an open run of its own >= T: player_dead
     CS.dead_clock_of_record(lab, rows([(290, 376), (700, 800)]), "tiktok", {"low_spans": [], "dead_clocks": []}, labels)
     assert lab["dead_player_class_s"] == 99.0 and not lab["dead_clock_of_record"]["disagrees"]

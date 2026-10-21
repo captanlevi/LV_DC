@@ -35,7 +35,7 @@ LABELS = ["ad_span_seconds", "ad_spans_per_signal", "ad_spans_span_type_set", "a
           "dead_player_max_all_s", "dead_player_max_s",
           "duration_s", "entry_tick_presence", "frozen_clock_of_record", "frozen_playhead_T_s", "frozen_playhead_class_s", "frozen_playhead_max_all_s",
           "frozen_playhead_max_s",
-          "login_wall_text_ticks", "login_wall_ticks", "n_res_meta", "paused_while_playing_share",
+          "login_wall_text_ticks", "login_wall_ticks", "n_res_meta", "paused_while_playing_share", "provisional_runs",
           "quality_countdown_ticks", "recovered_dead", "recovered_dead_runs", "recovered_frozen", "shot_effects",
           "src_changed_ticks", "stall_advancing_share", "stall_loop_s", "stall_loops", "stall_share", "swap_only_ad_spans", "tick_presence", "tick_window",
           "tier_changes", "tier_changes_per_min", "tier_changes_with_swap_within_2s_share", "tier_mix_quality_time",
