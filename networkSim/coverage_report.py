@@ -121,9 +121,10 @@ TT_RUNG_REGIME = "hevc"                         # tt's rungs are the HEVC ladder
 # restart prereg §2b (levi on brad's design check 00231): classes that are the top tier of no shaper state, or of only
 # one (yt Q_480p at state 5), are ABR-only: listed as unreachable targets, never steered after; their minutes come from
 # ABR behaviour, and a floor not met reads "insufficient" in the report
-ABR_ONLY = (("twitch", "Q_1080p"), ("youtube", "Q_240p"), ("youtube", "Q_480p"))
-ABR_ONLY_RULE = ("restart prereg §2b: tw Q_1080p, yt Q_240p, yt Q_480p are ABR-only (the top tier of no state, or of one): "
-                 "unreachable targets, never steered; a floor not met reads insufficient")
+ABR_ONLY = (("youtube", "Q_240p"), ("youtube", "Q_480p"))
+ABR_ONLY_RULE = ("restart prereg §2b: yt Q_240p, yt Q_480p are ABR-only (the top tier of no state, or of one): "
+                 "unreachable targets, never steered; a floor not met reads insufficient. tw Q_1080p left the list at "
+                 "the 10-22 tip (prereg d32a48ce item 4: TW-H's state 11 reaches it)")
 GEOMETRY_FOR_CLASS = {("youtube", "Q_1080p"): "fullscreen:1920x1080"}   # am. 15 (3) / am. 2: the only yt geometry for it
 GEOMETRY_UNCOUPLED = "restart §7: geometry drawn per session (geometry.draw_geometry), never forced by the target"
 SUMMARY_FILE = "_summaries/coverage_last.json"

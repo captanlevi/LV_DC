@@ -32,7 +32,7 @@ from utils.shaping import (PLATFORM_MATRICES, SCENARIOS, SCHEDULES, schedule_of,
 SIM_SEED = 0
 SIM_SESSIONS = 2000
 FIXTURE = HERE / "fixtures" / "schedule_occupancy.json"
-OCCUPANCY_SHA256 = "cdf186fc02a1795a0f28d6dfc50cbb744d24428d9d42672af696f230dce312b6"
+OCCUPANCY_SHA256 = "3a0743330d86a98ef8d189079b573a09d71af9fd82076dbbef592ad9fbf253ed"
 
 
 def families(platform: str) -> list[str]:

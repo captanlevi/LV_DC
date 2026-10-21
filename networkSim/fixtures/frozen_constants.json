@@ -2,10 +2,6 @@
  "abr_only": {
   "ABR_ONLY": [
    [
-    "twitch",
-    "Q_1080p"
-   ],
-   [
     "youtube",
     "Q_240p"
    ],
@@ -14,7 +10,7 @@
     "Q_480p"
    ]
   ],
-  "ABR_ONLY_RULE": "restart prereg \u00a72b: tw Q_1080p, yt Q_240p, yt Q_480p are ABR-only (the top tier of no state, or of one): unreachable targets, never steered; a floor not met reads insufficient"
+  "ABR_ONLY_RULE": "restart prereg \u00a72b: yt Q_240p, yt Q_480p are ABR-only (the top tier of no state, or of one): unreachable targets, never steered; a floor not met reads insufficient. tw Q_1080p left the list at the 10-22 tip (prereg d32a48ce item 4: TW-H's state 11 reaches it)"
  },
  "capture_offloads": {
   "OFF": {
@@ -614,6 +610,83 @@
    }
   },
   "twitch": {
+   "TW-H": {
+    "initial_state_rule": "stationary",
+    "low_state_cap": 2,
+    "transitions": {
+     "1": {
+      "1": 0.45,
+      "2": 0.4,
+      "3": 0.15
+     },
+     "10": {
+      "10": 0.35,
+      "11": 0.3,
+      "8": 0.1,
+      "9": 0.25
+     },
+     "11": {
+      "10": 0.35,
+      "11": 0.55,
+      "9": 0.1
+     },
+     "2": {
+      "1": 0.2,
+      "2": 0.5,
+      "3": 0.2,
+      "4": 0.1
+     },
+     "3": {
+      "1": 0.1,
+      "2": 0.2,
+      "3": 0.4,
+      "4": 0.2,
+      "5": 0.1
+     },
+     "4": {
+      "2": 0.05,
+      "3": 0.15,
+      "4": 0.45,
+      "5": 0.3,
+      "6": 0.05
+     },
+     "5": {
+      "3": 0.05,
+      "4": 0.3,
+      "5": 0.45,
+      "6": 0.15,
+      "7": 0.05
+     },
+     "6": {
+      "4": 0.1,
+      "5": 0.2,
+      "6": 0.4,
+      "7": 0.2,
+      "8": 0.1
+     },
+     "7": {
+      "5": 0.1,
+      "6": 0.2,
+      "7": 0.4,
+      "8": 0.2,
+      "9": 0.1
+     },
+     "8": {
+      "10": 0.1,
+      "6": 0.1,
+      "7": 0.2,
+      "8": 0.4,
+      "9": 0.2
+     },
+     "9": {
+      "10": 0.25,
+      "11": 0.15,
+      "7": 0.05,
+      "8": 0.15,
+      "9": 0.4
+     }
+    }
+   },
    "TW-L": {
     "initial_state_rule": "stationary",
     "low_state_cap": 2,
@@ -1457,7 +1530,7 @@
    "youtube": "A"
   },
   "FAMILY_FLOOR": 5,
-  "OCCUPANCY_SHA256": "cdf186fc02a1795a0f28d6dfc50cbb744d24428d9d42672af696f230dce312b6",
+  "OCCUPANCY_SHA256": "3a0743330d86a98ef8d189079b573a09d71af9fd82076dbbef592ad9fbf253ed",
   "SCHEDULES": {
    "fast": {
     "episode_s": 12,
@@ -1543,7 +1616,7 @@
   "WALK_SIGMA_PER_BAND": 0.159,
   "WALK_SIM_SEED": 0,
   "WALK_SIM_SESSIONS": 1000,
-  "WALK_SIM_SHA256": "9dbbf8e56d8d6057d73865d0c4c5272e4911da7f3c974314bc5f604f9276ddea",
+  "WALK_SIM_SHA256": "20c6ebccaf1ef10fdbf7249208099a16c0c8faedfc337537ebbbb0e741df29ac",
   "WALK_SPAN_SHARE": 0.5,
   "WALK_STEP_S": 2.0
  },

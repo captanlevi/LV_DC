@@ -40,7 +40,7 @@ DL_SAMPLES = 20000
 REF_SUBSTEP_S = (21.0, 23.0)       # [lo, hi): the sub-steps with exactly WALK_REF_STEPS steps
 CALIB_SUBSTEPS = 20000            # per state
 FIXTURE = HERE / "fixtures" / "walk_simulation.json"
-WALK_SIM_SHA256 = "9dbbf8e56d8d6057d73865d0c4c5272e4911da7f3c974314bc5f604f9276ddea"
+WALK_SIM_SHA256 = "20c6ebccaf1ef10fdbf7249208099a16c0c8faedfc337537ebbbb0e741df29ac"
 
 
 def _q(xs: list[float], ps=(0.1, 0.5, 0.9)) -> dict:

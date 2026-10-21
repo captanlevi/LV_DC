@@ -85,6 +85,10 @@ SCENARIOS = {
     #   900–1200    → stable 360p
     #   ≥1800       → 1080p (with quality forcing)
 
+    # State 11 (prereg d32a48ce, label diversity item 4; levi 18:14): twitch 1080p60 headroom, used only by TW-H. Its
+    # rate_max reaches >= 1.25 x the highest 1080p variant BANDWIDTH in t58 twitch HLS masters (9147536 bps, tw_100078,
+    # shagun's read sha 3c63b074113b: 48 sessions / 106 masters / 50 rows) = 11435 kbit; delay / loss as state 10
+    "11": Scenario(rate_lim=(9000, 12000), delay_lim=(0, 20), loss_pct_lim=(0.0, 0.05)),
     # State 10: rock-solid 1080p, headroom to spare
     "10": Scenario(rate_lim=(6000, 9000), delay_lim=(0, 20),  loss_pct_lim=(0.0, 0.05)),
     # State 9: clean 1080p
@@ -336,6 +340,16 @@ TWITCH_TRANSITIONS_L = {
     "9":  {"6": 1.00},
     "10": {"6": 1.00},
 }
+# prereg d32a48ce item 4 (levi 18:14): TW-H, the twitch matrix whose band reaches 1080p. Rows 1-8 are TW-M's (the base
+# matrix's shape); rows 9-10 move mass up into state 11 and 11 returns to 9-10, so the top band is reachable and left;
+# state 11's stationary mass clears coverage_report's qualifying floor for twitch Q_1080p (band_map min_mass).
+# Cap 2 and the stationary start as TW-M.
+TWITCH_TRANSITIONS_H = {
+    **{s: dict(r) for s, r in TWITCH_TRANSITIONS_M.items() if int(s) <= 8},
+    "9":  {"7": 0.05, "8": 0.15, "9": 0.40, "10": 0.25, "11": 0.15},
+    "10": {"8": 0.10, "9": 0.25, "10": 0.35, "11": 0.30},
+    "11": {"9": 0.10, "10": 0.35, "11": 0.55},
+}
 TIKTOK_MATRICES = {
     "current": (TIKTOK_TRANSITIONS, 2, "linear"),
     "TT-M": (TIKTOK_TRANSITIONS_M, 4, "stationary"),
@@ -344,6 +358,7 @@ TWITCH_MATRICES = {
     "current": (TWITCH_TRANSITIONS, 2, "linear"),
     "TW-M": (TWITCH_TRANSITIONS_M, 2, "stationary"),
     "TW-L": (TWITCH_TRANSITIONS_L, 2, "stationary"),
+    "TW-H": (TWITCH_TRANSITIONS_H, 2, "stationary"),
 }
 # per platform: matrix id -> (transitions, low-state cap, initial-state rule)
 PLATFORM_MATRICES = {"youtube": YOUTUBE_MATRICES, "tiktok": TIKTOK_MATRICES, "twitch": TWITCH_MATRICES}
