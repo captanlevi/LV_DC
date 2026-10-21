@@ -283,7 +283,7 @@
   }
  },
  "geometry": {
-  "DRAW_RULE": "restart \u00a77: per session, seeded, equal weights over GEOMETRY_CHOICES minus excluded modes, independent of the steering target; a fullscreen draw while a sibling holds the token is redrawn among the others",
+  "DRAW_RULE": "restart \u00a77: per session, seeded, over GEOMETRY_CHOICES minus excluded modes, independent of the steering target; equal weights except yt fullscreen at 1/3 of the full support (prereg d32a48ce, the 10-22 tip); a fullscreen draw while a sibling holds the token is redrawn among the others",
   "DRAW_WEIGHTS": {
    "tiktok": {
     "player:537x880": 1.0,
@@ -295,7 +295,7 @@
     "window:1920x1080": 1.0
    },
    "youtube": {
-    "fullscreen:1920x1080": 1.0,
+    "fullscreen:1920x1080": 1.9999999999999998,
     "player:1280x720": 1.0,
     "player:853x480": 1.0,
     "theater:1920x1080": 1.0,

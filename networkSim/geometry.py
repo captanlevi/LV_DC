@@ -141,9 +141,25 @@ def next_geometry(data_dir: Path, platform: str, exclude_modes: tuple = (), sele
     return min(choices, key=lambda g: (counts[g], choices.index(g)))
 
 
-DRAW_RULE = ("restart §7: per session, seeded, equal weights over GEOMETRY_CHOICES minus excluded modes, independent "
-             "of the steering target; a fullscreen draw while a sibling holds the token is redrawn among the others")
-DRAW_WEIGHTS: dict[str, dict[str, float]] = {p: {g: 1.0 for g in gs} for p, gs in GEOMETRY_CHOICES.items()}
+DRAW_RULE = ("restart §7: per session, seeded, over GEOMETRY_CHOICES minus excluded modes, independent of the steering "
+             "target; equal weights except yt fullscreen at 1/3 of the full support (prereg d32a48ce, the 10-22 tip); a "
+             "fullscreen draw while a sibling holds the token is redrawn among the others")
+# prereg d32a48ce (label diversity at the 10-22 tip): yt's fullscreen draw weight is 1/3 of yt's full support, the four
+# other entries sharing the rest equally; the token deferral still applies, so the realised share is reported, not assumed
+YT_FULLSCREEN_SHARE = 1.0 / 3.0
+
+
+def _weights(platform: str, choices: list[str]) -> dict[str, float]:
+    if platform != "youtube":
+        return {g: 1.0 for g in choices}
+    rest = [g for g in choices if not g.startswith("fullscreen")]
+    fs = [g for g in choices if g.startswith("fullscreen")]
+    w = {g: 1.0 for g in rest}
+    w.update({g: YT_FULLSCREEN_SHARE * len(rest) / (1.0 - YT_FULLSCREEN_SHARE) / len(fs) for g in fs})
+    return w
+
+
+DRAW_WEIGHTS: dict[str, dict[str, float]] = {p: _weights(p, gs) for p, gs in GEOMETRY_CHOICES.items()}
 
 
 def draw_geometry(platform: str, seed: str, exclude_modes: tuple = (), token_held: bool = False) -> dict | None:

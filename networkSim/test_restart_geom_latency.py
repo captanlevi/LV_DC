@@ -22,13 +22,18 @@ import test_trio_slots as TS  # noqa: E402  (its run_trio harness)
 def test_geometry_draw():
     yt = G.draw_geometry("youtube", "s")
     assert yt["support"] == G.GEOMETRY_CHOICES["youtube"] and "fullscreen:1920x1080" in yt["support"]
-    assert "theater:1920x1080" in yt["support"] and set(yt["weights"].values()) == {0.2}, yt
+    assert "theater:1920x1080" in yt["support"], yt                                 # prereg d32a48ce: fullscreen 1/3
+    assert abs(yt["weights"]["fullscreen:1920x1080"] - 1 / 3) < 1e-6 and all(
+        abs(v - 1 / 6) < 1e-6 for g, v in yt["weights"].items() if not g.startswith("fullscreen")), yt
+    nofs = G.draw_geometry("youtube", "s", ("fullscreen",))                        # excluded: the other four, equal
+    assert set(nofs["weights"].values()) == {0.25}, nofs
     assert G.draw_geometry("youtube", "s") == yt                                   # seeded: the same seed, the same draw
     assert G.draw_geometry("twitch", "s")["support"] == G.GEOMETRY_CHOICES["twitch"]
     assert G.draw_geometry("youtube", "s", ("fullscreen",))["support"] == G.GEOMETRY_CHOICES["youtube"][:4]
     assert G.draw_geometry("nope", "s") is None
     n = collections.Counter(G.draw_geometry("youtube", f"r:{i}")["geometry"] for i in range(5000))
-    assert set(n) == set(G.GEOMETRY_CHOICES["youtube"]) and all(900 < v < 1100 for v in n.values()), n   # equal shares
+    assert set(n) == set(G.GEOMETRY_CHOICES["youtube"]) and 1550 < n["fullscreen:1920x1080"] < 1780 and all(
+        750 < v < 920 for g, v in n.items() if not g.startswith("fullscreen")), n   # 1/3 and 1/6 each
     # the one-fullscreen token: a fullscreen draw is redrawn among the others by the same generator, recorded
     held = [G.draw_geometry("youtube", f"r:{i}", token_held=True) for i in range(500)]
     assert not any(r["geometry"].startswith("fullscreen") for r in held)
