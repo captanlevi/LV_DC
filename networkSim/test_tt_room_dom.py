@@ -10,6 +10,7 @@ import importlib.util
 import json
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 
@@ -82,6 +83,7 @@ def main() -> int:
     test_room_enter_fields_and_names()
     test_net_listener_events()
     test_net_listener_failure_never_raises()
+    test_per_port_attach_and_attribution()
     print("test_tt_room_dom: ok")
     return 0
 
@@ -149,13 +151,73 @@ def test_net_listener_events():
 
 
 def test_net_listener_failure_never_raises():
+    """A port with no page yet / a refused connect: the listener retries each second, never raises, stops on request."""
+    import threading
     with tempfile.TemporaryDirectory() as d:
         def boom(url):
             raise OSError("no page")
         L = R.NetListener(Path(d), "ws://x", None, connect=boom)
-        L.run()                                                         # logs and returns
-        assert L.errors == 1
+        th = threading.Thread(target=L.run)
+        th.start()
+        time.sleep(1.5)
+        L.stop_ev.set()
+        th.join(5)
+        assert not th.is_alive() and L.errors >= 1 and L.attaches == 0
     assert R.NET_BUFFER["maxResourceBufferSize"] <= 1024 * 1024        # bounded buffers (supervisor 03:54)
+
+
+def test_per_port_attach_and_attribution():
+    """Bundle dry-run FAIL fix: the listener is per tt slot PORT (from the slots log's trio_up), attaches as soon as the
+    port has a page (here on its 2nd poll) and writes each room_enter row to the session running on the port at that
+    moment; with none running the row is dropped and counted; counts taken for a session never carry another's."""
+    import threading
+    with tempfile.TemporaryDirectory() as d:
+        troot = Path(d) / "_trio"
+        (troot / "_summaries").mkdir(parents=True)
+        log = troot / "_summaries" / "trio_slots.jsonl"
+        log.write_text(json.dumps({"event": "trio_up", "run": "r1", "slots": {
+            "yt1": {"platform": "youtube", "cdp_port": 9223}, "tt1": {"platform": "tiktok", "cdp_port": 9224},
+            "tt2": {"platform": "tiktok", "cdp_port": 9225}}}) + "\n")
+        assert R.tt_slot_ports(troot) == [9224, 9225]
+        with open(log, "a") as fh:
+            fh.write(json.dumps({"event": "trio_down", "run": "r1"}) + "\n")
+        assert R.tt_slot_ports(troot) == []
+        s1, s2 = Path(d) / "ti_1", Path(d) / "ti_2"
+        s1.mkdir()
+        s2.mkdir()
+        on = {"sd": None}
+        polls = {"n": 0}
+
+        def url_of(port):
+            polls["n"] += 1
+            return "ws://page" if polls["n"] >= 2 else None
+        ws = _WS()
+        ws.recv = lambda: (_ for _ in ()).throw(TimeoutError("timed out"))
+        L = R.NetListener(None, None, 9224, connect=lambda u: ws, sd_of=lambda p: on["sd"], ws_url_of=url_of)
+        th = threading.Thread(target=L.run)
+        th.start()
+        time.sleep(1.5)
+        assert L.attaches == 1 and ws.sent and ws.sent[0]["method"] == "Network.enable"
+        L.stop_ev.set()
+        th.join(5)
+        enter = json.dumps(json.loads((HERE / "fixtures" / "tt_room_enter_reduced.json").read_text()))
+        bodies = {}
+        for who, rid in ((None, "1"), (s1, "2"), (s2, "3")):
+            on["sd"] = who
+            L.handle(ws, {"method": "Network.responseReceived", "params": {"requestId": rid,
+                     "response": {"url": "https://webcast.tiktok.com/webcast/room/enter/"}}}, bodies)
+            L.handle(ws, {"method": "Network.loadingFinished", "params": {"requestId": rid}}, bodies)
+            L.handle(ws, {"id": ws.sent[-1]["id"], "result": {"body": enter, "base64Encoded": False}}, bodies)
+        assert L.unattributed == 1
+        assert len((s1 / "tt_room_dom.jsonl").read_text().splitlines()) == 1
+        assert len((s2 / "tt_room_dom.jsonl").read_text().splitlines()) == 1
+        on["sd"] = s1
+        L._add({"WebcastLinkMicBattle": 1})
+        on["sd"] = s2
+        L._add({"WebcastLinkMicArmies": 2})                    # the port's session changed: s1's counts dropped
+        assert L.take_counts(s1) == {} and L.counts == {}
+        L._add({"WebcastLinkMicArmies": 1})
+        assert L.take_counts(s2) == {"WebcastLinkMicArmies": 1}
 
 
 if __name__ == "__main__":

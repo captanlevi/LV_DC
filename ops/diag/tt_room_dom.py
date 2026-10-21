@@ -79,11 +79,20 @@ def count_names(data: bytes) -> dict:
 
 
 class NetListener(threading.Thread):
-    """The passive Network listener on one tt page (its own CDP websocket; never the session's client)."""
+    """The passive Network listener on one tt slot's Chrome (its own CDP websocket; never the session's client).
+    Per PORT, not per session (bundle dry-run FAIL 2026-10-21: attached on the sampler's 30 s session poll, it missed
+    every room/enter): started at the window's trio_up from the slots log, it polls the port's /json every second,
+    attaches to the page target as soon as one exists (before the picker's /live -> room navigation) and re-attaches
+    after a Chrome restart. Each row goes to the session running on the port at that moment (sd_of(port)); none
+    running: the row is dropped and counted."""
 
-    def __init__(self, sd: Path, ws_url: str, port: int | None, connect=None):
-        super().__init__(daemon=True, name=f"tt-net-{sd.name}")
+    def __init__(self, sd: Path | None, ws_url: str | None, port: int | None, connect=None, sd_of=None, ws_url_of=None):
+        super().__init__(daemon=True, name=f"tt-net-{port}")
         self.sd, self.ws_url, self.port = sd, ws_url, port
+        self._sd_of = sd_of or (lambda port: self.sd)          # the session on the port now
+        self._ws_url_of = ws_url_of or (lambda port: self.ws_url)
+        self.unattributed = 0
+        self.attaches = 0
         self._connect = connect or self._ws_connect
         self.counts: dict = {}
         self.lock = threading.Lock()
@@ -105,13 +114,21 @@ class NetListener(threading.Thread):
         ws.send(json.dumps({"id": self._seq, "method": method, "params": params or {}}))
         return self._seq
 
-    def take_counts(self) -> dict:
+    def take_counts(self, sd: Path | None = None) -> dict:
+        """The counts since the last take, for session sd (counts gathered while another session ran are dropped)."""
         with self.lock:
             c, self.counts = self.counts, {}
-        return c
+            owner, self._count_sd = getattr(self, "_count_sd", None), None
+        return c if sd is None or owner in (None, str(sd)) else {}
 
     def _add(self, c: dict) -> None:
+        if not c:
+            return
+        sd = self._sd_of(self.port)
         with self.lock:
+            if sd is not None and getattr(self, "_count_sd", None) not in (None, str(sd)):
+                self.counts = {}                       # the port's session changed: the old one's counts are not its
+            self._count_sd = str(sd) if sd is not None else None
             for k, v in c.items():
                 self.counts[k] = self.counts.get(k, 0) + v
 
@@ -145,39 +162,56 @@ class NetListener(threading.Thread):
                            **room_enter_fields(json.loads(data.decode("utf-8", "replace")))}
                 except ValueError:
                     row = {"kind": "room_enter", "ts": time.time(), "cdp_port": self.port, "unparsed": True}
-                with open(self.sd / "tt_room_dom.jsonl", "a") as fh:
-                    fh.write(json.dumps(row) + "\n")
+                sd = self._sd_of(self.port)
+                if sd is None:
+                    self.unattributed += 1
+                else:
+                    with open(Path(sd) / "tt_room_dom.jsonl", "a") as fh:
+                        fh.write(json.dumps(row) + "\n")
             else:
                 self._add(count_names(data))
 
-    def run(self) -> None:
-        try:
-            ws = self._connect(self.ws_url)
-            self._send(ws, "Network.enable", NET_BUFFER)
-        except Exception as e:
-            print(f"{time.strftime('%T')} {self.sd.name} net listener failed to start: {e!r}", flush=True)
-            self.errors += 1
-            return
-        bodies: dict = {}
+    def _attach(self):
+        """Wait (1 s polls) for the port's page target and connect with the Network domain on; None when stopped."""
         while not self.stop_ev.is_set():
             try:
-                raw = ws.recv()
-            except Exception as e:       # a timeout (no event this second) or a closed page
-                if "timed out" in str(e).lower() or type(e).__name__.endswith("TimeoutException"):
-                    continue
-                print(f"{time.strftime('%T')} {self.sd.name} net listener stopped: {e!r}", flush=True)
-                self.errors += 1
-                break
-            try:
-                self.handle(ws, json.loads(raw), bodies)
-            except Exception as e:       # a bad event never stops the listener
+                url = self._ws_url_of(self.port)
+                if url:
+                    ws = self._connect(url)
+                    self._send(ws, "Network.enable", NET_BUFFER)
+                    self.attaches += 1
+                    return ws
+            except Exception as e:
                 self.errors += 1
                 if self.errors <= 5:
-                    print(f"{time.strftime('%T')} {self.sd.name} net event skipped: {e!r}", flush=True)
-        try:
-            ws.close()
-        except Exception:
-            pass
+                    print(f"{time.strftime('%T')} port {self.port} net attach failed: {e!r}", flush=True)
+            self.stop_ev.wait(1.0)
+        return None
+
+    def run(self) -> None:
+        while not self.stop_ev.is_set():
+            ws = self._attach()
+            if ws is None:
+                return
+            bodies: dict = {}
+            while not self.stop_ev.is_set():
+                try:
+                    raw = ws.recv()
+                except Exception as e:   # a timeout (no event this second) or a closed page: re-attach
+                    if "timed out" in str(e).lower() or type(e).__name__.endswith("TimeoutException"):
+                        continue
+                    self.errors += 1
+                    break
+                try:
+                    self.handle(ws, json.loads(raw), bodies)
+                except Exception as e:   # a bad event never stops the listener
+                    self.errors += 1
+                    if self.errors <= 5:
+                        print(f"{time.strftime('%T')} port {self.port} net event skipped: {e!r}", flush=True)
+            try:
+                ws.close()
+            except Exception:
+                pass
 
 
 def live_session():
@@ -222,39 +256,80 @@ def sample(sd: Path, base: str, port: int | None, listener: "NetListener | None"
     page.close()
     r["ts"], r["cdp_port"] = time.time(), port
     if listener is not None:              # the 30 s row carries the message-type counts since the last one
-        r["msg_counts"], r["net_listener"] = listener.take_counts(), {"alive": listener.is_alive(),
-                                                                      "errors": listener.errors}
+        r["msg_counts"] = listener.take_counts(sd)
+        r["net_listener"] = {"alive": listener.is_alive(), "errors": listener.errors, "attaches": listener.attaches,
+                             "unattributed": listener.unattributed}
     with open(sd / "tt_room_dom.jsonl", "a") as fh:
         fh.write(json.dumps(r) + "\n")
 
 
+def tt_slot_ports(troot: Path) -> list[int]:
+    """The tt slots' CDP ports of the run that is up: the slots log's last trio_up without a later trio_down."""
+    log = troot / T.SLOTS_LOG
+    up = None
+    try:
+        for line in log.read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("event") == "trio_up":
+                up = e
+            elif e.get("event") == "trio_down" and up is not None and e.get("run") == up.get("run"):
+                up = None
+    except OSError:
+        return []
+    return sorted(int(s["cdp_port"]) for s in ((up or {}).get("slots") or {}).values()
+                  if s.get("platform") == "tiktok" and s.get("cdp_port"))
+
+
+def page_ws_url(port: int) -> str | None:
+    """The first page target's websocket on a slot's port (browser._get_page_ws_url's rule, any port)."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://localhost:{port}/json", timeout=2) as r:
+            targets = json.loads(r.read())
+    except Exception:
+        return None
+    for t in targets:
+        if t.get("type") == "page" and "devtools" not in t.get("url", ""):
+            return t.get("webSocketDebuggerUrl")
+    return None
+
+
 def main(argv=None) -> None:
     net = "--no-net" not in (sys.argv[1:] if argv is None else argv)
-    listeners: dict = {}
-    idle_since = time.time()
+    troot = DATA / T.TRIO_DIR
+    listeners: dict = {}                              # port -> NetListener (the window's tt slots)
+    session_on: dict = {}                             # port -> the session running there now
+
+    def sd_of(port):
+        return session_on.get(port)
+    idle_since, last_sample = time.time(), 0.0
     while time.time() - idle_since < 600:
+        if net:                                       # every second: the up run's tt ports, a listener on each
+            ports = tt_slot_ports(troot)
+            for port in [p for p in listeners if p not in ports]:
+                listeners.pop(port).stop_ev.set()     # the run went down
+            for port in ports:
+                if port not in listeners:
+                    listeners[port] = NetListener(None, None, port, sd_of=sd_of, ws_url_of=page_ws_url)
+                    listeners[port].start()
+        running = running_trio_tt(troot)
+        session_on.clear()
+        session_on.update({p: s for s, p in running})
         todo = [(s, SINGLE_BASE, None) for s in [live_session()] if s]
-        todo += [(s, f"http://localhost:{p}", p) for s, p in running_trio_tt(DATA / T.TRIO_DIR)]
-        for key in [k for k in listeners if k not in {(str(s), p) for s, _, p in todo}]:
-            listeners.pop(key).stop_ev.set()          # the session ended: its listener stops
-        if not todo:
-            time.sleep(30)
-            continue
-        idle_since = time.time()
-        for sd, base, port in todo:
-            key = (str(sd), port)
-            if net and key not in listeners:
+        todo += [(s, f"http://localhost:{p}", p) for s, p in running]
+        if todo or listeners:
+            idle_since = time.time()
+        if todo and time.time() - last_sample >= 30:
+            last_sample = time.time()
+            for sd, base, port in todo:
                 try:
-                    B.CDP_BASE = base
-                    listeners[key] = NetListener(sd, B._get_page_ws_url(), port)
-                    listeners[key].start()
-                except Exception as e:    # never touches the session
-                    print(f"{time.strftime('%T')} {sd.name} net listener not started: {e!r}", flush=True)
-            try:
-                sample(sd, base, port, listeners.get(key))
-            except Exception as e:  # a missed sample never matters
-                print(f"{time.strftime('%T')} {sd.name} sample failed: {e!r}", flush=True)
-        time.sleep(30)
+                    sample(sd, base, port, listeners.get(port))
+                except Exception as e:  # a missed sample never matters
+                    print(f"{time.strftime('%T')} {sd.name} sample failed: {e!r}", flush=True)
+        time.sleep(1)
 
 
 if __name__ == "__main__":
