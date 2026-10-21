@@ -2453,9 +2453,37 @@ def _timing(call_ms: list) -> dict:
             "max_ms": round(v[-1], 3)}
 
 
+# levi 18:36 (option A, record-only, the 10-22 tip): tt's codec and renditions from what the page already holds: the
+# WebCodecs capability flag the player stored (localStorage webcodecs_ability_key_temporary.isSupportH265, as
+# stuck.TT_ROOM_JS reads it) and each sdk_params rendition in the room data (VCodec, resolution, vbitrate,
+# stream_suffix), parsed in the page so only that short list crosses CDP. No injection, no request, no click. Every
+# TT_CODEC_EVERY_S, written to meta.json tt_codec on change, timed into stream_read_timing.tt_codec. tt's decode_hw is
+# not readable from the page and stays absent (levi 18:36).
+TT_CODEC_EVERY_S = 30.0
+TT_CODEC_JS = """(() => { try {
+  let h265 = null;
+  try { const a = JSON.parse(localStorage.getItem('webcodecs_ability_key_temporary') || 'null'); if (a) h265 = !!a.isSupportH265; } catch (e) {}
+  const t = Array.from(document.scripts).map(s => s.textContent || '').filter(x => x.includes('sdk_params')).join('\\n').split('\\\\').join('');
+  const key = '"sdk_params":"{', out = [], seen = new Set();
+  for (let i = t.indexOf(key); i >= 0 && out.length < 64; i = t.indexOf(key, i + 1)) {
+    let j = i + key.length - 1, depth = 0, k = j;
+    for (; k < Math.min(t.length, j + 4000); k++) { depth += t[k] === '{' ? 1 : t[k] === '}' ? -1 : 0; if (depth === 0) break; }
+    const b = t.slice(j, k + 1), g = (re) => { const m = b.match(re); return m ? m[1] : null; };
+    const r = {codec: g(/"VCodec":"(\\w+)"/), resolution: g(/"resolution":"([0-9x]*)"/),
+               vbitrate: g(/"vbitrate":(\\d+)/), suffix: g(/"stream_suffix":"([^"]*)"/)};
+    const id = JSON.stringify(r);
+    if (r.codec && !seen.has(id)) { seen.add(id); out.push(r); }
+  }
+  return JSON.stringify({h265: h265, renditions: out});
+} catch (e) { return null; } })()"""
+
+
 class YtLadderRecorder:
     """meta.json yt_ladder: the reads that changed ({t, formats (itag, mimeType with its codecs, bitrate, width, height,
-    qualityLabel, fps), levels, ad}, at most WATCH_LOG_MAX), n_reads, n_null."""
+    qualityLabel, fps), levels, ad}, at most WATCH_LOG_MAX), n_reads, n_null. TtCodecRecorder (meta.json tt_codec) is
+    the same recorder over TT_CODEC_JS's {h265, renditions}."""
+    KEYS = ("formats", "levels")                   # a read with none of these non-empty is a null read
+    RULE = "levi 16:27: record-only; page-held formats + getAvailableQualityLevels, written on change"
 
     def __init__(self, every_s: float = YT_LADDER_EVERY_S):
         self.every_s, self.next_at = every_s, 0.0
@@ -2475,21 +2503,38 @@ class YtLadderRecorder:
             v = json.loads(value) if value else None
         except ValueError:
             v = None
-        if not v or not (v.get("formats") or v.get("levels")):
+        if not v or not any(v.get(k) for k in self.KEYS):
             self.n_null += 1
             return
         key = json.dumps(v, sort_keys=True)
         if key != self._last and len(self.reads) < WATCH_LOG_MAX:
-            self.reads.append({"t": now, "formats": v.get("formats") or [], "levels": v.get("levels"),
-                               "ad": bool(v.get("ad"))})       # brad 16:27: an ad's player response is marked
+            self.reads.append(self._row(v, now))
         self._last = key
+
+    def _row(self, v: dict, now: float) -> dict:
+        return {"t": now, "formats": v.get("formats") or [], "levels": v.get("levels"),
+                "ad": bool(v.get("ad"))}                        # brad 16:27: an ad's player response is marked
 
     def timing(self) -> dict:
         return _timing(self.call_ms)
 
     def record(self) -> dict:
         return {"every_s": self.every_s, "n_reads": self.n_reads, "n_null": self.n_null, "reads": self.reads,
-                "rule": "levi 16:27: record-only; page-held formats + getAvailableQualityLevels, written on change"}
+                "rule": self.RULE}
+
+
+class TtCodecRecorder(YtLadderRecorder):
+    """meta.json tt_codec (levi 18:36, option A): the reads that changed ({t, h265, renditions [{codec, resolution,
+    vbitrate, suffix}]}); a read with no rendition and no capability flag is a null read."""
+    KEYS = ("renditions", "h265")
+    RULE = ("levi 18:36 (A): record-only; the page-held WebCodecs capability flag + the room's sdk_params renditions, "
+            "written on change; decode_hw not readable (absent)")
+
+    def __init__(self, every_s: float = TT_CODEC_EVERY_S):
+        super().__init__(every_s)
+
+    def _row(self, v: dict, now: float) -> dict:
+        return {"t": now, "h265": v.get("h265"), "renditions": v.get("renditions") or []}
 
 
 def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_path: Path | None = None,
@@ -2564,10 +2609,10 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                     on_stream_ended(trig)
                 except Exception as exc:
                     print(f"[browser] stream_ended abort failed: {exc!r}", flush=True)
-        if yt_ladder is not None and yt_ladder.due(time.time()):           # levi 16:27: record-only, timed
+        if yt_ladder is not None and yt_ladder.due(time.time()):           # levi 16:27 / 18:36: record-only, timed
             try:
                 t_call = time.perf_counter()
-                val = page.eval(YT_LADDER_JS)
+                val = page.eval(TT_CODEC_JS if isinstance(yt_ladder, TtCodecRecorder) else YT_LADDER_JS)
                 yt_ladder.feed(val, time.time(), (time.perf_counter() - t_call) * 1000.0)
             except Exception:
                 yt_ladder.feed(None, time.time())
@@ -3159,6 +3204,8 @@ class BrowserSession:
         self.platform = platform
         # levi 16:27: yt's ladder, record-only, one recorder for the session (re-entries included)
         self.yt_ladder: "YtLadderRecorder | None" = YtLadderRecorder() if platform == "youtube" else None
+        # levi 18:36 (A): tt's codec / renditions, record-only, one recorder for the session
+        self.tt_codec: "TtCodecRecorder | None" = TtCodecRecorder() if platform == "tiktok" else None
         # restart §8: twitch's drawn low-latency setting ("on" / "off"; None = the profile's own, untouched), set before
         # the first navigation and read back once (tw_latency.py); its record goes to meta.json tw_low_latency
         self.tw_low_latency = tw_low_latency if platform == "twitch" else None
@@ -3487,7 +3534,7 @@ class BrowserSession:
                   self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
                   self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch,
                   self.resumer, self._stream_ended if self.platform in STREAM_ENDED_PLATFORMS else None,
-                  self._stream_watch(), self.yt_ladder),
+                  self._stream_watch(), self.yt_ladder or self.tt_codec),
             daemon=True,
             name="ad-watcher",
         )

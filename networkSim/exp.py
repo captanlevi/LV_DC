@@ -982,8 +982,11 @@ if __name__ == "__main__":
                               stream_ended=browser.stream_ended,
                               stream_read_timing=({**(browser.stream_watch.timing() if browser.stream_watch else {}),
                                                    **({"yt_ladder": browser.yt_ladder.timing()} if browser.yt_ladder
+                                                      else {}),
+                                                   **({"tt_codec": browser.tt_codec.timing()} if browser.tt_codec
                                                       else {})} or None),
                               yt_ladder=browser.yt_ladder.record() if browser.yt_ladder else None,
+                              tt_codec=browser.tt_codec.record() if browser.tt_codec else None,
                               lowstate_hold_available=browser.lowstate_hold_available,
                               player_dead_watch=browser.player_dead_watch if browser.platform == "tiktok" else None,
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,

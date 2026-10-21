@@ -93,13 +93,56 @@ def test_js():
     assert nop == {"formats": [], "levels": None, "ad": False}, nop
 
 
+TT_STUB = r"""
+const [text, flag] = JSON.parse(process.argv[2]);
+global.localStorage = {getItem: (k) => k === 'webcodecs_ability_key_temporary' && flag !== null
+                       ? JSON.stringify({isSupportH265: flag}) : null};
+global.document = {scripts: [{textContent: 'x'}, {textContent: text}]};
+console.log(JSON.stringify({r: eval(process.argv[1])}));
+"""
+
+
+def tt_js(text, flag=True):
+    out = subprocess.run([shutil.which("node"), "-e", TT_STUB, B.TT_CODEC_JS, json.dumps([text, flag])],
+                         capture_output=True, text=True, check=True)
+    return json.loads(json.loads(out.stdout)["r"])
+
+
+def test_tt_codec_js():
+    """levi 18:36 (A): the page-held capability flag and the sdk_params renditions (test_tt_stream's room shape:
+    JSON-in-JSON with backslashes), parsed in the page; read only, no injection."""
+    import test_tt_stream as TS
+    room = TS.page([("h264", "hd", "1280x720"), ("h264", "ao", "")],
+                   [("h265", "hd5", "1280x720"), ("h265", "sd5", "854x480")])
+    v = tt_js(room)
+    assert v["h265"] is True and {(r["codec"], r["suffix"], r["resolution"]) for r in v["renditions"]} == {
+        ("h264", "hd", "1280x720"), ("h264", "ao", ""), ("h265", "hd5", "1280x720"), ("h265", "sd5", "854x480")}, v
+    assert tt_js("no room data here", None) == {"h265": None, "renditions": []}
+    for word in ("setPlaybackQuality", ".configure", "prototype", "fetch(", "click"):
+        assert word not in B.TT_CODEC_JS, word
+
+
+def test_tt_codec_recorder():
+    r = B.TtCodecRecorder()
+    assert B.TT_CODEC_EVERY_S == 30.0 and r.every_s == 30.0
+    a = json.dumps({"h265": True, "renditions": [{"codec": "h265", "resolution": "1280x720", "vbitrate": "1", "suffix": "hd5"}]})
+    r.feed(a, 1.0, 3.0)
+    r.feed(a, 31.0, 2.0)                                           # unchanged
+    r.feed(json.dumps({"h265": None, "renditions": []}), 61.0)     # null
+    rec = r.record()
+    assert rec["n_reads"] == 3 and rec["n_null"] == 1 and len(rec["reads"]) == 1 and rec["reads"][0]["h265"] is True
+    assert rec["reads"][0]["renditions"][0]["suffix"] == "hd5" and "decode_hw" in rec["rule"] and r.timing()["n"] == 2
+
+
 def main() -> int:
     test_never_sets_a_quality()
     test_recorder()
+    test_tt_codec_recorder()
     if not shutil.which("node"):
         print("SKIP (js): node not found")
         return 0
     test_js()
+    test_tt_codec_js()
     print("test_yt_ladder: ok")
     return 0
 
