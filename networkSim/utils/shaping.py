@@ -456,3 +456,13 @@ def next_state_no_self(curr: str, transition_dict: dict[str, dict[str, float]], 
     if not row:
         return curr
     return rng.choices(list(row), weights=list(row.values()), k=1)[0]
+
+
+def hold_schedule(state: str) -> dict:
+    """exp.py --hold-state (t56 decode_stress, diag only): one state for the whole session. The transition holds it, and
+    the low-state cap is lifted (levi gate 49d: with the platform's cap kept, a held state <= 3 was forced to state 4
+    after the cap; yt 1 -> 4 at t+381): max_consecutive_low infinite, low_cap None (meta.json low_state_cap reads None)."""
+    if state not in SCENARIOS:
+        raise ValueError(f"--hold-state {state!r}: no such shaper state")
+    return {"transition": {state: {state: 1.0}}, "matrix_id": f"hold:{state}", "low_cap": None,
+            "max_consecutive_low": math.inf}

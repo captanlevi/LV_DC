@@ -74,6 +74,33 @@ def test_trio_stress_holds_pinned_state():
             assert (("--hold-state" in c) and c[c.index("--hold-state") + 1] == "10") is on, (on, c)
 
 
+
+def test_hold_state_lifts_the_low_cap():
+    """levi gate 49d (00:45, the next boundary): exp --hold-state holds its state for the whole session at every low
+    state (1-4) and a high one: the low-state cap is lifted (at 49d5a19f the platform's cap forced state 4 after it);
+    the cap kept, the defect reproduces; the hold is a base schedule with no cap in seconds; exp.py uses hold_schedule."""
+    from utils.netStat import net_episode_generator
+    from utils.shaping import hold_schedule, schedule_of
+    for st in ("1", "2", "3", "4", "10"):
+        h = hold_schedule(st)
+        assert h["matrix_id"] == f"hold:{st}" and h["low_cap"] is None
+        g = net_episode_generator(60, h["transition"], forced_initial_state=st, max_episodes=12,
+                                  max_consecutive_low=h["max_consecutive_low"])
+        assert {n.state for n in g} == {st}, st
+        sch = schedule_of(h["matrix_id"], h["low_cap"], 12)
+        assert sch["schedule"] == "base" and sch["low_cap_s"] is None
+    kept = {n.state for n in net_episode_generator(60, {"1": {"1": 1.0}, "4": {"1": 1.0}}, forced_initial_state="1",
+                                                   max_episodes=12, max_consecutive_low=6)}
+    assert kept == {"1", "4"}                                    # the 49d5a19f behaviour: forced to 4 after the cap
+    try:
+        hold_schedule("99")
+        raise AssertionError("an unknown state must be refused")
+    except ValueError as e:
+        assert "no such shaper state" in str(e)
+    exp = (HERE / "exp.py").read_text()
+    assert "_hold = hold_schedule(args.hold_state)" in exp and 'max_consecutive_low=_hold["max_consecutive_low"]' in exp
+
+
 def test_commands():
     a = SimpleNamespace(state="10", yt_fullscreen=True, dpms_off=True, layout="composite", iface="wlp0s20f3",
                         python="/v/python")

@@ -711,12 +711,14 @@ if __name__ == "__main__":
         import trio_slots as _ts
         if not args.slot or _ts.TRIO_DIR != _ts.STRESS_DIR:
             sys.exit("--hold-state is decode_stress only: it needs --slot and LVDC_TRIO_DIR=_trio_stress")
-        from utils.shaping import SCENARIOS
-        if args.hold_state not in SCENARIOS:
-            sys.exit(f"--hold-state {args.hold_state!r}: no such shaper state")
-        transition, matrix_id = {args.hold_state: {args.hold_state: 1.0}}, f"hold:{args.hold_state}"
+        from utils.shaping import hold_schedule
+        try:
+            _hold = hold_schedule(args.hold_state)
+        except ValueError as e:
+            sys.exit(str(e))
+        transition, matrix_id, low_cap = _hold["transition"], _hold["matrix_id"], _hold["low_cap"]
         args.initial_state = args.hold_state
-        SHAPER_OPTS.update(initial_state_fn=None)
+        SHAPER_OPTS.update(initial_state_fn=None, max_consecutive_low=_hold["max_consecutive_low"])
     # Q am. 17: the matrix id's schedule (base, or a "<m>@slow|fast" family: its episode length, self-loop rule, re-draw
     # and low-state cap in seconds, the base matrix's cap x 60 s); recorded in meta.json shaper
     # restart §4: a drawn session length (--session-minutes) replaces the platform's base length in @slow's division
