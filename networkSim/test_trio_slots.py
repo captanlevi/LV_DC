@@ -760,7 +760,7 @@ def test_run_trio():
         assert rec["reason"] == "levi 00261 coverage: 60 fps tier" and rec["initial_state"] == "10", rec
         yc, ye = by["youtube"]
         assert "LVDC_PICK_PINNED" not in ye and yc[yc.index("--initial-state") + 1] == "9"
-        for bad in ("twitch:channel=x", "twitch:state=11", "youtube:category=Chess", "twitch", "zz:state=3"):
+        for bad in ("twitch:channel=x", "twitch:state=12", "youtube:category=Chess", "twitch", "zz:state=3"):
             try:
                 O.parse_pin(bad, "r")
                 raise AssertionError(bad)

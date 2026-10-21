@@ -254,7 +254,7 @@ def test_abr_only_classes():
     after; the report lists them with met / insufficient, never as a deficit."""
     import coverage_report as C
     from utils.shaping import PLATFORM_MATRICES
-    assert set(C.ABR_ONLY) == {("twitch", "Q_1080p"), ("youtube", "Q_240p"), ("youtube", "Q_480p")}
+    assert set(C.ABR_ONLY) == {("youtube", "Q_240p"), ("youtube", "Q_480p")}      # tw Q_1080p: TW-H (prereg d32a48ce)
     cls = {c: {"sessions_ge_min": 5, "minutes": 50} for c in C.CLASSES["youtube"]}
     snap = {"platform": "youtube", "classes": {**cls, "Q_240p": {"sessions_ge_min": 0, "minutes": 0},
                                                 "Q_480p": {"sessions_ge_min": 1, "minutes": 3}},
@@ -266,7 +266,7 @@ def test_abr_only_classes():
     assert C.abr_only(snap) == {"Q_240p": {"sessions_ge_min": 0, "floor": 5, "minutes": 0, "status": "insufficient"},
                                 "Q_480p": {"sessions_ge_min": 1, "floor": 5, "minutes": 3, "status": "insufficient"}}
     tw = {"platform": "twitch", "classes": {c: {"sessions_ge_min": 5, "minutes": 50} for c in C.CLASSES["twitch"]}}
-    assert C.abr_only(tw) == {"Q_1080p": {"sessions_ge_min": 5, "floor": 5, "minutes": 50, "status": "met"}}
+    assert C.abr_only(tw) == {}                    # tw Q_1080p is reachable through TW-H (prereg d32a48ce item 4)
 
 
 

@@ -131,7 +131,10 @@ SUMMARY_FILE = "_summaries/coverage_last.json"
 INITIAL_STATE_RULE = ("Q am. 15 (5): a tier-class target starts in its band, drawn from the matrix's stationary "
                       "distribution restricted to the band")
 LOW_YIELD_MIN_PER_SESSION, LOW_YIELD_MIN_SESSIONS = 0.5, 5   # Q am. 15 (6): minutes per session, over >= 5 sessions
-MATRIX_TARGETS = {("youtube", "H"): ("Q_1080p",)}   # Q am. 15 (6): yt-H is drawn only for the Q_1080p target
+MATRIX_TARGETS = {("youtube", "H"): ("Q_1080p",)}
+# prereg d32a48ce item 4: TW-H is a candidate only when allowed explicitly (--coverage-allowed) or under --trio-steer
+# (orchestrate adds it); without an allowed list the balancer's candidates are as before the 10-22 tip
+OPT_IN_MATRICES = {("twitch", "TW-H")}   # Q am. 15 (6): yt-H is drawn only for the Q_1080p target
 # Q am. 17 (2026-10-20): the schedule families ("<m>@slow|fast", utils/shaping.SCHEDULES) each carry a floor of accepted
 # sessions of record (a schedule-diversity floor, not a readable stratum); every deficit (class, entry state, family) is
 # ranked on one scale, its share = missing / its floor; a family qualifies for a tier class on its own simulated
@@ -406,7 +409,10 @@ def class_band(platform: str, cls: str) -> dict | None:
         return None
     kbit, kind, src = r
     need = RUNG_MARGIN[kind] * kbit
-    return {"band": sorted((s for s in SCENARIOS if state_rate(s) >= need), key=int), "rung_kbit": kbit, "kind": kind,
+    # the platform's own states only (TW-H's state 11 exists on twitch alone, prereg d32a48ce item 4)
+    own = {st for m in (PLATFORM_MATRICES.get(platform) or {}).values() for st in m[0]} or set(SCENARIOS)
+    return {"band": sorted((s for s in SCENARIOS if s in own and state_rate(s) >= need), key=int), "rung_kbit": kbit,
+            "kind": kind,
             "margin": RUNG_MARGIN[kind], "need_kbit": round(need, 1), "state_rate": STATE_RATE, "source": src,
             **({"codec": YT_RUNG_CODEC} if platform == "youtube" else {}),
             **({"regime": TT_RUNG_REGIME} if platform == "tiktok" else {})}
@@ -508,7 +514,7 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
     trio, restart §7: the geometry is drawn per session, independent of the target): geometry_forced stays None and
     geometry_coupling records why."""
     platform = snap["platform"]
-    ids = sorted(allowed or matrices)
+    ids = sorted(allowed or [m for m in matrices if (platform, m) not in OPT_IN_MATRICES])
     states = sorted({s for m in ids for s in matrices[m][0]}, key=int) if platform == "tiktok" else []
     seed = DEFICIT_TIE_SEED + int((snap.get("attempts") or {}).get("total", 0))
     defs = deficits(snap, states, [m for m in ids if "@" in m], seed=seed)

@@ -70,7 +70,8 @@ def test_am15_bands():
     assert C.state_rate("10") == 7500.0 and C.class_band("youtube", "STALL") is None
     b = C.class_band("youtube", "Q_1080p")
     assert (b["band"], b["need_kbit"], b["margin"], b["codec"]) == (["9", "10"], 4256.0, 1.4, "vp9"), b
-    assert C.class_band("twitch", "Q_720p")["band"] == ["9", "10"] and C.class_band("twitch", "Q_1080p")["band"] == []
+    # prereg d32a48ce item 4: TW-H's state 11 joins twitch's top bands (twitch's own states only; yt / tt unchanged)
+    assert C.class_band("twitch", "Q_720p")["band"] == ["9", "10", "11"] and C.class_band("twitch", "Q_1080p")["band"] == ["11"]
     assert C.class_band("tiktok", "Q_1080p")["band"] == ["9", "10"] and C.class_band("tiktok", "Q_720p")["regime"] == "hevc"
     m = C.band_map("youtube", PLATFORM_MATRICES["youtube"], ["A", "B", "current"])
     # restart §4 (levi 2026-10-20): qualification on the expected 25 min (2 / 25 = 0.08, was 2 / 21): A's Q_1080p mass
@@ -292,7 +293,11 @@ def main():
         r = C.pick_matrix(q, BASE["twitch"])
         assert r["unreachable_targets"] == ["Q_1080p"] and r["target"]["key"] == "Q_480p", r
         assert set(r["bands"]["Q_480p"]["qualifies"]) == {"current", "TW-M"} and r["matrix"] in ("current", "TW-M"), r
-        assert r["geometry_forced"] is None and r["bands"]["Q_1080p"]["band"] == []
+        # the band holds TW-H's state 11 (prereg d32a48ce item 4), but TW-H is opt-in: no default candidate reaches it
+        assert r["geometry_forced"] is None and r["bands"]["Q_1080p"]["band"] == ["11"]
+        assert r["bands"]["Q_1080p"]["qualifies"] == [] and "TW-H" not in r["bands"]["Q_1080p"]["mass"]
+        r = C.pick_matrix(q, BASE["twitch"], sorted(BASE["twitch"]))       # allowed explicitly: TW-H takes Q_1080p
+        assert r["target"]["key"] == "Q_1080p" and r["matrix"] == "TW-H" and r["unreachable_targets"] == [], r
         only = dict(ok, classes={**ok["classes"], "Q_1080p": {"sessions_ge_min": 0, "minutes": 0, "criterion": ""}})
         r = C.pick_matrix(only, BASE["twitch"])     # every deficit unreachable -> rotation, reported
         assert r["default_rotation"] and r["unreachable_targets"] == ["Q_1080p"] and "unreachable" in r["why"], r

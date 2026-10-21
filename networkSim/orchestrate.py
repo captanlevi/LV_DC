@@ -1301,6 +1301,10 @@ if __name__ == "__main__":
             import steering
             coverage_report.TARGET_MINUTES = {p: {c: v / 60.0 for c, v in t.items()}
                                               for p, t in steering.TARGETS_S.items()}
+            # item 4: TW-H joins twitch's candidates under --trio-steer (an explicit --coverage-allowed list stands)
+            if "twitch" not in COVERAGE_ALLOWED:          # every candidate as before, plus the opt-in TW-H
+                from utils.shaping import PLATFORM_MATRICES as _PM
+                COVERAGE_ALLOWED["twitch"] = sorted(_PM["twitch"])
         if args.concurrent:
             import trio_slots
             nd = None
