@@ -306,6 +306,9 @@ TRIO_RECORD = False      # --trio-record: this run's sessions are of record (cou
 # coverage target's coupling); the slot's process then runs single mode's fullscreen path with a focus keeper. Off: the
 # draw's support excludes it (EXCLUDED_GEOMETRIES) and yt Q_1080p is unreachable (coverage.geometry_excluded)
 TRIO_YT_FULLSCREEN = False
+# prereg d32a48ce (label diversity at the 10-22 tip, item 2): --trio-steer hands each trio session the deficit table's
+# path (LVDC_STEER_TABLE = <trio root>/_summaries/coverage_joint.json); exp.py draws the dwell weights at session start
+TRIO_STEER = False
 # restart §7 / §8 (levi's prereg 2026-10-21): each trio session's draws (geometry, twitch low latency) are seeded by
 # f"{SESSION_DRAW_SEED}:{run id}:{slot tag}:{the slot's session number}"; each draw salts it with its own name
 SESSION_DRAW_SEED = 20261021
@@ -800,6 +803,10 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     elif (category or {}).get("pick"):            # restart prereg §5: the category draw, its floor and seeded tie
         env["LVDC_CHANNEL_PICK"] = json.dumps({"category": category["pick"]}, default=str)
     env["LVDC_TRIO_RECORD"] = "1" if TRIO_RECORD else "0"
+    env.pop("LVDC_STEER_TABLE", None)
+    if TRIO_STEER:
+        import steering
+        env["LVDC_STEER_TABLE"] = str(Path(troot) / "_summaries" / steering.TABLE_NAME)
     env.pop("LVDC_TRIO_YT_FULLSCREEN", None)
     if yt_fs:
         env["LVDC_TRIO_YT_FULLSCREEN"] = "1"
@@ -1190,6 +1197,9 @@ if __name__ == "__main__":
     parser.add_argument("--trio-stress", action="store_true",
                         help="--concurrent, t56 decode_stress: sessions under data/_trio_stress (never counted; not with "
                              "--trio-record); a --trio-pin state is held for the whole session (exp.py --hold-state).")
+    parser.add_argument("--trio-steer", action="store_true",
+                        help="--concurrent (prereg d32a48ce; default off): each session's shaper dwell weights drawn at "
+                             "session start from <trio root>/_summaries/coverage_joint.json (the last post's deficit)")
     parser.add_argument("--trio-yt-fullscreen", action="store_true",
                         help="--concurrent (t53 (a); default off): the yt slot goes fullscreen when its coverage target "
                              "couples it (Q_1080p), with a focus keeper and on-top-gated root grabs (browser.py).")
@@ -1286,6 +1296,7 @@ if __name__ == "__main__":
         if args.trio_yt_fullscreen and args.trio_layout != "composite":      # t58 N-7: the keeper needs the composite
             sys.exit("--trio-yt-fullscreen needs --trio-layout composite (the fullscreen keeper runs only there)")
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
+        TRIO_STEER = bool(args.trio_steer)
         if args.concurrent:
             import trio_slots
             nd = None

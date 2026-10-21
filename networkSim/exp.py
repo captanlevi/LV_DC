@@ -754,6 +754,19 @@ if __name__ == "__main__":
     # record (rules, sigma per state, factor, seeds) goes to meta.json shaper
     WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)
     SHAPER_OPTS.update(walk_rng=WALK_RNG, dl_factor=SHAPING_REC["dl_factor"]["value"])
+    # prereg d32a48ce (label diversity at the 10-22 tip, item 2): with LVDC_STEER_TABLE set (orchestrate --trio-steer),
+    # the session's dwell weights over the shaper states are drawn now, at session start, from the last post's deficit
+    # table and the base matrix only; nothing during the session feeds back. A balancer band start (--initial-state)
+    # still wins; the record goes to meta.json steering
+    STEERING = None
+    if os.environ.get("LVDC_STEER_TABLE") is not None and args.hold_state is None:
+        import steering
+        base_transition = transition
+        transition, steer_start, STEERING = steering.steer(platform, transition,
+                                                           os.environ.get("LVDC_STEER_TABLE") or None, session_dir.name)
+        STEERING["base_matrix"] = base_transition
+        if steer_start is not None and not args.initial_state:
+            SHAPER_OPTS.update(initial_state_fn=lambda _t, _s=steer_start: _s)
     template = None if args.empty_profile else (args.profile_template or PROFILE_TEMPLATES / platform)
     chrome_profile, profile_template = fresh_chrome_profile(session_dir, template)
     from profile_clone import template_note_of
@@ -768,6 +781,8 @@ if __name__ == "__main__":
                        profile_template=profile_template, shaping=SHAPING_REC)
     if args.hold_state is not None:
         session_meta.write(session_dir, hold_state=args.hold_state)
+    if STEERING is not None:
+        session_meta.write(session_dir, steering=STEERING)
     if SLOT is None:
         session_meta.write(session_dir, concurrency={"mode": "single"})
     else:
