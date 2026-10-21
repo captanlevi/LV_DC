@@ -3,7 +3,9 @@
 
 Per trio run, over its sessions' merged.pcap and the unmarked remainder's (data/_trio/_default/<run>/merged.pcap):
   - 5-tuple uniqueness: a flow (protocol + both endpoints) seen in two sessions' pcaps while both saw it, or in a
-    session's pcap and the default capture at the same time, is a marking leak;
+    session's pcap and the default capture at the same time, is a marking leak; a flow to or from a link-local
+    multicast group (224.0.0.0/24, ff02::/16: mDNS) is the host's, reported apart (shared_linklocal_flows,
+    linklocal_flows_also_in_default) and never a leak (levi 02:07); flows_also_in_default_list names every such flow;
   - QUIC connection-ID uniqueness: a long- or short-header CID seen in two pcaps (a migrated QUIC connection keeps its
     CIDs on a new 5-tuple, which the 5-tuple check cannot see);
   - sibling host families: a TLS / QUIC SNI of another platform's family (check_session MEDIA_HOSTS + PLATFORM_PAGE) in
@@ -23,6 +25,7 @@ Output: JSON on stdout (or --out). Exit 0 = no leak and no DNS fail, 1 = a leak 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 import shutil
@@ -202,6 +205,23 @@ def is_media(name: str, platform: str) -> bool:
     return any(re.search(pt, name) for pt in MEDIA_HOSTS.get(platform, []))
 
 
+LINKLOCAL_MULTICAST = (ipaddress.ip_network("224.0.0.0/24"), ipaddress.ip_network("ff02::/16"))
+FLOW_LIST_MAX = 200
+
+
+def is_linklocal(k: tuple) -> bool:
+    """levi 02:07: a flow to or from a link-local multicast group (224.0.0.0/24, ff02::/16: mDNS, SSDP's neighbours,
+    IGMP-ish chatter) is the host's, seen by every capture on the link; reported in its own field, never a leak."""
+    for ip in (k[1][0], k[2][0]):
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if any(a.version == n.version and a in n for n in LINKLOCAL_MULTICAST):
+            return True
+    return False
+
+
 def _spans_meet(a, b) -> bool:
     return a[0] <= b[1] and b[0] <= a[1]
 
@@ -215,9 +235,12 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
         for b in names[i + 1:]:
             fa, fb = sessions[a]["s"]["flows"], sessions[b]["s"]["flows"]
             ca, cb = sessions[a]["s"]["cids"], sessions[b]["s"]["cids"]
-            shared = [k for k in fa.keys() & fb.keys() if _spans_meet(fa[k], fb[k])]
+            both = sorted(k for k in fa.keys() & fb.keys() if _spans_meet(fa[k], fb[k]))
+            shared = [k for k in both if not is_linklocal(k)]           # levi 02:07: unicast only reads as a leak
+            ll = [k for k in both if is_linklocal(k)]
             shared_cids = sorted(c for c in ca.keys() & cb.keys())
             pairs.append({"a": a, "b": b, "shared_flows": len(shared), "shared_flow_examples": [list(k) for k in shared[:5]],
+                          "shared_linklocal_flows": len(ll), "shared_linklocal_examples": [list(k) for k in ll[:5]],
                           "shared_quic_cids": len(shared_cids), "cid_examples": shared_cids[:5]})
     per = {}
     for n in names:
@@ -241,7 +264,12 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
                        "unanswered": sorted(set(media) - set(own) - set(dflt)), "dns_packets_in_own_pcap": s["dns_packets"]}}
         if default is not None:
             df = default["flows"]
-            rec["flows_also_in_default"] = sum(1 for k, v in s["flows"].items() if k in df and _spans_meet(v, df[k]))
+            also = sorted(k for k, v in s["flows"].items() if k in df and _spans_meet(v, df[k]))
+            uni = [k for k in also if not is_linklocal(k)]
+            rec["flows_also_in_default"] = len(uni)                      # levi 02:07: unicast; link-local beside it
+            rec["linklocal_flows_also_in_default"] = len(also) - len(uni)
+            rec["flows_also_in_default_list"] = [[k[0], list(k[1]), list(k[2]), "linklocal" if is_linklocal(k) else "unicast"]
+                                                 for k in also[:FLOW_LIST_MAX]]
             rec["quic_cids_also_in_default"] = len(s["cids"].keys() & default["cids"].keys())
             rec["default_media_snis_in_window"] = sorted(h for h, t in default["snis"].items()
                                                          if is_media(h, plat) and t0 <= t <= t1)
@@ -323,6 +351,11 @@ def main(argv=None) -> int:
     if a.out:
         a.out.write_text(text)
     print(text)
+    return exit_code(rep)
+
+
+def exit_code(rep: dict) -> int:
+    """0 = no leak and no DNS fail, 1 = either (the link-local fields never count)."""
     return 1 if rep["leak"] or rep["dns_fail"] else 0
 
 

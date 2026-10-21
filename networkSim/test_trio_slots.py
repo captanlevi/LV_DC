@@ -316,6 +316,36 @@ def test_flow_overlap():
                                                  "nf_conntrack_tcp_timeout_established": None}
 
 
+
+def test_flow_overlap_linklocal():
+    """levi 02:07: a link-local multicast flow (mDNS on 224.0.0.251 / ff02::fb) shared by two sessions or with the
+    default capture is reported in its own fields and never a leak (rc 0); one shared unicast flow is (rc 1);
+    flows_also_in_default_list names each flow with its kind."""
+    me = "10.0.0.2"
+    yt = [_pkt(100.0, me, "142.250.1.1", "udp", 50001, 443, 1300, "aabbccddeeff0011", "rr1---sn-x.googlevideo.com")]
+    tw = [_pkt(100.5, me, "151.101.1.1", "tcp", 50100, 443, 900, sni="video-weaver.fra02.hls.ttvnw.net")]
+    mdns = [_pkt(110.0, me, "224.0.0.251", "udp", 5353, 5353, 120)]
+    mdns6 = [dict(_pkt(111.0, "", "", "udp", 5353, 5353, 140), **{"ipv6.src": "fe80::1", "ipv6.dst": "ff02::fb"})]
+    assert F.is_linklocal(("udp", (me, 5353), ("224.0.0.251", 5353))) and F.is_linklocal(("udp", ("fe80::1", 5353), ("ff02::fb", 5353)))
+    assert not F.is_linklocal(("udp", (me, 5353), ("224.0.1.1", 5353))) and not F.is_linklocal(("udp", (me, 1), ("ff05::2", 1)))
+    s = {"youtube/yt_1": {"platform": "youtube", "window": [95.0, 200.0], "s": F.summarise(yt + mdns + mdns6)},
+         "twitch/tw_1": {"platform": "twitch", "window": [96.0, 200.0], "s": F.summarise(tw + mdns + mdns6)}}
+    rep = F.report(s, F.summarise(mdns, keep_udp=True))
+    p = rep["pairs"][0]
+    assert not rep["leak"] and F.exit_code({**rep, "dns_fail": []}) == 0, rep
+    assert p["shared_flows"] == 0 and p["shared_linklocal_flows"] == 2 and len(p["shared_linklocal_examples"]) == 2
+    y = rep["sessions"]["youtube/yt_1"]
+    assert y["flows_also_in_default"] == 0 and y["linklocal_flows_also_in_default"] == 1
+    assert y["flows_also_in_default_list"] == [["udp", [me, 5353], ["224.0.0.251", 5353], "linklocal"]]
+    s["twitch/tw_1"]["s"] = F.summarise(tw + mdns + yt)          # one unicast flow shared: a leak
+    rep = F.report(s, F.summarise(mdns, keep_udp=True))
+    assert rep["leak"] and rep["pairs"][0]["shared_flows"] == 1 and F.exit_code({**rep, "dns_fail": []}) == 1
+    rep = F.report(s, F.summarise(mdns + tw, keep_udp=True))       # a unicast flow also in the default: a leak
+    t = rep["sessions"]["twitch/tw_1"]
+    assert rep["leak"] and t["flows_also_in_default"] == 1 and t["linklocal_flows_also_in_default"] == 1
+    assert sorted(x[-1] for x in t["flows_also_in_default_list"]) == ["linklocal", "unicast"]
+
+
 def test_dns_answers():
     txt = "rr1---sn-x.googlevideo.com\t142.250.1.1,142.250.1.2\t\nwww.youtube.com\t142.250.1.1\t\n\t\t\nnoans.com\t\t\n"
     assert T.parse_dns(txt) == {"142.250.1.1": ["rr1---sn-x.googlevideo.com", "www.youtube.com"],
