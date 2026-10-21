@@ -444,7 +444,7 @@ def fullscreen_player_lt_screen(meta: dict) -> dict | None:
 
 def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
                  frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
-                 entry_win: tuple[float, float] | None = None) -> dict:
+                 entry_win: tuple[float, float] | None = None, net_labels: list | None = None) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
         return {"n_res_meta": len(meta)}
@@ -479,7 +479,9 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
     tier_changes = [ts[j] for i, j in zip(play_idx, play_idx[1:]) if j == i + 1 and h[i] != h[j]]
     near = sum(1 for t in tier_changes if any(abs(t - s) <= SWAP_BOUNDARY_S for s in sw_t))
     per_signal = collections.Counter(s for r in meta for s in (r.get("ad_signals") or "").split("|") if s)
-    dp = E.dead_player(rows, reentries)   # levi 2026-10-18: a run recovered by the re-entry is reported, not the verdict
+    # levi 2026-10-18: a run recovered by the re-entry is reported, not the verdict; tt with its net labels (the
+    # end-of-day-2 tip): the dead measure leaves out what the collector's low-state hold held (bd4bebf)
+    dp = E.dead_player(rows, reentries, net_labels if platform == "tiktok" and net_labels else None)
     fp = recovered_frozen(rows, frozen_reentries, n_dead_recovered=dp["recovered_runs"])
     if dp["recovered"] and any(r.get("outcome") == "continue" for r in frozen_reentries or []):
         dp = {**dp, "max_s": dp["max_all_s"], "recovered": None}   # one recovery of either kind per session (am. 6)
@@ -1048,7 +1050,7 @@ def main() -> int:
         ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
     win = session_window(meta, E.read_net_labels(sd))
     lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
-                       entry_window(ents, win))
+                       entry_window(ents, win), E.read_net_labels(sd))
     lab["shot_effects"] = shot_effects(label_rows, sd)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])

@@ -119,6 +119,24 @@ def low_hold_end(net_labels: list, t: float) -> float | None:
     return end
 
 
+def low_spans(net_labels: list) -> list[tuple[float, float]]:
+    """The shaper's stretches in LOW_HOLD_STATES: (first low label's time, the next label's time; inf if none)."""
+    labs = sorted([n for n in net_labels or [] if _ts(n) is not None], key=_ts)
+    out = []
+    for a, b in zip(labs, labs[1:] + [None]):
+        try:
+            low = int(a.state if hasattr(a, "state") else a.get("state")) in LOW_HOLD_STATES
+        except (TypeError, ValueError):
+            low = False
+        if low:
+            end = _ts(b) if b is not None else float("inf")
+            if out and out[-1][1] == _ts(a):
+                out[-1] = (out[-1][0], end)
+            else:
+                out.append((_ts(a), end))
+    return out
+
+
 def action(recoveries_used: int) -> str:
     """At T2: 'reenter' while a recovery remains this session, else 'censor'."""
     return "reenter" if recoveries_used < RECOVERIES_PER_SESSION else "censor"

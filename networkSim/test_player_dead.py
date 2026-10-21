@@ -149,6 +149,27 @@ def test_preroll_ad_sustains_the_entry():
     assert E.sustained_at(rows(), 0.0, window_s=float("inf")) == 1075.0    # played_at: non-ad play after the ad
 
 
+def test_held_dead_measure_and_watch_log():
+    """end-of-day-2 tip (levi 09:40 / 11:22): with a tt session's net labels the player_dead measure leaves out what
+    the collector's low-state hold held (states 1-4 and 30 s after); without them it is dead_runs' as before; the
+    TTRoomWatch records its low spans and dead clocks (meta.json player_dead_watch) for the reader to match."""
+    def rows(dead_from, dead_to, total=900, t0=1000.0):
+        out = []
+        for k in range(total):
+            dead = dead_from <= k < dead_to
+            out.append({"ts": str((t0 + k) * 1000), "type": "res_meta", "current_time": str(k), "is_ad": "False",
+                        "paused": "False", "ready_state": "0" if dead else "4", "video_w": "720"})
+        return out
+    net = [{"timestamp": 1000.0, "state": "8", "speed": 2000}, {"timestamp": 1300.0, "state": "2", "speed": 300},
+           {"timestamp": 1500.0, "state": "7", "speed": 1500}]
+    r = rows(380, 500)
+    assert E.dead_player(r, None)["max_s"] == 119.0                          # as before: no net labels
+    assert E.dead_player(r, None, net)["max_s"] == 0.0                       # all held: state 2
+    r2 = rows(450, 620)                                                      # held to 1530, then 1531 .. 1619 = 88 s
+    assert E.held_dead_runs(r2, net) == [(1531.0, 1619.0)] and E.dead_player(r2, None, net)["max_s"] == 88.0
+    assert E.held_dead_runs(r, [{"timestamp": 1000.0, "state": "8"}]) == E.dead_runs(r)   # no low state: unchanged
+
+
 def test_entries_and_class():
     meta = {"channel_url": SESS["channel_url"], "room_rotation": SESS["room_rotation"]}
     ents = E.compute_entries(ROWS, meta, SESS["net_labels"])
@@ -558,6 +579,7 @@ def main() -> int:
     test_low_state_hold()
     test_room_ended_carries_the_reentry_confirm()
     test_preroll_ad_sustains_the_entry()
+    test_held_dead_measure_and_watch_log()
     test_recovery_is_a_discontinuity()
     test_entries_and_class()
     test_precedence()
