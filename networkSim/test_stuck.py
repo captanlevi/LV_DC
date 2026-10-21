@@ -360,6 +360,70 @@ def test_low_state_hold():
     assert any(w2.step(None, st, 1000.0 + k) for k in range(60))
 
 
+def test_on_frozen_holds_in_low_states():
+    """levi gate 49d (C), yt_900027 (00:44 condition 1): addendum N's frozen clock (_on_frozen, T = FROZEN_PLAYHEAD_MAX_S)
+    holds on yt / twitch in states 1-4 and for the grace after, as the T2 rule does: no abort while held; past the
+    release T counts from the hold's end + grace; unshaped (no labels) and tt unchanged."""
+    import time
+    now = time.time()
+    T, G = CS.FROZEN_PLAYHEAD_MAX_S["youtube"], S.LOW_HOLD_GRACE_S
+    yt = _session("youtube")
+    for st in (1, 4):                                            # held in 1-4, however long the run (yt_900027: 4)
+        yt.net_labels = nl((now - 900, 300, st))
+        assert yt._on_frozen(800) is False and yt.abort_reason is None
+    yt.net_labels = nl((now - 900, 300, 1), (now - G - T + 20, 600, 6))   # released, T - 20 s counted since end + grace
+    assert yt._on_frozen(800) is False and yt.abort_reason is None
+    yt.net_labels = nl((now - 900, 300, 1), (now - G - T - 20, 600, 6))   # T + 20 s counted: the abort
+    assert yt._on_frozen(800) is True and yt.abort_reason == "player_frozen"
+    yt = _session("youtube")                                     # a freeze begun after the hold: its own run counts
+    yt.net_labels = nl((now - 900, 300, 1), (now - 800, 600, 6))
+    assert yt._on_frozen(T + 5) is True and yt.abort_reason == "player_frozen"
+    yt = _session("youtube")                                     # unshaped / startup (no labels): as before
+    yt.net_labels, yt.lowstate_hold_available = [], None
+    assert yt._on_frozen(T + 5) is True and yt.abort_reason == "player_frozen" and yt.lowstate_hold_available is False
+    yt = _session("youtube")                                     # never low: as before
+    assert yt._on_frozen(T + 5) is True and yt.abort_reason == "player_frozen"
+    Tw = CS.FROZEN_PLAYHEAD_MAX_S["twitch"]                      # twitch: the same at its T
+    tw = _session("twitch")
+    tw.net_labels = nl((now - 3000, 300, 2), (now - G - Tw + 20, 600, 6))
+    assert tw._on_frozen(2500) is False and tw.abort_reason is None
+    tw.net_labels = nl((now - 3000, 300, 2), (now - G - Tw - 20, 600, 6))
+    assert tw._on_frozen(2500) is True and tw.abort_reason == "player_frozen"
+    tt = _session("tiktok")                                      # tt: unchanged (its own player_dead hold)
+    tt.net_labels = nl((now - 900, 300, 1))
+    assert tt._on_frozen(CS.FROZEN_PLAYHEAD_MAX_S["tiktok"] + 5) is True and tt.abort_reason == "player_frozen"
+
+
+def test_watcher_loop_asks_on_frozen_again_while_held():
+    """The ad-watch loop calls on_frozen once the run passes T and again each tick while it answers False (held); the
+    deadlocked-pause run (resumer.stuck_frozen_s, 3c10fbc; levi 00:44 condition 2) reaches the same gate."""
+    for content_js, pause in ((400.0, 0.0), (0.0, 400.0)):
+        stop, got = threading.Event(), []
+
+        class P:
+            def eval(self, js, await_promise=False):
+                return str(content_js) if js == B._FROZEN_JS else None
+
+        class R:
+            def step(self, *a):
+                return None
+
+            def stuck_frozen_s(self, t):
+                return pause
+
+        def on_frozen(f):
+            got.append(f)
+            if len(got) == 3:
+                stop.set()
+                return True
+            return False
+        th = threading.Thread(target=B._ad_watcher_loop, args=(P(), "youtube", stop),
+                              kwargs={"on_frozen": on_frozen, "resumer": R()}, daemon=True)
+        th.start()
+        th.join(timeout=15)
+        assert got == [400.0] * 3, (content_js, pause, got)
+
+
 def test_lowstate_error_page_does_not_use_the_recovery():
     import time
     now = time.time()

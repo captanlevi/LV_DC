@@ -2636,8 +2636,7 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 except Exception as exc:
                     print(f"[browser] stuck-player check failed: {exc!r}", flush=True)
             if on_frozen is not None and frozen_max_s is not None and not froze and frozen_s > frozen_max_s:
-                froze = True
-                on_frozen(frozen_s)
+                froze = on_frozen(frozen_s) is not False      # False: held (yt / twitch low states), asked again next tick
 
 
 SHOT_INTERVAL_S = 10.0
@@ -4087,13 +4086,23 @@ class BrowserSession:
         self.abort_reason, self.abort_at = "login_wall", time.time()
         print("[browser] LOGIN WALL detected (content.js login_wall) — aborting the session", flush=True)
 
-    def _on_frozen(self, frozen_s: float) -> None:
+    def _on_frozen(self, frozen_s: float) -> bool:
         # addendum N: the player froze in a stall and has not recovered within T; no reload (that would be a user
         # action inside the session). exp.py exits EXIT_PLAYER_FROZEN, which the batch does not count as a failure.
+        # levi gate 49d (C), yt_900027: on yt / twitch this clock holds in the low states as the T2 rule does
+        # (_stuck_tick): no abort while held, then T counts from the hold's end + grace; False = held, not aborted
+        if self.platform in PLAYER_ERROR_PLATFORMS:
+            now = time.time()
+            he = self._low_hold_end(now)
+            if he is not None:
+                if now <= he or min(frozen_s, now - he) <= FROZEN_PLAYHEAD_MAX_S[self.platform]:
+                    return False
+                frozen_s = min(frozen_s, now - he)
         if self.abort_reason is None:
             self.abort_reason, self.abort_at = "player_frozen", time.time()
         print(f"[browser] PLAYER FROZEN: playhead frozen {frozen_s:.0f} s in a stall > T "
               f"{FROZEN_PLAYHEAD_MAX_S.get(self.platform)} s — aborting the session", flush=True)
+        return True
 
     def stop(self) -> None:
         k = FS_KEEP.pop("keeper", None)                 # t53 (a): the keeper ends with the session, its record kept
