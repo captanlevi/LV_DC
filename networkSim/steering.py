@@ -33,6 +33,8 @@ TIERS = {"youtube": ["Q_144p", "Q_240p", "Q_360p", "Q_480p", "Q_720p", "Q_1080p"
          "tiktok": ["Q_360p", "Q_480p", "Q_720p", "Q_1080p"]}
 TARGETS_S = {p: {**{t: TIER_TARGET_S for t in ts}, "STALL": STALL_TARGET_S} for p, ts in TIERS.items()}
 TABLE_NAME = "coverage_joint.json"
+# the class names a table may use (watcher's VideoState names); anything else (e.g. "144p") is refused, never read as 0
+CLASS_NAMES = ("STALL", "Q_144p", "Q_240p", "Q_360p", "Q_480p", "Q_720p", "Q_1080p")
 RULE = ("prereg d32a48ce: session-start dwell weights from the last post's deficit table; w = FLOOR + (1 - FLOOR) * "
         "pull / max pull, pull = sum_c P(c | state) d(c); transitions into a state x w, rows renormalised; start state "
         "from the steered stationary distribution, seeded by the session name; no within-session input")
@@ -50,6 +52,11 @@ def load_table(path: str | os.PathLike | None) -> tuple[dict | None, dict]:
         table = json.loads(raw)
         if not isinstance(table, dict) or not isinstance(table.get("per_platform"), dict):
             raise ValueError("no per_platform")
+        bad = sorted({k for pp in table["per_platform"].values() if isinstance(pp, dict)
+                      for k in [*(pp.get("tiers") or {}), *(c for row in (pp.get("by_state") or {}).values()
+                                                            for c in (row or {}))] if k not in CLASS_NAMES})
+        if bad:                  # peter 16:43: a name mismatch would read every tier as unmet; refuse it, recorded
+            raise ValueError(f"class names not in {CLASS_NAMES}: {bad[:6]}")
         rec["built_at"] = table.get("built_at")
         return table, rec
     except (OSError, ValueError) as e:

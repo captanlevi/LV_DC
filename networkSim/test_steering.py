@@ -85,6 +85,12 @@ def test_steer_and_fallback():
     assert m3 is TWITCH_TRANSITIONS and r3["fallback"].startswith("base schedule")
     bad = write({"nope": 1})
     assert not S.steer("twitch", TWITCH_TRANSITIONS, bad, "x")[2]["applied"]
+    # peter 16:43: a table naming tiers outside VideoState's names ("144p") is refused, never read as 0 seconds
+    named = write(table(tiers={"144p": 9 * H}, by_state={"1": {"144p": 1.0}}))
+    r = S.steer("twitch", TWITCH_TRANSITIONS, named, "x")[2]
+    assert not r["applied"] and "class names" in r["table"]["error"], r
+    exp = (HERE / "exp.py").read_text()
+    assert "steering_fallback=" in exp                                             # levi 16:43: logged in meta
 
 
 def test_no_within_session_input():

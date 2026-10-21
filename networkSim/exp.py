@@ -783,6 +783,9 @@ if __name__ == "__main__":
         session_meta.write(session_dir, hold_state=args.hold_state)
     if STEERING is not None:
         session_meta.write(session_dir, steering=STEERING)
+        if not STEERING.get("applied"):           # levi 16:43: never silent; era_report counts these per window
+            session_meta.write(session_dir, steering_fallback=STEERING.get("table", {}).get("error")
+                               or STEERING.get("fallback") or "not applied")
     if SLOT is None:
         session_meta.write(session_dir, concurrency={"mode": "single"})
     else:
