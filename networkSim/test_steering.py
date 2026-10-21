@@ -170,6 +170,36 @@ def test_steer_platforms():
     assert "_steering.fallback_of(os.environ, args.hold_state, STEERING)" in exp
 
 
+
+def test_every_drawable_state_is_an_accepted_start():
+    """w9 (levi 02:41, shagun's stop-and-read): every state of every platform's matrix, opt-in included (TW-H's 11), is
+    an accepted exp.py --initial-state: the balancer's band start (coverage_report.initial_state_forced), the steered
+    start (steering.start_state) and a pin draw only from these; exp's choices are utils.shaping.state_ids()."""
+    import coverage_report as CR
+    from utils.shaping import PLATFORM_MATRICES, SCENARIOS, state_ids
+    ids = set(state_ids())
+    assert ids == set(SCENARIOS) and "11" in ids
+    for p, ms in PLATFORM_MATRICES.items():
+        for m, v in ms.items():
+            t = v[0]
+            states = set(t) | {d for row in t.values() for d in row}
+            assert states <= ids, (p, m, states - ids)
+            pi = stationary_distribution(t)                       # initial_state_forced draws from these
+            assert {s for s, x in pi.items() if x > 0} <= ids, (p, m)
+    assert ("twitch", "TW-H") in CR.OPT_IN_MATRICES
+    tree = ast.parse((HERE / "exp.py").read_text())
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and n.args and isinstance(n.args[0], ast.Constant)
+             and n.args[0].value in ("--initial-state", "--hold-state")]
+    init = next(c for c in calls if c.args[0].value == "--initial-state")
+    assert any(k.arg == "choices" and ast.unparse(k.value) == "all_states" for k in init.keywords)
+    assert "all_states = state_ids()" in (HERE / "exp.py").read_text()
+    assert "range(1, 11)" not in (HERE / "exp.py").read_text()
+    from utils.shaping import TWITCH_MATRICES, start_state_refusal          # a start outside the matrix: refused early
+    assert start_state_refusal("11", TWITCH_MATRICES["TW-H"][0], "TW-H") is None
+    assert "not a state of matrix TW-M" in start_state_refusal("11", TWITCH_MATRICES["TW-M"][0], "TW-M")
+    assert start_state_refusal(None, TWITCH_MATRICES["TW-M"][0], "TW-M") is None
+    assert "_bad = start_state_refusal(args.initial_state, transition, matrix_id)" in (HERE / "exp.py").read_text()
+
 def test_fallback_of():
     """Every non-steered session names why (levi 16:43 / 20:58 / 00:41): unlisted platform, a held (pinned) state under
     a table, a table that did not apply (its error, else its fallback, else "not applied"); steered or steering off: None."""
@@ -188,6 +218,7 @@ def main() -> int:
     test_constants()
     test_deficits_and_weights()
     test_fallback_of()
+    test_every_drawable_state_is_an_accepted_start()
     test_extreme_single_unmet_tier()
     test_steer_and_fallback()
     test_no_within_session_input()

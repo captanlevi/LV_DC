@@ -458,6 +458,20 @@ def next_state_no_self(curr: str, transition_dict: dict[str, dict[str, float]], 
     return rng.choices(list(row), weights=list(row.values()), k=1)[0]
 
 
+def state_ids() -> list[str]:
+    """Every shaper state id, ascending (SCENARIOS' keys): exp.py's --initial-state / --hold-state choices (w9, levi
+    02:41: a hard-coded 1..10 refused TW-H's state 11 at argparse, so the twitch slot never ran)."""
+    return sorted(SCENARIOS, key=int)
+
+
+def start_state_refusal(state: str | None, transition: dict, matrix_id: str | None) -> str | None:
+    """exp.py's refusal of a forced start state outside the session's matrix (its first transition would read a row the
+    matrix does not have); None when there is no forced state or it is one of the matrix's states."""
+    if state is None or state in transition:
+        return None
+    return f"--initial-state {state!r}: not a state of matrix {matrix_id or 'default'} ({sorted(transition, key=int)})"
+
+
 def hold_schedule(state: str) -> dict:
     """exp.py --hold-state (t56 decode_stress, diag only): one state for the whole session. The transition holds it, and
     the low-state cap is lifted (levi gate 49d: with the platform's cap kept, a held state <= 3 was forced to state 4

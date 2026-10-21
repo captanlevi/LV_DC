@@ -514,7 +514,8 @@ def save_json(path: str | Path, data: list[NetLabel]):
 if __name__ == "__main__":
 
     platform_choices = ["youtube", "tiktok", "twitch", "bilibili"]
-    all_states = [str(i) for i in range(1, 11)]
+    from utils.shaping import state_ids
+    all_states = state_ids()          # w9 (levi 02:41): every SCENARIOS state, 11 (TW-H) included
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--platform", required=True, choices=platform_choices)
@@ -719,6 +720,12 @@ if __name__ == "__main__":
         transition, matrix_id, low_cap = _hold["transition"], _hold["matrix_id"], _hold["low_cap"]
         args.initial_state = args.hold_state
         SHAPER_OPTS.update(initial_state_fn=None, max_consecutive_low=_hold["max_consecutive_low"])
+    # hardening stop (w9 follow-up): a start state outside the session's matrix would crash the shaper at its first
+    # transition (next_state reads the state's row); refused here, before any session dir
+    from utils.shaping import start_state_refusal
+    _bad = start_state_refusal(args.initial_state, transition, matrix_id)
+    if _bad:
+        sys.exit(_bad)
     # Q am. 17: the matrix id's schedule (base, or a "<m>@slow|fast" family: its episode length, self-loop rule, re-draw
     # and low-state cap in seconds, the base matrix's cap x 60 s); recorded in meta.json shaper
     # restart §4: a drawn session length (--session-minutes) replaces the platform's base length in @slow's division
