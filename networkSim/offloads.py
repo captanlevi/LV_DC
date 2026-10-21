@@ -29,6 +29,11 @@ IFB_OFF = {"tso": "tcp-segmentation-offload", "gso": "generic-segmentation-offlo
            "gro": "generic-receive-offload", "rx-gro-list": "rx-gro-list"}
 
 
+# hardening stop (coverage audit): these three are on every NIC and IFB `ethtool -k` lists; absent = an unreadable or
+# reformatted read, never "off" (the optional features may be absent on an older kernel)
+REQUIRED = ("generic-receive-offload", "generic-segmentation-offload", "tcp-segmentation-offload")
+
+
 def parse(text: str) -> dict:
     """`ethtool -k` text -> {feature: {"on": bool, "fixed": bool}} (sub-features, indented, included)."""
     out = {}
@@ -58,7 +63,8 @@ def read(iface: str = IFACE_DEFAULT, run=subprocess.run, features: dict = OFF) -
     feats = parse(out) if rc == 0 else {}
     state = {name: feats.get(name, "absent") for name in features.values()}
     return {"iface": iface, "rc": rc, **({"error": err} if rc else {}), "features": state,
-            "all_off": rc == 0 and all(v == "absent" or not v["on"] for v in state.values())}
+            "all_off": rc == 0 and all(v == "absent" or not v["on"] for v in state.values())
+            and not any(state.get(n) == "absent" for n in REQUIRED)}
 
 
 def ensure_off(iface: str = IFACE_DEFAULT, run=subprocess.run, features: dict = OFF) -> dict:

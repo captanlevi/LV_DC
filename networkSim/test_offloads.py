@@ -90,6 +90,14 @@ def main() -> int:
     assert sorted(c[-2] for c in ifb.calls if c[0] == "sudo") == sorted(O.IFB_OFF)
     assert O.read("lvo_yt", run=FakeIfb(), features=O.IFB_OFF)["all_off"] is False
     assert O.read("wlp0s20f3", run=FakeEthtool(gro="off", gso="off", tso="off", udpfwd="off"))["all_off"] is True
+    # hardening stop: a read that lists none of GRO / GSO / TSO (reformatted or truncated output) is not "all off"
+    class Blank(FakeIfb):
+        def __call__(self, cmd, capture_output=True, text=True, timeout=None):
+            self.calls.append(cmd)
+            return types.SimpleNamespace(returncode=0, stderr="", stdout="Features for x:\nrx-checksumming: on\n")
+    assert O.read("wlp0s20f3", run=Blank())["all_off"] is False
+    assert O.ensure_off("wlp0s20f3", run=Blank())["ok"] is False
+    assert O.read("lvo_yt", run=Blank(), features=O.IFB_OFF)["all_off"] is False
     print("test_offloads: ok")
     return 0
 
