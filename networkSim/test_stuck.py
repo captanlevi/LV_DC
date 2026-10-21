@@ -557,6 +557,19 @@ def test_first_abort_stands():
     assert exp.count(rule) == 2 and exp.index('meta_extra["abort_reason"] = ' + rule) < exp.index(
         "abort_reason = " + rule + "\n    if abort_reason == \"login_wall\"")
 
+
+def test_not_live_mark_matches_the_start_failure():
+    """Coverage audit: session_class reads not_live from abort_reason containing entries.NOT_LIVE_MARK (and yt_channels'
+    copy); browser.py's start failure must produce that text for every platform, else not_live reads startup_failure."""
+    import yt_channels
+    assert E.NOT_LIVE_MARK == yt_channels.NOT_LIVE_MARK
+    src = (HERE / "browser.py").read_text()
+    raised = __import__("re").findall(r'raise RuntimeError\(f"(Failed to navigate to a live[^"]*)"\)', src)
+    assert raised and all(r.startswith(E.NOT_LIVE_MARK) for r in raised), raised
+    for p in ("youtube", "twitch"):
+        msg = raised[0].replace("{self.platform}", p)
+        assert E.session_class(p, "FAIL", msg, [], None, None, None, None) == "not_live"
+
 def test_lowstate_error_page_does_not_use_the_recovery():
     import time
     now = time.time()
