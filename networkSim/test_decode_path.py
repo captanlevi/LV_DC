@@ -37,6 +37,11 @@ def main():
         assert "--render-node-override=/dev/dri/renderD128" in out and "LIBVA_DRIVER_NAME=iHD" in out
         base = dry([])
         assert "--enable-features" not in base and "LIBVA" not in base and "UseChromeOSDirectVideoDecoder" not in base
+        # levi 13:41 (the Cast LAN defect): the three platforms' Chromes carry the same Cast disable, tt's merged list too
+        base_dis = re.findall(r"--disable-features=(\S+)", base)
+        for d in (dis[0], base_dis[0]):
+            assert "MediaRouter" in d.split(",") and "GlobalMediaControlsCastStartStop" in d.split(","), d
+        assert dis[0] == base_dis[0] + ",UseChromeOSDirectVideoDecoder", (dis, base_dis)
     info = {"gpu": {"featureStatus": {"video_decode": "enabled"}, "auxAttributes": {"glRenderer": "Mesa Intel"},
                     "videoDecoding": [{"profile": "h264 main"}, {"profile": "hevc main"}]}}
     assert D.gpu_summary(info) == {"video_decode": "enabled", "decode_profiles": ["h264 main", "hevc main"], "hevc": True,

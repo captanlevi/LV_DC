@@ -104,7 +104,7 @@ echo "🚀 Starting Chrome with remote debugging..."
 LAUNCH_USER=${SUDO_USER:-${USER}}; \
 mkdir -p /P/prof; \
 chown -R $LAUNCH_USER /P/prof 2>/dev/null || true; \
-CHROME_ARGS="--no-sandbox --user-data-dir=/P/prof --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --load-extension=<REPO>/labeling about:blank"; \
+CHROME_ARGS="--no-sandbox --user-data-dir=/P/prof --remote-debugging-port=9222 --remote-allow-origins=* --disable-features=ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel,MediaRouter,GlobalMediaControlsCastStartStop --no-first-run --disable-default-apps --autoplay-policy=no-user-gesture-required --mute-audio --enable-unsafe-extension-debugging --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-background-networking --disable-component-update --disable-sync --disable-domain-reliability --no-default-browser-check --load-extension=<REPO>/labeling about:blank"; \
 if [ "$LAUNCH_USER" = "$(id -un)" ]; then \
 env SSLKEYLOGFILE=/S/yt_1/ssl_keys.log /usr/bin/google-chrome $CHROME_ARGS > /C/chrome.log 2>&1 & \
 else \

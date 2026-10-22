@@ -213,7 +213,10 @@ WINDOW_FLAG := $(if $(WINDOW_SIZE),--window-size=$(WINDOW_SIZE),)
 # one --disable-features list (Chrome honours only the last one). Optimization Guide: its on-device model download
 # ignores --disable-background-networking / --disable-component-update and took 41-42 MB in the first ~70 s of a
 # session inside the shaped link (chaos captest3; laptop: 42.3 MB with the old list, 0.0 MB with this one, t37)
-CHROME_DISABLE_FEATURES = ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel
+# MediaRouter / GlobalMediaControlsCastStartStop (levi 13:41, a named T* defect): Chrome's Cast discovery opened :8009
+# connections to LAN devices in every yt / tw session of record (shagun's era count, json 98f84545e13f); one list for
+# every launch (single mode, every slot, tt's merged list), so the three platforms' Chromes are identical in it
+CHROME_DISABLE_FEATURES = ChromeWhatsNewUI,OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints,OptimizationGuideOnDeviceModel,MediaRouter,GlobalMediaControlsCastStartStop
 comma := ,
 # per-platform decode flags (decode_path.py; exp.py passes them for tt's HEVC path, 2026-10-18): extra features to
 # disable join the one list above; features to enable, extra args and env assignments before the binary

@@ -128,7 +128,24 @@ def capture_buffer_64mib(got: dict) -> list[str]:
     return seen or ["no make here"]
 
 
-KNOWN_DELTAS = (("the capture buffer, 64 MiB (t57 tw_100023)", capture_buffer_64mib),
+CAST_OFF = ",MediaRouter,GlobalMediaControlsCastStartStop"
+
+
+def cast_disabled(got: dict) -> list[str]:
+    """Known delta (levi 13:41, the Cast LAN defect): every slot's Chrome launches with Media Router and the Cast
+    start/stop control disabled, appended to the one --disable-features list. Asserted on start_chrome, then taken out."""
+    seen = []
+    for tag, s in got["slots"].items():
+        if "make_n" in s:
+            sc = s["make_n"]["start_chrome"]
+            assert sc.count("OptimizationGuideOnDeviceModel" + CAST_OFF + " ") == 1, (tag, sc)
+            s["make_n"]["start_chrome"] = sc.replace(CAST_OFF + " ", " ")
+            seen.append(f"{tag}: start_chrome --disable-features ...{CAST_OFF}")
+    return seen or ["no make here"]
+
+
+KNOWN_DELTAS = (("Cast discovery off (levi 13:41)", cast_disabled),
+                ("the capture buffer, 64 MiB (t57 tw_100023)", capture_buffer_64mib),
                 ("staged tcpdump runs as root (t58: staging on the data volume)", staged_tcpdump_as_root))
 
 
