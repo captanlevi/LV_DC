@@ -10,7 +10,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-NEEDLE = "refs_" + "pre_era"              # split, so this file does not name it
+NEEDLE = "refs_" + "pre_era"
+SELF = Path(__file__).resolve()           # this test names it (its own name and docstring), so it is not scanned
 SKIP_DIRS = {".git", ".venv", "data", "current_data", "profiles", "node_modules", "__pycache__"}
 
 
@@ -38,7 +39,7 @@ def repo_files() -> list[Path]:
 def hits(files: list[Path]) -> list[str]:
     out = []
     for p in files:
-        if p.is_symlink() or not p.is_file():
+        if p.is_symlink() or not p.is_file() or p.resolve() == SELF:
             continue
         if NEEDLE in str(p.relative_to(REPO)) or NEEDLE.encode() in p.read_bytes():
             out.append(str(p.relative_to(REPO)))
