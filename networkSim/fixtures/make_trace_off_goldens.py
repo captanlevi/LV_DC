@@ -113,7 +113,9 @@ def _collect(tmp, spawned, T):
         out = {}
         for cmd, env, _ in spawned:
             tag = cmd[cmd.index("--slot") + 1]
-            out[tag] = {"argv": [norm(c) for c in cmd[1:]], "env_keys": sorted(k for k in env if k.startswith("LVDC_")),
+            import os
+            out[tag] = {"argv": [norm(c) for c in cmd[1:]],     # the keys orchestrate sets (not the caller's own env)
+                        "env_keys": sorted(k for k in env if k.startswith("LVDC_") and env[k] != os.environ.get(k)),
                         "session_length": json.loads(norm(env.get("LVDC_SESSION_LENGTH", "null")))}
         return out
 

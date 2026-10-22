@@ -154,8 +154,9 @@ def test_the_session_record_and_factor():
 
 def test_net_labels_and_the_wiring():
     names = [x.name for x in fields(NetLabel)]
+    from utils.dataModels import TRACE_FIELDS                              # §9: the trace fields after them,
     assert names == ["timestamp", "speed", "state", "delay_ms", "loss_pct", "redraw_kbit", "redraw_delay_ms",
-                     "redraw_loss_pct", "walk_step"]
+                     "redraw_loss_pct", "walk_step", *TRACE_FIELDS]          # written only on a trace row
     assert NetLabel(1.0, 500, "2").delay_ms is None                           # the old three-field rows still build
     src = (HERE / "exp.py").read_text()
     assert "WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)" in src
