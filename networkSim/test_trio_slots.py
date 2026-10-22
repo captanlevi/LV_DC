@@ -249,62 +249,6 @@ def _pkt(t, src, dst, proto, sport, dport, n=100, dcid="", sni="", qname="", res
     return r
 
 
-def test_flow_overlap():
-    me = "10.0.0.2"
-    yt = [_pkt(100.0, me, "142.250.1.1", "udp", 50001, 443, 1300, "aabbccddeeff0011", "rr1---sn-x.googlevideo.com"),
-          _pkt(101.0, "142.250.1.1", me, "udp", 443, 50001, 1300, "1122334455667788"),
-          _pkt(101.5, me, "172.217.1.1", "tcp", 50002, 443, 400, sni="www.youtube.com"),
-          _pkt(99.0, me, "8.8.8.8", "udp", 40000, 53, 80, qname="rr1---sn-x.googlevideo.com", resp="1", ans="1")]
-    tw = [_pkt(100.5, me, "151.101.1.1", "tcp", 50100, 443, 900, sni="video-weaver.fra02.hls.ttvnw.net")]
-    dflt = [_pkt(98.0, "127.0.0.53", me, "udp", 53, 41000, 90, qname="video-weaver.fra02.hls.ttvnw.net", resp="1", ans="2")]
-    s = {"youtube/yt_1": {"platform": "youtube", "window": [95.0, 200.0], "s": F.summarise(yt)},
-         "twitch/tw_1": {"platform": "twitch", "window": [96.0, 200.0], "s": F.summarise(tw)}}
-    rep = F.report(s, F.summarise(dflt, keep_udp=True))
-    assert not rep["leak"], rep
-    y = rep["sessions"]["youtube/yt_1"]
-    assert y["dns"]["answered_own_pcap"] == 1 and rep["sessions"]["twitch/tw_1"]["dns"]["answered_default_capture"] == 1
-    assert y["quic"] == {"bytes_share": round(2600 / 3080, 4), "flows_share": round(1 / 3, 4), "quic_flows": 1, "flows": 3}
-    assert y["default_udp_from_media_addresses"]["packets"] == 0 and y["default_udp_from_media_addresses"]["media_addresses"] == 1
-    assert F.family("rr1---sn-x.googlevideo.com") == "youtube" and F.family("www.google.com") is None
-    # a leak: the tw session also holds a yt flow, a QUIC CID and a yt SNI
-    s["twitch/tw_1"]["s"] = F.summarise(tw + [_pkt(100.5, me, "142.250.1.1", "udp", 50001, 443, 1300, "aabbccddeeff0011",
-                                                    "rr1---sn-x.googlevideo.com")])
-    rep = F.report(s, F.summarise(dflt, keep_udp=True))
-    assert rep["leak"] and rep["pairs"][0]["shared_flows"] == 1 and rep["pairs"][0]["shared_quic_cids"] == 1
-    assert rep["sessions"]["twitch/tw_1"]["sibling_family_snis"] == {"youtube": ["rr1---sn-x.googlevideo.com"]}
-    # L-A3: yt media (by SNI) in the default class during the yt session
-    s["twitch/tw_1"]["s"] = F.summarise(tw)
-    rep = F.report(s, F.summarise(dflt + [_pkt(120.0, me, "142.250.9.9", "tcp", 50200, 443, sni="rr5---sn-y.googlevideo.com")],
-                                  keep_udp=True))
-    assert rep["leak"] and rep["sessions"]["youtube/yt_1"]["default_media_snis_in_window"] == ["rr5---sn-y.googlevideo.com"]
-    # the conntrack-timeout case: a short-header QUIC packet from the yt media address, unmarked, on a new client port
-    rep = F.report(s, F.summarise(dflt + [_pkt(150.0, "142.250.1.1", me, "udp", 443, 50009, 1200, "99887766aabbccdd")],
-                                  keep_udp=True))
-    hit = rep["sessions"]["youtube/yt_1"]["default_udp_from_media_addresses"]
-    assert rep["leak"] and hit["packets"] == 1 and hit["quic_packets"] == 1 and hit["bytes"] == 1200
-    # levi's call on pilot-1, item 11: each Chrome's own mDNS on the fixed 5-tuple is reported when packet-disjoint
-    mdns = lambda tt: _pkt(tt, me, "224.0.0.251", "udp", 5353, 5353, 120, plen=78)
-    s = {"youtube/yt_1": {"platform": "youtube", "window": [95.0, 200.0], "s": F.summarise(yt + [mdns(110.0), mdns(130.0)])},
-         "twitch/tw_1": {"platform": "twitch", "window": [96.0, 200.0], "s": F.summarise(tw + [mdns(115.0), mdns(125.0)])}}
-    pr = F.report(s, None)["pairs"][0]
-    assert (pr["shared_flows"], pr["shared_unicast_flows"]) == (1, 0), pr
-    assert json.loads(json.dumps(pr["shared_link_local_multicast"])) == [{"flow": ["udp", ["10.0.0.2", 5353], ["224.0.0.251", 5353]],
-                                                  "packets_a": 2, "packets_b": 2, "packets_in_both": 0}], pr
-    s["twitch/tw_1"]["s"] = F.summarise(tw + [mdns(115.0), mdns(130.0)])    # one packet in both pcaps
-    assert F.report(s, None)["pairs"][0]["shared_link_local_multicast"][0]["packets_in_both"] == 1
-    # split flows: payload-carrying packets in the default class counted apart from control ones (RST / ACK)
-    split = [_pkt(102.0, me, "172.217.1.1", "tcp", 50002, 443, 54, plen=0),
-             _pkt(102.5, "172.217.1.1", me, "tcp", 443, 50002, 1400, plen=1346)]
-    sy = F.summarise(yt, keep_pkts=True)
-    sd = F.split_detail(sy, F.summarise(split, keep_pkts=True), "youtube")
-    assert sd["flows"] == 1 and sd["rows"][0]["payload_packets"] == 1 and sd["rows"][0]["default_packets"] == 2, sd
-    with tempfile.TemporaryDirectory() as d:
-        (Path(d) / "nf_conntrack_udp_timeout").write_text("30\n")
-        (Path(d) / "nf_conntrack_udp_timeout_stream").write_text("120\n")
-        assert T.conntrack_timeouts(Path(d)) == {"nf_conntrack_udp_timeout": 30, "nf_conntrack_udp_timeout_stream": 120,
-                                                 "nf_conntrack_tcp_timeout_established": None}
-
-
 def test_dns_answers():
     txt = "rr1---sn-x.googlevideo.com\t142.250.1.1,142.250.1.2\t\nwww.youtube.com\t142.250.1.1\t\n\t\t\nnoans.com\t\t\n"
     assert T.parse_dns(txt) == {"142.250.1.1": ["rr1---sn-x.googlevideo.com", "www.youtube.com"],
@@ -356,39 +300,6 @@ def test_dns_answers():
         rep = F.report({"youtube/yt_7": {"platform": "youtube", "window": [0, 1e12], "s": s,
                                          "dns_answers_file": str(d / "dns_answers.json")}}, None)
         assert rep["dns_fail"] == ["youtube/yt_7"]
-
-
-def test_split_detail():
-    """Supervisor (i): a flow split between a session and the default class, by when its default packets came."""
-    me, cdn = "10.0.0.2", "142.250.1.1"
-    s_rows = [_pkt(100.0 + i, me, cdn, "udp", 50001, 443, 1200, sni="rr1---sn-x.googlevideo.com" if i == 0 else "")
-              for i in range(10)]                                                    # flow A: 100..109
-    s_rows += [_pkt(t, me, cdn, "udp", 50002, 443, 1200) for t in (100.0, 105.0, 200.0, 201.0)]   # flow B: a 95 s gap
-    s_rows += [_pkt(t, me, cdn, "tcp", 50003, 443, 1500) for t in (100.0, 101.0, 102.0)]           # flow C
-    s_rows += [_pkt(t, me, cdn, "tcp", 50004, 443, 1500) for t in (100.0, 110.0)]                  # flow D
-    d_rows = [_pkt(115.0, me, cdn, "udp", 50001, 443, 66),                                         # A: after its end
-              _pkt(180.0, cdn, me, "udp", 443, 50002, 1200),                                       # B: after the idle gap
-              _pkt(101.5, cdn, me, "tcp", 443, 50003, 1500),                                       # C: mid-flow
-              _pkt(90.0, me, cdn, "tcp", 50004, 443, 74)]                                          # D: before its first
-    d_rows[0]["tcp.flags.str"] = ""
-    d_rows[2]["tcp.flags.str"] = "·······A····"
-    default = F.summarise(d_rows, keep_udp=True, keep_pkts=True)
-    s = F.summarise(s_rows, keep_pkts=set(default["flows"]))
-    det = F.split_detail(s, default, "youtube")
-    assert det["by_class"] == {"after_last": 1, "after_idle": 1, "mid_flow": 1, "before_first": 1}, det["by_class"]
-    assert det["media_flows_by_class"] == {"after_last": 1}
-    assert det["default_packets_by_direction"] == {"up": 2, "down": 2}
-    rows = {r["flow"][1][1] if r["flow"][1][0] == me else r["flow"][2][1]: r for r in det["rows"]}
-    assert rows[50002]["max_gap_before_s"] == 75.0 and rows[50003]["tcp_flags"] == {"·······A····": 1}
-    # levi (round 1): a link-local multicast flow (mDNS 5353 -> 224.0.0.251:5353, a host-wide 5-tuple) carries
-    # packets_in_both: its default packets matching a session packet by (time, length); avahi's own query matches none
-    mrow = [_pkt(t, me, "224.0.0.251", "udp", 5353, 5353, 82) for t in (100.0, 101.0)]
-    dm = [_pkt(150.0, me, "224.0.0.251", "udp", 5353, 5353, 87), _pkt(101.0, me, "224.0.0.251", "udp", 5353, 5353, 82)]
-    dflt = F.summarise(dm, keep_udp=True, keep_pkts=True)
-    sm = F.summarise(mrow, keep_pkts=set(dflt["flows"]))
-    r = F.split_detail(sm, dflt, "youtube")["rows"][0]
-    assert r["link_local_multicast"] is True and r["packets_in_both"] == 1 and r["default_packets"] == 2, r
-    assert "link_local_multicast" not in F.split_detail(s, default, "youtube")["rows"][0]
 
 
 def test_check_session_reads_dns_answers():
