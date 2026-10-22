@@ -199,7 +199,9 @@ def dumps(man: dict) -> str:
     return json.dumps(man, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
 
 
-def verify(cache: Path, man: dict) -> list[str]:
+def verify(cache: Path, man: dict, series_only: bool = False) -> list[str]:
+    """Every manifest file's sha256 in the cache; series_only (chaos: the derived series and logs are copied there, the
+    FCC archive never is, rushi 11:45) skips the archives."""
     bad = []
     for sid, s in man["sources"].items():
         for f in s["files"]:
@@ -208,7 +210,7 @@ def verify(cache: Path, man: dict) -> list[str]:
                 bad.append(f"{sid}/{f['name']}: missing")
             elif sha256_file(p) != f["sha256"]:
                 bad.append(f"{sid}/{f['name']}: sha256 differs")
-        if "archive" in s:
+        if "archive" in s and not series_only:
             p = cache / sid / s["archive"]["name"]
             if not p.exists() or sha256_file(p) != s["archive"]["sha256"]:
                 bad.append(f"{sid}/{s['archive']['name']}: missing or sha256 differs")
@@ -252,6 +254,7 @@ def main(argv=None) -> int:
     g.add_argument("--build", action="store_true", help="build the manifest from the cache only")
     g.add_argument("--verify", action="store_true")
     g.add_argument("--summary", action="store_true")
+    ap.add_argument("--series-only", action="store_true", help="--verify: the series and logs only, no archive (chaos)")
     a = ap.parse_args(argv)
     if a.fetch or a.build:
         text = dumps(build(a.cache, a.fetch))
@@ -260,7 +263,7 @@ def main(argv=None) -> int:
         return 0
     man = json.loads(MANIFEST.read_text())
     if a.verify:
-        bad = verify(a.cache, man)
+        bad = verify(a.cache, man, a.series_only)
         print("\n".join(bad) if bad else f"verified: manifest sha256 {sha256_file(MANIFEST)}")
         return 1 if bad else 0
     print(json.dumps(summary(a.cache, man), indent=1))
