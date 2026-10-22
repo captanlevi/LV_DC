@@ -150,8 +150,26 @@ def compute_entries(rows: list[dict], meta: dict, net_labels: list[dict]) -> lis
     return out
 
 
-def dead_tick_runs(rows: list[dict]) -> list[list[float]]:
-    """dead_runs' runs as their dead ticks' times (s)."""
+def nav_times(meta: dict) -> list[float]:
+    """levi 11:40 (ti_100086 / ti_100090): every navigation of ours inside the session, sorted: the re-entries' t_nav
+    (player_dead_reentries, frozen_reentries, the room rotation's moves past the first room; t_enter where a record has
+    no t_nav). The collector's watches are rebuilt there, so no clock of theirs runs across one."""
+    recs = list(meta.get("player_dead_reentries") or []) + list(meta.get("frozen_reentries") or [])
+    recs += [r for r in (meta.get("room_rotation") or {}).get("rooms") or [] if not r.get("first")]
+    out = set()
+    for r in recs:
+        t = r.get("t_nav") if isinstance(r.get("t_nav"), (int, float)) else r.get("t_enter")
+        if isinstance(t, (int, float)):
+            out.add(float(t))
+    return sorted(out)
+
+
+def dead_tick_runs(rows: list[dict], navs: list[float] | None = None) -> list[list[float]]:
+    """dead_runs' runs as their dead ticks' times (s). With navs (nav_times; levi 11:40): a run is split at each of our
+    navigations inside it: the part before ends AT the navigation (its censored end, appended as its last time: the
+    collector's clock ran to the rebuild) and the ticks from the navigation on (the new page loading) are a run of
+    their own."""
+    navs = sorted(navs or [])
     played_at = sustained_at(rows, 0.0, window_s=float("inf"))
     runs, cur = [], []
     for r, _ in tick_states(rows):
@@ -169,22 +187,26 @@ def dead_tick_runs(rows: list[dict]) -> list[list[float]]:
                 runs.append(cur)
             cur = []
             continue
+        cut = next((n for n in navs if cur and cur[-1] < n <= ts), None)
+        if cut is not None:
+            runs.append(cur + [cut])
+            cur = []
         cur.append(ts)
     if cur:
         runs.append(cur)
     return runs
 
 
-def dead_open_at_end(rows: list[dict]) -> bool:
+def dead_open_at_end(rows: list[dict], navs: list[float] | None = None) -> bool:
     """A dead run with no live res_meta tick after it: the page never came back before the session ended."""
-    runs = dead_tick_runs(rows)
+    runs = dead_tick_runs(rows, navs)
     if not runs:
         return False
     last = runs[-1][-1]
     return not any(_f(r.get("ts")) is not None and float(r["ts"]) / 1000.0 > last for r, _ in tick_states(rows))
 
 
-def held_dead_runs(rows: list[dict], net_labels: list) -> list[tuple[float, float]]:
+def held_dead_runs(rows: list[dict], net_labels: list, navs: list[float] | None = None) -> list[tuple[float, float]]:
     """The dead runs with the parts the collector's player_dead clock holds left out (bd4bebf: shaper states 1-4 and
     stuck.LOW_HOLD_GRACE_S after leaving them; the clock restarts after the hold): (first, last tick) per remaining
     part, as dead_runs measures (levi 09:40 / 11:22, the end-of-day-2 tip: the class follows the collector's hold)."""
@@ -192,7 +214,7 @@ def held_dead_runs(rows: list[dict], net_labels: list) -> list[tuple[float, floa
     spans = stuck.low_spans(net_labels)
     held = lambda t: any(a <= t <= b + stuck.LOW_HOLD_GRACE_S for a, b in spans)
     out = []
-    for run in dead_tick_runs(rows):
+    for run in dead_tick_runs(rows, navs):
         seg = []
         for t in run:
             if held(t):
@@ -221,15 +243,15 @@ def held_frozen_s(runs: list[tuple[float, float]], net_labels: list, step_s: flo
     return best
 
 
-def open_dead_run_held_s(rows: list[dict], net_labels: list) -> float | None:
+def open_dead_run_held_s(rows: list[dict], net_labels: list, navs: list[float] | None = None) -> float | None:
     """levi 03:51 (ti_100084): the length of the dead run still open at the last tick, as the collector's clock counts
     it: its final part outside the low-state hold (states 1-4 + grace), first to last dead tick; None when no run is
     open at the end. The session's other, earlier runs never enter it."""
-    if not dead_open_at_end(rows):
+    if not dead_open_at_end(rows, navs):
         return None
     import stuck
     spans = stuck.low_spans(net_labels or [])
-    run = dead_tick_runs(rows)[-1]
+    run = dead_tick_runs(rows, navs)[-1]
     seg: list[float] = []
     for t in run:
         if any(a <= t <= b + stuck.LOW_HOLD_GRACE_S for a, b in spans):
@@ -240,7 +262,8 @@ def open_dead_run_held_s(rows: list[dict], net_labels: list) -> float | None:
 
 
 def unresolved_dead_runs(rows: list[dict], open_clocks: list[dict], low_spans: list, t_dead: float | None,
-                         net_labels: list | None = None) -> tuple[list[dict], list[tuple[float, float]]]:
+                         net_labels: list | None = None,
+                         navs: list[float] | None = None) -> tuple[list[dict], list[tuple[float, float]]]:
     """levi 03:58 / 04:06 (final, (H)): for each dead clock left unresolved (end None), the raw dead run it belongs to
     (dead_tick_runs: the run holding the clock's start, else the first run starting after it) and, as the mask, that
     run's HELD parts (held_dead_runs: the parts outside the low-state hold, states 1-4 + grace, the measure check's
@@ -251,10 +274,10 @@ def unresolved_dead_runs(rows: list[dict], open_clocks: list[dict], low_spans: l
     clock the net labels and meta use), never slot indices; end / raw_end None = open at the session's last tick.
     brad's cuts loader masks every slot overlapping [onset, end) of each item, on its own slot grid."""
     import stuck
-    runs = dead_tick_runs(rows)
-    parts = held_dead_runs(rows, net_labels or [])
+    runs = dead_tick_runs(rows, navs)
+    parts = held_dead_runs(rows, net_labels or [], navs)
     last_tick = max((float(r["ts"]) / 1000.0 for r, _ in tick_states(rows) if _f(r.get("ts")) is not None), default=None)
-    open_end = dead_open_at_end(rows)
+    open_end = dead_open_at_end(rows, navs)
     prov, hard, seen = [], [], set()
     for c in open_clocks:
         t = c.get("start")
@@ -282,31 +305,11 @@ def unresolved_dead_runs(rows: list[dict], open_clocks: list[dict], low_spans: l
     return prov, hard
 
 
-def dead_runs(rows: list[dict]) -> list[tuple[float, float]]:
+def dead_runs(rows: list[dict], navs: list[float] | None = None) -> list[tuple[float, float]]:
     """Runs (first, last dead tick, s) of res_meta ticks with no media at all, after playback had been sustained once:
-    readyState 0 (ready_state column, from the 2026-10-17 extension) or, on older ticks, a 0x0 video at playhead 0."""
-    played_at = sustained_at(rows, 0.0, window_s=float("inf"))
-    runs, t0, last = [], None, None
-    for r, _ in tick_states(rows):
-        ts = _f(r.get("ts"))
-        if ts is None:
-            continue
-        ts /= 1000.0
-        rs = r.get("ready_state")
-        if rs not in (None, "", "None", "null"):
-            dead = _f(rs) == 0
-        else:
-            dead = _f(r.get("video_w")) in (0.0, None) and _f(r.get("current_time")) in (0.0, None)
-        if not dead or played_at is None or ts < played_at:
-            if t0 is not None:
-                runs.append((t0, last))
-            t0 = None
-            continue
-        t0 = ts if t0 is None else t0
-        last = ts
-    if t0 is not None:
-        runs.append((t0, last))
-    return runs
+    readyState 0 (ready_state column, from the 2026-10-17 extension) or, on older ticks, a 0x0 video at playhead 0.
+    dead_tick_runs' runs (navs: split at our navigations, levi 11:40)."""
+    return [(r[0], r[-1]) for r in dead_tick_runs(rows, navs)]
 
 
 def dead_player_run(rows: list[dict]) -> float:
@@ -314,18 +317,20 @@ def dead_player_run(rows: list[dict]) -> float:
     return max((b - a for a, b in dead_runs(rows)), default=0.0)
 
 
-def dead_player(rows: list[dict], reentries: list[dict] | None, net_labels: list | None = None) -> dict:
+def dead_player(rows: list[dict], reentries: list[dict] | None, net_labels: list | None = None,
+                navs: list[float] | None = None) -> dict:
     """The player_dead measure with levi's recovery rule (RECOVERED_DEAD_CLASS): {max_s (longest run not recovered),
     max_all_s, recovered (recovered_dead_s, window, t_nav, t_playing, dead_window) or None, recovered_runs}. With
     net_labels (tt), the runs are held_dead_runs: the parts the collector's low-state hold held are left out."""
-    runs = dead_runs(rows)
+    runs = dead_runs(rows, navs)
     cont = [r for r in reentries or [] if r.get("outcome") == "continue" and r.get("t_nav")]
+    # with navs the run our re-entry ended ends at its t_nav; the new page's load run after it is not that run
     rec = [(run, r) for run in runs for r in cont
-           if run[0] - RECOVERY_SLACK_S <= r["t_nav"] <= run[1] + RECOVERY_SLACK_S]
+           if run[0] - RECOVERY_SLACK_S <= r["t_nav"] <= run[1] + RECOVERY_SLACK_S and (navs is None or run[0] < r["t_nav"])]
     keep = runs if len(rec) != 1 else [x for x in runs if x != rec[0][0]]
     # the recovery is matched on the raw runs (the run our re-entry ended); the measure, with net labels, on the parts
     # of the runs the low-state hold did not hold
-    parts = held_dead_runs(rows, net_labels) if net_labels is not None else runs
+    parts = held_dead_runs(rows, net_labels, navs) if net_labels is not None else runs
     inside = lambda p, rs: any(a <= p[0] and p[1] <= b for a, b in rs)
     out = {"max_s": max((b - a for a, b in parts if inside((a, b), keep)), default=0.0),
            "max_all_s": max((b - a for a, b in parts), default=0.0),

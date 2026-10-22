@@ -296,6 +296,60 @@ def test_open_run_is_measured_on_its_own():
     assert lab["dead_clock_of_record"]["open_run_held_s"] == 0.0 and lab["dead_player_class_s"] == 0.0
     assert "E.read_net_labels(sd))" in (HERE / "check_session.py").read_text()
 
+def test_dead_runs_split_at_our_navigation():
+    """levi 11:40 (peter's margin fact a5ffab57; ti_100086 / ti_100090): a dead run ends at our re-entry's navigation,
+    where the collector's watch is rebuilt and its clock cut; the new page's load ticks after it are a run of their own.
+    ti_100086 / ti_100090 rebuilt from check_Tstar_all (ef9905b22161): the held part ends at t_nav (59.485 / 59.986 s,
+    < T: no fire, as the collector saw), not at the last load tick past it (63.776 / 63.307). A hard run (no low span,
+    raw >= T) joined across a navigation, each part < T: not player_dead; a hard run >= T before the navigation: still."""
+    import check_session as CS
+    for onset, nav, last, held in ((1792597662.422, 1792597721.9073412, 1792597726.197, 59.485),
+                                   (1792604608.539, 1792604668.5246737, 1792604671.847, 59.986)):
+        raw0 = onset - 79.0                                          # raw - held = the low part + 30 s grace (levi)
+        ticks = [raw0 - 20.0 + k for k in range(int(last - raw0 + 21))]
+        rows = [{"ts": str(t * 1000), "type": "res_meta", "current_time": str(t - ticks[0]), "is_ad": "False",
+                 "paused": "False", "ready_state": "0" if t >= raw0 else "4", "video_w": "720"} for t in ticks]
+        labels = [{"timestamp": raw0 - 10.0, "speed": 300, "state": "2"},
+                  {"timestamp": onset - 30.0 - 0.5, "speed": 1600, "state": "6"}]    # the hold ends 0.5 s before onset
+        before = E.held_dead_runs(rows, labels)
+        assert round(before[-1][1] - before[-1][0], 3) > 60.0, before          # unsplit: the load ticks join, > T
+        parts = E.held_dead_runs(rows, labels, [nav])
+        assert round(parts[0][0], 3) == onset and parts[0][1] == nav and round(nav - onset, 3) == held, parts
+        assert parts[1][0] >= nav and parts[1][1] - parts[1][0] < 60.0, parts      # the load run, its own
+        pdw = {"low_spans": [[raw0 - 10.0, onset - 30.5]], "dead_clocks": [{"start": onset - 0.5, "end": None, "how": None}]}
+        lab = {"dead_player_max_s": held, "dead_player_T_s": 60.0}
+        CS.dead_clock_of_record(lab, rows, "tiktok", pdw, labels, [nav])
+        p0 = lab["provisional_runs"][0]
+        assert lab["dead_player_class_s"] == 0.0 and (p0["onset"], p0["end"], p0["held_s"]) == (round(onset, 3), round(nav, 3), held), lab
+        assert not lab["dead_clock_of_record"]["disagrees"], lab                  # held < T: the reader agrees
+    assert E.nav_times({"frozen_reentries": [{"t_nav": 5.0}], "player_dead_reentries": [{"t_enter": 9.0}],
+                        "room_rotation": {"rooms": [{"first": True, "t_nav": 1.0}, {"t_nav": 5.0}, {"room": "x"}]}}) == [5.0, 9.0]
+    t0 = 1_792_000_000.0
+
+    def rows(spans, total=800):
+        return [{"ts": str((t0 + k) * 1000), "type": "res_meta", "current_time": str(k), "is_ad": "False",
+                 "paused": "False", "ready_state": "0" if any(a <= k < b for a, b in spans) else "4", "video_w": "720"}
+                for k in range(total)]
+    labels = [{"timestamp": t0 + 88, "speed": 300, "state": "1"}, {"timestamp": t0 + 148, "speed": 900, "state": "5"}]
+    pdw = lambda s: {"low_spans": [[t0 + 88, t0 + 148]], "dead_clocks": [{"start": t0 + s, "end": None, "how": None}]}
+    net = {"pcap": True, "packets": 1, "ssl_keys": True}
+    base = {"n_res_meta": 100, "tick_presence": 1.0, "v2_columns": True, "dead_player_T_s": 60.0}
+    joined = {"dead_player_max_s": 86.0, "dead_player_T_s": 60.0}        # 500 -> 586 across a navigation at 540
+    CS.dead_clock_of_record(joined, rows([(500, 586)]), "tiktok", pdw(500), labels, [t0 + 540.5])
+    v, why = CS.verdict({**base, **joined}, net, {}, [], 0.0)
+    assert joined["dead_player_class_s"] < 60.0 and v == "PASS" and not any("player_dead" in w for w in why), (joined, why)
+    assert E.dead_runs(rows([(500, 586)]), [t0 + 540.5]) == [(t0 + 500, t0 + 540.5), (t0 + 541, t0 + 585)]
+    hard = {"dead_player_max_s": 86.0, "dead_player_T_s": 60.0}          # >= T before the navigation at 580
+    CS.dead_clock_of_record(hard, rows([(500, 586)]), "tiktok", pdw(500), labels, [t0 + 580.5])
+    v, why = CS.verdict({**base, **hard}, net, {}, [], 0.0)
+    assert hard["dead_player_class_s"] == 80.5 and v == "FAIL" and any("player_dead" in w for w in why), hard
+    assert E.dead_runs(rows([(500, 586)])) == E.dead_runs(rows([(500, 586)]), [t0 + 700.0]) == [(t0 + 500, t0 + 585)]
+    # the recovery rule matches the run our re-entry ended, never the new page's load run after it
+    re_ = [{"t_nav": t0 + 540.5, "outcome": "continue"}]
+    dp = E.dead_player(rows([(500, 586)]), re_, None, [t0 + 540.5])
+    assert dp["recovered_runs"] == 1 and dp["recovered"]["window"] == [t0 + 500, t0 + 540.5], dp
+
+
 def test_entries_and_class():
     meta = {"channel_url": SESS["channel_url"], "room_rotation": SESS["room_rotation"]}
     ents = E.compute_entries(ROWS, meta, SESS["net_labels"])
@@ -724,6 +778,7 @@ def main() -> int:
             mp.close()
     test_a_player_dead_reentry_is_an_entry()
     test_ti37_recovered_reads_normal()
+    test_dead_runs_split_at_our_navigation()
     print("test_player_dead: ok")
     return 0
 

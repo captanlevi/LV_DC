@@ -444,7 +444,8 @@ def fullscreen_player_lt_screen(meta: dict) -> dict | None:
 
 def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
                  frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
-                 entry_win: tuple[float, float] | None = None, net_labels: list | None = None) -> dict:
+                 entry_win: tuple[float, float] | None = None, net_labels: list | None = None,
+                 navs: list[float] | None = None) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
         return {"n_res_meta": len(meta)}
@@ -481,7 +482,8 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
     per_signal = collections.Counter(s for r in meta for s in (r.get("ad_signals") or "").split("|") if s)
     # levi 2026-10-18: a run recovered by the re-entry is reported, not the verdict; tt with its net labels (the
     # end-of-day-2 tip): the dead measure leaves out what the collector's low-state hold held (bd4bebf)
-    dp = E.dead_player(rows, reentries, net_labels if platform == "tiktok" and net_labels else None)
+    # levi 11:40: dead runs split at our navigations (E.nav_times), where the collector's clock is cut
+    dp = E.dead_player(rows, reentries, net_labels if platform == "tiktok" and net_labels else None, navs)
     fp = recovered_frozen(rows, frozen_reentries, n_dead_recovered=dp["recovered_runs"])
     if dp["recovered"] and any(r.get("outcome") == "continue" for r in frozen_reentries or []):
         dp = {**dp, "max_s": dp["max_all_s"], "recovered": None}   # one recovery of either kind per session (am. 6)
@@ -1034,7 +1036,8 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
     return ("FAIL" if why else "PASS"), why
 
 
-def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw, net_labels: list | None = None) -> None:
+def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw, net_labels: list | None = None,
+                         navs: list[float] | None = None) -> None:
     """levi 09:54 / 12:04: on a tt session carrying meta.json player_dead_watch, the collector's live clock is the class
     of record: dead_over_t when a dead clock fired (the check's held measure), or when the dead run still open at the
     last tick is itself >= T (levi 03:51, ti_100084: its own held length, E.open_dead_run_held_s; before, an open run of
@@ -1047,7 +1050,7 @@ def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw, 
         return
     clocks = pdw.get("dead_clocks") or []
     fired = any(c.get("how") == "fired" for c in clocks)
-    open_s = E.open_dead_run_held_s(label_rows, net_labels or [])
+    open_s = E.open_dead_run_held_s(label_rows, net_labels or [], navs)
     open_end = open_s is not None
     T, measure = lab.get("dead_player_T_s"), lab.get("dead_player_max_s")
     unresolved = sum(1 for c in clocks if c.get("end") is None)
@@ -1056,7 +1059,7 @@ def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw, 
     # hold; the held-out ticks are a STALL by the hold's rule) for the labels of record to censor (-1, as censored_end);
     # a raw run itself >= T with no low span inside it (no hold could apply) reads player_dead as before, not provisional
     prov, hard = E.unresolved_dead_runs(label_rows, [c for c in clocks if c.get("end") is None], pdw.get("low_spans") or [],
-                                        T, net_labels) if not fired else ([], [])
+                                        T, net_labels, navs) if not fired else ([], [])
     if hard:
         cls = max(cls, max(b - a for a, b in hard))
     disagree = E.dead_over_t(measure, T) and not E.dead_over_t(cls, T)
@@ -1110,10 +1113,11 @@ def main() -> int:
     if ents is None:
         ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
     win = session_window(meta, E.read_net_labels(sd))
+    navs = E.nav_times(meta)
     lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
-                       entry_window(ents, win), E.read_net_labels(sd))
+                       entry_window(ents, win), E.read_net_labels(sd), navs)
     lab["shot_effects"] = shot_effects(label_rows, sd)
-    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), E.read_net_labels(sd))
+    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), E.read_net_labels(sd), navs)
     frozen_clock_of_record(lab, label_rows, platform, E.read_net_labels(sd), meta)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
