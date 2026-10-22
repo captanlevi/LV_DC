@@ -262,8 +262,8 @@ def open_dead_run_held_s(rows: list[dict], net_labels: list, navs: list[float] |
 
 
 def unresolved_dead_runs(rows: list[dict], open_clocks: list[dict], low_spans: list, t_dead: float | None,
-                         net_labels: list | None = None,
-                         navs: list[float] | None = None) -> tuple[list[dict], list[tuple[float, float]]]:
+                         net_labels: list | None = None, navs: list[float] | None = None,
+                         shared_navs: list[float] | None = None) -> tuple[list[dict], list[tuple[float, float]]]:
     """levi 03:58 / 04:06 (final, (H)): for each dead clock left unresolved (end None), the raw dead run it belongs to
     (dead_tick_runs: the run holding the clock's start, else the first run starting after it) and, as the mask, that
     run's HELD parts (held_dead_runs: the parts outside the low-state hold, states 1-4 + grace, the measure check's
@@ -291,7 +291,7 @@ def unresolved_dead_runs(rows: list[dict], open_clocks: list[dict], low_spans: l
         is_open = open_end and run is runs[-1]
         raw_b = max(b, last_tick) if is_open and last_tick is not None else b
         low_inside = any(lo <= raw_b and a <= hi + stuck.LOW_HOLD_GRACE_S for lo, hi in low_spans)
-        if t_dead is not None and raw_b - a >= t_dead and not low_inside:
+        if t_dead is not None and raw_b - a >= t_dead and not low_inside and not _ends_at(b, shared_navs):
             hard.append((a, raw_b))
             continue
         for pa, pb in parts:
@@ -317,8 +317,12 @@ def dead_player_run(rows: list[dict]) -> float:
     return max((b - a for a, b in dead_runs(rows)), default=0.0)
 
 
+def _ends_at(end: float, navs) -> bool:
+    return any(abs(end - n) < 1e-6 for n in navs or ())
+
+
 def dead_player(rows: list[dict], reentries: list[dict] | None, net_labels: list | None = None,
-                navs: list[float] | None = None) -> dict:
+                navs: list[float] | None = None, shared_navs: list[float] | None = None) -> dict:
     """The player_dead measure with levi's recovery rule (RECOVERED_DEAD_CLASS): {max_s (longest run not recovered),
     max_all_s, recovered (recovered_dead_s, window, t_nav, t_playing, dead_window) or None, recovered_runs}. With
     net_labels (tt), the runs are held_dead_runs: the parts the collector's low-state hold held are left out."""
@@ -332,9 +336,14 @@ def dead_player(rows: list[dict], reentries: list[dict] | None, net_labels: list
     # of the runs the low-state hold did not hold
     parts = held_dead_runs(rows, net_labels, navs) if net_labels is not None else runs
     inside = lambda p, rs: any(a <= p[0] and p[1] <= b for a, b in rs)
-    out = {"max_s": max((b - a for a, b in parts if inside((a, b), keep)), default=0.0),
+    # levi 14:43: a run our own re-entry ends at the shared deadline (shared_navs: check_session's tag) is not compared
+    # with T; its censored length is reported (shared_deadline_runs), its class follows the re-entry's outcome
+    shared = [(a, b) for a, b in parts if _ends_at(b, shared_navs)]
+    out = {"max_s": max((b - a for a, b in parts if inside((a, b), keep) and (a, b) not in shared), default=0.0),
            "max_all_s": max((b - a for a, b in parts), default=0.0),
-           "recovered": None, "recovered_runs": len(rec)}
+           "recovered": None, "recovered_runs": len(rec),
+           "shared_deadline_runs": [{"onset": round(a, 3), "censored_end": round(b, 3), "s": round(b - a, 3)}
+                                    for a, b in shared]}
     if len(rec) == 1:
         (a, b), r = rec[0]
         out["recovered"] = {"recovered_dead_s": round(b - a, 1), "window": [a, b], "t_nav": r["t_nav"],

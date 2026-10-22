@@ -445,7 +445,7 @@ def fullscreen_player_lt_screen(meta: dict) -> dict | None:
 def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
                  frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
                  entry_win: tuple[float, float] | None = None, net_labels: list | None = None,
-                 navs: list[float] | None = None) -> dict:
+                 navs: list[float] | None = None, shared_navs: list[float] | None = None) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
         return {"n_res_meta": len(meta)}
@@ -483,7 +483,7 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
     # levi 2026-10-18: a run recovered by the re-entry is reported, not the verdict; tt with its net labels (the
     # end-of-day-2 tip): the dead measure leaves out what the collector's low-state hold held (bd4bebf)
     # levi 11:40: dead runs split at our navigations (E.nav_times), where the collector's clock is cut
-    dp = E.dead_player(rows, reentries, net_labels if platform == "tiktok" and net_labels else None, navs)
+    dp = E.dead_player(rows, reentries, net_labels if platform == "tiktok" and net_labels else None, navs, shared_navs)
     fp = recovered_frozen(rows, frozen_reentries, n_dead_recovered=dp["recovered_runs"])
     if dp["recovered"] and any(r.get("outcome") == "continue" for r in frozen_reentries or []):
         dp = {**dp, "max_s": dp["max_all_s"], "recovered": None}   # one recovery of either kind per session (am. 6)
@@ -509,6 +509,7 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
         "frozen_playhead_T_s": FROZEN_PLAYHEAD_MAX_S.get(platform),
         "dead_player_max_s": dp["max_s"], "dead_player_max_all_s": dp["max_all_s"],
         "recovered_dead": dp["recovered"], "recovered_dead_runs": dp["recovered_runs"],
+        "shared_deadline_runs": dp["shared_deadline_runs"],
         "dead_player_T_s": PLAYER_DEAD_MAX_S.get(platform),
         "stall_advancing_share": stall_advancing_share(rows),
         "tier_mix_quality_time": {str(k): v / nq for k, v in sorted(mix.items())},
@@ -1036,8 +1037,69 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
     return ("FAIL" if why else "PASS"), why
 
 
+# one watch poll: browser._room_watch_loop (the dead clock) and the ad watcher feeding _stuck_tick (T2) each wait
+# timeout=1 per loop (browser.py `while not self._stop.wait(timeout=1)` / `while not stop.wait(timeout=1)`)
+SHARED_DEADLINE_POLL_S = 1.0
+
+
+def shared_deadline_reentries(meta: dict, rows: list[dict], net_labels: list) -> list[dict]:
+    """levi 14:41 (peter's 2fdf48cc: after a low-state hold tt's T2 deadline, stuck.T2_S above the rung, and the
+    player_dead clock's T, its start + TT_STALL_GRACE_S after the hold, coincide; which watcher acts is poll phase).
+    Per tt re-entry of ours (frozen_reentries, player_dead_reentries): the two deadlines from the meta timings and
+    shared = |T2 deadline - dead deadline| <= SHARED_DEADLINE_POLL_S; None when one cannot be read.
+      T2: a frozen re-entry's t2_window[0] + T2_S; a dead re-entry's, as stuck.t2_clock would have run it, from the
+          frozen run holding its t_nav and stuck.above_since on the session's rung (meta lowest_rung);
+      dead: the player_dead_watch clock running at the re-entry (begun by t_nav; open, or ended within two polls of
+          it) + PLAYER_DEAD_MAX_S; a session with no watch log (before Y, levi 14:43): the clock as the collector ran it,
+          max(the dead run's onset, the last low-state stretch's end + LOW_HOLD_GRACE_S) + PLAYER_DEAD_MAX_S, the run
+          the one our navigation ends (E.dead_tick_runs split at t_nav). Record only; brad's list reads a failed
+          tagged re-entry as censored at its t_nav. dead_source says which."""
+    import stuck
+    if (meta.get("platform") or "") != "tiktok":
+        return []
+    t_dead = PLAYER_DEAD_MAX_S.get("tiktok")
+    watch = isinstance(meta.get("player_dead_watch"), dict)
+    clocks = ((meta.get("player_dead_watch") or {}).get("dead_clocks")) or []
+    spans = stuck.low_spans(net_labels or [])
+    rung = stuck.t2_rung(meta.get("lowest_rung"))
+    runs = frozen_runs(rows)
+    out = []
+    for kind, recs in (("player_frozen", meta.get("frozen_reentries") or []),
+                       ("player_dead", meta.get("player_dead_reentries") or [])):
+        for r in recs:
+            tn = r.get("t_nav")
+            if not isinstance(tn, (int, float)):
+                continue
+            w = r.get("t2_window") or [None, None]
+            t2 = None
+            if kind == "player_frozen" and isinstance(w[0], (int, float)):
+                t2 = w[0] + stuck.T2_S
+            elif kind == "player_dead" and rung:
+                run = next((x for x in runs if x[0] - 2.0 <= tn <= x[1] + 5.0), None)
+                above = stuck.above_since(net_labels or [], rung, tn)
+                if run is not None and above is not None:
+                    t2 = max(run[0], above) + stuck.T2_S
+            dd, src = None, None
+            if watch:
+                c = [x for x in clocks if isinstance(x.get("start"), (int, float)) and x["start"] <= tn
+                     and (x.get("end") is None or x["end"] >= tn - 2 * SHARED_DEADLINE_POLL_S)]
+                dd, src = ((c[-1]["start"] + t_dead) if c and t_dead else None), "player_dead_watch"
+            else:
+                run = next((x for x in E.dead_tick_runs(rows, [tn]) if abs(x[-1] - tn) < 1e-6), None)
+                if run is not None and t_dead:
+                    lows = [b for a, b in spans if b <= tn]
+                    start = max(run[0], (max(lows) + stuck.LOW_HOLD_GRACE_S) if lows else run[0])
+                    dd, src = start + t_dead, "net_labels (no watch log)"
+            diff = None if t2 is None or dd is None else round(t2 - dd, 3)
+            out.append({"kind": kind, "t_nav": tn, "outcome": r.get("outcome"), "dead_source": src,
+                        "t2_deadline": None if t2 is None else round(t2, 3),
+                        "dead_deadline": None if dd is None else round(dd, 3), "diff_s": diff,
+                        "shared_deadline_reentry": None if diff is None else abs(diff) <= SHARED_DEADLINE_POLL_S})
+    return sorted(out, key=lambda x: x["t_nav"])
+
+
 def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw, net_labels: list | None = None,
-                         navs: list[float] | None = None) -> None:
+                         navs: list[float] | None = None, shared_navs: list[float] | None = None) -> None:
     """levi 09:54 / 12:04: on a tt session carrying meta.json player_dead_watch, the collector's live clock is the class
     of record: dead_over_t when a dead clock fired (the check's held measure), or when the dead run still open at the
     last tick is itself >= T (levi 03:51, ti_100084: its own held length, E.open_dead_run_held_s; before, an open run of
@@ -1059,7 +1121,7 @@ def dead_clock_of_record(lab: dict, label_rows: list[dict], platform: str, pdw, 
     # hold; the held-out ticks are a STALL by the hold's rule) for the labels of record to censor (-1, as censored_end);
     # a raw run itself >= T with no low span inside it (no hold could apply) reads player_dead as before, not provisional
     prov, hard = E.unresolved_dead_runs(label_rows, [c for c in clocks if c.get("end") is None], pdw.get("low_spans") or [],
-                                        T, net_labels, navs) if not fired else ([], [])
+                                        T, net_labels, navs, shared_navs) if not fired else ([], [])
     if hard:
         cls = max(cls, max(b - a for a, b in hard))
     disagree = E.dead_over_t(measure, T) and not E.dead_over_t(cls, T)
@@ -1114,10 +1176,13 @@ def main() -> int:
         ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
     win = session_window(meta, E.read_net_labels(sd))
     navs = E.nav_times(meta)
+    tie = shared_deadline_reentries({**meta, "platform": platform}, label_rows, E.read_net_labels(sd))
+    shared = [x["t_nav"] for x in tie if x["shared_deadline_reentry"]]
     lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
-                       entry_window(ents, win), E.read_net_labels(sd), navs)
+                       entry_window(ents, win), E.read_net_labels(sd), navs, shared)
     lab["shot_effects"] = shot_effects(label_rows, sd)
-    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), E.read_net_labels(sd), navs)
+    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), E.read_net_labels(sd), navs, shared)
+    lab["shared_deadline_reentries"] = tie
     frozen_clock_of_record(lab, label_rows, platform, E.read_net_labels(sd), meta)
     if platform == "tiktok":
         lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
