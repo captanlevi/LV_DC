@@ -44,6 +44,10 @@ def main() -> int:
         _proc(d, {200: b"\0".join(a.encode() for a in BROWSER.split()) + b"\0"})
         r = S.chrome_cmdline("http://localhost:9224", proc_root=d)
         assert r["pid"] == 200 and r["title_rewritten"] is False, r
+    # levi 13:44 (record only): exp reads the browser's argv once it is up as well as at finish (meta chrome_cmdline_start)
+    src = (Path(__file__).resolve().parent / "exp.py").read_text()
+    i = src.index("chrome_cmdline_start=session_meta.chrome_cmdline()")
+    assert src.index("session_meta.write(session_dir, display_start=_display_start)") < i < src.index("asyncio.run(experiment("), i
     print("test_chrome_cmdline: ok")
     return 0
 

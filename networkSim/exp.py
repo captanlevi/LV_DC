@@ -948,6 +948,9 @@ if __name__ == "__main__":
             # any forced off) and at the end; both change GPU load (reverse PRIME's copy)
             _display_start = {**session_meta.display_state(), "dpms_off_requested": bool(args.dpms_off)}
             session_meta.write(session_dir, display_start=_display_start)
+            # the launched browser's argv once it is up (levi 13:44, the Cast fix's S3 reads the flag): the end read alone
+            # misses a browser already gone at finish (w10 yt_100096 / ti_100090: "no browser process"); record only
+            session_meta.write(session_dir, chrome_cmdline_start=session_meta.chrome_cmdline())
         else:
             # Manual mode (default): wait for Chrome to be reachable, then hand off.
             from browser import _wait_for_cdp
