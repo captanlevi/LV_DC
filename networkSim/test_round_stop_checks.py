@@ -77,6 +77,8 @@ def test_a_missing_item_stops():
     assert R.gating(dict(single, mode="single")) == ([], ["item 2: reported, excluded as in single mode",
                                                           "item4a device_limited ['Q_720p'] (reported)"])
     assert R.gating(dict(single, mode="quad"))[0] == ["schema: mode 'quad' unknown"]
+    und = _row("tw_100005", record={"is_record": None, "schema": ["era: is_record undetermined (no git at /x)"]})
+    assert "era: is_record undetermined (no git at /x)" in R.gating(und)[0]
 
 
 def test_systematic_rule():

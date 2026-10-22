@@ -584,20 +584,32 @@ def item3_not_applicable(rows: list[dict]) -> dict:
 # at --lvdc-sha, else at the session's own meta.json lvdc_commit.sha (git show in this repo). Unresolved: is_record None.
 _ERA_RE = re.compile(r'^ERA\s*=\s*"([^"]+)"', re.M)
 _ERA_AT: dict = {}
+REPO = Path(__file__).resolve().parents[1]
 
 
-def era_at(sha: str, repo: Path = Path(__file__).resolve().parents[1]) -> str | None:
-    """record.ERA at a collector sha (networkSim/record.py in that commit), or None."""
+def era_lookup(sha: str, repo: Path = REPO) -> tuple[str | None, str | None]:
+    """(record.ERA at a collector sha (networkSim/record.py in that commit), else None; why it could not be read)."""
     if sha not in _ERA_AT:
         import subprocess
-        try:
-            r = subprocess.run(["git", "-C", str(repo), "show", f"{sha}:networkSim/record.py"], capture_output=True,
-                               text=True, timeout=30)
-            m = _ERA_RE.search(r.stdout) if r.returncode == 0 else None
-            _ERA_AT[sha] = m.group(1) if m else None
-        except Exception:  # noqa: BLE001
-            _ERA_AT[sha] = None
+        if not (Path(repo) / ".git").exists():
+            # levi 16:42 (shagun v2 §3): a git-archive copy of the reader has no history to read the era from
+            _ERA_AT[sha] = (None, f"no git at {repo}")
+        else:
+            try:
+                r = subprocess.run(["git", "-C", str(repo), "show", f"{sha}:networkSim/record.py"], capture_output=True,
+                                   text=True, timeout=30)
+                m = _ERA_RE.search(r.stdout) if r.returncode == 0 else None
+                _ERA_AT[sha] = ((m.group(1), None) if m else
+                                (None, f"no record.ERA at {sha[:12]} in {repo}" if r.returncode == 0
+                                 else f"{sha[:12]} not in {repo}"))
+            except Exception as e:  # noqa: BLE001
+                _ERA_AT[sha] = (None, f"git failed: {e!r}"[:160])
     return _ERA_AT[sha]
+
+
+def era_at(sha: str, repo: Path = REPO) -> str | None:
+    """record.ERA at a collector sha, or None (era_lookup)."""
+    return era_lookup(sha, repo)[0]
 
 
 def record_status(meta: dict, expect_era: str | None = None, lvdc_sha: str | None = None) -> dict:
@@ -607,11 +619,20 @@ def record_status(meta: dict, expect_era: str | None = None, lvdc_sha: str | Non
         era, src = expect_era, "--expect-era"
     else:
         sha = lvdc_sha or (meta.get("lvdc_commit") or {}).get("sha")
-        era = era_at(sha) if sha else None
+        era, why = era_lookup(sha) if sha else (None, "no collector sha")
         src = (f"record.py at {sha[:12]} ({'--lvdc-sha' if lvdc_sha else 'the session meta lvdc_commit'})" if sha
-               else "no collector sha")
+               else "no collector sha") + (f": {why}" if why and sha else "")
     is_rec = None if era is None else (bool(c.get("record")) and c.get("era") == era)
     return {"flag": c.get("record"), "era": c.get("era"), "expected_era": era, "era_source": src, "is_record": is_rec}
+
+
+def _record_or_refuse(rec: dict, mode: str) -> dict:
+    """levi 16:42: a trio session whose record membership cannot be determined refuses (as the schema rule), never
+    proceeds with is_record None: "era: is_record undetermined (<why>)", recorded false, the run exits SCHEMA_RC."""
+    if mode == "trio" and rec["is_record"] is None:
+        return {**rec, "recorded": False, "ok": False,
+                "schema": [f"era: is_record undetermined ({rec['era_source']})"]}
+    return rec
 
 
 def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dict | None = None,
@@ -635,7 +656,7 @@ def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dic
         mode = f"conflict: meta {mode}, trio root"
     return {"session": str(sd), "mode": mode,
             # levi: the operator sets the flag; printed so a forgotten flag or a flagged pilot shows in the round summary
-            "record": record_status(meta, expect_era, lvdc_sha),
+            "record": _record_or_refuse(record_status(meta, expect_era, lvdc_sha), mode),
             "ticks": len(tk), "items1_2": items1_2(sd, inventory), "item3": item3(sd, coverage, table),
             "item4a": item4a(tk, iv, rendition_fps), "item5": item5(sd),
             "item8": item8(iv, len(spans)), **concurrency_items(meta),

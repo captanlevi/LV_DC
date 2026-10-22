@@ -90,6 +90,7 @@ def gating(row: dict) -> tuple[list[str], list[str]]:
     if "error" in row:
         return [f"reader error: {row['error'][:120]}"], notes
     bad += schema_missing(row)
+    bad += list((row.get("record") or {}).get("schema") or [])     # levi 16:42: is_record undetermined refuses
     for k, v in (row.get("items1_2") or {}).items():
         if v.get("ok") is False:
             bad.append(f"item {k}: {v.get('reading')}")

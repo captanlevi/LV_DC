@@ -275,7 +275,8 @@ def test_concurrency_and_overlap_items():
         r = G.session_items(sd)
         assert all(r[k]["ok"] is False and r[k]["recorded"] is False for k in ("item7", "item9", "item11", "item14")), r
         assert r["record"] == {"flag": None, "era": None, "expected_era": None, "era_source": "no collector sha",
-                               "is_record": None}, r["record"]
+                               "is_record": None, "recorded": False, "ok": False,
+                               "schema": ["era: is_record undetermined (no collector sha)"]}, r["record"]
     assert G.overlap_items("youtube/yt_9", fo) == {} and G.overlap_items("twitch/tw_1", None) == {}
 
 
@@ -499,6 +500,35 @@ def test_mode_from_the_root():
         sd2 = session(Path(d) / "twitch" / "tw_10")
         assert G.session_items(sd2)["mode"] == "single"
 
+def test_era_undetermined_refuses():
+    """levi 16:42 (shagun v2 §3): a reader copy without git history cannot read the collector's era; a trio session
+    whose is_record is undetermined refuses (schema, rc 3), never reads is_record None silently. A single-mode
+    reference is not refused."""
+    import types
+    with tempfile.TemporaryDirectory() as d:
+        bare = Path(d) / "copy"
+        bare.mkdir()
+        assert G.era_lookup("ef587323" + "0" * 32, bare) == (None, f"no git at {bare}")
+        saved = G.REPO, G.era_lookup.__defaults__
+        G._ERA_AT.clear()
+        G.era_lookup.__defaults__ = (bare,)
+        try:
+            sd = session(Path(d) / "twitch" / "tw_1")
+            (sd / "meta.json").write_text(json.dumps({"concurrency": {"mode": "trio", "record": True, "era": "x"},
+                                                      "lvdc_commit": {"sha": "ef587323" + "0" * 32}}))
+            r = G.session_items(sd)["record"]
+            assert r["ok"] is False and r["schema"] == [f"era: is_record undetermined (record.py at ef5873230000 "
+                                                          f"(the session meta lvdc_commit): no git at {bare})"], r
+            assert G.session_items(sd, expect_era="x")["record"]["is_record"] is True      # --expect-era: determined
+            single = session(Path(d) / "twitch" / "tw_2")
+            (single / "meta.json").write_text(json.dumps({"lvdc_commit": {"sha": "ef587323" + "0" * 32}}))
+            assert "schema" not in G.session_items(single)["record"]
+            assert G.main([str(sd), "--out", str(Path(d) / "o.json")]) == G.SCHEMA_RC
+        finally:
+            G.era_lookup.__defaults__ = saved[1]
+            G._ERA_AT.clear()
+
+
 def main() -> int:
     test_item3_frames_coverage_against_the_single_min()
     test_item8_shot_free_rate()
@@ -512,6 +542,7 @@ def main() -> int:
     test_item11_schema_refused()
     test_item2_stream_ended_reported()
     test_mode_from_the_root()
+    test_era_undetermined_refuses()
     test_the_expected_era_is_the_collectors()
     test_cli()
     print("test_gate2_items: ok")
