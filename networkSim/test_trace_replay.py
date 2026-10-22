@@ -105,6 +105,78 @@ def test_hold_keys_on_rate_band_state():
     assert "int(stuck.hold_state(labels[-1]))" in (HERE / "browser.py").read_text()
 
 
+def test_fidelity_gates():
+    """levi efb5e4cc (1): byte-total ratio over backlogged spans (backlog above the delay line + 2 MTU throughout,
+    >= 10 s), each in [0.9, 1.15]; apply lag p99 <= 0.5 s; the per-second ratio reported only."""
+    from traces import fidelity as F
+    ch = [(0.0, 800.0, 40.0), (12.0, 1600.0, 40.0)]
+    assert F.integral_kbit_s(ch, 0.0, 20.0) == 800 * 12 + 1600 * 8
+    thr = lambda k: k * 1000 / 8 * 0.04 + 2 * F.MTU
+    # delivered exactly the applied rate, backlog above the line throughout 0..20 s: one span, ratio 1.0
+    by, smp = 0.0, []
+    for t in range(21):
+        smp.append({"t": float(t), "bytes": by, "backlog": thr(1600) + 5000})
+        by += (800 if t < 12 else 1600) * 1000 / 8
+    sp = F.backlogged_spans(smp, ch)
+    assert len(sp) == 1 and sp[0]["s"] == 20.0 and sp[0]["ratio"] == 1.0 and F.ratio_gate(sp) == "pass", sp
+    # the class idles (backlog at the delay line) from 8 to 12 s: two runs, the short one (< 10 s) dropped
+    smp2 = [dict(x, backlog=100.0) if 8 <= x["t"] <= 11 else x for x in smp]
+    sp2 = F.backlogged_spans(smp2, ch)
+    assert [s["t0"] for s in sp2] == [] or all(s["s"] >= 10 for s in sp2)
+    assert F.ratio_gate([]) == "insufficient"
+    starved = [dict(x, bytes=x["bytes"] * 0.8) for x in smp]
+    assert F.ratio_gate(F.backlogged_spans(starved, ch)) == "fail"
+    labels = [{"timestamp": 10.1 + i, "scheduled_t": 10.0 + i, "speed": 900} for i in range(99)] + \
+             [{"timestamp": 200.9, "scheduled_t": 200.0, "speed": 900}, {"timestamp": 5.0, "speed": 700, "state": "4"}]
+    lags = F.apply_lags(labels)
+    assert len(lags) == 100 and F.lag_gate(lags)["gate"] == "pass" and F.lag_gate(lags)["max"] == 0.9
+    assert F.lag_gate([0.6] * 5)["gate"] == "fail" and F.lag_gate([])["gate"] == "insufficient"
+    assert F.per_second_ratio(smp, ch)["share_in_band"] == 1.0
+    rows = [{"ts": 1.0, "in": {"bytes": 10, "backlog": 5}}, {"ts": 0.5, "in": {"bytes": 5, "backlog": 1}}, {"ts": 2.0}]
+    assert F.session_samples(rows) == [{"t": 0.5, "bytes": 5, "backlog": 1}, {"t": 1.0, "bytes": 10, "backlog": 5}]
+    assert F.session_changes([{"timestamp": 3.0, "speed": 500, "delay_ms": 40}, {"timestamp": 1.0, "speed": 700}]) == \
+        [(1.0, 700.0, 0.0), (3.0, 500.0, 40.0)]
+
+
+def test_g2_session_check():
+    """ops/diag/trace_session_check.py on a synthetic trace session: the record, fidelity, drops, the low band crossed
+    with the hold logged, the pooled apply lag; a state session is not read."""
+    import importlib.util
+    import json
+    import tempfile
+    spec = importlib.util.spec_from_file_location("tsc", HERE.parent / "ops" / "diag" / "trace_session_check.py")
+    C = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(C)
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d) / "tiktok" / "ti_900001"
+        sd.mkdir(parents=True)
+        rates = [3000] * 20 + [400] * 20 + [3000] * 20                         # 8 -> 2 -> 8: the low band crossed
+        labels, tc, by = [], [], 0.0
+        for i, k in enumerate(rates):
+            if i == 0 or k != rates[i - 1]:
+                labels.append({"timestamp": 1000.0 + i + 0.05, "scheduled_t": 1000.0 + i, "speed": k, "state": None,
+                               "delay_ms": 40, "regime": "trace", "rate_band_state": R.rate_band_state(k)})
+        for i in range(61):
+            k = rates[min(i, 59)]
+            tc.append({"ts": 1000.05 + i + 0.5, "in": {"bytes": by, "backlog": k * 1000 / 8 * 0.04 + 9000}})
+            by += k * 1000 / 8
+        (sd / "net_labels.txt").write_text("".join(json.dumps(x) + "\n" for x in labels))
+        (sd / "tc_stats.jsonl").write_text("".join(json.dumps(x) + "\n" for x in tc))
+        (sd / "meta.json").write_text(json.dumps({"platform": "tiktok", "steering_fallback": "trace regime",
+                                                  "shaper": {"regime": "trace", "trace": {"plan": {"source": "a"}, "upper_kbit": 8000}},
+                                                  "player_dead_watch": {"low_spans": [[1020.0, 1040.0]]},
+                                                  "concurrency": {"capture_drops": {"dropped_kernel_total": 0}}}))
+        other = Path(d) / "youtube" / "yt_900002"
+        other.mkdir(parents=True)
+        (other / "meta.json").write_text(json.dumps({"platform": "youtube", "shaper": {}}))
+        out = Path(d) / "g2.json"
+        rc = C.main([str(sd), str(other), "--out", str(out)])
+        rep = json.loads(out.read_text())
+        assert rc == 0 and rep["pass"] and len(rep["sessions"]) == 1, rep["gates"]
+        assert rep["low_band_crossing_sessions"] == [str(sd)] and rep["apply_lag"]["p99"] == 0.05
+        assert C.main([str(other)]) == 2
+
+
 def test_real_cache():
     cache = Path(os.environ.get("LVDC_TRACE_CACHE", ""))
     if not os.environ.get("LVDC_TRACE_CACHE") or not cache.exists():
