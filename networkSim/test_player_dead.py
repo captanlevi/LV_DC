@@ -294,7 +294,9 @@ def test_open_run_is_measured_on_its_own():
     lab = {"dead_player_max_s": 85.0, "dead_player_T_s": 60.0}
     CS.dead_clock_of_record(lab, rows([(700, 800)]), "tiktok", {"low_spans": [], "dead_clocks": []}, held)
     assert lab["dead_clock_of_record"]["open_run_held_s"] == 0.0 and lab["dead_player_class_s"] == 0.0
-    assert "E.read_net_labels(sd))" in (HERE / "check_session.py").read_text()
+    src = (HERE / "check_session.py").read_text()          # labels_block passes the net labels to the clock of record
+    assert "nl = E.read_net_labels(sd)" in src and \
+        'dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), nl, navs, shared)' in src
 
 def test_dead_runs_split_at_our_navigation():
     """levi 11:40 (peter's margin fact a5ffab57; ti_100086 / ti_100090): a dead run ends at our re-entry's navigation,
