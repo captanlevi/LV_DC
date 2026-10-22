@@ -24,7 +24,7 @@ def _sess(root: Path, name: str, covered: int = 100, secs: int = 100) -> Path:
 
 
 def _row(name, **over):
-    r = {"session": f"/d/twitch/{name}", "items1_2": {"1": {"ok": True, "reading": "PASS"},
+    r = {"session": f"/d/twitch/{name}", "mode": "trio", "item3": {"ok": True}, "items1_2": {"1": {"ok": True, "reading": "PASS"},
                                                       "2": {"ok": None, "reading": "reported, excluded as in single mode"}},
          "item4a": {"ok": True, "device_limited_tiers": ["Q_720p"]}, "item5": {"ok": None}, "item7": {"ok": True},
          "item9": {"ok": True}, "item11": {"ok": True}, "item12": {"ok": True}, "item13": {"ok": True},
@@ -61,6 +61,22 @@ def test_stop_rule():
         assert any("no box_record" in x for x in R.check({"sessions": [_row("tw_100005")]}, None, [a])["gating"])
         (root / "g.json").write_text(json.dumps({"sessions": [_row("tw_100005")]}))
         assert R.main(["--gate2", str(root / "g.json"), str(a)]) == 1                 # no device record: BAD, exit 1
+
+
+def test_a_missing_item_stops():
+    """levi 11:37 (the fail-open sweep): a row without an item its mode gates on, or without mode, stops as schema."""
+    for drop, want in (("item11", "schema: item11 missing"), ("teardown", "schema: teardown missing"),
+                       ("mode", "schema: mode missing")):
+        r = _row("tw_100005")
+        r.pop(drop)
+        bad, _ = R.gating(r)
+        assert want in bad, (drop, bad)
+    r = _row("tw_100005", items1_2={"1": {"ok": True, "reading": "PASS"}})
+    assert "schema: items1_2.2 missing" in R.gating(r)[0]
+    single = {k: v for k, v in _row("yt_1").items() if k in ("session", "items1_2", "item3", "item4a")}
+    assert R.gating(dict(single, mode="single")) == ([], ["item 2: reported, excluded as in single mode",
+                                                          "item4a device_limited ['Q_720p'] (reported)"])
+    assert R.gating(dict(single, mode="quad"))[0] == ["schema: mode 'quad' unknown"]
 
 
 def test_systematic_rule():
@@ -198,6 +214,7 @@ def test_verify_kinds_on_pass_sessions_are_reported_never_systematic():
 if __name__ == "__main__":
     test_verify_kinds_on_pass_sessions_are_reported_never_systematic()
     test_stop_rule()
+    test_a_missing_item_stops()
     test_startup_failure_rule()
     test_systematic_rule()
     test_a_content_startup_failure_is_no_systematic_event()

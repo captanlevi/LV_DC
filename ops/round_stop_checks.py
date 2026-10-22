@@ -68,11 +68,28 @@ def coverage(sd: Path) -> dict:
     return {"seconds": secs, "covered_share": share, "ok": bool(share is not None and share >= COVERAGE_MIN)}
 
 
+# levi 11:37 (the fail-open sweep): every gating item a row of its mode must carry; one missing stops the chain as
+# "schema: <item> missing" (before, a row without the item read as not gated)
+REQUIRED_ITEMS = {"single": ("item3", "item4a"),
+                  "trio": ("item3", "item4a", "item7", "item9", "item11", "item12", "item13", "item14", "teardown")}
+
+
+def schema_missing(row: dict) -> list[str]:
+    mode = row.get("mode")
+    if mode not in REQUIRED_ITEMS:
+        return [f"schema: mode {mode!r} unknown" if "mode" in row else "schema: mode missing"]
+    out = [f"schema: {k} missing" for k in REQUIRED_ITEMS[mode] if not isinstance(row.get(k), dict)]
+    i12 = row.get("items1_2")
+    out += [f"schema: items1_2.{k} missing" for k in ("1", "2") if not isinstance((i12 or {}).get(k), dict)]
+    return out
+
+
 def gating(row: dict) -> tuple[list[str], list[str]]:
     """(gating failures, reported notes) of one gate2_items session row."""
     bad, notes = [], []
     if "error" in row:
         return [f"reader error: {row['error'][:120]}"], notes
+    bad += schema_missing(row)
     for k, v in (row.get("items1_2") or {}).items():
         if v.get("ok") is False:
             bad.append(f"item {k}: {v.get('reading')}")

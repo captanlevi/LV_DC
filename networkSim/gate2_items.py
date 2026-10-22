@@ -29,8 +29,13 @@ insufficient support, 5 not shaper-bound, 1 / 2 content band only). Admission: n
   11-14 (trio, flow_overlap.py's run json, --flow-overlap; levi's call on pilot-1): 11 no unicast flow or QUIC CID
      shared with a sibling, link-local multicast (each Chrome's own mDNS) reported when packet-disjoint, no
      payload-carrying packet of the session's flows in the default class (control-only splits reported; needs
-     flow_overlap --detail, else not read); 12 no sibling platform's host family; 13 no media of the session's platform
-     in the default class during it; 14 every contacted media address named in dns_answers.json.
+     flow_overlap --detail, else not read; levi's w10 R1: a payload row wholly before_first / after_last its flow and
+     wholly outside the session's window is reported in default_split_after_window / _before_window, never counted);
+     12 no sibling platform's host family; 13 no media of the session's platform in the default class during it; 14
+     every contacted media address named in dns_answers.json. Every key these items read is required: a missing one
+     gates as "schema: <key> missing" and the run exits SCHEMA_RC (levi 11:37; nothing is defaulted).
+  2 (levi's w10 R3): class stream_ended with meta.stream_ended's sign and t_trigger and no other reason is reported,
+     as room_ended.
   8  (reported, never gating) dropped frames per playing second outside +- SHOT_GUARD_S of any shot capture (every shots/index.jsonl row's
      [t_decide, ts], any reason), in both modes (the shot-free rule keeps it comparable when trio shots are CDP captures).
 A playing interval: two consecutive res_meta ticks, both not paused and not ad, the gap <= MAX_GAP_S and the playhead
@@ -240,6 +245,26 @@ def item5(sd: Path) -> dict:
 LINK_FLAG_MAX_SHARE = 0.05     # item 7: flagged link seconds <= 5 % of the session
 
 
+# levi 11:37 (supervisor's schema rule, after peter 11:36: gate2_items read a field missing from flow_overlap's json as 0,
+# so another flow_overlap version's output would pass item 11 silently): every key a gating item reads is required; a
+# missing one gates as "schema: <key> missing" (recorded False, ok False) and the run exits SCHEMA_RC; nothing defaults
+SCHEMA_RC = 3
+ITEM11_PAIR_KEYS = ("shared_unicast_flows", "shared_quic_cids", "shared_link_local_multicast")
+ITEM11_SESSION_KEYS = ("window", "flows_also_in_default")
+ITEM11_ROW_KEYS = ("flow", "class", "per_class", "payload_packets", "default_packets", "default_bytes", "default_span")
+ITEM12_KEYS = ("sibling_family_snis",)
+ITEM13_KEYS = ("default_media_snis_in_window", "default_udp_from_media_addresses")
+
+
+def schema_missing(d, keys, where: str) -> list[str]:
+    """`schema: <where>.<key> missing` for each key absent from d (d not a dict: every key)."""
+    return [f"schema: {where}.{k} missing" for k in keys if not isinstance(d, dict) or k not in d]
+
+
+def schema_fail(missing: list[str]) -> dict:
+    return {"recorded": False, "ok": False, "schema": missing, "reading": "; ".join(missing)}
+
+
 def concurrency_items(meta: dict) -> dict:
     """Items 7, 9 and the teardown from meta.json concurrency (trio sessions; {} otherwise)."""
     c = meta.get("concurrency") or {}
@@ -251,10 +276,13 @@ def concurrency_items(meta: dict) -> dict:
     bad = [f for f in (c.get("slot_down") or {}).get("failed") or []
            if not (f.get("cmd") in detached and "not found" in str(f.get("err")))]
     dk = cd.get("dropped_kernel_total")
+    # levi 11:37 (the fail-open sweep): a teardown record without staging_left or slot_down read as clean before
+    miss = schema_missing(c, ("staging_left", "slot_down"), "concurrency")
     return {"item7": {"flagged_share": fs, "max": LINK_FLAG_MAX_SHARE, "recorded": fs is not None,
                       "ok": fs is not None and fs <= LINK_FLAG_MAX_SHARE},
             "item9": {"dropped_kernel_total": dk, "recorded": dk is not None, "ok": dk == 0},
-            "teardown": {"staging_left": c.get("staging_left"), "slot_down_failures_not_benign": bad,
+            "teardown": schema_fail(miss) if miss else
+                        {"staging_left": c.get("staging_left"), "slot_down_failures_not_benign": bad,
                          "ok": not c.get("staging_left") and not bad}}
 
 
@@ -267,46 +295,98 @@ def _link_local_row(r: dict) -> bool:
                for e in f[1:])
 
 
+def _outside_window(r: dict, window) -> str | None:
+    """R1 (levi's w10 ruling; the prereg's w1 refinement at :195): a unicast split row wholly before_first / after_last
+    the session's flow AND wholly outside the session's window [t0, t1] by its default packets' span: "after" / "before";
+    else None (any default packet that may sit inside the window keeps the row counted)."""
+    cls = set((r.get("per_class") or {}).keys()) or {r.get("class")}
+    span, (t0, t1) = r.get("default_span"), window
+    if not cls <= {"before_first", "after_last"} or not span or len(span) != 2:
+        return None
+    if cls == {"after_last"} and span[0] > t1:
+        return "after"
+    if cls == {"before_first"} and span[1] < t0:
+        return "before"
+    return None
+
+
 def overlap_items(name: str, fo: dict | None) -> dict:
-    """Items 11-14 for session `name` ("<platform>/<session>") from flow_overlap.py's run json; {} without it."""
+    """Items 11-14 for session `name` ("<platform>/<session>") from flow_overlap.py's run json; {} without it. Every key a
+    gating item reads is required (schema_missing): a missing one fails that item with "schema: ... missing"."""
     if not fo or name not in (fo.get("sessions") or {}):
         return {}
     pairs = [x for x in fo.get("pairs") or [] if name in (x.get("a"), x.get("b"))]
     rec = fo["sessions"][name]
     sd = (fo.get("split_detail") or {}).get(name)
-    unicast = sum(x.get("shared_unicast_flows", x.get("shared_flows", 0)) for x in pairs)
-    cids = sum(x.get("shared_quic_cids", 0) for x in pairs)
-    mc = [m for x in pairs for m in x.get("shared_link_local_multicast") or []]
-    mc_both = sum(m.get("packets_in_both", 0) for m in mc)
     rows = (sd or {}).get("rows") or []
-    mc_rows = [r for r in rows if _link_local_row(r)]
-    payload = None if sd is None else sum(1 for r in rows if r.get("payload_packets", 0) > 0 and not _link_local_row(r))
-    control = None if sd is None else sum(1 for r in rows if not r.get("payload_packets") and not _link_local_row(r))
-    # levi (round 1, avahi's printer browse on 224.0.0.251:5353): a link-local multicast split is reported, not counted,
-    # when packet-disjoint: packets_in_both 0, or (outputs before it was recorded) every default packet outside the
-    # session flow's span (before_first / after_last), where none can be a session packet; else undecided, a FAIL
-    mc_split = [{"flow": r.get("flow"), "default_packets": r.get("default_packets"), "class": r.get("class"),
-                 "packets_in_both": r.get("packets_in_both"),
-                 "disjoint": (r["packets_in_both"] == 0) if "packets_in_both" in r else
-                             (True if r.get("class") in ("before_first", "after_last") else None)} for r in mc_rows]
-    mc_bad = [m for m in mc_split if m["disjoint"] is not True]
-    fail11 = bool(unicast or cids or mc_both or payload or mc_bad)
-    unread = sd is None and bool(rec.get("flows_also_in_default"))   # not recorded: a FAIL (levi)
-    ok11 = not fail11 and not unread
-    item11 = {"shared_unicast_flows": unicast, "shared_quic_cids": cids, "link_local_multicast_flows": len(mc),
-              "multicast_packets_in_both": mc_both, "default_split_flows_payload": payload,
-              "default_split_flows_control_only": control, "default_split_link_local_multicast": mc_split,
-              "recorded": not unread, "ok": ok11,
-              **({"note": "flows also in the default class, not read: run flow_overlap --detail"} if unread else {}),
-              **({"note_multicast": "a link-local multicast split not shown packet-disjoint: rerun flow_overlap --detail "
-                                    "(packets_in_both)"} if any(m["disjoint"] is None for m in mc_split) else {})}
-    fam = rec.get("sibling_family_snis") or {}
-    dm, du = rec.get("default_media_snis_in_window") or [], (rec.get("default_udp_from_media_addresses") or {}).get("packets", 0)
-    dj = rec.get("dns_answers_json") or {}
-    return {"item11": item11, "item12": {"sibling_family_snis": fam, "ok": not fam},
-            "item13": {"default_media_snis_in_window": dm, "default_udp_from_media_addresses": du, "ok": not dm and not du},
-            "item14": {"present": dj.get("present"), "media_unnamed": dj.get("media_unnamed"), "recorded": bool(dj),
-                       "ok": bool(dj) and bool(dj.get("present")) and not dj.get("media_unnamed")}}
+    miss11 = (schema_missing(rec, ITEM11_SESSION_KEYS, "sessions[]")
+              + [m for x in pairs for m in schema_missing(x, ITEM11_PAIR_KEYS, "pairs[]")]
+              + [m for x in pairs for e in (x.get("shared_link_local_multicast") or [])
+                 for m in schema_missing(e, ("packets_in_both",), "pairs[].shared_link_local_multicast[]")]
+              + [m for r in rows for m in schema_missing(r, ITEM11_ROW_KEYS, "split_detail.rows[]")]
+              + (schema_missing(sd, ("rows",), "split_detail") if sd is not None else []))
+    out = {}
+    if miss11:
+        out["item11"] = schema_fail(sorted(set(miss11)))
+    else:
+        unicast = sum(x["shared_unicast_flows"] for x in pairs)
+        cids = sum(x["shared_quic_cids"] for x in pairs)
+        mc = [m for x in pairs for m in x["shared_link_local_multicast"]]
+        mc_both = sum(m["packets_in_both"] for m in mc)
+        mc_rows = [r for r in rows if _link_local_row(r)]
+        uni_rows = [r for r in rows if not _link_local_row(r)]
+        # R1: a payload row wholly outside the session's window is teardown residue (or pre-session), reported apart
+        side = {id(r): _outside_window(r, rec["window"]) for r in uni_rows if r["payload_packets"] > 0}
+        listed = lambda which: [{"flow": r["flow"], "class": r["class"], "default_packets": r["default_packets"],
+                                 "payload_packets": r["payload_packets"], "default_bytes": r["default_bytes"],
+                                 "tcp_flags": r.get("tcp_flags"), "default_span": r["default_span"]}
+                                for r in uni_rows if side.get(id(r)) == which]
+        payload = None if sd is None else sum(1 for r in uni_rows if r["payload_packets"] > 0 and side.get(id(r)) is None)
+        control = None if sd is None else sum(1 for r in uni_rows if not r["payload_packets"])
+        kernel = None if sd is None else sum(1 for r in uni_rows if r.get("kernel_reply"))
+        # levi (round 1, avahi's printer browse on 224.0.0.251:5353): a link-local multicast split is reported, not
+        # counted, when packet-disjoint: packets_in_both 0, or (outputs before it was recorded) every default packet
+        # outside the session flow's span (before_first / after_last), where none can be a session packet; else
+        # undecided, a FAIL
+        mc_split = [{"flow": r.get("flow"), "default_packets": r.get("default_packets"), "class": r.get("class"),
+                     "packets_in_both": r.get("packets_in_both"),
+                     "disjoint": (r["packets_in_both"] == 0) if "packets_in_both" in r else
+                                 (True if r.get("class") in ("before_first", "after_last") else None)} for r in mc_rows]
+        mc_bad = [m for m in mc_split if m["disjoint"] is not True]
+        fail11 = bool(unicast or cids or mc_both or payload or mc_bad)
+        unread = sd is None and bool(rec["flows_also_in_default"])   # not recorded: a FAIL (levi)
+        out["item11"] = {"shared_unicast_flows": unicast, "shared_quic_cids": cids, "link_local_multicast_flows": len(mc),
+                         "multicast_packets_in_both": mc_both, "default_split_flows_payload": payload,
+                         "default_split_flows_control_only": control, "default_split_kernel_reply": kernel,
+                         "default_split_after_window": listed("after"), "default_split_before_window": listed("before"),
+                         "default_split_link_local_multicast": mc_split, "recorded": not unread,
+                         "ok": not fail11 and not unread,
+                         **({"note": "flows also in the default class, not read: run flow_overlap --detail"} if unread else {}),
+                         **({"note_multicast": "a link-local multicast split not shown packet-disjoint: rerun flow_overlap "
+                                               "--detail (packets_in_both)"} if any(m["disjoint"] is None for m in mc_split)
+                            else {})}
+    m12 = schema_missing(rec, ITEM12_KEYS, "sessions[]")
+    m13 = (schema_missing(rec, ITEM13_KEYS, "sessions[]")
+           + schema_missing(rec.get("default_udp_from_media_addresses"), ("packets",),
+                            "sessions[].default_udp_from_media_addresses") if "default_udp_from_media_addresses" in rec
+           else schema_missing(rec, ITEM13_KEYS, "sessions[]"))
+    dj = rec.get("dns_answers_json")
+    m14 = (schema_missing(rec, ("dns_answers_json",), "sessions[]") if dj is None
+           else schema_missing(dj, ("present", "media_unnamed"), "sessions[].dns_answers_json"))
+    if m12:
+        out["item12"] = schema_fail(m12)
+    else:
+        fam = rec["sibling_family_snis"]
+        out["item12"] = {"sibling_family_snis": fam, "ok": not fam}
+    if m13:
+        out["item13"] = schema_fail(m13)
+    else:
+        dm, du = rec["default_media_snis_in_window"], rec["default_udp_from_media_addresses"]["packets"]
+        out["item13"] = {"default_media_snis_in_window": dm, "default_udp_from_media_addresses": du, "ok": not dm and not du}
+    out["item14"] = (schema_fail(m14) if m14 else
+                     {"present": dj["present"], "media_unnamed": dj["media_unnamed"], "recorded": True,
+                      "ok": bool(dj["present"]) and not dj["media_unnamed"]})
+    return out
 
 
 def missing_overlap_items() -> dict:
@@ -373,6 +453,21 @@ def load_inventory(path: Path, expect: str) -> dict:
     return inv
 
 
+# levi 11:32 (w10 ruling R3, tw_100099's raid): stream_ended, a coarse kind new at Y, is reported as room_ended is, iff
+# check's class is stream_ended, meta.stream_ended carries a sign and a t_trigger (the collector's StreamEndedWatch fired),
+# and every check reason is that one kind (check_session.verdict's text); any other reason or class gates as before
+STREAM_ENDED_REASON = "stream_ended (yt / twitch: the tab left its live stream; browser.py StreamEndedWatch)"
+
+
+def stream_ended_reported(check: dict, meta: dict) -> bool:
+    se = meta.get("stream_ended")
+    reasons = list(check.get("reasons") or [])
+    kind = reason_kind(STREAM_ENDED_REASON, coarse=True)
+    return (check.get("session_class") == "stream_ended" and isinstance(se, dict) and se.get("sign") is not None
+            and se.get("t_trigger") is not None and bool(reasons)
+            and all(reason_kind(r, coarse=True) == kind for r in reasons))
+
+
 def items1_2(sd: Path, inventory: dict | None = None) -> dict:
     """Items 1 / 2 (module docstring): verify.json and check.json, each PASS (check: class normal or censored), a
     non-PASS whose reasons single mode also produced (with an inventory: every coarse kind in it; without one: content
@@ -391,6 +486,8 @@ def items1_2(sd: Path, inventory: dict | None = None) -> dict:
                "content_band_reasons": content}
         if passed:
             ok, reading = True, "PASS"
+        elif f == "check" and stream_ended_reported(v, _meta(sd)):
+            ok, reading = None, "reported: stream_ended (StreamEndedWatch fired; the sole reason), as room_ended"
         elif inventory is not None:
             rs = reasons + ([f"class:{v.get('session_class')}"] if f == "check" and v.get("session_class") is not None
                             and v.get("session_class") not in PASS_CLASSES else [])
@@ -408,6 +505,13 @@ def items1_2(sd: Path, inventory: dict | None = None) -> dict:
             ok, reading = False, "gates"
         out[item] = {**rec, "ok": ok, "reading": reading}
     return out
+
+
+def _meta(sd: Path) -> dict:
+    try:
+        return json.loads((Path(sd) / "meta.json").read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 PLATFORM_DIRS = ("youtube", "twitch", "tiktok")
@@ -522,7 +626,14 @@ def session_items(sd: Path, rendition_fps: dict | None = None, flow_overlap: dic
     except (OSError, ValueError):
         pass
     c = meta.get("concurrency") or {}
-    return {"session": str(sd), "mode": c.get("mode", "single"),
+    # the fail-open sweep (levi 11:37): a session under a trio root whose meta lost concurrency.mode read as single and
+    # skipped items 7 / 9 / 11-14; the root decides: no mode there is trio (its missing items then stop the round),
+    # a conflicting one is named and stops (round_stop_checks: unknown mode)
+    under_trio = any(x.name.startswith("_trio") for x in sd.resolve().parents)
+    mode = c.get("mode") or ("trio" if under_trio else "single")
+    if under_trio and mode != "trio":
+        mode = f"conflict: meta {mode}, trio root"
+    return {"session": str(sd), "mode": mode,
             # levi: the operator sets the flag; printed so a forgotten flag or a flagged pilot shows in the round summary
             "record": record_status(meta, expect_era, lvdc_sha),
             "ticks": len(tk), "items1_2": items1_2(sd, inventory), "item3": item3(sd, coverage, table),
@@ -568,9 +679,23 @@ def main(argv=None) -> int:
         except Exception as e:  # noqa: BLE001 -- one session's failure is reported
             rows.append({"session": str(sd), "error": repr(e)[:300]})
         print(json.dumps(rows[-1]), flush=True)
+    bad = schema_errors(rows)
     if a.out:
-        a.out.write_text(json.dumps({"sessions": rows, "item3_not_applicable": item3_not_applicable(rows)}, indent=1))
-    return 0
+        a.out.write_text(json.dumps({"sessions": rows, "item3_not_applicable": item3_not_applicable(rows),
+                                     "schema_errors": bad}, indent=1))
+    if bad:
+        print("SCHEMA " + " | ".join(f"{k}: {'; '.join(v)}" for k, v in bad.items()), file=sys.stderr)
+    return SCHEMA_RC if bad else 0
+
+
+def schema_errors(rows: list[dict]) -> dict:
+    """{session: [schema lines]} over every item of every row (levi 11:37: the run exits SCHEMA_RC on any)."""
+    out = {}
+    for r in rows:
+        lines = [m for v in r.values() if isinstance(v, dict) for m in v.get("schema") or []]
+        if lines:
+            out[r.get("session")] = lines
+    return out
 
 
 if __name__ == "__main__":

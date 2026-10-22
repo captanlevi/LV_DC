@@ -205,6 +205,17 @@ def test_fullscreen_report():
         assert G.fullscreen_report(sd, {}) is None
 
 
+def _row(**kw) -> dict:
+    """A split_detail row with every key item 11 reads (flow_overlap --detail's schema)."""
+    r = {"flow": ["tcp", ["192.168.4.50", 40000], ["151.101.1.1", 443]], "class": "mid_flow", "per_class": {"mid_flow": 1},
+         "payload_packets": 0, "default_packets": 1, "default_bytes": 66, "default_span": [150.0, 150.0],
+         "tcp_flags": {"·········R··": 1}}
+    r.update(kw)
+    if "class" in kw and "per_class" not in kw:
+        r["per_class"] = {kw["class"]: r["default_packets"]}
+    return r
+
+
 def test_concurrency_and_overlap_items():
     """Items 7 / 9 / teardown from meta.concurrency (pilot-1's tw_100003 shape: slot_down's only failures re-delete what
     slot_detach removed) and 11-14 from flow_overlap's run json (levi's call: mDNS reported when packet-disjoint)."""
@@ -223,22 +234,22 @@ def test_concurrency_and_overlap_items():
     mc = {"flow": ["udp", ["192.168.4.50", 5353], ["224.0.0.251", 5353]], "packets_a": 3, "packets_b": 4, "packets_in_both": 0}
     fo = {"pairs": [{"a": "tiktok/ti_1", "b": "twitch/tw_1", "shared_flows": 1, "shared_unicast_flows": 0,
                      "shared_link_local_multicast": [mc], "shared_quic_cids": 0}],
-          "sessions": {"twitch/tw_1": {"sibling_family_snis": {}, "default_media_snis_in_window": [],
+          "sessions": {"twitch/tw_1": {"window": [100.0, 1000.0], "sibling_family_snis": {}, "default_media_snis_in_window": [],
                                        "default_udp_from_media_addresses": {"packets": 0}, "flows_also_in_default": 1,
                                        "dns_answers_json": {"present": True, "media_unnamed": []}}},
-          "split_detail": {"twitch/tw_1": {"rows": [{"payload_packets": 0}]}}}
+          "split_detail": {"twitch/tw_1": {"rows": [_row(payload_packets=0)]}}}
     r = G.overlap_items("twitch/tw_1", fo)
     assert [r[k]["ok"] for k in ("item11", "item12", "item13", "item14")] == [True, True, True, True], r
     assert (r["item11"]["link_local_multicast_flows"], r["item11"]["default_split_flows_control_only"]) == (1, 1), r
     fo["pairs"][0]["shared_link_local_multicast"][0]["packets_in_both"] = 1        # one packet in two pcaps: gates
     assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is False
     fo["pairs"][0]["shared_link_local_multicast"][0]["packets_in_both"] = 0
-    fo["split_detail"]["twitch/tw_1"]["rows"].append({"payload_packets": 2})       # a payload-carrying split: gates
+    fo["split_detail"]["twitch/tw_1"]["rows"].append(_row(payload_packets=2))       # a payload-carrying split: gates
     assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is False
     fo["split_detail"]["twitch/tw_1"]["rows"].pop()
     # levi (round 1): a link-local multicast split (avahi's mDNS) is reported, not counted, when packet-disjoint
-    av = {"flow": ["udp", ["192.168.4.50", 5353], ["224.0.0.251", 5353]], "payload_packets": 1, "default_packets": 1,
-          "class": "after_idle"}
+    av = _row(flow=["udp", ["192.168.4.50", 5353], ["224.0.0.251", 5353]], payload_packets=1, default_packets=1,
+              **{"class": "after_idle"})
     fo["split_detail"]["twitch/tw_1"]["rows"].append(dict(av, link_local_multicast=True, packets_in_both=0))
     r = G.overlap_items("twitch/tw_1", fo)["item11"]
     assert r["ok"] is True and r["default_split_flows_payload"] == 0, r
@@ -248,7 +259,7 @@ def test_concurrency_and_overlap_items():
     fo["split_detail"]["twitch/tw_1"]["rows"][-1] = dict(av)                              # an older output, no field:
     r = G.overlap_items("twitch/tw_1", fo)["item11"]                                      # inside the span, undecided
     assert r["ok"] is False and r["default_split_link_local_multicast"][0]["disjoint"] is None and "note_multicast" in r, r
-    fo["split_detail"]["twitch/tw_1"]["rows"][-1] = dict(av, **{"class": "after_last"})   # outside the span: disjoint
+    fo["split_detail"]["twitch/tw_1"]["rows"][-1] = dict(av, **{"class": "after_last", "per_class": {"after_last": 1}})
     assert G.overlap_items("twitch/tw_1", fo)["item11"]["ok"] is True
     del fo["split_detail"]                                                          # no --detail: not recorded, a FAIL
     r = G.overlap_items("twitch/tw_1", fo)["item11"]
@@ -365,11 +376,128 @@ def test_item3_frames_coverage_against_the_single_min():
     spec = importlib.util.spec_from_file_location("rsc", Path(__file__).resolve().parent.parent / "ops" / "round_stop_checks.py")
     R = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(R)
-    bad, _ = R.gating({"item3": {"ok": False, "reading": "not read: no --single-table"}})
+    full = {"mode": "single", "item4a": {"ok": True}, "items1_2": {"1": {"ok": True}, "2": {"ok": True}}}
+    bad, _ = R.gating(dict(full, item3={"ok": False, "reading": "not read: no --single-table"}))
     assert bad and bad[0].startswith("item3"), bad
-    bad, notes = R.gating({"item3": na})
+    bad, notes = R.gating(dict(full, item3=na))
     assert not bad and notes == ["item3 not applicable: no sized media response (bodies recovered) (reported)"], notes
 
+
+def _fo(rows, window=(1792604519.9, 1792605951.6)):
+    """A flow_overlap run json on the reader's schema (97c16a1) for one twitch session."""
+    return {"pairs": [{"a": "tiktok/ti_1", "b": "twitch/tw_1", "shared_flows": 0, "shared_unicast_flows": 0,
+                       "shared_link_local_multicast": [], "shared_quic_cids": 0}],
+            "sessions": {"twitch/tw_1": {"window": list(window), "flows_also_in_default": len(rows),
+                                         "sibling_family_snis": {}, "default_media_snis_in_window": [],
+                                         "default_udp_from_media_addresses": {"packets": 0},
+                                         "dns_answers_json": {"present": True, "media_unnamed": []}}},
+            "split_detail": {"twitch/tw_1": {"rows": rows}}}
+
+
+def test_item11_after_window_residue():
+    """levi's w10 ruling R1 (the prereg's w1 refinement at :195): a unicast payload split row wholly after_last the flow
+    AND after the session's window end (tw_100101: FIN+PSH 14-96 s after t1) is reported in default_split_after_window,
+    not counted; one wholly before_first and before t0 likewise (default_split_before_window); a row with a default
+    packet that may sit inside [t0, t1] still gates."""
+    t1 = 1792605951.6
+    res = _row(payload_packets=1, default_packets=1, default_bytes=246, default_span=[t1 + 14.3, t1 + 14.3],
+               tcp_flags={"·······AP··F": 1}, **{"class": "after_last"})
+    r = G.overlap_items("twitch/tw_1", _fo([res, _row(payload_packets=0)]))["item11"]
+    assert r["ok"] is True and r["default_split_flows_payload"] == 0, r
+    assert r["default_split_after_window"] == [{"flow": res["flow"], "class": "after_last", "default_packets": 1,
+                                                "payload_packets": 1, "default_bytes": 246,
+                                                "tcp_flags": {"·······AP··F": 1}, "default_span": res["default_span"]}], r
+    inside = dict(res, default_span=[t1 - 5.0, t1 + 3.0])                        # after the flow, inside the window
+    r = G.overlap_items("twitch/tw_1", _fo([inside]))["item11"]
+    assert r["ok"] is False and r["default_split_flows_payload"] == 1 and r["default_split_after_window"] == [], r
+    mixed = dict(res, per_class={"after_last": 1, "mid_flow": 1})                # one packet mid-flow: counted
+    assert G.overlap_items("twitch/tw_1", _fo([mixed]))["item11"]["ok"] is False
+    before = _row(payload_packets=2, default_span=[1792604400.0, 1792604410.0], **{"class": "before_first"})
+    r = G.overlap_items("twitch/tw_1", _fo([before]))["item11"]
+    assert r["ok"] is True and len(r["default_split_before_window"]) == 1, r
+    assert G.overlap_items("twitch/tw_1", _fo([dict(before, default_span=[1792604510.0, 1792604520.5])]))["item11"]["ok"] is False
+    kr = _row(payload_packets=0, kernel_reply=True)
+    assert G.overlap_items("twitch/tw_1", _fo([kr, res]))["item11"]["default_split_kernel_reply"] == 1
+
+
+def test_item11_schema_refused():
+    """levi 11:37 (supervisor's schema rule): a key a gating item reads, missing, gates as "schema: <key> missing" and
+    is never defaulted. fdef4cc's flow_overlap shape (no payload_packets in split rows, no shared_unicast_flows /
+    shared_link_local_multicast in pairs) must refuse, never read payload 0."""
+    old_row = {"flow": ["tcp", ["192.168.4.50", 53688], ["151.101.30.214", 443]], "media": False, "class": "after_last",
+               "per_class": {"after_last": 1}, "default_packets": 1, "default_bytes": 246, "up": 1, "down": 0,
+               "tcp_flags": {"·······AP··F": 1}, "quic_forms": {}, "max_gap_before_s": None,
+               "session_span": [1.0, 2.0], "default_span": [3.0, 3.0]}
+    fo = _fo([old_row])
+    fo["pairs"][0] = {"a": "tiktok/ti_1", "b": "twitch/tw_1", "shared_flows": 0, "shared_linklocal_flows": 0,
+                      "shared_quic_cids": 0}
+    r = G.overlap_items("twitch/tw_1", fo)["item11"]
+    assert r["ok"] is False and r["recorded"] is False, r
+    assert {"schema: split_detail.rows[].payload_packets missing", "schema: pairs[].shared_unicast_flows missing",
+            "schema: pairs[].shared_link_local_multicast missing"} <= set(r["schema"]), r
+    fo = _fo([])
+    del fo["sessions"]["twitch/tw_1"]["default_udp_from_media_addresses"]
+    del fo["sessions"]["twitch/tw_1"]["sibling_family_snis"]
+    x = G.overlap_items("twitch/tw_1", fo)
+    assert x["item13"]["schema"] == ["schema: sessions[].default_udp_from_media_addresses missing"], x
+    assert x["item12"]["ok"] is False and x["item11"]["ok"] is True, x
+    fo = _fo([])
+    fo["sessions"]["twitch/tw_1"]["default_udp_from_media_addresses"] = {}
+    assert G.overlap_items("twitch/tw_1", fo)["item13"]["schema"] == [
+        "schema: sessions[].default_udp_from_media_addresses.packets missing"]
+    m = G.concurrency_items({"concurrency": {"mode": "trio", "tc": {"flagged_share": 0.0},
+                                             "capture_drops": {"dropped_kernel_total": 0}}})
+    assert m["teardown"]["ok"] is False and m["teardown"]["schema"] == [
+        "schema: concurrency.staging_left missing", "schema: concurrency.slot_down missing"], m
+    assert G.schema_errors([{"session": "s", "item11": {"schema": ["schema: x missing"]}, "item12": {"ok": True}}]) == {
+        "s": ["schema: x missing"]}
+    with tempfile.TemporaryDirectory() as d:                         # the run exits SCHEMA_RC (3), after writing --out
+        sd = session(Path(d) / "twitch" / "tw_1")
+        (sd / "meta.json").write_text(json.dumps({"concurrency": {"mode": "trio"}}))
+        fo = _fo([old_row])
+        (Path(d) / "fo.json").write_text(json.dumps(fo))
+        rc = G.main([str(sd), "--flow-overlap", str(Path(d) / "fo.json"), "--out", str(Path(d) / "o.json")])
+        out = json.loads((Path(d) / "o.json").read_text())
+        assert rc == G.SCHEMA_RC == 3 and str(sd) in out["schema_errors"], out["schema_errors"]
+
+
+def test_item2_stream_ended_reported():
+    """levi 11:32 (w10 ruling R3, tw_100099's raid): item 2 is reported iff class stream_ended, meta.stream_ended has a
+    sign and a t_trigger, and the reasons are exactly the stream_ended kind; else it gates as before."""
+    why = G.STREAM_ENDED_REASON
+    se = {"reason": "stream_ended", "t_trigger": 1792604010.0, "sign": "U", "from_page": "/kantannachess",
+          "to_page": "/phoebewitte"}
+    cases = [({"verdict": "FAIL", "session_class": "stream_ended", "reasons": [why]}, se, None),
+             ({"verdict": "FAIL", "session_class": "stream_ended",
+               "reasons": [why, "player_dead (tt: readyState 0 with no media for T; browser.py TTRoomWatch)"]}, se, False),
+             ({"verdict": "FAIL", "session_class": "stream_ended", "reasons": [why]}, None, False),
+             ({"verdict": "FAIL", "session_class": "stream_ended", "reasons": [why]}, dict(se, sign=None), False),
+             ({"verdict": "FAIL", "session_class": "stream_ended", "reasons": [why]}, dict(se, t_trigger=None), False),
+             ({"verdict": "FAIL", "session_class": "qa_fail", "reasons": [why]}, se, False),
+             ({"verdict": "FAIL", "session_class": "stream_ended", "reasons": []}, se, False)]
+    for chk, meta_se, want in cases:
+        with tempfile.TemporaryDirectory() as d:
+            sd = Path(d)
+            (sd / "check.json").write_text(json.dumps(chk))
+            (sd / "verify.json").write_text(json.dumps({"verdict": "PASS", "reasons": []}))
+            (sd / "meta.json").write_text(json.dumps({"stream_ended": meta_se} if meta_se is not None else {}))
+            r = G.items1_2(sd)["2"]
+            assert r["ok"] is want, (chk, meta_se, r)
+            if want is None:
+                assert r["reading"].startswith("reported: stream_ended"), r
+
+
+def test_mode_from_the_root():
+    """The fail-open sweep: a session under a _trio root reads as trio even when meta.json lost concurrency.mode, so
+    its trio items are required; a meta saying single under a trio root is a named conflict."""
+    with tempfile.TemporaryDirectory() as d:
+        sd = session(Path(d) / "_trio" / "twitch" / "tw_9")
+        (sd / "meta.json").write_text(json.dumps({}))
+        assert G.session_items(sd)["mode"] == "trio"
+        (sd / "meta.json").write_text(json.dumps({"concurrency": {"mode": "single"}}))
+        assert G.session_items(sd)["mode"] == "conflict: meta single, trio root"
+        sd2 = session(Path(d) / "twitch" / "tw_10")
+        assert G.session_items(sd2)["mode"] == "single"
 
 def main() -> int:
     test_item3_frames_coverage_against_the_single_min()
@@ -380,6 +508,10 @@ def main() -> int:
     test_items1_2_inventory()
     test_fullscreen_report()
     test_concurrency_and_overlap_items()
+    test_item11_after_window_residue()
+    test_item11_schema_refused()
+    test_item2_stream_ended_reported()
+    test_mode_from_the_root()
     test_the_expected_era_is_the_collectors()
     test_cli()
     print("test_gate2_items: ok")
