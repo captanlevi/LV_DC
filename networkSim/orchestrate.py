@@ -324,6 +324,18 @@ SESSION_DRAW_SEED = 20261021
 # pinned state is held for the whole session (exp.py --hold-state)
 TRIO_STRESS = False
 UPLINK_CAP_KBIT: int | None = None        # --uplink-cap-kbit (levi 02:48, diag only): trio_slots.uplink_cap_cmds
+# §9 trace regime (levi efb5e4cc): each session is trace-driven with probability TRACE_P_RUN (--trace-p; the record's is
+# traces/replay.TRACE_P), drawn per session on its own generator; the window's upper clip (ruling 3) is fixed at trio_up
+TRACE_P_RUN = 0.0
+PROBE_GOODPUT_KBIT: float | None = None
+TRACE_UPPER: dict | None = None
+
+
+def trace_upper(probe_kbit: float, capacity_kbit: float, n_slots: int) -> dict:
+    """Ruling 3: the window's upper clip per slot, min(the window-start probe's goodput, the configured capacity) / N."""
+    return {"probe_goodput_kbit": probe_kbit, "link_capacity_kbit": capacity_kbit, "n_slots": n_slots,
+            "upper_kbit": round(min(probe_kbit, capacity_kbit) / n_slots, 1),
+            "rule": "min(probe goodput, link capacity) / N (levi efb5e4cc ruling 3)"}
 TRIO_STRESS_EPISODES: int | None = None   # --trio-stress --episodes: a held session's base episodes (decode_stress --short)
 
 
@@ -738,6 +750,14 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     # index); a held state (decode_stress) runs base episodes (exp.py: hold is base)
     held = TRIO_STRESS and (TRIO_PINS.get(tag) or TRIO_PINS.get(p) or {}).get("state")
     slen = None if held else draw_session_minutes(f"{run_id}:{s.tag}:{started[tag] + 1}")
+    # §9 (levi efb5e4cc): the trace draw, on the same session key, its own generator (independent of coverage, time and
+    # every other draw); a drawn session replays a trace at the window's upper clip
+    trace = None
+    if TRACE_P_RUN and slen and TRACE_UPPER:
+        from traces.replay import drawn
+        tkey = f"{run_id}:{s.tag}:{started[tag] + 1}"
+        if drawn(tkey, TRACE_P_RUN):
+            trace = {"key": tkey, "p": TRACE_P_RUN, **TRACE_UPPER}
     if slen and SESSION_RANGE:          # a dry run's law (--session-range, never the record): the same draw rescaled
         lo, hi = SESSION_RANGE
         slen = {**slen, "session_range": [lo, hi],
@@ -821,6 +841,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         cmd += ["--tw-low-latency", ll["drawn"]]
     if hold:
         cmd += ["--hold-state", pin["state"]]
+    if trace:
+        cmd += ["--trace-regime", trace["key"], "--trace-upper-kbit", str(trace["upper_kbit"])]
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
     # window's own XComposite pixmap in the "composite" layout (pilot-1, probe v3)
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
@@ -831,7 +853,7 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     env.pop("LVDC_SESSION_LENGTH", None)
     if slen:
         env["LVDC_SESSION_LENGTH"] = json.dumps(slen)
-    for k, v in (("LVDC_GEOMETRY_DRAW", gdraw), ("LVDC_TW_LOW_LATENCY", ll)):   # restart §7 / §8: meta.json records
+    for k, v in (("LVDC_GEOMETRY_DRAW", gdraw), ("LVDC_TW_LOW_LATENCY", ll), ("LVDC_TRACE_UPPER", trace)):
         env.pop(k, None)
         if v is not None:
             env[k] = json.dumps(v)
@@ -859,6 +881,7 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
           + (f"; channel {channel['handle']}" if channel else "")
           + (f"; category {category['name']}" if category else "")
           + (f"; geometry {geom}" if geom else "") + (f"; {slen['minutes']:.1f} min" if slen else "")
+          + (f"; TRACE regime (upper {trace['upper_kbit']} kbit)" if trace else "")
           + f"\n  Running: {' '.join(cmd)}\n  log: {log}")
     running[tag] = {"proc": spawn(cmd, env, log), "before": before, "channel": channel, "category": category,
                     "now": now, "t": time.time(), "log": str(log), "geom": geom,
@@ -1003,8 +1026,12 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
             t_up = time.time()
             window = {"min": window_min, "t0": t_up, "deadline": t_up + window_min * 60}
             os.environ["LVDC_TRIO_WINDOW"] = json.dumps(window)
+        global TRACE_UPPER
+        TRACE_UPPER = (trace_upper(PROBE_GOODPUT_KBIT, capacity_kbit, len(T.SLOTS))
+                       if TRACE_P_RUN and PROBE_GOODPUT_KBIT and capacity_kbit else None)
         T.slots_log_append(slots_log, {"event": "trio_up", "run": run_id, "t": time.time(), "iface": iface,
                                        "capacity_kbit": capacity_kbit, "targets": targets, "max_per_slot": max_per_slot,
+                                       **({"trace": {"p": TRACE_P_RUN, **TRACE_UPPER}} if TRACE_UPPER else {}),
                                        "slots": {k: s.record() for k, s in T.SLOTS.items()},
                                        "composition": T.composition_of(T.SLOTS),
                                        **({"n_draw": n_draw} if n_draw else {}),
@@ -1235,6 +1262,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trio-record", action="store_true",
                         help="--concurrent: a counted run: its sessions are of record (meta concurrency.record, era "
                              "record.ERA); steering counts only such sessions. Pilots and re-runs: leave it off.")
+    parser.add_argument("--trace-p", type=float, default=0.0,
+                        help="--concurrent, §9 trace regime (levi efb5e4cc): each session trace-driven with this "
+                             "probability, drawn per session (traces/replay.drawn); the record runs replay.TRACE_P; "
+                             "another value needs --trio-stress (G2 forces 1). Needs --probe-goodput-kbit and "
+                             "--link-capacity-kbit (the window's upper clip).")
+    parser.add_argument("--probe-goodput-kbit", type=float, default=None,
+                        help="§9: the window-start goodput probe's reading (ops goodput_probe.sh); with "
+                             "--link-capacity-kbit and N it fixes the window's upper clip (trio_up trace).")
     parser.add_argument("--uplink-cap-kbit", type=int, default=None,
                         help="--trio-stress only (levi 02:48): police all non-management downloads on the interface at "
                              "this rate before the slots, a slower house link (trio_slots.uplink_cap_cmds); in trio_up.")
@@ -1327,6 +1362,14 @@ def arg_refusal(args, environ) -> str | None:
         return "--trio-yt-fullscreen needs --concurrent"
     if args.trio_yt_fullscreen and args.trio_layout != "composite":      # t58 N-7: the keeper needs the composite
         return "--trio-yt-fullscreen needs --trio-layout composite (the fullscreen keeper runs only there)"
+    if args.trace_p or args.probe_goodput_kbit is not None:          # §9 (levi efb5e4cc)
+        from traces.replay import TRACE_P
+        if not args.concurrent or not 0 < args.trace_p <= 1:
+            return "--trace-p needs --concurrent and 0 < p <= 1 (--probe-goodput-kbit needs --trace-p)"
+        if not (args.probe_goodput_kbit or 0) > 0 or not (args.link_capacity_kbit or 0) > 0:
+            return "--trace-p needs a positive --probe-goodput-kbit and --link-capacity-kbit (the window's upper clip)"
+        if args.trace_p != TRACE_P and not args.trio_stress:
+            return f"--trace-p other than the record's {TRACE_P} needs --trio-stress (a diag arm, never the record)"
     if args.trio_steer_platforms is not None:
         if not args.trio_steer:
             return "--trio-steer-platforms needs --trio-steer"
@@ -1367,6 +1410,7 @@ if __name__ == "__main__":
         if args.session_range:                         # arg_refusal checked it
             SESSION_RANGE = tuple(float(x) for x in args.session_range.split(","))
         TRIO_RECORD = bool(args.trio_record)
+        TRACE_P_RUN, PROBE_GOODPUT_KBIT = float(args.trace_p or 0.0), args.probe_goodput_kbit
         for spec in args.trio_pin:
             plat, pin = parse_pin(spec, args.trio_pin_reason)      # arg_refusal checked it
             import trio_slots

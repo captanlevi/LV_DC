@@ -246,6 +246,13 @@ def twitch_latency(sd: Path) -> dict | None:
     return {"modes": dict(modes), "latency_s": _q(lat, (50, 90)) if lat else None}
 
 
+def state_select(select=None):
+    """§9 (levi efb5e4cc, ruling 6): the state coverage (snapshot, attempts, entries: the floors and the pick) never
+    counts a trace-regime session; select's own rule beside it."""
+    import record
+    return lambda meta: (select is None or select(meta)) and not record.is_trace(meta)
+
+
 def accepted_sessions(data_dir: Path, platform: str, select=None) -> list[Path]:
     """select(meta) -> bool: only the sessions it keeps (the trio: its sessions of record, levi 00265 note)."""
     out = []
@@ -263,6 +270,7 @@ def attempts(data_dir: Path, platform: str, select=None) -> dict:
     the attempts, their total, and the last EXPLORE_REPEAT_CAP finished ones (check.json written or set aside in
     _failed) in start order as [matrix, accepted]."""
     root = Path(data_dir)
+    select = state_select(select)
     acc = set(accepted_sessions(root, platform, select))
     rows = []
     for d in list((root / platform).glob("*")) + list((root / "_failed" / platform).glob("*")):
@@ -311,8 +319,9 @@ def entry_states(meta: dict) -> list[str]:
 
 def entry_sessions(data_dir: Path, platform: str, select=None) -> list[tuple[Path, dict]]:
     """(session dir, check.json) of every checked session, accepted or _failed, whose class is not excluded (and that
-    select keeps, when given)."""
+    select keeps, when given); never a trace-regime session (state_select)."""
     out = []
+    select = state_select(select)
     for c in sorted(list((Path(data_dir) / platform).glob("*/check.json"))
                     + list((Path(data_dir) / "_failed" / platform).glob("*/check.json"))):
         chk = _load(c)
@@ -341,7 +350,7 @@ def snapshot(data_dir: Path, platform: str, select=None) -> dict:
     pm = collections.defaultdict(lambda: {"n": 0, "n_tier": 0, "min": collections.Counter(), "stall": 0.0, "lab": 0.0,
                                           "onsets": 0, "tg_n": collections.Counter(), "tg_min": collections.Counter()})
     onsets, run_s = 0, []
-    sessions = accepted_sessions(data_dir, platform, select)
+    sessions = accepted_sessions(data_dir, platform, state_select(select))
     for sd in sessions:
         meta = _load(sd / "meta.json")
         sc = session_classes(sd)

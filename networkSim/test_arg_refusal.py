@@ -67,6 +67,13 @@ def test_each_refusal():
         (without(RECORD, "--trio-steer-platforms") + ["--trio-steer-platforms", "youtube,vimeo"], "unknown or empty"),
         (RECORD + ["--uplink-cap-kbit", "40000"], "--uplink-cap-kbit needs --trio-stress"),
         (["--batch", "youtube=1", "--concurrent", "--trio-stress", "--uplink-cap-kbit", "0"], "positive rate"),
+        # §9 trace regime (levi efb5e4cc)
+        (RECORD + ["--trace-p", "0.1", "--link-capacity-kbit", "104100"], "positive --probe-goodput-kbit"),
+        (RECORD + ["--trace-p", "0.1", "--probe-goodput-kbit", "90000"], "positive --probe-goodput-kbit"),
+        (RECORD + ["--trace-p", "1", "--probe-goodput-kbit", "90000", "--link-capacity-kbit", "104100"],
+         "needs --trio-stress"),
+        (RECORD + ["--probe-goodput-kbit", "90000"], "--probe-goodput-kbit needs --trace-p"),
+        (["--batch", "youtube=1", "--trace-p", "0.1"], "--trace-p needs --concurrent"),
     ]
     for argv, want in cases:
         got = refusal(argv)
@@ -74,6 +81,9 @@ def test_each_refusal():
     assert "LVDC_DATA_ROOT_UUID" in refusal(RECORD, {}) and "LVDC_DATA_ROOT_UUID" in refusal(RECORD, {"LVDC_DATA_ROOT_UUID": " "})
     assert refusal(["--concurrent", "--platform", "youtube"]) == "--concurrent needs --batch"
     assert refusal(["--batch", "youtube=2,twitch=2,tiktok=1", "--concurrent", "--trio-stress", "--uplink-cap-kbit", "40000"]) is None
+    assert refusal(RECORD + ["--trace-p", "0.1", "--probe-goodput-kbit", "90000", "--link-capacity-kbit", "104100"]) is None
+    assert refusal(["--batch", "youtube=1,twitch=1,tiktok=1", "--concurrent", "--trio-stress", "--trace-p", "1",
+                    "--probe-goodput-kbit", "90000", "--link-capacity-kbit", "104100"]) is None     # G2: forced, stress
 
 
 def test_main_refuses_first():

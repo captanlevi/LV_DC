@@ -443,6 +443,46 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     return rc, calls
 
 
+def test_run_trio_trace_draw():
+    """§9 (levi efb5e4cc): with --trace-p a session drawn by traces/replay.drawn on its key (run:slot:index) gets
+    --trace-regime <key> and --trace-upper-kbit (min(probe, capacity) / N, fixed at trio_up, recorded there and in
+    LVDC_TRACE_UPPER); with the draw off (p 0) no session carries any trace argument or env key."""
+    import n_draw
+    import record
+    from traces import replay
+    d = next(x for x in n_draw.simulate(20, record.ERA) if x["n"] == 4)
+    saved = (O.TRACE_P_RUN, O.PROBE_GOODPUT_KBIT, O.TRACE_UPPER)
+    try:
+        for p_ in (1.0, 0.0):
+            O.TRACE_P_RUN, O.PROBE_GOODPUT_KBIT, O.TRACE_UPPER = p_, 60000.0, None
+            with tempfile.TemporaryDirectory() as t:
+                tmp, spawned = Path(t), []
+
+                def spawn(cmd, env, log):
+                    spawned.append((cmd, env, log))
+                    return FakeProc(1, 0, [])
+                rc, _ = _trio(tmp, {"youtube": 5, "twitch": 5, "tiktok": 5}, spawn, slots=d["composition"], n_draw=d)
+                ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
+                run = ev[0]["run"]
+                assert rc == 0 and len(spawned) == 4
+                for cmd, env, _ in spawned:
+                    tag = cmd[cmd.index("--slot") + 1]
+                    if p_:
+                        key = f"{run}:{tag}:1"
+                        assert replay.drawn(key, 1.0) and cmd[cmd.index("--trace-regime") + 1] == key, cmd
+                        assert float(cmd[cmd.index("--trace-upper-kbit") + 1]) == 15000.0
+                        assert json.loads(env["LVDC_TRACE_UPPER"])["upper_kbit"] == 15000.0
+                    else:
+                        assert "--trace-regime" not in cmd and "--trace-upper-kbit" not in cmd
+                        assert "LVDC_TRACE_UPPER" not in env
+                if p_:
+                    assert ev[0]["trace"] == {"p": 1.0, **O.trace_upper(60000.0, 104100.0, 4)}, ev[0].get("trace")
+                else:
+                    assert "trace" not in ev[0]
+    finally:
+        O.TRACE_P_RUN, O.PROBE_GOODPUT_KBIT, O.TRACE_UPPER = saved
+
+
 def test_run_trio_records_the_n_draw_and_session_lengths():
     """Restart prereg §1 / §4: the round's draw runs its composition and is recorded in trio_up and (LVDC_N_DRAW) every
     slot's env; each session's length is drawn (seeded by the run, slot and index) and passed as --session-minutes with

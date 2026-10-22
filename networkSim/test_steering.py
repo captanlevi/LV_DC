@@ -166,7 +166,7 @@ def test_steer_platforms():
         O.COVERAGE_ALLOWED.clear(); O.COVERAGE_ALLOWED.update(saved[3])
     # exp.py: the draw needs LVDC_STEER_TABLE (absent for an unlisted platform), and the skip is logged in meta
     exp = (HERE / "exp.py").read_text()
-    assert 'if os.environ.get("LVDC_STEER_TABLE") is not None and args.hold_state is None:' in exp
+    assert 'if os.environ.get("LVDC_STEER_TABLE") is not None and args.hold_state is None and TRACE is None:' in exp
     assert "_steering.fallback_of(os.environ, args.hold_state, STEERING)" in exp
 
 

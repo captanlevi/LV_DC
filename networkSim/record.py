@@ -55,6 +55,12 @@ def descends(sha: str, boundary: str | None) -> bool:
     return r.returncode == 0
 
 
+def is_trace(meta: dict | None) -> bool:
+    """A §9 trace-regime session (meta.json shaper.regime = "trace"): a record session on no shaper state, a held-out
+    test regime only; never in the state coverage, the steering or a fold (levi efb5e4cc, ruling 6)."""
+    return ((meta or {}).get("shaper") or {}).get("regime") == "trace"
+
+
 def is_record(meta: dict | None) -> bool:
     """The record flag, an era in RECORD_LINES and the session's collector sha on the era's counted line: the boundary
     or a descendant of it (descends)."""
