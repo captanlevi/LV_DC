@@ -203,6 +203,26 @@ def test_g1_read_trace_segment():
     assert r["apply_lag"]["p99"] == 0.05 and r["status"] == "pass", r
 
 
+def test_trace_off_identity():
+    """§9 identity proof (levi efb5e4cc, (i)-(iii) against goldens at the landing base T* d7433b03): with the regime's
+    code present and its draw off, the state path's shaper changes and make argv (every platform x matrix x two keys,
+    and held states), orchestrate's exp command lines and env keys per refill, and the net_labels rows (test_net_label_rows)
+    are T*'s; meta's shaper gains regime only under --trace-regime."""
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location("gold", HERE / "fixtures" / "make_trace_off_goldens.py")
+    G = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(G)
+    want = json.loads((HERE / "fixtures" / "trace_off_goldens_d7433b03.json").read_text())
+    got = G.build()
+    assert got["generators"] == want["generators"], [k for k in want["generators"] if got["generators"].get(k) != want["generators"][k]][:3]
+    assert got["orchestrate"] == want["orchestrate"]
+    assert not any("NEW" in x for seq in got["generators"].values() for x in seq)
+    src = (HERE / "exp.py").read_text()
+    i = src.index("if TRACE is not None:                  # §9: meta.json shaper.regime = trace")
+    assert src.index('"regime": "trace", "trace": {') > i and src.count('"regime": "trace"') == 1
+
+
 def test_real_cache():
     cache = Path(os.environ.get("LVDC_TRACE_CACHE", ""))
     if not os.environ.get("LVDC_TRACE_CACHE") or not cache.exists():
