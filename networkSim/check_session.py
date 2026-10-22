@@ -1181,6 +1181,32 @@ def frozen_clock_of_record(lab: dict, label_rows: list[dict], platform: str, net
                                      "margin_s": round(raw - T, 3) if disagree else None}
 
 
+def labels_block(sd: Path, meta: dict, platform: str | None = None) -> tuple[list[dict], list[dict], dict]:
+    """The check's labels block from labels.csv, net_labels.txt and meta.json, no pcap pass: (label rows, entries, lab).
+    main builds check.json's labels with it, and every reader that re-derives the labels block (the nav-split diff,
+    levi 15:15) calls it rather than re-assembling label_checks' arguments, so a signature change cannot skip a rule."""
+    platform = platform or meta.get("platform") or Path(sd).parent.name
+    label_rows = read_labels(sd)
+    nl = E.read_net_labels(sd)
+    # levi 2026-10-17: entries (from meta.json, else computed here for older sessions)
+    ents = meta.get("entries")
+    if ents is None:
+        ents = E.compute_entries(label_rows, meta, nl)
+    win = session_window(meta, nl)
+    navs = E.nav_times(meta)
+    tie = shared_deadline_reentries({**meta, "platform": platform}, label_rows, nl)
+    shared = [x["t_nav"] for x in tie if x["shared_deadline_reentry"]]
+    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
+                       entry_window(ents, win), nl, navs, shared, E.nav_loads(meta))
+    lab["shot_effects"] = shot_effects(label_rows, sd)
+    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), nl, navs, shared)
+    lab["shared_deadline_reentries"] = tie
+    frozen_clock_of_record(lab, label_rows, platform, nl, meta)
+    if platform == "tiktok":
+        lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
+    return label_rows, ents, lab
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session_dir", type=Path)
@@ -1190,23 +1216,7 @@ def main() -> int:
     sd = a.session_dir.resolve()
     meta, meta_missing = meta_check(sd)
     platform = meta.get("platform") or sd.parent.name
-    label_rows = read_labels(sd)
-    # levi 2026-10-17: entries (from meta.json, else computed here for older sessions)
-    ents = meta.get("entries")
-    if ents is None:
-        ents = E.compute_entries(label_rows, meta, E.read_net_labels(sd))
-    win = session_window(meta, E.read_net_labels(sd))
-    navs = E.nav_times(meta)
-    tie = shared_deadline_reentries({**meta, "platform": platform}, label_rows, E.read_net_labels(sd))
-    shared = [x["t_nav"] for x in tie if x["shared_deadline_reentry"]]
-    lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
-                       entry_window(ents, win), E.read_net_labels(sd), navs, shared, E.nav_loads(meta))
-    lab["shot_effects"] = shot_effects(label_rows, sd)
-    dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), E.read_net_labels(sd), navs, shared)
-    lab["shared_deadline_reentries"] = tie
-    frozen_clock_of_record(lab, label_rows, platform, E.read_net_labels(sd), meta)
-    if platform == "tiktok":
-        lab["tt_flv_tokens_per_room"] = tt_flv_tokens(sd, lab.get("tt_room_visits") or [])
+    label_rows, ents, lab = labels_block(sd, meta, platform)
     net = traffic_checks(sd, platform)
     # independent of the pcap (a header-only pcap used to return early and report the keys missing; chaos smoke run)
     keys = sd / "ssl_keys.log"

@@ -66,6 +66,11 @@ def test_check_json_schema() -> None:
         subprocess.run([sys.executable, str(HERE / "check_session.py"), str(sd)], capture_output=True, text=True,
                        cwd=HERE)
         c = json.loads((sd / "check.json").read_text())
+        # levi 15:15: a reader re-deriving the labels block calls check_session.labels_block, the same entry point main
+        # uses; its block equals check.json's labels byte for byte (as serialised)
+        _, _, lab = CS.labels_block(sd, json.loads((sd / "meta.json").read_text()))
+        assert json.dumps(json.loads(json.dumps(lab, default=str)), sort_keys=True) == \
+            json.dumps(c["labels"], sort_keys=True), "labels_block differs from check.json's labels"
     assert sorted(c) == sorted(TOP), f"check.json keys changed: +{sorted(set(c) - set(TOP))} -{sorted(set(TOP) - set(c))}"
     def ok(v, t) -> bool:   # bool is an int: accepted only where bool is the type
         ts = t if isinstance(t, tuple) else (t,)
