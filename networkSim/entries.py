@@ -164,6 +164,19 @@ def nav_times(meta: dict) -> list[float]:
     return sorted(out)
 
 
+def nav_loads(meta: dict) -> list[tuple[float, float]]:
+    """Our navigations that came back (nav_times' set with a t_playing): (t_nav, t_playing). The dead ticks between are
+    the new page loading after our own navigation, never a dead player (as the labeler censors t_nav -> video_start)."""
+    recs = list(meta.get("player_dead_reentries") or []) + list(meta.get("frozen_reentries") or [])
+    recs += [r for r in (meta.get("room_rotation") or {}).get("rooms") or [] if not r.get("first")]
+    out = set()
+    for r in recs:
+        t = r.get("t_nav") if isinstance(r.get("t_nav"), (int, float)) else r.get("t_enter")
+        if isinstance(t, (int, float)) and isinstance(r.get("t_playing"), (int, float)) and r["t_playing"] >= t:
+            out.add((float(t), float(r["t_playing"])))
+    return sorted(out)
+
+
 def dead_tick_runs(rows: list[dict], navs: list[float] | None = None) -> list[list[float]]:
     """dead_runs' runs as their dead ticks' times (s). With navs (nav_times; levi 11:40): a run is split at each of our
     navigations inside it: the part before ends AT the navigation (its censored end, appended as its last time: the
@@ -322,7 +335,8 @@ def _ends_at(end: float, navs) -> bool:
 
 
 def dead_player(rows: list[dict], reentries: list[dict] | None, net_labels: list | None = None,
-                navs: list[float] | None = None, shared_navs: list[float] | None = None) -> dict:
+                navs: list[float] | None = None, shared_navs: list[float] | None = None,
+                loads: list[tuple[float, float]] | None = None) -> dict:
     """The player_dead measure with levi's recovery rule (RECOVERED_DEAD_CLASS): {max_s (longest run not recovered),
     max_all_s, recovered (recovered_dead_s, window, t_nav, t_playing, dead_window) or None, recovered_runs}. With
     net_labels (tt), the runs are held_dead_runs: the parts the collector's low-state hold held are left out."""
@@ -339,8 +353,12 @@ def dead_player(rows: list[dict], reentries: list[dict] | None, net_labels: list
     # levi 14:43: a run our own re-entry ends at the shared deadline (shared_navs: check_session's tag) is not compared
     # with T; its censored length is reported (shared_deadline_runs), its class follows the re-entry's outcome
     shared = [(a, b) for a, b in parts if _ends_at(b, shared_navs)]
+    # the new page loading after our own navigation (nav_loads: t_nav -> t_playing) is no dead run of the player
+    load = [(a, b) for a, b in parts if any(n <= a and b <= tp + RECOVERY_SLACK_S for n, tp in loads or ())]
+    parts = [x for x in parts if x not in load]
     out = {"max_s": max((b - a for a, b in parts if inside((a, b), keep) and (a, b) not in shared), default=0.0),
            "max_all_s": max((b - a for a, b in parts), default=0.0),
+           "reentry_load_runs": [{"onset": round(a, 3), "end": round(b, 3), "s": round(b - a, 3)} for a, b in load],
            "recovered": None, "recovered_runs": len(rec),
            "shared_deadline_runs": [{"onset": round(a, 3), "censored_end": round(b, 3), "s": round(b - a, 3)}
                                     for a, b in shared]}

@@ -399,9 +399,9 @@ def test_shared_deadline_run_is_not_compared_with_t():
     r = rows(470, 574.4, 580)
     labels = [{"timestamp": t0 + 380, "speed": 300, "state": "2"}, {"timestamp": t0 + 483.5, "speed": 1600, "state": "6"}]
     fr = {"t_nav": nav, "outcome": "continue", "t2_window": [t0 + 484.22, nav - 0.002]}
-    meta = {"platform": "tiktok", "frozen_reentries": [fr]}                      # no player_dead_watch: before Y
+    meta = {"platform": "tiktok", "frozen_reentries": [fr], "lvdc_commit": {"sha": "bea39af06adbbd83bee9d56ce1b17fdc892a7365"}}   # no watch log: bea39af
     (tag,) = CS.shared_deadline_reentries(meta, r, labels)
-    assert tag["dead_source"] == "net_labels (no watch log)" and tag["dead_deadline"] == round(t0 + 513.5 + 60, 3), tag
+    assert tag["dead_source"] == "net_labels, the hold (no watch log)" and tag["dead_deadline"] == round(t0 + 513.5 + 60, 3), tag
     assert tag["t2_deadline"] == round(t0 + 574.22, 3) and tag["shared_deadline_reentry"] is True, tag
     navs = E.nav_times(meta)
     dp = E.dead_player(r, [], labels, navs)                                       # untagged: held 514 -> 574.4 > T
@@ -420,6 +420,11 @@ def test_shared_deadline_run_is_not_compared_with_t():
         r2[k]["ready_state"], r2[k]["current_time"] = "0", "9.0"
     dp2 = E.dead_player(r2, [], labels, navs, [nav])
     assert dp2["max_s"] == 89.0 and E.dead_over_t(dp2["max_s"], 60.0), dp2
+    # levi 14:57: before the hold (ef58732) the dead clock ran from the run's onset: deadline 470 + 60, T2 574.22: no tie
+    pre = {**meta, "lvdc_commit": {"sha": "ef58732" + "0" * 33}}
+    (pt,) = CS.shared_deadline_reentries(pre, r, labels)
+    assert pt["dead_source"].startswith("the run's onset") and pt["dead_deadline"] == round(t0 + 530, 3), pt
+    assert pt["shared_deadline_reentry"] is False, pt
     far = {**fr, "t2_window": [t0 + 490.0, nav]}                                  # T2 due 580: 6 s from the dead T
     assert CS.shared_deadline_reentries({**meta, "frozen_reentries": [far]}, r, labels)[0]["shared_deadline_reentry"] is False
 
@@ -440,13 +445,13 @@ def test_ti100058_shared_deadline():
                  "ready_state": "0" if onset <= t < nav + 4.7 else "4"} for t in ticks]
     rows = mk(nav)
     labels = [{"timestamp": low0, "speed": 203, "state": "1"}, {"timestamp": low1, "speed": 1219, "state": "5"}]
-    meta = {"platform": "tiktok", "frozen_reentries": [{"t_nav": nav, "outcome": "continue",
-                                                        "t2_window": [low1, 1792533964.9910736]}]}
+    meta = {"platform": "tiktok", "lvdc_commit": {"sha": "bea39af06adbbd83bee9d56ce1b17fdc892a7365"},
+            "frozen_reentries": [{"t_nav": nav, "outcome": "continue", "t2_window": [low1, 1792533964.9910736]}]}
     (tag,) = CS.shared_deadline_reentries(meta, rows, labels)
     assert tag["diff_s"] == 0.0 and tag["shared_deadline_reentry"] is True and tag["dead_source"].startswith("net_labels"), tag
     assert abs(tag["nav_after_deadline_s"] - 0.162) < 0.002, tag
     # levi 14:55: equal deadlines alone do not tag; a re-entry 30 s after the shared deadline (another cause) is not tagged
-    late = {"platform": "tiktok", "frozen_reentries": [{"t_nav": nav + 30.0, "outcome": "continue",
+    late = {"platform": "tiktok", "lvdc_commit": {"sha": "bea39af06adbbd83bee9d56ce1b17fdc892a7365"}, "frozen_reentries": [{"t_nav": nav + 30.0, "outcome": "continue",
                                                         "t2_window": [low1, nav + 30.0]}]}
     (lt,) = CS.shared_deadline_reentries(late, mk(nav + 30.0), labels)
     assert lt["diff_s"] == 0.0 and lt["shared_deadline_reentry"] is False and abs(lt["nav_after_deadline_s"] - 30.162) < 0.002, lt
@@ -457,6 +462,55 @@ def test_ti100058_shared_deadline():
     assert round(untagged["max_s"], 2) == 60.07 and E.dead_over_t(untagged["max_s"], 60.0), untagged
     tagged = E.dead_player(rows, [], labels, navs, [nav])
     assert not E.dead_over_t(tagged["max_s"], 60.0) and tagged["shared_deadline_runs"][0]["s"] == 60.07, tagged
+
+
+def test_reentry_load_is_not_a_dead_run():
+    """levi 15:06: dead ticks in [t_nav, t_playing] of our navigations that came back (E.nav_loads) are the new page
+    loading, excluded from the dead measure, reported as reentry_load_runs (the labeler censors the same span). On
+    ti_100043's real timings (ef587323, a player_dead re-entry, continue): the run 1792511608.02 -> 1792511710.83, t_nav
+    1792511668.56, t_playing 1792511713.96: the post-nav 41.81 s is load, the measure is the session's other runs as
+    before the split. A failed re-entry (no t_playing) keeps its post-nav run (ti_100057)."""
+    a, nav, b, tp = 1792511608.0226002, 1792511668.5605295, 1792511710.8312998, 1792511713.96
+    ticks = [a - 30 + k for k in range(30)] + [a + k for k in range(int(b - a) + 1)] + [b + 1 + k for k in range(20)]
+    rows = [{"ts": str(t * 1000), "type": "res_meta", "is_ad": "False", "paused": "False", "video_w": "720",
+             "current_time": "50.0" if a <= t <= b + 0.01 else str(t - ticks[0]),
+             "ready_state": "0" if a <= t <= b + 0.01 else "4"} for t in ticks]
+    meta = {"player_dead_reentries": [{"t_nav": nav, "t_playing": tp, "outcome": "continue", "dead_s": 60.6}],
+            "room_rotation": {"rooms": [{"first": True}, {"t_nav": nav, "t_playing": tp, "reason": "player_dead"}]}}
+    assert E.nav_loads(meta) == [(nav, tp)]
+    navs = E.nav_times(meta)
+    split = E.dead_player(rows, meta["player_dead_reentries"], None, navs)
+    assert 40.0 < split["max_s"] < 42.0, split                                       # the load run, exposed by the split
+    dp = E.dead_player(rows, meta["player_dead_reentries"], None, navs, None, E.nav_loads(meta))
+    assert dp["max_s"] == 0.0 and dp["recovered"]["window"] == [a, nav], dp
+    assert len(dp["reentry_load_runs"]) == 1 and dp["reentry_load_runs"][0]["s"] == round(split["max_s"], 3), dp
+    failed = {"player_dead_reentries": [{"t_nav": nav, "outcome": "player_dead"}]}    # no t_playing: no load span
+    fd = E.dead_player(rows, failed["player_dead_reentries"], None, navs, None, E.nav_loads(failed))
+    assert E.nav_loads(failed) == [] and fd["reentry_load_runs"] == [] and round(fd["max_s"], 1) == 60.5, fd
+
+
+def test_tag_rule_per_collector():
+    """levi 15:06: without a watch log the hold follows the list's TT_LOWSTATE_POST_FIX (mirrored); one case per side.
+    Where the LVQoE repo is beside this one (LVQOE_REPO), the mirror equals the list's tuple."""
+    import os
+    import re as _re
+    import check_session as CS
+    t0 = 1792500000.0
+    rows = [{"ts": str((t0 + k) * 1000), "type": "res_meta", "is_ad": "False", "paused": "False", "video_w": "720",
+             "current_time": "5.0" if 470 <= k < 580 else str(k), "ready_state": "0" if 470 <= k < 580 else "4"}
+            for k in range(400, 650)]
+    labels = [{"timestamp": t0 + 380, "speed": 300, "state": "2"}, {"timestamp": t0 + 483.5, "speed": 1600, "state": "6"}]
+    fr = {"t_nav": t0 + 574.4, "outcome": "continue", "t2_window": [t0 + 483.5, t0 + 574.4]}
+    for sha, want in (("bea39af06adbbd83bee9d56ce1b17fdc892a7365", True), ("0309d76e2f31f627c531ec316119712f31aee1dd", True),
+                      ("ef587323" + "0" * 32, False)):
+        (t,) = CS.shared_deadline_reentries({"platform": "tiktok", "lvdc_commit": {"sha": sha}, "frozen_reentries": [fr]},
+                                             rows, labels)
+        assert t["shared_deadline_reentry"] is want, (sha, t)
+    repo = os.environ.get("LVQOE_REPO")
+    if repo and (Path(repo) / "scripts" / "checkpoint_session_list.py").exists():
+        src = (Path(repo) / "scripts" / "checkpoint_session_list.py").read_text()
+        m = _re.search(r"TT_LOWSTATE_POST_FIX[^=]*=\s*\((.*?)\n\)", src, _re.S)
+        assert m and tuple(_re.findall(r'"([0-9a-f]{40})"', m.group(1))) == CS.TT_LOWSTATE_POST_FIX, m and m.group(1)
 
 
 def test_entries_and_class():
@@ -891,6 +945,8 @@ def main() -> int:
     test_shared_deadline_reentry_tag()
     test_shared_deadline_run_is_not_compared_with_t()
     test_ti100058_shared_deadline()
+    test_reentry_load_is_not_a_dead_run()
+    test_tag_rule_per_collector()
     print("test_player_dead: ok")
     return 0
 
