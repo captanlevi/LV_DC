@@ -18,7 +18,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import orchestrate as O                                  # noqa: E402
-assert "trio_slots" not in sys.modules, "single mode imports trio_slots"
+
+
+def test_single_mode_does_not_import_trio_slots():
+    """In a fresh interpreter: under pytest another test module may already have imported trio_slots."""
+    import subprocess
+    r = subprocess.run([sys.executable, "-c", "import sys, orchestrate; "
+                        "sys.exit('trio_slots' in sys.modules)"], cwd=HERE, capture_output=True, text=True)
+    assert r.returncode == 0, ("single mode imports trio_slots", r.stderr[-500:])
 import trio_slots as T                                   # noqa: E402
 import flow_overlap as F                                 # noqa: E402
 

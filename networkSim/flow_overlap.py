@@ -360,26 +360,19 @@ def _session_dirs_of_run(data: Path, run: str) -> list[Path]:
     return sorted(out)
 
 
-def _trio_root() -> Path:
-    """data_root.DATA_ROOT / _trio where the collector's data_root module exists (70973cd), else the repo's data/_trio:
-    one file for the reader line and the collector line (levi 11:37: the same blob on both)."""
-    try:
-        from data_root import DATA_ROOT
-    except ImportError:
-        return HERE.parent / "data" / "_trio"
-    return DATA_ROOT / "_trio"
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--run", default=None, help="a trio run id (meta.json concurrency.trio_run)")
-    ap.add_argument("--data", type=Path, default=_trio_root(), help="the trio root (data_root.DATA_ROOT / _trio)")
+    ap.add_argument("--data", type=Path, default=None, help="the trio root (default: data_root.DATA_ROOT / _trio)")
     ap.add_argument("--sessions", nargs="*", type=Path, default=[])
     ap.add_argument("--default", type=Path, default=None, help="the run's default-capture dir (merged.pcap)")
     ap.add_argument("--tshark", default=shutil.which("tshark") or "tshark")
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--detail", action="store_true", help="the split flows' packets in the default class (split_detail)")
     a = ap.parse_args(argv)
+    if a.data is None:
+        from data_root import DATA_ROOT
+        a.data = DATA_ROOT / "_trio"
     dirs = list(a.sessions)
     dflt = a.default
     if a.run:
