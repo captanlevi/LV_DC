@@ -20,8 +20,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-NS = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(NS))
+NS = Path(__file__).resolve().parents[1]           # the tree it runs in; __main__ takes one as its argument
 
 OLD_NETSTAT = ("rate", "duration", "delay_ms", "loss_pct", "state", "redraw_kbit", "redraw_delay_ms", "redraw_loss_pct",
                "walk_step")
@@ -121,6 +120,8 @@ def _collect(tmp, spawned, T):
 
 
 def build() -> dict:
+    if str(NS) not in sys.path:
+        sys.path.insert(0, str(NS))
     import contextlib
     import io
     with contextlib.redirect_stdout(io.StringIO()):          # run_trio prints its progress
@@ -129,4 +130,7 @@ def build() -> dict:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        NS = Path(sys.argv[1]).resolve()
+    sys.path.insert(0, str(NS))
     print(json.dumps(build(), sort_keys=True))
