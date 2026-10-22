@@ -1,0 +1,2555 @@
+{
+ "parser_version": "1",
+ "prereg": "LVQoE docs/analysis/design/restart_2026-10-21_prereg_levi.md §9",
+ "schema": "lvdc_trace_manifest_v1",
+ "sources": {
+  "fcc_mba_webget": {
+   "archive": {
+    "bytes": 2488214092,
+    "name": "data-raw-2016-jun.tar.gz",
+    "sha256": "f93de5c4f1705f82e2ee33d82083d8ee53885c244ca3ec8291c421b87170d91c"
+   },
+   "citation": "FCC Measuring Broadband America, raw data release June 2016 (data-raw-2016-jun.tar.gz, raw unaudited). Series construction after H. Mao, R. Netravali, M. Alizadeh. Neural Adaptive Video Streaming with Pensieve. ACM SIGCOMM 2017 (github.com/hongzimao/pensieve traces/fcc/load_webget_data.py)",
+   "files": [
+    {
+     "name": "series/trace_10039_http---www.ebay.com.txt",
+     "rows": 264,
+     "seconds": 1320,
+     "sha256": "38bd91c407ee8e710043266352a0cc6154b8ba62da4b4b32f84552aee7b4deb2",
+     "target": "http://www.ebay.com",
+     "unit_id": "10039"
+    },
+    {
+     "name": "series/trace_10396_http---www.youtube.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "127d8da0c728755ecb0b9d01ab2974454952f93f7518f7e4528e726f7fca63e5",
+     "target": "http://www.youtube.com",
+     "unit_id": "10396"
+    },
+    {
+     "name": "series/trace_10426_http---www.amazon.com.txt",
+     "rows": 206,
+     "seconds": 1030,
+     "sha256": "8c7c3a6601312b055033848635efef39e3deb5edb729e9f9d2505dc8fc3e4802",
+     "target": "http://www.amazon.com",
+     "unit_id": "10426"
+    },
+    {
+     "name": "series/trace_10455_http---edition.cnn.com.txt",
+     "rows": 277,
+     "seconds": 1385,
+     "sha256": "46216cdef7c5e05b0864723b9174eb9fa2dd25822b2f1dcc24e31046c4992ac0",
+     "target": "http://edition.cnn.com",
+     "unit_id": "10455"
+    },
+    {
+     "name": "series/trace_10557_http---www.yahoo.com.txt",
+     "rows": 264,
+     "seconds": 1320,
+     "sha256": "14720c5f157b89c1ca71ad175a819ae9efc6bb3c8adccb0fcd7b9a4eea082014",
+     "target": "http://www.yahoo.com",
+     "unit_id": "10557"
+    },
+    {
+     "name": "series/trace_10729_http---www.amazon.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "9381d5b46bf2d2f96c4fb7b2af454a7e355414dd85c1b6b159c2ed9dc13e0d6b",
+     "target": "http://www.amazon.com",
+     "unit_id": "10729"
+    },
+    {
+     "name": "series/trace_10766_http---www.msn.com.txt",
+     "rows": 240,
+     "seconds": 1200,
+     "sha256": "c7b4b6d45d973716a7faf6b1a3bc34389f5ae37b12f7d0d9a5045c6983322bba",
+     "target": "http://www.msn.com",
+     "unit_id": "10766"
+    },
+    {
+     "name": "series/trace_10932_http---www.msn.com.txt",
+     "rows": 241,
+     "seconds": 1205,
+     "sha256": "53183660cc0913924024acfde403cc78a2a9225fd277a7a766a12d3bdba76541",
+     "target": "http://www.msn.com",
+     "unit_id": "10932"
+    },
+    {
+     "name": "series/trace_11142_http---edition.cnn.com.txt",
+     "rows": 161,
+     "seconds": 805,
+     "sha256": "fbf149d591e313b306c1d56747c11a2dd9b4f16c0a4933c826a59b8a3538bc98",
+     "target": "http://edition.cnn.com",
+     "unit_id": "11142"
+    },
+    {
+     "name": "series/trace_11230_http---edition.cnn.com.txt",
+     "rows": 187,
+     "seconds": 935,
+     "sha256": "123ae187fdabe23f0f5d2b6049717cb0c3e8e41e4c91430e9336b015a4083c78",
+     "target": "http://edition.cnn.com",
+     "unit_id": "11230"
+    },
+    {
+     "name": "series/trace_11308_http---www.google.com-mobile-.txt",
+     "rows": 206,
+     "seconds": 1030,
+     "sha256": "8f7e1c0767ed1e71272f7c7aa397df26d61f6464ab9e30baa06ef84125f910df",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "11308"
+    },
+    {
+     "name": "series/trace_11324_http---www.google.com-mobile-.txt",
+     "rows": 275,
+     "seconds": 1375,
+     "sha256": "1625a4999df652d3c9469a5f8c000f4fa36a3826ed897af9750170ebb2d37392",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "11324"
+    },
+    {
+     "name": "series/trace_11357_http---www.msn.com.txt",
+     "rows": 231,
+     "seconds": 1155,
+     "sha256": "f154a5e062e23afbe2581d587d0b8c038edd0157916b9ffe6c3d577fa83848d5",
+     "target": "http://www.msn.com",
+     "unit_id": "11357"
+    },
+    {
+     "name": "series/trace_11520_http---www.google.com-mobile-.txt",
+     "rows": 239,
+     "seconds": 1195,
+     "sha256": "647e58914697f71f98940a88058828de51e45bbdf09f1bbece3c4cc8acd3c70a",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "11520"
+    },
+    {
+     "name": "series/trace_11528_http---www.ebay.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "4de2cc685754b26f7c618dfd14e6c36d3248463d9456228c6b25c83f0b8e4f8a",
+     "target": "http://www.ebay.com",
+     "unit_id": "11528"
+    },
+    {
+     "name": "series/trace_12062_http---www.google.com-mobile-.txt",
+     "rows": 245,
+     "seconds": 1225,
+     "sha256": "9debb92cbf8e2d5d3967ebd00163a586effb86334d0943ff2351ef98047f4dd9",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "12062"
+    },
+    {
+     "name": "series/trace_12156_http---edition.cnn.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "6d7a7443377f767fdc36ce17432a83e63880d7f38b2317e94fea661f51ca5ed6",
+     "target": "http://edition.cnn.com",
+     "unit_id": "12156"
+    },
+    {
+     "name": "series/trace_12156_http---www.facebook.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "1151cbc241831c37d9c830754e569a0f2596ee0122d21a7bbc5274917e9ce6ca",
+     "target": "http://www.facebook.com",
+     "unit_id": "12156"
+    },
+    {
+     "name": "series/trace_12186_http---www.facebook.com.txt",
+     "rows": 273,
+     "seconds": 1365,
+     "sha256": "23689401849b46b2f7c2a04df4626e36e8d583a0982de26d3c353927df210e4c",
+     "target": "http://www.facebook.com",
+     "unit_id": "12186"
+    },
+    {
+     "name": "series/trace_12194_http---www.amazon.com.txt",
+     "rows": 274,
+     "seconds": 1370,
+     "sha256": "ac3d11c5cfc8be7c9eacfff07c7963ced3f28c72530cae82c040dd52ed65725d",
+     "target": "http://www.amazon.com",
+     "unit_id": "12194"
+    },
+    {
+     "name": "series/trace_12214_http---www.youtube.com.txt",
+     "rows": 252,
+     "seconds": 1260,
+     "sha256": "107003f822b034ac2a887cb8af4210c19a67b9c68a96b1467e29b2403937588d",
+     "target": "http://www.youtube.com",
+     "unit_id": "12214"
+    },
+    {
+     "name": "series/trace_12444_http---www.youtube.com.txt",
+     "rows": 238,
+     "seconds": 1190,
+     "sha256": "ad4bfde3bc469d9576e8386ed375f8faefdf7548bc26f18bd3a355c2150d1dd0",
+     "target": "http://www.youtube.com",
+     "unit_id": "12444"
+    },
+    {
+     "name": "series/trace_12476_http---www.facebook.com.txt",
+     "rows": 258,
+     "seconds": 1290,
+     "sha256": "fa37d8d2c2614fde35b09b1704c234f1fbd61131c2bf6a37c757d424c0a4a72c",
+     "target": "http://www.facebook.com",
+     "unit_id": "12476"
+    },
+    {
+     "name": "series/trace_12550_http---www.google.com-mobile-.txt",
+     "rows": 241,
+     "seconds": 1205,
+     "sha256": "42a6de8bbef1e00b8283974e0717724379a87b20991bd8b0b19d12d436180e19",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "12550"
+    },
+    {
+     "name": "series/trace_1260_http---edition.cnn.com.txt",
+     "rows": 256,
+     "seconds": 1280,
+     "sha256": "62a0a9b4afd645208d899673d650759018d8a33840224b7165ef474826ea572b",
+     "target": "http://edition.cnn.com",
+     "unit_id": "1260"
+    },
+    {
+     "name": "series/trace_12605_http---www.amazon.com.txt",
+     "rows": 272,
+     "seconds": 1360,
+     "sha256": "837e5a0f15ae34f0f280cc8c302e35d676ba383c2893c19d3ef52223d0dfc169",
+     "target": "http://www.amazon.com",
+     "unit_id": "12605"
+    },
+    {
+     "name": "series/trace_12869_http---www.yahoo.com.txt",
+     "rows": 213,
+     "seconds": 1065,
+     "sha256": "e2218d7ff90651a52d71359bd68b8d4d771ea390a8ba85181f0098bc452bbc4b",
+     "target": "http://www.yahoo.com",
+     "unit_id": "12869"
+    },
+    {
+     "name": "series/trace_12912_http---www.facebook.com.txt",
+     "rows": 223,
+     "seconds": 1115,
+     "sha256": "1fb70e4946a13634a579e23e616780cb55fdd6b324774eb295b672c4bb363ff7",
+     "target": "http://www.facebook.com",
+     "unit_id": "12912"
+    },
+    {
+     "name": "series/trace_12915_http---edition.cnn.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "9b2a1e291f81530a4d435775cff4978be7ccd3729684224ff3b7fd421d68a450",
+     "target": "http://edition.cnn.com",
+     "unit_id": "12915"
+    },
+    {
+     "name": "series/trace_12927_http---www.ebay.com.txt",
+     "rows": 261,
+     "seconds": 1305,
+     "sha256": "b337dfdc9ff2f6dadabb34167d0d9ba86bef0d1dfc87ba4017b1e9ba2dda3b1a",
+     "target": "http://www.ebay.com",
+     "unit_id": "12927"
+    },
+    {
+     "name": "series/trace_12987_http---www.yahoo.com.txt",
+     "rows": 173,
+     "seconds": 865,
+     "sha256": "62438e6415589895b6feb81a05626dbf43666b2ad819a40ea0903879597ea705",
+     "target": "http://www.yahoo.com",
+     "unit_id": "12987"
+    },
+    {
+     "name": "series/trace_13293_http---www.yahoo.com.txt",
+     "rows": 262,
+     "seconds": 1310,
+     "sha256": "33edb1da700fa47b4c7cef73cd570a4489479bfafafa3c7110974c4e3cbef001",
+     "target": "http://www.yahoo.com",
+     "unit_id": "13293"
+    },
+    {
+     "name": "series/trace_13340_http---www.amazon.com.txt",
+     "rows": 271,
+     "seconds": 1355,
+     "sha256": "e3aae1d48c52736b74d81934706553ce74ad28df0c4e1b64f4dedfdd1f42c3cf",
+     "target": "http://www.amazon.com",
+     "unit_id": "13340"
+    },
+    {
+     "name": "series/trace_13353_http---www.yahoo.com.txt",
+     "rows": 259,
+     "seconds": 1295,
+     "sha256": "f20e3a7aa7f5c8fd6cb6eb9a78b17d9080aeae45efcb420fee67162a152306b9",
+     "target": "http://www.yahoo.com",
+     "unit_id": "13353"
+    },
+    {
+     "name": "series/trace_13357_http---www.msn.com.txt",
+     "rows": 209,
+     "seconds": 1045,
+     "sha256": "1745618103f84d068edbc415da751f008e2698db0c4e446353c3cb3ff75a655e",
+     "target": "http://www.msn.com",
+     "unit_id": "13357"
+    },
+    {
+     "name": "series/trace_13445_http---edition.cnn.com.txt",
+     "rows": 182,
+     "seconds": 910,
+     "sha256": "70d409f3dd46cf3cc3cdd3abd8e583bec5152685c2a64cb6b4e196d9667b9fd3",
+     "target": "http://edition.cnn.com",
+     "unit_id": "13445"
+    },
+    {
+     "name": "series/trace_13494_http---www.yahoo.com.txt",
+     "rows": 234,
+     "seconds": 1170,
+     "sha256": "55e423e882537f231527c2ac89c41036ad22fe9c1149aaf08cd6512d7b0def86",
+     "target": "http://www.yahoo.com",
+     "unit_id": "13494"
+    },
+    {
+     "name": "series/trace_139118_http---edition.cnn.com.txt",
+     "rows": 276,
+     "seconds": 1380,
+     "sha256": "679d57118a1106bef57c5ac6646fba5fbc52df4e5ac2db95366908b96ec670db",
+     "target": "http://edition.cnn.com",
+     "unit_id": "139118"
+    },
+    {
+     "name": "series/trace_14666_http---www.amazon.com.txt",
+     "rows": 268,
+     "seconds": 1340,
+     "sha256": "d8fb1e4b84e0ee7d591661aa6e3df3ddc35a090f28968b850f350df6bd8de8a6",
+     "target": "http://www.amazon.com",
+     "unit_id": "14666"
+    },
+    {
+     "name": "series/trace_14666_http---www.youtube.com.txt",
+     "rows": 268,
+     "seconds": 1340,
+     "sha256": "7f8718b2f414892edf84db70f28bc13e3e2617a1775bb58719b71c14a9a1db20",
+     "target": "http://www.youtube.com",
+     "unit_id": "14666"
+    },
+    {
+     "name": "series/trace_14672_http---www.msn.com.txt",
+     "rows": 263,
+     "seconds": 1315,
+     "sha256": "5bf68d2c3f0e7603955f03c33c89f6892cfde5094d7362566f4b80414b0f7075",
+     "target": "http://www.msn.com",
+     "unit_id": "14672"
+    },
+    {
+     "name": "series/trace_14693_http---www.facebook.com.txt",
+     "rows": 249,
+     "seconds": 1245,
+     "sha256": "76a6ec78e7bb345e9b723f0bd83455445ab9e864e22804a861a6e36cc8e22fba",
+     "target": "http://www.facebook.com",
+     "unit_id": "14693"
+    },
+    {
+     "name": "series/trace_207344_http---www.facebook.com.txt",
+     "rows": 276,
+     "seconds": 1380,
+     "sha256": "5191128e4f7f154fa8abf845c859c414cad1e21f4fe1f064512cdf3ee0356167",
+     "target": "http://www.facebook.com",
+     "unit_id": "207344"
+    },
+    {
+     "name": "series/trace_213332_http---www.amazon.com.txt",
+     "rows": 270,
+     "seconds": 1350,
+     "sha256": "af2f184b678f4fb5fd50e956fce22b78b370908ed8b2bc2e7af894d399044540",
+     "target": "http://www.amazon.com",
+     "unit_id": "213332"
+    },
+    {
+     "name": "series/trace_213376_http---www.youtube.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "860af15100cdaf685082402995332324b5ae7f1964513b56fb43575eb60d6101",
+     "target": "http://www.youtube.com",
+     "unit_id": "213376"
+    },
+    {
+     "name": "series/trace_213478_http---www.yahoo.com.txt",
+     "rows": 208,
+     "seconds": 1040,
+     "sha256": "b87dc860f4191ed83362117ce346f151ed74814c0c2fa47430afbe64948f58af",
+     "target": "http://www.yahoo.com",
+     "unit_id": "213478"
+    },
+    {
+     "name": "series/trace_213486_http---www.facebook.com.txt",
+     "rows": 278,
+     "seconds": 1390,
+     "sha256": "ef72e648c47a354bc1557336ee94773e4fa6f3838098e5547c10ea41a53b9591",
+     "target": "http://www.facebook.com",
+     "unit_id": "213486"
+    },
+    {
+     "name": "series/trace_213640_http---edition.cnn.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "1942c312e4f634f4677789e44c77e97187dd12f4a770c48292a3d53e9b636212",
+     "target": "http://edition.cnn.com",
+     "unit_id": "213640"
+    },
+    {
+     "name": "series/trace_214480_http---www.facebook.com.txt",
+     "rows": 265,
+     "seconds": 1325,
+     "sha256": "9e0feae456ef4a4049b388db5cae4c158ffeb4c27d8265f274f44f1e9afb0eaa",
+     "target": "http://www.facebook.com",
+     "unit_id": "214480"
+    },
+    {
+     "name": "series/trace_214516_http---www.youtube.com.txt",
+     "rows": 236,
+     "seconds": 1180,
+     "sha256": "b36d67056fcb0327e701b51793ef4b764e2abec21de0f8cdb369c194f183bcba",
+     "target": "http://www.youtube.com",
+     "unit_id": "214516"
+    },
+    {
+     "name": "series/trace_214536_http---www.youtube.com.txt",
+     "rows": 228,
+     "seconds": 1140,
+     "sha256": "b8a4f8d85406a44cbdcdd1032e74a62b62a8cdb957089ff283397422f8b7aa9c",
+     "target": "http://www.youtube.com",
+     "unit_id": "214536"
+    },
+    {
+     "name": "series/trace_215370_http---www.yahoo.com.txt",
+     "rows": 189,
+     "seconds": 945,
+     "sha256": "036017749602a5b5eb850c626afef0a6e946e26e7f174d14b3ec3b97fb0ab7e9",
+     "target": "http://www.yahoo.com",
+     "unit_id": "215370"
+    },
+    {
+     "name": "series/trace_215726_http---www.amazon.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "af541b4be2fdcb9c995ce6c3bad9915fbaa3c46731d95fc1cd35566cd2266e7f",
+     "target": "http://www.amazon.com",
+     "unit_id": "215726"
+    },
+    {
+     "name": "series/trace_216038_http---www.google.com-mobile-.txt",
+     "rows": 265,
+     "seconds": 1325,
+     "sha256": "a06e48153b0dfd91614eae05c01f26f9c69cd276a4db65c9fe430c8de2e7f143",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "216038"
+    },
+    {
+     "name": "series/trace_216630_http---www.youtube.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "9e2de0590e6c48e549a79dce87810057690ee092345719069fd89f1834a2a3da",
+     "target": "http://www.youtube.com",
+     "unit_id": "216630"
+    },
+    {
+     "name": "series/trace_216654_http---www.yahoo.com.txt",
+     "rows": 245,
+     "seconds": 1225,
+     "sha256": "8fdbda58f5f0176b900e9928951ee593feaba8683537f49cf82ca09116c7322b",
+     "target": "http://www.yahoo.com",
+     "unit_id": "216654"
+    },
+    {
+     "name": "series/trace_216812_http---www.ebay.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "4f3c8108f2ae4bbfd3e46c1e733ed307af2fc0eb1c8e796a8298d9509b199088",
+     "target": "http://www.ebay.com",
+     "unit_id": "216812"
+    },
+    {
+     "name": "series/trace_232372_http---www.youtube.com.txt",
+     "rows": 275,
+     "seconds": 1375,
+     "sha256": "1db2f7896596d39d97fad7450b0a4e65f3911fe1da088ebb712180410d1a471c",
+     "target": "http://www.youtube.com",
+     "unit_id": "232372"
+    },
+    {
+     "name": "series/trace_232412_http---www.youtube.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "7fe1280a68c7abc1548d762525403f9a56ebf23b61177afea18fa046ea93eadf",
+     "target": "http://www.youtube.com",
+     "unit_id": "232412"
+    },
+    {
+     "name": "series/trace_233004_http---www.amazon.com.txt",
+     "rows": 239,
+     "seconds": 1195,
+     "sha256": "dcff24bbb7d1f85c6de4fff07c0e5211240a44602a040e6f9f23d5b5a061443b",
+     "target": "http://www.amazon.com",
+     "unit_id": "233004"
+    },
+    {
+     "name": "series/trace_235290_http---edition.cnn.com.txt",
+     "rows": 260,
+     "seconds": 1300,
+     "sha256": "a1a243d38c1825fe494fdfba47e4dbd63e0b3c9bd02eb6fb0fd55313616e786d",
+     "target": "http://edition.cnn.com",
+     "unit_id": "235290"
+    },
+    {
+     "name": "series/trace_244844_http---www.facebook.com.txt",
+     "rows": 253,
+     "seconds": 1265,
+     "sha256": "409e3d0f1faf5b61ad3da5703cf9c9095bbb6647c73d8b5838a3b053d2082e1f",
+     "target": "http://www.facebook.com",
+     "unit_id": "244844"
+    },
+    {
+     "name": "series/trace_26073_http---edition.cnn.com.txt",
+     "rows": 255,
+     "seconds": 1275,
+     "sha256": "728a4b52c62bbd4fcbd098ea869a7c1d496a2e9429ca94f1f349b63e7f3d5348",
+     "target": "http://edition.cnn.com",
+     "unit_id": "26073"
+    },
+    {
+     "name": "series/trace_26584_http---www.msn.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "2de140f8eca00f442b4e2ba76cc0b5165cb01638648ba3e0d1435dd6dc320ca2",
+     "target": "http://www.msn.com",
+     "unit_id": "26584"
+    },
+    {
+     "name": "series/trace_26610_http---www.google.com-mobile-.txt",
+     "rows": 275,
+     "seconds": 1375,
+     "sha256": "bdc4ce60afb4f40ccf22d96120ba044dc9e9a61c2fbd3cee348177c04a25f322",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "26610"
+    },
+    {
+     "name": "series/trace_26699_http---www.amazon.com.txt",
+     "rows": 194,
+     "seconds": 970,
+     "sha256": "faa515089acf90082ca2b9fd13df518ab37cdc3d79ea31ef76ba33a419e924df",
+     "target": "http://www.amazon.com",
+     "unit_id": "26699"
+    },
+    {
+     "name": "series/trace_26890_http---www.google.com-mobile-.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "c4b8c4f6071aa513400c5b79c632678b80eb56bf886f0bc31e0bcd212c0ec745",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "26890"
+    },
+    {
+     "name": "series/trace_27004_http---www.yahoo.com.txt",
+     "rows": 179,
+     "seconds": 895,
+     "sha256": "b3e4ea03def96cf11cfdbff5a66edf6e75cafff4072ac016e978a96a4096e825",
+     "target": "http://www.yahoo.com",
+     "unit_id": "27004"
+    },
+    {
+     "name": "series/trace_27053_http---www.yahoo.com.txt",
+     "rows": 252,
+     "seconds": 1260,
+     "sha256": "e5217b759bb1e3dd7800649e05a8fe451182bcfa2201ac5ad1a0a1c82d15c6ab",
+     "target": "http://www.yahoo.com",
+     "unit_id": "27053"
+    },
+    {
+     "name": "series/trace_27102_http---www.ebay.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "f0aeffe9a6b217312bfdf7bd8b2c631862414604efe1a0892f40e6b95a47663f",
+     "target": "http://www.ebay.com",
+     "unit_id": "27102"
+    },
+    {
+     "name": "series/trace_27147_http---edition.cnn.com.txt",
+     "rows": 219,
+     "seconds": 1095,
+     "sha256": "56dbf7022d554f5059a669c721fab212537332f5514c5f8380f9d51ef7154ef1",
+     "target": "http://edition.cnn.com",
+     "unit_id": "27147"
+    },
+    {
+     "name": "series/trace_27182_http---www.amazon.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "eae2e5f7f050a2246624f04906f4b2227efa5502d013b334b1922ef3c007bebb",
+     "target": "http://www.amazon.com",
+     "unit_id": "27182"
+    },
+    {
+     "name": "series/trace_27234_http---www.facebook.com.txt",
+     "rows": 220,
+     "seconds": 1100,
+     "sha256": "34e232ca10af028d5b4677bf11750e0984d627fe229346a2ef0a2f80e9008425",
+     "target": "http://www.facebook.com",
+     "unit_id": "27234"
+    },
+    {
+     "name": "series/trace_27252_http---edition.cnn.com.txt",
+     "rows": 186,
+     "seconds": 930,
+     "sha256": "713f6f5c822270a9215b7d0f38137404e7abbe23540a239c1ae1af728f32641a",
+     "target": "http://edition.cnn.com",
+     "unit_id": "27252"
+    },
+    {
+     "name": "series/trace_27367_http---edition.cnn.com.txt",
+     "rows": 277,
+     "seconds": 1385,
+     "sha256": "c6719658a7ca82c1794c38aec73bc3c6d1f5b2fdf37b38f602ea429422137e09",
+     "target": "http://edition.cnn.com",
+     "unit_id": "27367"
+    },
+    {
+     "name": "series/trace_27555_http---www.amazon.com.txt",
+     "rows": 278,
+     "seconds": 1390,
+     "sha256": "eea01a1fcba62d786f22f0d89a3de5ae3c73d1f711df7d65ecc38ad9d5da50cb",
+     "target": "http://www.amazon.com",
+     "unit_id": "27555"
+    },
+    {
+     "name": "series/trace_27755_http---www.youtube.com.txt",
+     "rows": 276,
+     "seconds": 1380,
+     "sha256": "74c3898aad8c09ef71552b6ab9dc8b0f2b467c9d7ec61440dc8c9161aff3f122",
+     "target": "http://www.youtube.com",
+     "unit_id": "27755"
+    },
+    {
+     "name": "series/trace_27771_http---www.google.com-mobile-.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "b0a2a0019b43925c6f09f1bfcc3d38e8d94f6803382a8433053d6dcd20f2e04f",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "27771"
+    },
+    {
+     "name": "series/trace_27797_http---www.ebay.com.txt",
+     "rows": 278,
+     "seconds": 1390,
+     "sha256": "065d5f8d421612bdf814b5f2f7f2287524373757930744ef32795943e2709ce0",
+     "target": "http://www.ebay.com",
+     "unit_id": "27797"
+    },
+    {
+     "name": "series/trace_28087_http---www.ebay.com.txt",
+     "rows": 262,
+     "seconds": 1310,
+     "sha256": "74f5b80e816ab1d09e789b0876bc3a3ffaffd62cc2b668de372df5c821cbdeb5",
+     "target": "http://www.ebay.com",
+     "unit_id": "28087"
+    },
+    {
+     "name": "series/trace_28255_http---www.ebay.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "0a682ea29fcba5f504393c858d09a2a933121e8b193e31e8f650c8a0dfd0bc99",
+     "target": "http://www.ebay.com",
+     "unit_id": "28255"
+    },
+    {
+     "name": "series/trace_28753_http---www.yahoo.com.txt",
+     "rows": 183,
+     "seconds": 915,
+     "sha256": "c813792fc390d6682c1f9eada2280845e337776fe16b7c224733fb524c0a18da",
+     "target": "http://www.yahoo.com",
+     "unit_id": "28753"
+    },
+    {
+     "name": "series/trace_28765_http---www.google.com-mobile-.txt",
+     "rows": 243,
+     "seconds": 1215,
+     "sha256": "d937a7696f0f9be1883675bf9f5d04da80ef8d780abccc53d3363ead0d083f58",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "28765"
+    },
+    {
+     "name": "series/trace_28849_http---www.facebook.com.txt",
+     "rows": 271,
+     "seconds": 1355,
+     "sha256": "6ded8696b8a6e48072c7d6661480c820c5ccd4c0818c04f04c624ed7b4733e73",
+     "target": "http://www.facebook.com",
+     "unit_id": "28849"
+    },
+    {
+     "name": "series/trace_28862_http---www.facebook.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "c7cda87b77ee8a563040a8e56636a03eb3bb99fd0cd11d9ddbc3771ad1d9acfd",
+     "target": "http://www.facebook.com",
+     "unit_id": "28862"
+    },
+    {
+     "name": "series/trace_28885_http---www.google.com-mobile-.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "202938d89c916f0251d455ecdd2421ed31add9f40b05ef8f94d9a16c216a43c1",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "28885"
+    },
+    {
+     "name": "series/trace_32424_http---www.youtube.com.txt",
+     "rows": 272,
+     "seconds": 1360,
+     "sha256": "db32c9401f4901d1ea32df6f29164c5a3b4cba0456399547976f757e76a846aa",
+     "target": "http://www.youtube.com",
+     "unit_id": "32424"
+    },
+    {
+     "name": "series/trace_32643_http---www.facebook.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "975a357e72c6851cfbba64dfeeb2b346b29efa6431375217c6849d8319eec6aa",
+     "target": "http://www.facebook.com",
+     "unit_id": "32643"
+    },
+    {
+     "name": "series/trace_386_http---www.youtube.com.txt",
+     "rows": 257,
+     "seconds": 1285,
+     "sha256": "aa75ed924b3828d3148869e2506dd653d59b3e7dee74e4883ce28d0dab527fb6",
+     "target": "http://www.youtube.com",
+     "unit_id": "386"
+    },
+    {
+     "name": "series/trace_422_http---edition.cnn.com.txt",
+     "rows": 277,
+     "seconds": 1385,
+     "sha256": "e9244d9cc0cd7e2b26bbac1ace4cd57c5d4bca9f8443fa398302ca1d8b9f0d2a",
+     "target": "http://edition.cnn.com",
+     "unit_id": "422"
+    },
+    {
+     "name": "series/trace_437_http---www.msn.com.txt",
+     "rows": 276,
+     "seconds": 1380,
+     "sha256": "9ae23bc7c7f122bd1551d7bd5ff116cc15d88c912b5d68975de1836fb8246758",
+     "target": "http://www.msn.com",
+     "unit_id": "437"
+    },
+    {
+     "name": "series/trace_458_http---www.youtube.com.txt",
+     "rows": 202,
+     "seconds": 1010,
+     "sha256": "3d90a412fd23f7b8b9c1b51396d11a03816b785fd7692ca4d3e6f14fe0237822",
+     "target": "http://www.youtube.com",
+     "unit_id": "458"
+    },
+    {
+     "name": "series/trace_5291_http---edition.cnn.com.txt",
+     "rows": 267,
+     "seconds": 1335,
+     "sha256": "14b08de5dbe9c3a20e5bbf7eca8ed3d54634d6d92854d20c761d3285367afec0",
+     "target": "http://edition.cnn.com",
+     "unit_id": "5291"
+    },
+    {
+     "name": "series/trace_5293_http---www.google.com-mobile-.txt",
+     "rows": 276,
+     "seconds": 1380,
+     "sha256": "ef6471668009bb024baaa9eb4d25df1e35f62e0c6f44f1cd5de9fea2252b78ce",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "5293"
+    },
+    {
+     "name": "series/trace_5299_http---www.google.com-mobile-.txt",
+     "rows": 202,
+     "seconds": 1010,
+     "sha256": "da24b812b3e377b75bfcdad2cb7b18853e66c689adf110b75bf572506d20b844",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "5299"
+    },
+    {
+     "name": "series/trace_5511_http---www.youtube.com.txt",
+     "rows": 190,
+     "seconds": 950,
+     "sha256": "8b12e62b903abadb52c1095ad570f19625a40d431f7f766e3afe57aae0677c63",
+     "target": "http://www.youtube.com",
+     "unit_id": "5511"
+    },
+    {
+     "name": "series/trace_5547_http---www.amazon.com.txt",
+     "rows": 275,
+     "seconds": 1375,
+     "sha256": "77aeb684b9f1d06ae82dd0ee5f89f66a76565440f862ea0c33d47c0785f167a6",
+     "target": "http://www.amazon.com",
+     "unit_id": "5547"
+    },
+    {
+     "name": "series/trace_5549_http---www.ebay.com.txt",
+     "rows": 255,
+     "seconds": 1275,
+     "sha256": "c199dc071ae808f9cbccf791c87510fa1df17d96c0b2d94fdcae32aee7c1a3a7",
+     "target": "http://www.ebay.com",
+     "unit_id": "5549"
+    },
+    {
+     "name": "series/trace_5549_http---www.youtube.com.txt",
+     "rows": 255,
+     "seconds": 1275,
+     "sha256": "9090bef6e9bd2988f0042248d2fad10cebcd51bbc3fe6910ba2313226a6657ff",
+     "target": "http://www.youtube.com",
+     "unit_id": "5549"
+    },
+    {
+     "name": "series/trace_5559_http---www.yahoo.com.txt",
+     "rows": 270,
+     "seconds": 1350,
+     "sha256": "504d8304ef5e058ccdf03bd7800d6efabee7bfbfa78ac70d5ef1f08dd0699ad2",
+     "target": "http://www.yahoo.com",
+     "unit_id": "5559"
+    },
+    {
+     "name": "series/trace_5826_http---www.amazon.com.txt",
+     "rows": 164,
+     "seconds": 820,
+     "sha256": "ca7a8343cd824fa04e34bd868ba873dbfe3f8934d61c2b2e8b68cf904b75de3d",
+     "target": "http://www.amazon.com",
+     "unit_id": "5826"
+    },
+    {
+     "name": "series/trace_589702_http---www.facebook.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "2a8d0e24b074576f9ed4537b6a3c9ba59dff1f24c2557979ab28cbccc50fcb91",
+     "target": "http://www.facebook.com",
+     "unit_id": "589702"
+    },
+    {
+     "name": "series/trace_589720_http---www.yahoo.com.txt",
+     "rows": 208,
+     "seconds": 1040,
+     "sha256": "9f909df25b7ee20733861e476754263655b7637e828e3f24f09d08b0df3914b8",
+     "target": "http://www.yahoo.com",
+     "unit_id": "589720"
+    },
+    {
+     "name": "series/trace_598594_http---www.amazon.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "d8d1b38687d33a8402a9dbcf357c447c6c5a3ce2c9424a72e759718072504de3",
+     "target": "http://www.amazon.com",
+     "unit_id": "598594"
+    },
+    {
+     "name": "series/trace_598628_http---edition.cnn.com.txt",
+     "rows": 157,
+     "seconds": 785,
+     "sha256": "4706b79d8ee2b49784fb23675c445b84879e1406cf6b1092f061160209e69d63",
+     "target": "http://edition.cnn.com",
+     "unit_id": "598628"
+    },
+    {
+     "name": "series/trace_598844_http---www.youtube.com.txt",
+     "rows": 277,
+     "seconds": 1385,
+     "sha256": "59c522127538de3299aa947ba35367173ebde4eb5fb1becd452ab9481b84bb58",
+     "target": "http://www.youtube.com",
+     "unit_id": "598844"
+    },
+    {
+     "name": "series/trace_599_http---www.yahoo.com.txt",
+     "rows": 275,
+     "seconds": 1375,
+     "sha256": "98a6a33495963833175fedf7bc3a523ed7ed967d79e1cff1341cf8adf3ac2fb4",
+     "target": "http://www.yahoo.com",
+     "unit_id": "599"
+    },
+    {
+     "name": "series/trace_599750_http---www.youtube.com.txt",
+     "rows": 275,
+     "seconds": 1375,
+     "sha256": "a0d58a39965c4f86811cedf5225f1795a5f2a0b76ac1f245b83677eef68d057a",
+     "target": "http://www.youtube.com",
+     "unit_id": "599750"
+    },
+    {
+     "name": "series/trace_599766_http---edition.cnn.com.txt",
+     "rows": 247,
+     "seconds": 1235,
+     "sha256": "d9342d2b9bdf39800a0eea3ad9304d2834a93c10c8034f7cf0f1b7a4540b7763",
+     "target": "http://edition.cnn.com",
+     "unit_id": "599766"
+    },
+    {
+     "name": "series/trace_605952_http---edition.cnn.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "b44a18c04b6023cfd488619b6f2ed42cd7ba8d818d17fae844ad4c34561797b7",
+     "target": "http://edition.cnn.com",
+     "unit_id": "605952"
+    },
+    {
+     "name": "series/trace_605966_http---www.amazon.com.txt",
+     "rows": 267,
+     "seconds": 1335,
+     "sha256": "82cdf4c140fade406eabec1fe0964fc06cbb4eac81fadfe2b7811ae15318d00c",
+     "target": "http://www.amazon.com",
+     "unit_id": "605966"
+    },
+    {
+     "name": "series/trace_6081_http---www.msn.com.txt",
+     "rows": 208,
+     "seconds": 1040,
+     "sha256": "ab044682775517a096dcc81925bb05080a15969773978913bbba6b9c792fa55b",
+     "target": "http://www.msn.com",
+     "unit_id": "6081"
+    },
+    {
+     "name": "series/trace_614150_http---www.msn.com.txt",
+     "rows": 276,
+     "seconds": 1380,
+     "sha256": "f5a5c9f9d4be98c58391ac027348136bbd84a77d17c043ae2e5d0c116a781945",
+     "target": "http://www.msn.com",
+     "unit_id": "614150"
+    },
+    {
+     "name": "series/trace_614152_http---www.youtube.com.txt",
+     "rows": 194,
+     "seconds": 970,
+     "sha256": "3df05ee8acc5108f2abd2b636bdec63aba930605e0a8a1a40bbe1c9736a5911c",
+     "target": "http://www.youtube.com",
+     "unit_id": "614152"
+    },
+    {
+     "name": "series/trace_614196_http---www.ebay.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "61f0e9901f779a5ef4393ab24edfc1b7b3ccdc3427d19f352b43704253a3c1fb",
+     "target": "http://www.ebay.com",
+     "unit_id": "614196"
+    },
+    {
+     "name": "series/trace_615092_http---www.ebay.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "fe2ea380f13f8ec6cb16fb359c0c36212fa3ea13f42d0ef2cc889da9be5fb553",
+     "target": "http://www.ebay.com",
+     "unit_id": "615092"
+    },
+    {
+     "name": "series/trace_615156_http---www.ebay.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "00735e88b80fb4759069af0221d4df4b410f494e3543e6d576f9f20df3802670",
+     "target": "http://www.ebay.com",
+     "unit_id": "615156"
+    },
+    {
+     "name": "series/trace_615298_http---www.amazon.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "f47b2c9c5639bd6b5509edf9a41410cc3c46b7df7f3ed292cbaa2632f47da52b",
+     "target": "http://www.amazon.com",
+     "unit_id": "615298"
+    },
+    {
+     "name": "series/trace_615488_http---www.amazon.com.txt",
+     "rows": 278,
+     "seconds": 1390,
+     "sha256": "48adb5438aaece3fd48dbdd3191054f538c010a6e7904cfcc2a4179769285eb9",
+     "target": "http://www.amazon.com",
+     "unit_id": "615488"
+    },
+    {
+     "name": "series/trace_615520_http---www.google.com-mobile-.txt",
+     "rows": 267,
+     "seconds": 1335,
+     "sha256": "c2254e9f8bb535ed3261195b8a59112bfbf73c98f0ff84ba654636d177e94030",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "615520"
+    },
+    {
+     "name": "series/trace_620666_http---www.facebook.com.txt",
+     "rows": 278,
+     "seconds": 1390,
+     "sha256": "136100e98329c3c6fdb336500ae8f5b11b1b67b4cbb7f50e23c152f7dfbd63be",
+     "target": "http://www.facebook.com",
+     "unit_id": "620666"
+    },
+    {
+     "name": "series/trace_621674_http---www.msn.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "03ce703b77463b296b892985a99f6446b325827f5bba0e86a7faa68c20a0e98f",
+     "target": "http://www.msn.com",
+     "unit_id": "621674"
+    },
+    {
+     "name": "series/trace_621686_http---www.facebook.com.txt",
+     "rows": 275,
+     "seconds": 1375,
+     "sha256": "0720aafaeb8a69f82e7c43e4287d08dfe178c52455d97e807d0aa92cf427127b",
+     "target": "http://www.facebook.com",
+     "unit_id": "621686"
+    },
+    {
+     "name": "series/trace_621724_http---www.google.com-mobile-.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "e8a8e77de657cc64e945658c41f0e450edcfc087f47d5e727eee275318a6bd51",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "621724"
+    },
+    {
+     "name": "series/trace_6244_http---edition.cnn.com.txt",
+     "rows": 188,
+     "seconds": 940,
+     "sha256": "b8c3d62ed671eda194be80f9b32cd62fbfff61f86cc857a860f42a22dd042e2b",
+     "target": "http://edition.cnn.com",
+     "unit_id": "6244"
+    },
+    {
+     "name": "series/trace_625896_http---www.ebay.com.txt",
+     "rows": 223,
+     "seconds": 1115,
+     "sha256": "1e123efc256e01a0551b9394852f28af7ab9877554c30c4cf60a0c630a809c19",
+     "target": "http://www.ebay.com",
+     "unit_id": "625896"
+    },
+    {
+     "name": "series/trace_632968_http---www.yahoo.com.txt",
+     "rows": 210,
+     "seconds": 1050,
+     "sha256": "63b9545a992e8e09bba4ac58c6b10500d811f8c8e6da45566d70bb1e576f479b",
+     "target": "http://www.yahoo.com",
+     "unit_id": "632968"
+    },
+    {
+     "name": "series/trace_6450_http---www.ebay.com.txt",
+     "rows": 267,
+     "seconds": 1335,
+     "sha256": "47b18272f0eddd411657ea1c25f769b536b0d4e06808e42eb65c17502f180590",
+     "target": "http://www.ebay.com",
+     "unit_id": "6450"
+    },
+    {
+     "name": "series/trace_6521_http---www.amazon.com.txt",
+     "rows": 129,
+     "seconds": 645,
+     "sha256": "b4f489c4cc059e770bcf053767f646ef0f3b1420fe54ad4f10b46eb097aa21d1",
+     "target": "http://www.amazon.com",
+     "unit_id": "6521"
+    },
+    {
+     "name": "series/trace_6553_http---edition.cnn.com.txt",
+     "rows": 237,
+     "seconds": 1185,
+     "sha256": "b1c097e2ed29bf595320d8403444e73f512b78333c69e0beb7e0aab8bfe1ee40",
+     "target": "http://edition.cnn.com",
+     "unit_id": "6553"
+    },
+    {
+     "name": "series/trace_657922_http---www.google.com-mobile-.txt",
+     "rows": 192,
+     "seconds": 960,
+     "sha256": "b6c24b470d2efa07ac51e4743882eb94d8e18b46f94cb2eddbebd9407de9eec1",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "657922"
+    },
+    {
+     "name": "series/trace_657934_http---www.ebay.com.txt",
+     "rows": 272,
+     "seconds": 1360,
+     "sha256": "3c7826628df3410267632eaf5c850fe4691f57d474b291658fd332af06d4b2ae",
+     "target": "http://www.ebay.com",
+     "unit_id": "657934"
+    },
+    {
+     "name": "series/trace_658030_http---www.youtube.com.txt",
+     "rows": 260,
+     "seconds": 1300,
+     "sha256": "1b6d2a293a067214b740ebdcbd573ba739af6b9975648c2b88293e615aff4bcf",
+     "target": "http://www.youtube.com",
+     "unit_id": "658030"
+    },
+    {
+     "name": "series/trace_658046_http---edition.cnn.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "1235c1da9cedc72313fe13123451b62ff64147eb6765b4170b031e367381eb1f",
+     "target": "http://edition.cnn.com",
+     "unit_id": "658046"
+    },
+    {
+     "name": "series/trace_658056_http---www.ebay.com.txt",
+     "rows": 266,
+     "seconds": 1330,
+     "sha256": "9129a1df058d1e78993f93fe099ea38349b3becedb889ecf00ddc187c5112b06",
+     "target": "http://www.ebay.com",
+     "unit_id": "658056"
+    },
+    {
+     "name": "series/trace_6617_http---edition.cnn.com.txt",
+     "rows": 165,
+     "seconds": 825,
+     "sha256": "273b023e1dc3b36274dd7c5f74706688a4372145f20268027f31fd3f58f091d0",
+     "target": "http://edition.cnn.com",
+     "unit_id": "6617"
+    },
+    {
+     "name": "series/trace_663124_http---www.yahoo.com.txt",
+     "rows": 250,
+     "seconds": 1250,
+     "sha256": "c7e096e395fded55f8e8c067dcfa31ce61e9c81496de007359ca6b91039af398",
+     "target": "http://www.yahoo.com",
+     "unit_id": "663124"
+    },
+    {
+     "name": "series/trace_6772_http---edition.cnn.com.txt",
+     "rows": 189,
+     "seconds": 945,
+     "sha256": "0fc0d9d9af560b2a2ecb72ad3bacb06a423c34d17c9325b2cc0acfb2c11f5669",
+     "target": "http://edition.cnn.com",
+     "unit_id": "6772"
+    },
+    {
+     "name": "series/trace_6778_http---www.youtube.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "c20c89bbb742f315ee55a334a1eec9ed9c01a697ed73d2ce41ce0b4bd4e70196",
+     "target": "http://www.youtube.com",
+     "unit_id": "6778"
+    },
+    {
+     "name": "series/trace_6883_http---www.msn.com.txt",
+     "rows": 237,
+     "seconds": 1185,
+     "sha256": "52411bba09e61040c6a4d3a110a477b1cb5ef6cc77f76a2b2540fc0b4e093fa4",
+     "target": "http://www.msn.com",
+     "unit_id": "6883"
+    },
+    {
+     "name": "series/trace_6904_http---www.yahoo.com.txt",
+     "rows": 276,
+     "seconds": 1380,
+     "sha256": "8f2e36e3229f6f138096d1f5ee6bf500cb1d2797ffa63ba3788c8ca0dff7d86c",
+     "target": "http://www.yahoo.com",
+     "unit_id": "6904"
+    },
+    {
+     "name": "series/trace_7061_http---www.yahoo.com.txt",
+     "rows": 256,
+     "seconds": 1280,
+     "sha256": "218eebb0c3b4cdf2569b0325fccb34b1f3ee6a5ea3d7a38ec8ee73fb32eb28c9",
+     "target": "http://www.yahoo.com",
+     "unit_id": "7061"
+    },
+    {
+     "name": "series/trace_7063_http---www.ebay.com.txt",
+     "rows": 219,
+     "seconds": 1095,
+     "sha256": "7afbb56c9c07d80d4f6f5165eda876b26604d0d5ccc389d2bf8fbf7b217c091c",
+     "target": "http://www.ebay.com",
+     "unit_id": "7063"
+    },
+    {
+     "name": "series/trace_7063_http---www.facebook.com.txt",
+     "rows": 220,
+     "seconds": 1100,
+     "sha256": "77772a07632ff8763d0d377a739dae2dd4b2298597cc36c3b10628516bacb83d",
+     "target": "http://www.facebook.com",
+     "unit_id": "7063"
+    },
+    {
+     "name": "series/trace_7304_http---www.amazon.com.txt",
+     "rows": 233,
+     "seconds": 1165,
+     "sha256": "eec057db105b4d2be6ab65b8aabf97d1c3c783eec624f7973cb71dcf2370a5f5",
+     "target": "http://www.amazon.com",
+     "unit_id": "7304"
+    },
+    {
+     "name": "series/trace_7502_http---www.amazon.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "ae17402599dbc93a082fdcd2dc6bf4b0e3c2bdda3e523c831c84c804b1fc9c75",
+     "target": "http://www.amazon.com",
+     "unit_id": "7502"
+    },
+    {
+     "name": "series/trace_766_http---www.youtube.com.txt",
+     "rows": 137,
+     "seconds": 685,
+     "sha256": "16f5e44c7a7ab76d065d625fea091bcedb0a4bc94bbc42b16149a201f213a42a",
+     "target": "http://www.youtube.com",
+     "unit_id": "766"
+    },
+    {
+     "name": "series/trace_778_http---www.youtube.com.txt",
+     "rows": 179,
+     "seconds": 895,
+     "sha256": "ae84a6a45fdfd59b5effc383fd6b78e0eb17287ea1338c5d8cd8429507c0338a",
+     "target": "http://www.youtube.com",
+     "unit_id": "778"
+    },
+    {
+     "name": "series/trace_7933_http---www.youtube.com.txt",
+     "rows": 215,
+     "seconds": 1075,
+     "sha256": "720f1a2740d99da95f4952d8d72e74d2fdb554d53bb022ff98fc467d2edf3fe9",
+     "target": "http://www.youtube.com",
+     "unit_id": "7933"
+    },
+    {
+     "name": "series/trace_797048_http---www.ebay.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "7ce9add347b180efaf4dbc297237572bdcb9da0b6a9671fb5f6d59b3ce0411e3",
+     "target": "http://www.ebay.com",
+     "unit_id": "797048"
+    },
+    {
+     "name": "series/trace_797250_http---www.youtube.com.txt",
+     "rows": 273,
+     "seconds": 1365,
+     "sha256": "8b8a3a2c2b9aeb4bd1b98daea3a98abeb4e38290e120c033f96722b972dc59c8",
+     "target": "http://www.youtube.com",
+     "unit_id": "797250"
+    },
+    {
+     "name": "series/trace_797270_http---www.amazon.com.txt",
+     "rows": 250,
+     "seconds": 1250,
+     "sha256": "12703477e87316bda2dfceecc0ba7f1f8e24ec823738579a47e1957d5e78eaa7",
+     "target": "http://www.amazon.com",
+     "unit_id": "797270"
+    },
+    {
+     "name": "series/trace_797570_http---edition.cnn.com.txt",
+     "rows": 276,
+     "seconds": 1380,
+     "sha256": "a3869564ec6665c811339e5f0bebb55e67eb37b6ca5bd199cd0398bbf0129144",
+     "target": "http://edition.cnn.com",
+     "unit_id": "797570"
+    },
+    {
+     "name": "series/trace_797620_http---www.msn.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "b79fd67a24123cefa38bf5889fa8d9f61482a92b6f6abcfc8ac0520986d684ce",
+     "target": "http://www.msn.com",
+     "unit_id": "797620"
+    },
+    {
+     "name": "series/trace_798162_http---www.yahoo.com.txt",
+     "rows": 218,
+     "seconds": 1090,
+     "sha256": "3399aa1d830506662d1722b19db1ff4a3f28a73b79870ffa091c590884cc9d0d",
+     "target": "http://www.yahoo.com",
+     "unit_id": "798162"
+    },
+    {
+     "name": "series/trace_798194_http---www.youtube.com.txt",
+     "rows": 274,
+     "seconds": 1370,
+     "sha256": "49f67ce01e801701263a8245314dfde94612eb6550475bae99a42bc255aff9a4",
+     "target": "http://www.youtube.com",
+     "unit_id": "798194"
+    },
+    {
+     "name": "series/trace_798266_http---www.msn.com.txt",
+     "rows": 278,
+     "seconds": 1390,
+     "sha256": "0012e7bce9a7ab7f2f22bec14f127abae9de76f424054f7b6adf8f73dc44763a",
+     "target": "http://www.msn.com",
+     "unit_id": "798266"
+    },
+    {
+     "name": "series/trace_798398_http---www.amazon.com.txt",
+     "rows": 277,
+     "seconds": 1385,
+     "sha256": "cf573f46b6537566b64ceda5625bf16b0ad097a2ec63d98ae14177c03a1508cb",
+     "target": "http://www.amazon.com",
+     "unit_id": "798398"
+    },
+    {
+     "name": "series/trace_798494_http---www.google.com-mobile-.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "994ae51fe55caae4f99cbf09efd7af7eb38e412343ca828795db0e11100175c7",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "798494"
+    },
+    {
+     "name": "series/trace_799316_http---www.facebook.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "71332752a67fc8eae7a97fec65d3adeeb26010c1e6665f21d7ce3c5490ac6159",
+     "target": "http://www.facebook.com",
+     "unit_id": "799316"
+    },
+    {
+     "name": "series/trace_799952_http---www.msn.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "ed1ce846523f18cdc0d65fdd44004add7b8aeace4935843067cbc255fc85577b",
+     "target": "http://www.msn.com",
+     "unit_id": "799952"
+    },
+    {
+     "name": "series/trace_800104_http---edition.cnn.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "4f3cd8706231fb7db46a418cab3ecc56649fffa8bbef7d1b716032d1efe02917",
+     "target": "http://edition.cnn.com",
+     "unit_id": "800104"
+    },
+    {
+     "name": "series/trace_800158_http---www.google.com-mobile-.txt",
+     "rows": 274,
+     "seconds": 1370,
+     "sha256": "f2b552c33aa0c111823627595c1c0657385346a8fd34773fa19bf91c85f70a83",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "800158"
+    },
+    {
+     "name": "series/trace_800342_http---www.yahoo.com.txt",
+     "rows": 174,
+     "seconds": 870,
+     "sha256": "4e3c301ef7127be454a2770b60ef636eec6651ee4103513a32e7baf808671065",
+     "target": "http://www.yahoo.com",
+     "unit_id": "800342"
+    },
+    {
+     "name": "series/trace_805026_http---www.yahoo.com.txt",
+     "rows": 244,
+     "seconds": 1220,
+     "sha256": "76b72dd65dd359ccf19421397b73edf1ee614c17297a41a916e125caf5685f12",
+     "target": "http://www.yahoo.com",
+     "unit_id": "805026"
+    },
+    {
+     "name": "series/trace_805036_http---www.facebook.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "d34e3c152885ec3b1d63aac30aefb18181eb78a6a399c803939cf080488d5958",
+     "target": "http://www.facebook.com",
+     "unit_id": "805036"
+    },
+    {
+     "name": "series/trace_805054_http---www.yahoo.com.txt",
+     "rows": 211,
+     "seconds": 1055,
+     "sha256": "034c78c5835163f01b5de4fd966b925fdf961c4186041fc0771822cc64dbbd86",
+     "target": "http://www.yahoo.com",
+     "unit_id": "805054"
+    },
+    {
+     "name": "series/trace_805190_http---www.amazon.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "ac1d570ad882fe6113c3bf81f631e0b1cb05684bcb12cb8bad1fc5276fd2b446",
+     "target": "http://www.amazon.com",
+     "unit_id": "805190"
+    },
+    {
+     "name": "series/trace_805302_http---www.google.com-mobile-.txt",
+     "rows": 257,
+     "seconds": 1285,
+     "sha256": "e9c2f73e5288cd64e94295b4dbfa54788e532fff83451f8d060020c166d8cf59",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "805302"
+    },
+    {
+     "name": "series/trace_805516_http---www.amazon.com.txt",
+     "rows": 278,
+     "seconds": 1390,
+     "sha256": "73339f4c56b4eb2cfa90f8df8c4a22c6d610a0b003305d7e0ca343ab3925d673",
+     "target": "http://www.amazon.com",
+     "unit_id": "805516"
+    },
+    {
+     "name": "series/trace_805524_http---www.facebook.com.txt",
+     "rows": 204,
+     "seconds": 1020,
+     "sha256": "fb6d798f93656e69a8c979d76e5fb528736031d93029d7fb5191cb8a0689ed43",
+     "target": "http://www.facebook.com",
+     "unit_id": "805524"
+    },
+    {
+     "name": "series/trace_805678_http---www.yahoo.com.txt",
+     "rows": 237,
+     "seconds": 1185,
+     "sha256": "f17906dd87dbac77dfbc78b95f07c57cb9f4cd16033e153ff63af25cc7746a6b",
+     "target": "http://www.yahoo.com",
+     "unit_id": "805678"
+    },
+    {
+     "name": "series/trace_805760_http---www.google.com-mobile-.txt",
+     "rows": 277,
+     "seconds": 1385,
+     "sha256": "a19b8c38835f862eb89e603a26ce3d11e6a8e25478bb86d62f898a7c5304a51c",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "805760"
+    },
+    {
+     "name": "series/trace_805804_http---www.amazon.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "8ae390ee581702a24153a3e741dcb7b89e6fd7c6a68c505b689c9851d98ef0c9",
+     "target": "http://www.amazon.com",
+     "unit_id": "805804"
+    },
+    {
+     "name": "series/trace_806194_http---www.yahoo.com.txt",
+     "rows": 238,
+     "seconds": 1190,
+     "sha256": "706f482d09012a07ce289139694fcdde3059b18a0fbe0e8f61f1e8e8eb84d49d",
+     "target": "http://www.yahoo.com",
+     "unit_id": "806194"
+    },
+    {
+     "name": "series/trace_806244_http---www.facebook.com.txt",
+     "rows": 124,
+     "seconds": 620,
+     "sha256": "ad97aaf40af200b2ca50ca7fe219d3796c54921d9aca86bf6dc98e41123fde49",
+     "target": "http://www.facebook.com",
+     "unit_id": "806244"
+    },
+    {
+     "name": "series/trace_806342_http---www.amazon.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "490969eb1a28e50b614c466eabc038e4273c9a0cc6ced4503747fee70df912e5",
+     "target": "http://www.amazon.com",
+     "unit_id": "806342"
+    },
+    {
+     "name": "series/trace_8078_http---www.google.com-mobile-.txt",
+     "rows": 204,
+     "seconds": 1020,
+     "sha256": "4598cfa4d973da0aa1f8497dcc9896bb795d98855562ba10a1c9b0d22d276db9",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "8078"
+    },
+    {
+     "name": "series/trace_811934_http---www.facebook.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "7d2d8be46301503215db8c301f4617569be966007ff747d79cd05d39cc33444b",
+     "target": "http://www.facebook.com",
+     "unit_id": "811934"
+    },
+    {
+     "name": "series/trace_8327_http---edition.cnn.com.txt",
+     "rows": 120,
+     "seconds": 600,
+     "sha256": "214e46fa3a31a93a78d3c52cbebe56821986d3cb36e749750dc138b767d3cfcf",
+     "target": "http://edition.cnn.com",
+     "unit_id": "8327"
+    },
+    {
+     "name": "series/trace_8330_http---www.msn.com.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "0de4224d6b4a915fea10a29413c402ee7ee061a4bac77a86f0b641abee5beefd",
+     "target": "http://www.msn.com",
+     "unit_id": "8330"
+    },
+    {
+     "name": "series/trace_8413_http---www.facebook.com.txt",
+     "rows": 271,
+     "seconds": 1355,
+     "sha256": "e8397f61a644eed99b79181be5c40895dfa697efb4ca47265901f289dc049d29",
+     "target": "http://www.facebook.com",
+     "unit_id": "8413"
+    },
+    {
+     "name": "series/trace_849896_http---www.msn.com.txt",
+     "rows": 233,
+     "seconds": 1165,
+     "sha256": "57a802cb7ce234beac71582a58648fec0cac2f43a89bc365a8893d2241ccedd2",
+     "target": "http://www.msn.com",
+     "unit_id": "849896"
+    },
+    {
+     "name": "series/trace_866_http---edition.cnn.com.txt",
+     "rows": 274,
+     "seconds": 1370,
+     "sha256": "01449e4b2b904ede43525472a1ec25e6555b3a153da79a4530219f5a53ecce4b",
+     "target": "http://edition.cnn.com",
+     "unit_id": "866"
+    },
+    {
+     "name": "series/trace_868588_http---www.facebook.com.txt",
+     "rows": 280,
+     "seconds": 1400,
+     "sha256": "f466587c9bc4b6466ed4471cf1fa271b271cb4ed842a989d6cc196c041d70c57",
+     "target": "http://www.facebook.com",
+     "unit_id": "868588"
+    },
+    {
+     "name": "series/trace_883789_http---www.ebay.com.txt",
+     "rows": 153,
+     "seconds": 765,
+     "sha256": "fcb87970e6ebd9381bb5ccb2e2fbfbc90e0c3a0c8bc41fe7dca8a7530f68f4d2",
+     "target": "http://www.ebay.com",
+     "unit_id": "883789"
+    },
+    {
+     "name": "series/trace_8846_http---www.youtube.com.txt",
+     "rows": 271,
+     "seconds": 1355,
+     "sha256": "ef465ba12721c8aa3a7c42d9ee7ed8766656e5eb5c847c6298b3c6583f464ba8",
+     "target": "http://www.youtube.com",
+     "unit_id": "8846"
+    },
+    {
+     "name": "series/trace_889041_http---www.msn.com.txt",
+     "rows": 172,
+     "seconds": 860,
+     "sha256": "6866ecb8c77303d4b971b46b88f51cfc04499f0f94bbc8dfbd27a3beea0d5eb5",
+     "target": "http://www.msn.com",
+     "unit_id": "889041"
+    },
+    {
+     "name": "series/trace_8931_http---www.youtube.com.txt",
+     "rows": 253,
+     "seconds": 1265,
+     "sha256": "67d5814f1b80573fdc10c6ce97503ca499620680af3517aba0c53a641d84e7e2",
+     "target": "http://www.youtube.com",
+     "unit_id": "8931"
+    },
+    {
+     "name": "series/trace_894_http---www.google.com-mobile-.txt",
+     "rows": 271,
+     "seconds": 1355,
+     "sha256": "8aa3aecfcacd69c0e35283898ada8e32a6011e874119a7866fee09f492d1a98f",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "894"
+    },
+    {
+     "name": "series/trace_9058_http---www.facebook.com.txt",
+     "rows": 274,
+     "seconds": 1370,
+     "sha256": "d38ce93c1d0d458384155ade7143e03c57d98d55fb4527ee4c5d2462daf2c27d",
+     "target": "http://www.facebook.com",
+     "unit_id": "9058"
+    },
+    {
+     "name": "series/trace_9066_http---www.amazon.com.txt",
+     "rows": 241,
+     "seconds": 1205,
+     "sha256": "8e661f558c21dc5c4f7688cc6f66735c2d8c13a46f382dba350a2a067eb66846",
+     "target": "http://www.amazon.com",
+     "unit_id": "9066"
+    },
+    {
+     "name": "series/trace_9129_http---www.facebook.com.txt",
+     "rows": 271,
+     "seconds": 1355,
+     "sha256": "2627d3c19d1922fc9d53eb0f8b8cb3b0c7b416b6c2d628f2c1b403306330f5a7",
+     "target": "http://www.facebook.com",
+     "unit_id": "9129"
+    },
+    {
+     "name": "series/trace_9235_http---www.facebook.com.txt",
+     "rows": 262,
+     "seconds": 1310,
+     "sha256": "76221c9d6586b155b547d559d3eddabb1a23d81ea0b6621c7e6bfc13d2283d2a",
+     "target": "http://www.facebook.com",
+     "unit_id": "9235"
+    },
+    {
+     "name": "series/trace_9267_http---www.yahoo.com.txt",
+     "rows": 207,
+     "seconds": 1035,
+     "sha256": "5dd40d8c32f7b3b0dd2c2386a2a1d802db5f3fbaaed51ae3f8f4f00cc96053f9",
+     "target": "http://www.yahoo.com",
+     "unit_id": "9267"
+    },
+    {
+     "name": "series/trace_9572_http---www.facebook.com.txt",
+     "rows": 186,
+     "seconds": 930,
+     "sha256": "ce7fc3a05ceeb480c414e5d807d3ebfe12097b697f83e06853cd703f76bc1612",
+     "target": "http://www.facebook.com",
+     "unit_id": "9572"
+    },
+    {
+     "name": "series/trace_9601_http---www.youtube.com.txt",
+     "rows": 254,
+     "seconds": 1270,
+     "sha256": "136c84dface477f9530708f55095be9700dd49066629c0f09f1b4ed16465ecd8",
+     "target": "http://www.youtube.com",
+     "unit_id": "9601"
+    },
+    {
+     "name": "series/trace_9914_http---www.google.com-mobile-.txt",
+     "rows": 279,
+     "seconds": 1395,
+     "sha256": "fd7db237de57d223c92dadde2445ef0d0489dc2ac1ae95f97fc7b7b874e6480e",
+     "target": "http://www.google.com/mobile/",
+     "unit_id": "9914"
+    },
+    {
+     "name": "series/trace_9945_http---www.msn.com.txt",
+     "rows": 181,
+     "seconds": 905,
+     "sha256": "4d423ec717ba638444469c9b1d604f68a42447e8995d06675bc28f155bd0da1d",
+     "target": "http://www.msn.com",
+     "unit_id": "9945"
+    },
+    {
+     "name": "series/trace_9965_http---edition.cnn.com.txt",
+     "rows": 137,
+     "seconds": 685,
+     "sha256": "70b65485535eb8b20b3bb2e09f39ed7ceb74e9969ee8838581d56a35870d05c1",
+     "target": "http://edition.cnn.com",
+     "unit_id": "9965"
+    }
+   ],
+   "format": "curr_webget CSV: unit_id, dtime, target, address, fetch_time, bytes_total, bytes_sec, ...: one row per web page fetch (about hourly per unit and target)",
+   "listing": "https://www.fcc.gov/reports-research/reports/measuring-broadband-america/raw-data-measuring-broadband-america-2016",
+   "member": {
+    "bytes": 1822111314,
+    "name": "201606/curr_webget_2016_06.csv",
+    "sha256": "b11771ce44d6d51796d036cf6b55e00328fb8fa0a1218e7624d67cd74e4a1012"
+   },
+   "parser": "fcc_webget_series + fcc_per_second",
+   "rtt": false,
+   "series_eligible": 37420,
+   "series_total": 41337,
+   "subset_rule": {
+    "caveat": "consecutive values are fetches about an hour apart, each held 5 s (Pensieve's construction): a composed series, not a measured per-second trace",
+    "draw": "random.Random(seed).sample(sorted(keys with >= min_values), min(sample, n)), sorted",
+    "hold_s": 5,
+    "min_values": 120,
+    "sample": 200,
+    "seed": 0,
+    "series": "one per (unit_id, target), its rows sorted by dtime",
+    "table": "curr_webget",
+    "value": "bytes_sec (column 6); rows with no numeric bytes_sec dropped"
+   },
+   "url": "https://data.fcc.gov/download/measuring-broadband-america/2017/data-raw-2016-jun.tar.gz"
+  },
+  "hsdpa_3g_norway": {
+   "citation": "H. Riiser, P. Vigmostad, C. Griwodz, P. Halvorsen. Commute Path Bandwidth Traces from 3G Networks: Analysis and Applications. ACM MMSys 2013. doi:10.1145/2483977.2483991",
+   "files": [
+    {
+     "bytes": 22665,
+     "name": "bus.ljansbakken-oslo/report.2010-09-28_1407CEST.log",
+     "rows": 457,
+     "seconds": 495,
+     "sha256": "d547ff31b7cfaf2686445d1266da41f4c9ea554b8a0b587b31d2925d3518fdea"
+    },
+    {
+     "bytes": 66450,
+     "name": "bus.ljansbakken-oslo/report.2010-09-29_0852CEST.log",
+     "rows": 1310,
+     "seconds": 1365,
+     "sha256": "743ac0da2107e7f030ada73b137f2226c9a6772ea1e6cf83fc5c8b4160c3dcf3"
+    },
+    {
+     "bytes": 51187,
+     "name": "bus.ljansbakken-oslo/report.2010-09-29_1622CEST.log",
+     "rows": 1010,
+     "seconds": 1082,
+     "sha256": "94aa4dd1befb9bda3d9064cfefd8109c875ca4437ca9fd34dc9af1b8e59d3907"
+    },
+    {
+     "bytes": 31964,
+     "name": "bus.ljansbakken-oslo/report.2010-09-29_1628CEST.log",
+     "rows": 631,
+     "seconds": 697,
+     "sha256": "f205c829c3fc1975aa48644470b0edc196e10a2f534552990d3043157ef8f83f"
+    },
+    {
+     "bytes": 37863,
+     "name": "bus.ljansbakken-oslo/report.2010-09-29_1823CEST.log",
+     "rows": 762,
+     "seconds": 787,
+     "sha256": "081f6737d8e1a580113997b476f57b324fb881c13dee745a6cf810eea24612e4"
+    },
+    {
+     "bytes": 26632,
+     "name": "bus.ljansbakken-oslo/report.2010-09-29_1827CEST.log",
+     "rows": 535,
+     "seconds": 550,
+     "sha256": "ea3b949e53353ceda2b01511d808fbaa64c06f637e8726b24d113925a4466255"
+    },
+    {
+     "bytes": 41667,
+     "name": "bus.ljansbakken-oslo/report.2010-09-30_1058CEST.log",
+     "rows": 838,
+     "seconds": 892,
+     "sha256": "a723c9561404e870beb5daf17ee2204e790fe8064457f08c40714e7b77eb854e"
+    },
+    {
+     "bytes": 26854,
+     "name": "bus.ljansbakken-oslo/report.2010-09-30_1113CEST.log",
+     "rows": 541,
+     "seconds": 584,
+     "sha256": "210ae7771030c6da57ba805cc6d396b9f8f7a48fb63b6ab20a6bc5c25777e9a3"
+    },
+    {
+     "bytes": 70571,
+     "name": "bus.ljansbakken-oslo/report.2010-09-30_1114CEST.log",
+     "rows": 1391,
+     "seconds": 1453,
+     "sha256": "3f581758a73cc3131d61d9534e663ae44b5910d3a3fb9b4425829bcf58e81e79"
+    },
+    {
+     "bytes": 13493,
+     "name": "bus.ljansbakken-oslo/report.2010-09-30_1133CEST.log",
+     "rows": 267,
+     "seconds": 281,
+     "sha256": "da4c35260fc78d4e8f445a8c57ce5c34fa1d7d58361fa65c7c5efee2c3e9d396"
+    },
+    {
+     "bytes": 28374,
+     "name": "bus.ljansbakken-oslo/report.2010-11-10_1424CET.log",
+     "rows": 565,
+     "seconds": 587,
+     "sha256": "b6fbaeed7981e6169244130bdd6bbdb40f8cd772ebd9bdf45f70a6c6115aacbe"
+    },
+    {
+     "bytes": 17572,
+     "name": "bus.ljansbakken-oslo/report.2010-11-10_1726CET.log",
+     "rows": 354,
+     "seconds": 444,
+     "sha256": "73e6fe52bfa6f4a5a296882132c83e7918705665bc41f7bb71dd5cdb093482f5"
+    },
+    {
+     "bytes": 37069,
+     "name": "bus.ljansbakken-oslo/report.2011-01-29_1125CET.log",
+     "rows": 732,
+     "seconds": 892,
+     "sha256": "caadf6f9a2625827d5764b273778a450dd138258c5db42ac3197a6da9d5253d6"
+    },
+    {
+     "bytes": 28960,
+     "name": "bus.ljansbakken-oslo/report.2011-01-29_1423CET.log",
+     "rows": 575,
+     "seconds": 908,
+     "sha256": "d18d95d66010b26eb0b543c0c19b399d0874db9fd7c19237012890f81c28e44e"
+    },
+    {
+     "bytes": 33512,
+     "name": "bus.ljansbakken-oslo/report.2011-01-29_1827CET.log",
+     "rows": 649,
+     "seconds": 704,
+     "sha256": "aa03c226b32d964d3da919f72815f2d218db597fa47038eca029cd6c301c9ec4"
+    },
+    {
+     "bytes": 29161,
+     "name": "bus.ljansbakken-oslo/report.2011-01-30_1323CET.log",
+     "rows": 565,
+     "seconds": 641,
+     "sha256": "b0fd60fd1f8cbda14236ec2a7b3749d26535980d156948fb49952b843433cd9d"
+    },
+    {
+     "bytes": 37589,
+     "name": "bus.ljansbakken-oslo/report.2011-01-31_1025CET.log",
+     "rows": 738,
+     "seconds": 788,
+     "sha256": "294144722f3204ef9715b231560f09cfa5c51b93b27ca5653edafbed02bccbfc"
+    },
+    {
+     "bytes": 278670,
+     "name": "car.aarnes-elverum/report.2011-02-10_1611CET.log",
+     "rows": 5579,
+     "seconds": 7399,
+     "sha256": "992ffa118f78639168771c7f14ab8d842220bb0ed54adfc1319d7e4132de5daa"
+    },
+    {
+     "bytes": 445583,
+     "name": "car.oslo-grimstad/report.2011-04-21_1135CEST.log",
+     "rows": 8865,
+     "seconds": 12223,
+     "sha256": "a3bc60973274f5086ee3f7c31952198fc26eebe1e96ecab37e65ed30d6d9e475"
+    },
+    {
+     "bytes": 21218,
+     "name": "car.snaroya-smestad/report.2011-02-14_2032CET.log",
+     "rows": 399,
+     "seconds": 437,
+     "sha256": "9c147ecada110046d565058e6ae0248b08dd1cb74145b0dc9bdf368137add569"
+    },
+    {
+     "bytes": 20655,
+     "name": "car.snaroya-smestad/report.2011-02-14_2051CET.log",
+     "rows": 387,
+     "seconds": 424,
+     "sha256": "83e2cc5cec70c1c90334ce6d3ce3bd331741efa761d3bec058eea2ec5d447646"
+    },
+    {
+     "bytes": 23255,
+     "name": "car.snaroya-smestad/report.2011-02-14_2108CET.log",
+     "rows": 427,
+     "seconds": 452,
+     "sha256": "faafbec0331b4d0f07fb76f068e1b8c09fca03643aa462e1bafd799c1774b759"
+    },
+    {
+     "bytes": 20797,
+     "name": "car.snaroya-smestad/report.2011-02-14_2124CET.log",
+     "rows": 384,
+     "seconds": 416,
+     "sha256": "9e790e0cbeb6f122f1ee5837245dd2d607844762345a45990a66a91ac1af15d3"
+    },
+    {
+     "bytes": 21291,
+     "name": "car.snaroya-smestad/report.2011-02-14_2139CET.log",
+     "rows": 390,
+     "seconds": 424,
+     "sha256": "ca615a932e38702369b4c534fb0c0de58676aaa3162c7b71981de429fbd9cdf8"
+    },
+    {
+     "bytes": 52287,
+     "name": "ferry.nesoddtangen-oslo/report.2010-09-20_1542CEST.log",
+     "rows": 1036,
+     "seconds": 1162,
+     "sha256": "3eec386d142b9927c009fd0042e599c351f467b476e157e9a889060811233610"
+    },
+    {
+     "bytes": 53443,
+     "name": "ferry.nesoddtangen-oslo/report.2010-09-21_1001CEST.log",
+     "rows": 1071,
+     "seconds": 1203,
+     "sha256": "a37fbb3b86e250778a1556ffba21e4b2134b3e3d0f3682d8a297498555564215"
+    },
+    {
+     "bytes": 53670,
+     "name": "ferry.nesoddtangen-oslo/report.2010-09-21_1622CEST.log",
+     "rows": 1064,
+     "seconds": 1307,
+     "sha256": "bb82dfbcb7b898ab1add09f5723d8d438e7c3a4fbbd8d8708d10904b8db78457"
+    },
+    {
+     "bytes": 50395,
+     "name": "ferry.nesoddtangen-oslo/report.2010-09-21_1735CEST.log",
+     "rows": 996,
+     "seconds": 1077,
+     "sha256": "12d111ec593a1b1227baac858ac114dc9cd22c0146adaeb49bb1ebff8f72e82c"
+    },
+    {
+     "bytes": 55493,
+     "name": "ferry.nesoddtangen-oslo/report.2010-09-22_0702CEST.log",
+     "rows": 1109,
+     "seconds": 1352,
+     "sha256": "e21f3114261a18e75c5e8d01c475f0080f00da453c88e6a3b871b11ba85472c9"
+    },
+    {
+     "bytes": 50840,
+     "name": "ferry.nesoddtangen-oslo/report.2010-09-23_1001CEST.log",
+     "rows": 1022,
+     "seconds": 1141,
+     "sha256": "08350bddbfc32f9125777b1bcab687313201a214a6bbf885ea5ae28c9febf6b7"
+    },
+    {
+     "bytes": 48225,
+     "name": "ferry.nesoddtangen-oslo/report.2010-09-28_1003CEST.log",
+     "rows": 969,
+     "seconds": 1055,
+     "sha256": "36bf74ae6498c428d270bde119d9becc59f23f6f328b0ec92d545fab6d736065"
+    },
+    {
+     "bytes": 48226,
+     "name": "ferry.nesoddtangen-oslo/report.2010-09-29_0702CEST.log",
+     "rows": 970,
+     "seconds": 1103,
+     "sha256": "f8717ba4646f5f2a2f2a4e20dc09ff71cd45ddd2fecc913d3e82cfc16281c1bd"
+    },
+    {
+     "bytes": 18768,
+     "name": "ferry.nesoddtangen-oslo/report.2011-01-29_1800CET.log",
+     "rows": 372,
+     "seconds": 555,
+     "sha256": "f4d1e309f8354ddc0d6a072f606b9453d4632b3da9a55a4a442f2554d9a60899"
+    },
+    {
+     "bytes": 20348,
+     "name": "ferry.nesoddtangen-oslo/report.2011-01-31_1830CET.log",
+     "rows": 412,
+     "seconds": 522,
+     "sha256": "4f3226c3ebd8eb300c75dc12c26ff42dc892eebf16394f134ca75a9494639fff"
+    },
+    {
+     "bytes": 59520,
+     "name": "ferry.nesoddtangen-oslo/report.2011-02-01_0629CET.log",
+     "rows": 1178,
+     "seconds": 1425,
+     "sha256": "839b1c771a008261e9ff49276e3e859aa9265e8eb02cb63a77ee5c6487648c0c"
+    },
+    {
+     "bytes": 58479,
+     "name": "ferry.nesoddtangen-oslo/report.2011-02-01_0740CET.log",
+     "rows": 1160,
+     "seconds": 1354,
+     "sha256": "487f3dff4c9a3798f37c320b217fb27fa5a27472714eb308702bc020e299d5ac"
+    },
+    {
+     "bytes": 11477,
+     "name": "ferry.nesoddtangen-oslo/report.2011-02-01_0840CET.log",
+     "rows": 228,
+     "seconds": 1301,
+     "sha256": "e37e4610c959cbcdd98555d62c0738c52a9dad21d13ca38e0952712f907a5b2e"
+    },
+    {
+     "bytes": 5939,
+     "name": "ferry.nesoddtangen-oslo/report.2011-02-01_1000CET.log",
+     "rows": 123,
+     "seconds": 200,
+     "sha256": "dd3751bb552fa74139798d9e83bddb55bc8d6ec1aa6e3d12f4e2ac82aed4242d"
+    },
+    {
+     "bytes": 53056,
+     "name": "ferry.nesoddtangen-oslo/report.2011-02-01_1539CET.log",
+     "rows": 1062,
+     "seconds": 1316,
+     "sha256": "c5798f6cbe2f35acdc4a15990dad92ead66961c48cbc4e4c6fee5e257132cf72"
+    },
+    {
+     "bytes": 57947,
+     "name": "ferry.nesoddtangen-oslo/report.2011-02-01_1639CET.log",
+     "rows": 1150,
+     "seconds": 1411,
+     "sha256": "ceafb4f20b623098b05ecb2bda32d933a16cba27b1cdfd942738f02e45841f36"
+    },
+    {
+     "bytes": 9561,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-09-13_1003CEST.log",
+     "rows": 192,
+     "seconds": 195,
+     "sha256": "a8e3eef0098892141f16f416cc9db21d7e2dbbcc2c1203cf3f3b93e00dd5e610"
+    },
+    {
+     "bytes": 30459,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-09-13_1046CEST.log",
+     "rows": 619,
+     "seconds": 816,
+     "sha256": "fe5f303227804ab694be606b550dc933986149c16c7b3777913a725f9c818ecb"
+    },
+    {
+     "bytes": 37437,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-09-14_1038CEST.log",
+     "rows": 759,
+     "seconds": 920,
+     "sha256": "fcf2de9e98772370b7e3dcf5c5e9f846173c76e4fabe330007d33e3fa741bd5f"
+    },
+    {
+     "bytes": 21151,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-09-14_1415CEST.log",
+     "rows": 430,
+     "seconds": 871,
+     "sha256": "603e6cc7cb696c4d3a018a3b2e900465795fdfb329d72e9ee28ef81d58844c90"
+    },
+    {
+     "bytes": 22508,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-09-14_2303CEST.log",
+     "rows": 459,
+     "seconds": 630,
+     "sha256": "f51d2971cf39b68d95c3c56264643e8c5c5740ce7a4d84ef9c71b93ad81f66b7"
+    },
+    {
+     "bytes": 37150,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-09-21_0742CEST.log",
+     "rows": 745,
+     "seconds": 1133,
+     "sha256": "9a5cbf07cab03f94dc68bd4a31d8074f6100ee501c606664081e4d43e825c98b"
+    },
+    {
+     "bytes": 40238,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-09-22_0857CEST.log",
+     "rows": 818,
+     "seconds": 1070,
+     "sha256": "9d42e7fb38a45afa26e5309c923fafd0e06c69558ade40e451f4b134b3064de6"
+    },
+    {
+     "bytes": 41280,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-09-27_0942CEST.log",
+     "rows": 834,
+     "seconds": 1016,
+     "sha256": "2b389d1eade66e2638f07660069371ab93ddbd2ca29707b23f0cbfc18065adc8"
+    },
+    {
+     "bytes": 47291,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-10-18_0951CEST.log",
+     "rows": 954,
+     "seconds": 1114,
+     "sha256": "8ebfc8f88d4d9d0ed7b7fb96711bfd6b93e7883c33d50f37fceb81c3120055b2"
+    },
+    {
+     "bytes": 43570,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-10-22_1458CEST.log",
+     "rows": 881,
+     "seconds": 1042,
+     "sha256": "caeb050e760247ab5d75aa46a643f884279e7c24feedcae313babf9dc33155d8"
+    },
+    {
+     "bytes": 40983,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-11-04_0957CET.log",
+     "rows": 832,
+     "seconds": 1031,
+     "sha256": "c7c93f5f124fdadd6f2cdf014ac5a5b5e2aa1aaca5d0c34fcd1ba291ecdd992a"
+    },
+    {
+     "bytes": 45612,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-11-11_1012CET.log",
+     "rows": 927,
+     "seconds": 1159,
+     "sha256": "93caaf5b9555eb61a52b29266c31fd95b2f8947e14c684aa0c6b73fca1445887"
+    },
+    {
+     "bytes": 44928,
+     "name": "metro.kalbakken-jernbanetorget/report.2010-11-16_1857CET.log",
+     "rows": 946,
+     "seconds": 1157,
+     "sha256": "d3ddf6f3aba1bc09b89a2888bb1fcd09020931288dee81e631bde91851285b9b"
+    },
+    {
+     "bytes": 41878,
+     "name": "metro.kalbakken-jernbanetorget/report.2011-01-31_1935CET.log",
+     "rows": 880,
+     "seconds": 1069,
+     "sha256": "161ae44de99474b17f7b52dfa9225d3235332631fd6c6d73a998c7f7cb1ea7b3"
+    },
+    {
+     "bytes": 29446,
+     "name": "metro.kalbakken-jernbanetorget/report.2011-01-31_2356CET.log",
+     "rows": 576,
+     "seconds": 1098,
+     "sha256": "bf566514f14db5b1d5a8e082359cc2bfe4cdb39ec70d3e7ba38c998c58c5efe7"
+    },
+    {
+     "bytes": 41277,
+     "name": "metro.kalbakken-jernbanetorget/report.2011-02-01_1800CET.log",
+     "rows": 883,
+     "seconds": 1171,
+     "sha256": "4d27e1740722cda9a123fccb71aac8b6022f91d6e0f3ae702fc5274f97562a13"
+    },
+    {
+     "bytes": 43143,
+     "name": "metro.kalbakken-jernbanetorget/report.2011-02-02_1251CET.log",
+     "rows": 920,
+     "seconds": 1090,
+     "sha256": "8c047ff4bfdca11a7d06e6ccc0a3dc50b447a6e12dcfbb6a45046ad5b6c896fe"
+    },
+    {
+     "bytes": 84339,
+     "name": "train.oslo-vestby/report.2011-02-11_1618CET.log",
+     "rows": 1683,
+     "seconds": 2200,
+     "sha256": "4381001419c36183ab00d9b9434cadad2f6b0f44eca87e5bddc851ce0756444c"
+    },
+    {
+     "bytes": 122354,
+     "name": "train.oslo-vestby/report.2011-02-14_0644CET.log",
+     "rows": 2407,
+     "seconds": 2709,
+     "sha256": "14419d653f57085a7990a490df4c1ee621c0267e4fc8c68ddb23ab3073a687e7"
+    },
+    {
+     "bytes": 90863,
+     "name": "train.vestby-oslo/report.2011-02-11_1530CET.log",
+     "rows": 1785,
+     "seconds": 2440,
+     "sha256": "b44f78387962466946138a4ef798c876032423963647bbbda627d314c48bce24"
+    },
+    {
+     "bytes": 81075,
+     "name": "train.vestby-oslo/report.2011-02-11_1729CET.log",
+     "rows": 1618,
+     "seconds": 2102,
+     "sha256": "7f6b18c332b0c498c62f578a37c4f32e2e2ce32aa12dff58b0f005dc11942655"
+    },
+    {
+     "bytes": 79295,
+     "name": "train.vestby-oslo/report.2011-02-14_1728CET.log",
+     "rows": 1562,
+     "seconds": 2118,
+     "sha256": "d1e4c25b16f8d66d21d61de0776735600be9c7c82225595ff7d4560aa57d23f1"
+    },
+    {
+     "bytes": 70245,
+     "name": "tram.jernbanetorget-ljabru/report.2010-11-23_1515CET.log",
+     "rows": 1401,
+     "seconds": 1511,
+     "sha256": "17b701906c40ca7f07df69a8364da10e5ee596e6211e9c471d2be37ab50beeec"
+    },
+    {
+     "bytes": 54726,
+     "name": "tram.jernbanetorget-ljabru/report.2010-12-09_1222CET.log",
+     "rows": 1089,
+     "seconds": 1190,
+     "sha256": "d64fdf16fc80ae72323803dced82c8844932da29c679a4e20548747202039e90"
+    },
+    {
+     "bytes": 56982,
+     "name": "tram.jernbanetorget-ljabru/report.2010-12-09_1310CET.log",
+     "rows": 1133,
+     "seconds": 1296,
+     "sha256": "79a41f316f84e76eb3e4263a04f1f2425f6162d63d64f4301dab8b0c8ca39de6"
+    },
+    {
+     "bytes": 57558,
+     "name": "tram.jernbanetorget-ljabru/report.2010-12-16_1100CET.log",
+     "rows": 1150,
+     "seconds": 1273,
+     "sha256": "d1dc6b0a1c298d22d47bf0ec495c61dcde076dcd2d9a73e56b4a26df3bfcef4f"
+    },
+    {
+     "bytes": 59590,
+     "name": "tram.jernbanetorget-ljabru/report.2010-12-16_1149CET.log",
+     "rows": 1184,
+     "seconds": 1271,
+     "sha256": "b4d57aff0deeef5670619654fd45a65c99ff1a0935699e5ed1a871d61d80bfee"
+    },
+    {
+     "bytes": 53467,
+     "name": "tram.jernbanetorget-ljabru/report.2010-12-21_1200CET.log",
+     "rows": 1064,
+     "seconds": 1187,
+     "sha256": "528e3f1cf45572d312955e30b3eff7e36833f9109ebb10ac053a574fa3e4508d"
+    },
+    {
+     "bytes": 57441,
+     "name": "tram.jernbanetorget-ljabru/report.2010-12-22_0826CET.log",
+     "rows": 1141,
+     "seconds": 1257,
+     "sha256": "a760c5b93588fc040be223cd44363e3243a4602c3b93be8478272f45c7906e63"
+    },
+    {
+     "bytes": 63981,
+     "name": "tram.jernbanetorget-ljabru/report.2011-01-06_0749CET.log",
+     "rows": 1273,
+     "seconds": 1373,
+     "sha256": "c4d1c8126f77d5aed5b3a4d65be7de795e63890e570be084145fa2b939eb5431"
+    },
+    {
+     "bytes": 69733,
+     "name": "tram.jernbanetorget-universitetssykehuset/report.2010-11-23_1606CET.log",
+     "rows": 1369,
+     "seconds": 1509,
+     "sha256": "5fd41a151fdcf967964824c9d2b00517dd81542d292130e9c3903c3a70523bd1"
+    },
+    {
+     "bytes": 66589,
+     "name": "tram.ljabru-jernbanetorget/report.2010-11-23_1541CET.log",
+     "rows": 1318,
+     "seconds": 1428,
+     "sha256": "65e339a90c4663c306378b7d3a0ec06d9a0c7be69a619bffa0ecd98b4613cbb6"
+    },
+    {
+     "bytes": 62149,
+     "name": "tram.ljabru-jernbanetorget/report.2010-12-09_1244CET.log",
+     "rows": 1231,
+     "seconds": 1388,
+     "sha256": "bd5d8db084a08b118dd9280ce8395cd15a2b446566a9da086f85b8373430e377"
+    },
+    {
+     "bytes": 58855,
+     "name": "tram.ljabru-jernbanetorget/report.2010-12-09_1334CET.log",
+     "rows": 1169,
+     "seconds": 1282,
+     "sha256": "665ca0b8b70a15d6a8739e03336dd2951cb1547c34572c3222a8dfd37aa74af5"
+    },
+    {
+     "bytes": 61524,
+     "name": "tram.ljabru-jernbanetorget/report.2010-12-16_1125CET.log",
+     "rows": 1221,
+     "seconds": 1322,
+     "sha256": "91f21aa718ab7bd2cfece82a69e5362e41076c5b34f858f7610447114b2dfe4f"
+    },
+    {
+     "bytes": 60128,
+     "name": "tram.ljabru-jernbanetorget/report.2010-12-16_1215CET.log",
+     "rows": 1195,
+     "seconds": 1287,
+     "sha256": "88058a9e03bb64d597b4befcc7592355c6da1f38413e2f8ba249a1dd49878a32"
+    },
+    {
+     "bytes": 59672,
+     "name": "tram.ljabru-jernbanetorget/report.2010-12-21_1134CET.log",
+     "rows": 1183,
+     "seconds": 1270,
+     "sha256": "2855a624e07265e4fd8ef2950bb60e174aa74d2f70a4a651b5ea4f2ad082b2a6"
+    },
+    {
+     "bytes": 56273,
+     "name": "tram.ljabru-jernbanetorget/report.2010-12-21_1225CET.log",
+     "rows": 1113,
+     "seconds": 1228,
+     "sha256": "a442b631a8f4962664c25909d99738cedb0dc6f7d5a520796ddad73e5729b73f"
+    },
+    {
+     "bytes": 64435,
+     "name": "tram.ljabru-jernbanetorget/report.2010-12-22_0800CET.log",
+     "rows": 1278,
+     "seconds": 1408,
+     "sha256": "a7319592a3e6b892331e0f2713e47d61bccd0bcffb4d27146ec1cbd8519032ce"
+    },
+    {
+     "bytes": 57970,
+     "name": "tram.ljabru-jernbanetorget/report.2010-12-22_0849CET.log",
+     "rows": 1150,
+     "seconds": 1232,
+     "sha256": "2eda01cb4da62b80bc5b81d2deb03fcc8e028eb343180961166609f43bec4d31"
+    },
+    {
+     "bytes": 65931,
+     "name": "tram.ljabru-jernbanetorget/report.2011-01-04_0820CET.log",
+     "rows": 1325,
+     "seconds": 1428,
+     "sha256": "80d9e48432adb54b997b14fbb5487f5b45f0e2a2cd08bcac5062cd22f382a669"
+    },
+    {
+     "bytes": 61665,
+     "name": "tram.ljabru-jernbanetorget/report.2011-01-05_0819CET.log",
+     "rows": 1224,
+     "seconds": 1330,
+     "sha256": "c2e8e940b330985f0b324793a502ada017e004c80ba25f664d58e11815c2c47a"
+    },
+    {
+     "bytes": 74560,
+     "name": "tram.ljabru-jernbanetorget/report.2011-01-06_0814CET.log",
+     "rows": 1480,
+     "seconds": 1573,
+     "sha256": "3f662583f65fa640af441e92108e3deddbae0358093cafc5bbdbb890940844c2"
+    },
+    {
+     "bytes": 55607,
+     "name": "tram.ljabru-jernbanetorget/report.2011-01-31_1045CET.log",
+     "rows": 1105,
+     "seconds": 1224,
+     "sha256": "5810cf57359c60e929cc383a728133073d45cbcf41cb59b6e422df5d96970d3a"
+    },
+    {
+     "bytes": 57657,
+     "name": "tram.ljabru-jernbanetorget/report.2011-01-31_2032CET.log",
+     "rows": 1143,
+     "seconds": 1260,
+     "sha256": "cdbcf7b8e9a178f696db1bd85fe0161f28f22a06735b818da9a2e6a16a87b18f"
+    },
+    {
+     "bytes": 59604,
+     "name": "tram.ljabru-jernbanetorget/report.2011-02-02_1345CET.log",
+     "rows": 1182,
+     "seconds": 1255,
+     "sha256": "7f5a09ba332ee12713fd3dff7d9faf54c22625a31eb53d616576dc6acd19e7d5"
+    }
+   ],
+   "format": "whitespace: unix s, monotonic ms, lat, lon, bytes since the previous row, ms since the previous row (~1 s rows); per-second kbit/s by spreading each row's bytes over its interval",
+   "mirror": "https://skulddata.cs.umass.edu/traces/mmsys/2013/pathbandwidth/",
+   "parser": "parse_riiser",
+   "routes": [
+    "bus.ljansbakken-oslo",
+    "car.aarnes-elverum",
+    "car.oslo-grimstad",
+    "car.snaroya-smestad",
+    "ferry.nesoddtangen-oslo",
+    "metro.kalbakken-jernbanetorget",
+    "train.oslo-vestby",
+    "train.vestby-oslo",
+    "tram.jernbanetorget-ljabru",
+    "tram.jernbanetorget-universitetssykehuset",
+    "tram.ljabru-jernbanetorget"
+   ],
+   "rtt": false,
+   "url": "https://datasets.simula.no/downloads/hsdpa-tcp-logs/"
+  },
+  "lte_4g_ghent": {
+   "citation": "J. van der Hooft, S. Petrangeli, T. Wauters, R. Huysegems, P. Rondao Alface, T. Bostoen, F. De Turck. HTTP/2-Based Adaptive Streaming of HEVC Video over 4G/LTE Networks. IEEE Communications Letters 20(11):2177-2180, 2016",
+   "files": [
+    {
+     "bytes": 35763,
+     "name": "report_bicycle_0001.log",
+     "rows": 531,
+     "seconds": 530,
+     "sha256": "1989a8b61129f1179e5e9ef2eef8041bed590aa1349aadbe11797945c4a0c4d3"
+    },
+    {
+     "bytes": 44184,
+     "name": "report_bicycle_0002.log",
+     "rows": 658,
+     "seconds": 657,
+     "sha256": "1d2cd70ce969d4d4e37ef568761e466c00428451bc0cf04eca3374fbb5958e00"
+    },
+    {
+     "bytes": 40917,
+     "name": "report_bus_0001.log",
+     "rows": 607,
+     "seconds": 606,
+     "sha256": "ec2ad48a90c4f24e6dfc0118ee8ddda6242cae2cba75d778a64409ef177b0181"
+    },
+    {
+     "bytes": 36782,
+     "name": "report_bus_0002.log",
+     "rows": 546,
+     "seconds": 545,
+     "sha256": "20ac124dd5afad30a096fe37f713e778aa485bdd2bf80c8f272d3af5c8833587"
+    },
+    {
+     "bytes": 50917,
+     "name": "report_bus_0003.log",
+     "rows": 758,
+     "seconds": 762,
+     "sha256": "9c3c56f77997e9f790c2d7d00a0082cd9493092bb08e6e1d44ba213f91ccc627"
+    },
+    {
+     "bytes": 18978,
+     "name": "report_bus_0004.log",
+     "rows": 281,
+     "seconds": 280,
+     "sha256": "68d6ca1eca8c00cae96c7f193d3ac5412af72f5eab3074bc1d7f164954bb8440"
+    },
+    {
+     "bytes": 22702,
+     "name": "report_bus_0005.log",
+     "rows": 338,
+     "seconds": 337,
+     "sha256": "f35f4651c712d61d566a7cbd79d6458fd6a4c1a0f6dacad4cde24e03ace4ac09"
+    },
+    {
+     "bytes": 34761,
+     "name": "report_bus_0006.log",
+     "rows": 516,
+     "seconds": 515,
+     "sha256": "b7b27e6649efafcadbf5057fa38b3f11324e7b40c4166d84aa2198fe54a1cd29"
+    },
+    {
+     "bytes": 32494,
+     "name": "report_bus_0007.log",
+     "rows": 483,
+     "seconds": 482,
+     "sha256": "53dbd703edccf58a99d2b6a393b356eacce729cfef1b3af006daa346024585b4"
+    },
+    {
+     "bytes": 23251,
+     "name": "report_bus_0008.log",
+     "rows": 346,
+     "seconds": 345,
+     "sha256": "1d50549d37f67de7cb65092261f6f3ec8212be358497df0d7275010d72e20915"
+    },
+    {
+     "bytes": 36665,
+     "name": "report_bus_0009.log",
+     "rows": 544,
+     "seconds": 543,
+     "sha256": "a39d020c29b965769ea42af545ff68cb44fbc43c614f8aa98a727952441e6af4"
+    },
+    {
+     "bytes": 29720,
+     "name": "report_bus_0010.log",
+     "rows": 442,
+     "seconds": 441,
+     "sha256": "a93e6cf7242011272b03e26882976d273f2e5688293d99306b8c25d04bddb999"
+    },
+    {
+     "bytes": 15531,
+     "name": "report_bus_0011.log",
+     "rows": 232,
+     "seconds": 231,
+     "sha256": "a234a7c3e05863da77e1c377f02ef9b7af411d3840c3a4524f191971abd87b3c"
+    },
+    {
+     "bytes": 31414,
+     "name": "report_car_0001.log",
+     "rows": 468,
+     "seconds": 467,
+     "sha256": "576ae7cdcec42b737d494c49ebcb4ffcdd366a8aac306f11299bb1f048cbe036"
+    },
+    {
+     "bytes": 38120,
+     "name": "report_car_0002.log",
+     "rows": 566,
+     "seconds": 565,
+     "sha256": "a51ed480dabec9a9b428f88f02c93f2ef6703383473de3c5af188807ade2bcd9"
+    },
+    {
+     "bytes": 33333,
+     "name": "report_car_0003.log",
+     "rows": 495,
+     "seconds": 494,
+     "sha256": "d493c6879dcd84042520e5a47e029fe684f0f10990a992736b18c98757ed31bf"
+    },
+    {
+     "bytes": 39154,
+     "name": "report_car_0004.log",
+     "rows": 581,
+     "seconds": 580,
+     "sha256": "82b73df8f0007b55fd62130b8cb2ad65559fd42170884c5ec83538e6aa216fd1"
+    },
+    {
+     "bytes": 30520,
+     "name": "report_car_0005.log",
+     "rows": 454,
+     "seconds": 453,
+     "sha256": "d00846723e269fb5b6218002598ad129ff4739a42ddd918d97abbac15333f64f"
+    },
+    {
+     "bytes": 28180,
+     "name": "report_car_0006.log",
+     "rows": 419,
+     "seconds": 418,
+     "sha256": "892bd018e4c06ddcb5d0a16e71e986262b58825221e53f2e4414890902d5809d"
+    },
+    {
+     "bytes": 12872,
+     "name": "report_car_0007.log",
+     "rows": 192,
+     "seconds": 191,
+     "sha256": "a4013bf8ed3fae3af23119801958500d79f5e5f13cbcddf1168ae588c01a2ea0"
+    },
+    {
+     "bytes": 11359,
+     "name": "report_car_0008.log",
+     "rows": 170,
+     "seconds": 169,
+     "sha256": "583ef3ef1f8c2d7278887242617f50ca66ba76d80a21b8aa2fe82c216315aa94"
+    },
+    {
+     "bytes": 27127,
+     "name": "report_foot_0001.log",
+     "rows": 403,
+     "seconds": 402,
+     "sha256": "1a0d718c84be0fad659cb696ab6ef9fc4d246b016ae21d476b804fef993c5f2c"
+    },
+    {
+     "bytes": 41479,
+     "name": "report_foot_0002.log",
+     "rows": 619,
+     "seconds": 618,
+     "sha256": "37ed0f4162f5f9287996a3ed0d47d1345e6e45892650c2c90d502351407205e3"
+    },
+    {
+     "bytes": 35334,
+     "name": "report_foot_0003.log",
+     "rows": 529,
+     "seconds": 528,
+     "sha256": "dd11b9ecbb8fa132422fdf0b83d6cec1eabf6b5e7fb670093019c0e2aa31e36c"
+    },
+    {
+     "bytes": 14939,
+     "name": "report_foot_0004.log",
+     "rows": 223,
+     "seconds": 222,
+     "sha256": "fdfa98a8b2afeb365f90413ea0350e6d31477501fb552ca909b4787ee4ad025c"
+    },
+    {
+     "bytes": 11788,
+     "name": "report_foot_0005.log",
+     "rows": 176,
+     "seconds": 175,
+     "sha256": "a9a707f0d38ce0c45e906bb9dfb7377f71b6c086c0d06292b8433ad96d8ceb48"
+    },
+    {
+     "bytes": 39226,
+     "name": "report_foot_0006.log",
+     "rows": 585,
+     "seconds": 584,
+     "sha256": "8bde2f41b7a61fb6c258b812d3ad0e803b24b2ab82d7bd10eddf2224d848eb5e"
+    },
+    {
+     "bytes": 28379,
+     "name": "report_foot_0007.log",
+     "rows": 422,
+     "seconds": 421,
+     "sha256": "9222fe79f8e6b9ac11825162e90c628e0b7f9fdc2f6ab4bd2900ca8715cb04d3"
+    },
+    {
+     "bytes": 30927,
+     "name": "report_foot_0008.log",
+     "rows": 462,
+     "seconds": 461,
+     "sha256": "24a1b461317081885bcd67bd18f3fababdb9d2f6c2ac6c4dd718e58d423ce82b"
+    },
+    {
+     "bytes": 33888,
+     "name": "report_train_0001.log",
+     "rows": 506,
+     "seconds": 505,
+     "sha256": "d7c26b5154c7030afeabd43c5abb3b485ba712e5d59689a6ee440825f3dfbc98"
+    },
+    {
+     "bytes": 33263,
+     "name": "report_train_0002.log",
+     "rows": 496,
+     "seconds": 503,
+     "sha256": "5c5d48e95566a6f4a97122380ba8f7145c7d7786574b0d7e3416ab4601d2d4b2"
+    },
+    {
+     "bytes": 35620,
+     "name": "report_train_0003.log",
+     "rows": 532,
+     "seconds": 540,
+     "sha256": "c1edf00f6a103e5105e71a5641f102fbd49f10a0b09627030b3216481e9dc444"
+    },
+    {
+     "bytes": 37848,
+     "name": "report_tram_0001.log",
+     "rows": 572,
+     "seconds": 571,
+     "sha256": "8b5cbd6dcfea754001cdbd4e24bb6a0c8b5dfa1a726fea72b120bc771bc0e81e"
+    },
+    {
+     "bytes": 43961,
+     "name": "report_tram_0002.log",
+     "rows": 659,
+     "seconds": 658,
+     "sha256": "5e16446283e367ee0c1a5464bc16b210f75396db21cd71d5dd69a201fb937c58"
+    },
+    {
+     "bytes": 31697,
+     "name": "report_tram_0003.log",
+     "rows": 472,
+     "seconds": 471,
+     "sha256": "2622bfa5f98592534b391c8fb9d4839e7e1e42fc43c92d5044c5269dd09e656c"
+    },
+    {
+     "bytes": 24574,
+     "name": "report_tram_0004.log",
+     "rows": 365,
+     "seconds": 364,
+     "sha256": "ce04a41ddab8d3ce3af81f92aa978b79700694120e9820fdc79fcd281b255258"
+    },
+    {
+     "bytes": 29745,
+     "name": "report_tram_0005.log",
+     "rows": 442,
+     "seconds": 441,
+     "sha256": "9e169888b5e480105ee8a3bdf744ebc02163ea416d29aba2e44a4a8fadf61975"
+    },
+    {
+     "bytes": 32471,
+     "name": "report_tram_0006.log",
+     "rows": 482,
+     "seconds": 481,
+     "sha256": "db7c3ca300ac6797ca09680fb8b773bec55ae2489df23ddf823ea79cfd2c8f0c"
+    },
+    {
+     "bytes": 11108,
+     "name": "report_tram_0007.log",
+     "rows": 166,
+     "seconds": 165,
+     "sha256": "be8cf95c57e3687a1a053436fcaf0919ef3805f1d054eef029e20a7f69fe95c1"
+    },
+    {
+     "bytes": 19731,
+     "name": "report_tram_0008.log",
+     "rows": 298,
+     "seconds": 297,
+     "sha256": "c543dca91a12554f0d5b58cb58662726bd699c95f2552fcca527bbd3f7c3be0b"
+    }
+   ],
+   "format": "whitespace: epoch ms, ms since start, lat, lon, bytes since the previous row, ms since the previous row (~1 s rows); per-second kbit/s as for hsdpa",
+   "parser": "parse_ghent",
+   "rtt": false,
+   "url": "https://users.ugent.be/~jvdrhoof/dataset-4g/logs/"
+  }
+ },
+ "weights": "equal by source"
+}
