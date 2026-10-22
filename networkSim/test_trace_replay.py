@@ -177,6 +177,32 @@ def test_g2_session_check():
         assert C.main([str(other)]) == 2
 
 
+def test_g1_read_trace_segment():
+    """The dry run's trace segment reader (G1) on a synthetic phase: ratio over backlogged spans per slot, the
+    change-instant drops, the pooled apply lag (post - scheduled)."""
+    import importlib.util
+    sys.path.insert(0, str(HERE.parent / "ops" / "diag"))
+    spec = importlib.util.spec_from_file_location("trio_dry_run", HERE.parent / "ops" / "diag" / "trio_dry_run.py")
+    D = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(D)
+    plan = [{"t": 0.0, "rate_kbit": 800, "delay_ms": 40, "loss_pct": 0.0, "walk_step": 0, "source": "a", "clip": None},
+            {"t": 15.0, "rate_kbit": 1600, "delay_ms": 40, "loss_pct": 0.0, "walk_step": 1, "source": "a", "clip": "high"}]
+    thr = 1600 * 1000 / 8 * 0.04 + 2 * 1500
+    samples, by = [], 0.0
+    for t in range(31):
+        samples.append({"t": float(t), "classes": {"lvi_yt1": {"1:10": {"bytes": by, "backlog": thr + 4000}}}})
+        by += (800 if t < 15 else 1600) * 1000 / 8
+    net = lambda p_, d: {"t": 0.0, "netem": {"packets": p_, "drops": d}}
+    changes = {"yt1": [{"pre": {"t": -3.0}, "post": {"t": -3.0}, "settle": None, "params": plan[0], "initial": True},
+                       {"pre": dict(net(1000, 0), t=14.9), "post": {"t": 15.0}, "settle": dict(net(1100, 0), t=16.0),
+                        "params": plan[1], "scheduled": 14.95}]}
+    ph = {"plan": {"yt1": plan}, "changes": changes, "samples": samples, "seconds": 30.0, "seed": 0}
+    r = D.read_trace_segment(ph)
+    v = r["per_slot"]["yt1"]
+    assert v["ratio_gate"] == "pass" and v["change_drops"]["gate"] == "pass" and v["clip_s"] == {"low": 0, "high": 1}, v
+    assert r["apply_lag"]["p99"] == 0.05 and r["status"] == "pass", r
+
+
 def test_real_cache():
     cache = Path(os.environ.get("LVDC_TRACE_CACHE", ""))
     if not os.environ.get("LVDC_TRACE_CACHE") or not cache.exists():
@@ -189,6 +215,14 @@ def test_real_cache():
         assert len(xs) >= min(1800, pl["covered_s"]) - 1, (pl["source"], len(xs), pl["covered_s"])
         ch = list(R.trace_episode_generator(xs, pl, R.lower_kbit(), 6000, 40, 1800))
         assert ch[0].walk_step == 0 and sum(c.duration for c in ch) == min(len(xs), 1800)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fast_segment", HERE.parent / "ops" / "diag" / "fast_segment.py")
+    FS = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(FS)
+    for src in sorted(man["sources"]):
+        pl = FS.trace_schedule("yt1", 300.0, 0, 6000.0, src)
+        assert pl[0]["walk_step"] == 0 and pl[0]["source"] == src and all(e["state"] is None for e in pl), pl[:2]
+        assert all(R.lower_kbit() <= e["rate_kbit"] <= 6000 for e in pl) and abs(sum(e["dur"] for e in pl) - 300) < 1e-6
 
 
 def main() -> int:

@@ -27,6 +27,27 @@ RATIO_LO, RATIO_HI = 0.9, 1.15
 MIN_QUAL_S = 10
 
 
+def trace_schedule(slot: str, seconds: float, seed: int, upper_kbit: float, source: str | None = None) -> list[dict]:
+    """§9's G1 (levi efb5e4cc): the slot's trace plan (traces/replay, keyed by the dry run's seed and slot, the source
+    forced per slot when given), its changes as exp.py applies them (make slow first, make rate after), clipped to
+    [state 1's min, upper_kbit], delay 40 ms x the slot's delay / loss factor, loss 0. Needs the trace cache."""
+    from traces import replay as R
+    from utils.netStat import session_shaping
+    man = R.load_manifest()
+    pl = R.plan(f"dry-trace:{seed}:{slot}", seconds, man, source=source)
+    xs = R.series(pl, R.cache_dir(), man)
+    f = session_shaping(f"dry-trace:{seed}:{slot}")[1]["dl_factor"]["value"]
+    delay = int(round(R.TRACE_DELAY_MS * f))
+    out, t = [], 0.0
+    for ns in R.trace_episode_generator(xs, pl, R.lower_kbit(), upper_kbit, delay, seconds):
+        out.append({"t": round(t, 3), "dur": round(ns.duration, 3), "state": None, "rate_kbit": ns.rate,
+                    "delay_ms": ns.delay_ms, "loss_pct": ns.loss_pct, "matrix_id": None, "walk_step": ns.walk_step,
+                    "regime": "trace", "rate_band_state": ns.rate_band_state, "source": pl["source"],
+                    "trace_id": ns.trace_id, "clip": ns.clip, "dl_factor": f})
+        t += ns.duration
+    return out
+
+
 def schedule(platform: str, slot: str, seconds: float, seed: int = 0, family: str = "fast") -> list[dict]:
     """The slot's plan: [{t, dur, state, rate_kbit, delay_ms, loss_pct, ...}] covering `seconds` (seeded per slot; the
     global random state is restored). family "fast": the platform's @fast family (Q am. 17); "base": its base matrix's

@@ -71,10 +71,12 @@ def rate_band_state(kbit: float) -> str:
     return min(bs, key=lambda b: min(abs(x - math.log(b[1])), abs(x - math.log(b[2]))))[0]
 
 
-def plan(key: str, session_s: float, manifest: dict, seed: int = TRACE_SEED) -> dict:
-    """The session's trace plan (module docstring): source, segments [{trace, offset_s, start_s, seconds}], junctions."""
+def plan(key: str, session_s: float, manifest: dict, seed: int = TRACE_SEED, source: str | None = None) -> dict:
+    """The session's trace plan (module docstring): source, segments [{trace, offset_s, start_s, seconds}], junctions.
+    source: forced (G1's segment rotates one source per platform), else drawn with equal weight."""
     rng = random.Random(f"trace-plan:{seed}:{key}")
-    source = rng.choice(sorted(manifest["sources"]))
+    drawn_source = rng.choice(sorted(manifest["sources"]))
+    source = source or drawn_source
     files = sorted((f for f in manifest["sources"][source]["files"] if (f.get("seconds") or 0) >= 2),
                    key=lambda f: f["name"])
     if not files:

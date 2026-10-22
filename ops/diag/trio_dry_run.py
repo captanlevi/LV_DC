@@ -598,6 +598,11 @@ def run(a) -> dict:
             with open(out / "walk_segment.json", "w") as fh:
                 json.dump(ph, fh)
             rep["walk_segment"] = read_fast_segment(ph)
+        if getattr(a, "trace_segment_s", 0) and not NO_IFB and not rerun:   # §9 G1: the trace segment
+            ph = fast_segment_phase(a, out, family="trace")
+            with open(out / "trace_segment.json", "w") as fh:
+                json.dump(ph, fh)
+            rep["trace_segment"] = read_trace_segment(ph)
         if a.player_load or rerun:      # Q am. 16: the player-shaped load, its own phase on the same states
             ph = player_phase(a, states, out)
             base = (rep.get("idle_ping_unshaped") or {}).get("rtt_ms_median")
@@ -651,6 +656,8 @@ def gates_summary(rep: dict) -> dict:
         g["bulk_ratio"] = {"status": res["bulk_ratio_gate"]["status"], "rule": res["bulk_ratio_gate"]["rule"],
                            "support": res["bulk_ratio_support"]["per_slot"]}
         g["rate_stage_validation"] = {"status": (res.get("rate_stage_validation") or {}).get("status")}
+    if rep.get("trace_segment"):
+        g["trace"] = {"status": rep["trace_segment"]["status"], "apply_lag": rep["trace_segment"]["apply_lag"]["gate"]}
     for key, name in (("fast_segment", "fast"), ("walk_segment", "walk")):
         if rep.get(key):
             f = rep[key]
@@ -956,8 +963,14 @@ def fast_segment_phase(a, out: Path, clock=time.time, sleep=time.sleep, family: 
     device sampled once a second, as the bulk phase does. family "base": restart §2's walk segment, the base matrix's
     plan for --walk-segment-s (the same seed), read by the same gates."""
     F = _fast()
-    seconds = a.fast_segment_s if family == "fast" else a.walk_segment_s
-    plan = {s: F.schedule(platform_of(s), s, seconds, a.fast_seed, family) for s in SESSIONS}
+    seconds = getattr(a, {"fast": "fast_segment_s", "base": "walk_segment_s", "trace": "trace_segment_s"}[family])
+    if family == "trace":                  # §9 G1: one source per slot, rotated over the manifest's sources
+        from traces.replay import load_manifest
+        srcs = sorted(load_manifest()["sources"])
+        plan = {s: F.trace_schedule(s, seconds, a.fast_seed, a.trace_upper_kbit, srcs[i % len(srcs)])
+                for i, s in enumerate(SESSIONS)}
+    else:
+        plan = {s: F.schedule(platform_of(s), s, seconds, a.fast_seed, family) for s in SESSIONS}
     for s in SESSIONS:
         for c in rate_cmds(a.iface, s, plan[s][0]):
             sh(c)
@@ -995,12 +1008,41 @@ def fast_segment_phase(a, out: Path, clock=time.time, sleep=time.sleep, family: 
                 pending = [x for x in pending if not (x[1] == s and x[2] == len(changes[s]) - 1)]
             for c in rate_cmds(a.iface, s, e):
                 sh(c)
-            changes[s].append({"pre": pre, "post": _fast_snap(s, t0, clock), "settle": None, "params": e})
+            changes[s].append({"pre": pre, "post": _fast_snap(s, t0, clock), "settle": None, "params": e,
+                               "scheduled": round(t_ev, 3)})
             pending.append((t_ev + F.SETTLE_S, s, len(changes[s]) - 1))
     finally:
         stop(procs)
     return {"plan": plan, "changes": changes, "samples": samples, "seconds": seconds, "seed": a.fast_seed,
             "family": family}
+
+
+def read_trace_segment(ph: dict) -> dict:
+    """§9 G1 (levi efb5e4cc (1)) per slot: the byte-total ratio over backlogged spans (traces/fidelity), each in
+    [0.9, 1.15]; the change-instant drops (fast_segment.change_drops); pooled: the apply lag (post - scheduled) p99 <=
+    0.5 s. The per-second ratio reported only."""
+    F = _fast()
+    from traces import fidelity as TF
+    per, lags = {}, []
+    for s, ch in ph["changes"].items():
+        smp = [{"t": x["t"], **{k: (((x.get("classes") or {}).get(f"lvi_{s}") or {}).get("1:10") or {}).get(k)
+                                for k in ("bytes", "backlog")}} for x in ph["samples"]]
+        smp = [x for x in smp if x["bytes"] is not None and x["backlog"] is not None]
+        app = sorted((c["post"]["t"], float(c["params"]["rate_kbit"]), float(c["params"]["delay_ms"])) for c in ch)
+        spans = TF.backlogged_spans(smp, app)
+        lags += [round(c["post"]["t"] - c["scheduled"], 4) for c in ch if "scheduled" in c]
+        dr = {k: v for k, v in F.change_drops(ch).items() if k != "per_change"}
+        per[s] = {"source": ph["plan"][s][0].get("source") if ph["plan"][s] else None,
+                  "changes": sum(1 for c in ch if not c.get("initial")), "spans": spans,
+                  "ratio_gate": TF.ratio_gate(spans), "change_drops": dr,
+                  "per_second": TF.per_second_ratio(smp, app),
+                  "clip_s": {"low": sum(1 for e in ph["plan"][s] if e.get("clip") == "low"),
+                             "high": sum(1 for e in ph["plan"][s] if e.get("clip") == "high")}}
+        per[s]["status"] = M.combine([per[s]["ratio_gate"], dr["gate"]])
+    lag = TF.lag_gate(lags)
+    st = M.combine([v["status"] for v in per.values()] + [lag["gate"]])
+    return {"per_slot": per, "apply_lag": lag, "status": st, "pass": st == "pass", "seconds": ph["seconds"],
+            "seed": ph["seed"], "rule": TF.RULE}
 
 
 def read_fast_segment(ph: dict) -> dict:
@@ -1446,6 +1488,12 @@ def main(argv=None) -> int:
                          "re-draws) and a delay / loss factor under the bulk load, after the @fast segment, read by the "
                          "@fast gates and the walk's minimum (>= 120 s); 0 = off; default: the profile's (short "
                          f"{M.SHORT['walk_s']:g}, full off)")
+    ap.add_argument("--trace-segment-s", type=float, default=0.0,
+                    help="§9 G1 (levi efb5e4cc): seconds of each slot's trace plan (one source per slot, rotated) under "
+                         "the bulk load, after the walk segment, read by the byte-total ratio over backlogged spans, the "
+                         "change-instant drops and the apply lag p99; 0 = off; needs --trace-upper-kbit and the trace cache")
+    ap.add_argument("--trace-upper-kbit", type=float, default=None,
+                    help="§9 G1: the segment's upper clip per slot (the window's min(probe, capacity) / N)")
     ap.add_argument("--player-rerun", action="store_true",
                     help="levi 00132: the tree, the bulk phase (option A's validation) and the player phase only; no "
                          "goodput, single-mode reference, cross-class fetch, idle pings, upload or @fast segment")
@@ -1494,6 +1542,8 @@ def main(argv=None) -> int:
         a.fast_segment_s = fast_auto_s(a.fast_min_changes, a.fast_seed)
     a.fast_segment_s = float(a.fast_segment_s)
     refused = None if a.player_rerun else fast_segment_refusal(a.fast_segment_s, a.fast_seed)
+    if not refused and a.trace_segment_s and not (a.trace_upper_kbit or 0) > 0:     # §9 G1
+        refused = "--trace-segment-s needs a positive --trace-upper-kbit (the window's min(probe, capacity) / N)"
     if refused:
         print(refused, file=sys.stderr)
         return 2
