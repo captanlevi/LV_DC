@@ -271,6 +271,26 @@ def write(session_dir: Path, **fields) -> dict:
     return meta
 
 
+VA_PACKAGES = ("intel-media-va-driver-non-free", "intel-media-va-driver", "libva2", "libigdgmm12")
+
+
+def platform_stack(run=None) -> dict:
+    """levi 15:42 (record only): the kernel (uname -r) and the VA driver stack's package versions at session start
+    (dpkg-query, once per session), so the 'unchanged across the era' claim rests on each session's record, not on apt
+    history. A package not installed reads None; never raises."""
+    import platform as _platform
+    run = run or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, timeout=10))
+    out: dict = {"kernel_release": _platform.release(), "packages": {}}
+    for pkg in VA_PACKAGES:
+        try:
+            r = run(["dpkg-query", "-W", "-f=${Version}", pkg])
+            out["packages"][pkg] = r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+        except Exception as e:  # noqa: BLE001 -- recorded, never fatal
+            out["packages"][pkg] = None
+            out.setdefault("errors", {})[pkg] = repr(e)[:120]
+    return out
+
+
 def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, argv: list[str],
           chrome_profile: Path, matrix_id: str | None = None, low_state_cap: int | None = None,
           initial_state_rule: str | None = None, forced_initial_state: str | None = None,
@@ -290,7 +310,7 @@ def start(session_dir: Path, platform: str, transitions: dict, episode_s: int, a
                  channel_url_requested=channel_url_requested, channel_type=channel_type, channel_handle=channel_handle,
                  profile_template=profile_template,
                  ntp_offset_start=ntp_offset(), ipv6_sysctl=ipv6_state(), data_volume_start=data_volume(session_dir),
-                 mgmt_exclusion=mgmt_exclusion())
+                 mgmt_exclusion=mgmt_exclusion(), platform_stack=platform_stack())
 
 
 def finish(session_dir: Path, channel_url: str | None, **extra) -> dict:

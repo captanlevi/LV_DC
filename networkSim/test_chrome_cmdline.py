@@ -48,6 +48,16 @@ def main() -> int:
     src = (Path(__file__).resolve().parent / "exp.py").read_text()
     i = src.index("chrome_cmdline_start=session_meta.chrome_cmdline()")
     assert src.index("session_meta.write(session_dir, display_start=_display_start)") < i < src.index("asyncio.run(experiment("), i
+    # levi 15:42 (record only): the kernel and the VA stack's package versions at session start (meta platform_stack)
+    vers = {"intel-media-va-driver-non-free": "24.1.0+dfsg1-1ubuntu0.1", "libva2": "2.20.0-2build1"}
+    fake = lambda cmd: types.SimpleNamespace(returncode=0 if cmd[-1] in vers else 1, stdout=vers.get(cmd[-1], ""))
+    ps = S.platform_stack(fake)
+    assert ps["packages"] == {"intel-media-va-driver-non-free": "24.1.0+dfsg1-1ubuntu0.1", "intel-media-va-driver": None,
+                              "libva2": "2.20.0-2build1", "libigdgmm12": None} and ps["kernel_release"], ps
+    def boom(cmd):
+        raise FileNotFoundError("dpkg-query")
+    assert set(S.platform_stack(boom)["errors"]) == set(S.VA_PACKAGES)
+    assert "platform_stack=platform_stack()" in (Path(__file__).resolve().parent / "session_meta.py").read_text()
     print("test_chrome_cmdline: ok")
     return 0
 
