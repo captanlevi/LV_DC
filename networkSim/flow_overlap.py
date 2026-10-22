@@ -4,8 +4,13 @@
 Per trio run, over its sessions' merged.pcap and the unmarked remainder's (data/_trio/_default/<run>/merged.pcap):
   - 5-tuple uniqueness: a flow (protocol + both endpoints) seen in two sessions' pcaps while both saw it, or in a
     session's pcap and the default capture at the same time, is a marking leak; a flow to or from a link-local
-    multicast group (224.0.0.0/24, ff02::/16: mDNS) is the host's, reported apart (shared_linklocal_flows,
-    linklocal_flows_also_in_default) and never a leak (levi 02:07); flows_also_in_default_list names every such flow;
+    multicast group (224.0.0.0/24, ff02::/16: mDNS) is the host's, reported apart (pairs' shared_link_local_multicast
+    with packets_in_both, sessions' linklocal_flows_also_in_default) and never a leak (levi 02:07);
+    flows_also_in_default_list names every flow also in the default class with its kind;
+  - an ICMP / ICMPv6 error (outer protocol ICMP) belongs to the flow it quotes (its inner addresses and ports); the
+    quoted packet's QUIC CIDs, SNI and DNS are not the capture's own and are never read (levi, w10 ti_100091: the shared
+    CID was an ICMP port-unreachable quoting an inbound QUIC packet); split rows whose default packets are all RST-only
+    TCP or ICMP, with no payload, are tagged kernel_reply (informational);
   - QUIC connection-ID uniqueness: a long- or short-header CID seen in two pcaps (a migrated QUIC connection keeps its
     CIDs on a new 5-tuple, which the 5-tuple check cannot see);
   - sibling host families: a TLS / QUIC SNI of another platform's family (check_session MEDIA_HOSTS + PLATFORM_PAGE) in
@@ -41,7 +46,8 @@ from trio_slots import conntrack_timeouts                # noqa: E402
 DNS_LEAD_S = 120.0
 FIELDS = ["frame.time_epoch", "frame.len", "ip.src", "ip.dst", "ipv6.src", "ipv6.dst", "ip.proto", "tcp.srcport", "tcp.dstport",
           "udp.srcport", "udp.dstport", "quic.dcid", "quic.scid", "tls.handshake.extensions_server_name",
-          "dns.qry.name", "dns.flags.response", "dns.count.answers", "tcp.flags.str", "quic.header_form"]
+          "dns.qry.name", "dns.flags.response", "dns.count.answers", "tcp.flags.str", "quic.header_form", "tcp.len",
+          "udp.length", "ipv6.nxt"]
 
 
 def tshark_rows(pcap: Path, tshark: str = "tshark") -> list[dict]:
@@ -56,10 +62,53 @@ def _split(v: str | None) -> list[str]:
     return [x for x in (v or "").split(",") if x]
 
 
+LINKLOCAL_MULTICAST = (ipaddress.ip_network("224.0.0.0/24"), ipaddress.ip_network("ff02::/16"))
+FLOW_LIST_MAX = 200
+
+
+def is_linklocal(k: tuple) -> bool:
+    """A flow to or from a link-local multicast group (224.0.0.0/24, ff02::/16): e.g. every Chrome's own mDNS on the
+    protocol's fixed 5-tuple, the host's, seen by every capture on the link (levi's gate-2 call on pilot-1, item 11:
+    reported when packet-disjoint; levi 02:07: never a leak)."""
+    for ip, _ in k[1:]:
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if any(a.version == n.version and a in n for n in LINKLOCAL_MULTICAST):
+            return True
+    return False
+
+
+link_local_multicast = is_linklocal
+
+
+def icmp_outer(r: dict) -> bool:
+    """The packet is an ICMP / ICMPv6 message (outer protocol 1 / 58); its transport fields are the quoted packet's."""
+    return (_split(r.get("ip.proto")) or [""])[0] == "1" or (_split(r.get("ipv6.nxt")) or [""])[0] == "58"
+
+
+def _payload(r: dict, k: tuple) -> int | None:
+    """The transport payload length: tcp.len, or udp.length less its 8-byte header."""
+    try:
+        if k[0] == "tcp":
+            return int((_split(r.get("tcp.len")) or [""])[0])
+        u = (_split(r.get("udp.length")) or [""])[0]
+        return int(u) - 8 if u else None
+    except ValueError:
+        return None
+
+
 def flow_key(r: dict) -> tuple | None:
-    """(protocol, lower endpoint, higher endpoint): the same key for both directions."""
-    src, dst = (_split(r.get("ip.src")) or _split(r.get("ipv6.src")) or [None])[0], \
-        (_split(r.get("ip.dst")) or _split(r.get("ipv6.dst")) or [None])[0]
+    """(protocol, lower endpoint, higher endpoint): the same key for both directions. An ICMP error's key is the flow it
+    quotes (the inner header's addresses with the quoted ports); an ICMP message quoting nothing has none."""
+    srcs, dsts = _split(r.get("ip.src")) or _split(r.get("ipv6.src")), _split(r.get("ip.dst")) or _split(r.get("ipv6.dst"))
+    i = 0
+    if icmp_outer(r):
+        if len(srcs) < 2 or len(dsts) < 2:
+            return None
+        i = 1
+    src, dst = (srcs[i] if len(srcs) > i else None), (dsts[i] if len(dsts) > i else None)
     if not src or not dst:
         return None
     for proto, a, b in (("tcp", "tcp.srcport", "tcp.dstport"), ("udp", "udp.srcport", "udp.dstport")):
@@ -80,7 +129,7 @@ def summarise(rows: list[dict], keep_udp: bool = False, keep_pkts=None) -> dict:
     flows: dict = {}
     flow_sni: dict = {}
     udp: list = []
-    pkts: dict = {}          # keep_pkts: True (every flow) or a set of keys -> [(t, src, bytes, tcp flags, quic form)]
+    pkts: dict = {}          # keep_pkts: True / a set of keys -> [(t, src, bytes, tcp flags, quic form, payload, icmp)]
     cids: dict = {}
     snis: dict = {}
     dns: dict = {}
@@ -92,15 +141,19 @@ def summarise(rows: list[dict], keep_udp: bool = False, keep_pkts=None) -> dict:
             continue
         k = flow_key(r)
         n = int((_split(r.get("frame.len")) or ["0"])[0] or 0)
+        icmp = icmp_outer(r)
         if k is not None:
             f = flows.setdefault(k, [t, t, 0, 0])
             f[0], f[1], f[2], f[3] = min(f[0], t), max(f[1], t), f[2] + 1, f[3] + n
-            if keep_udp and k[0] == "udp":
+            if keep_udp and k[0] == "udp" and not icmp:
                 udp.append((t, k, n))
-            if keep_pkts is True or (keep_pkts and k in keep_pkts):
-                src = (_split(r.get("ip.src")) or _split(r.get("ipv6.src")) or [""])[0]
-                pkts.setdefault(k, []).append((t, src, n, (_split(r.get("tcp.flags.str")) or [""])[0],
-                                               (_split(r.get("quic.header_form")) or [""])[0]))
+            if keep_pkts is True or (keep_pkts and k in keep_pkts) or is_linklocal(k):
+                src = (_split(r.get("ip.src")) or _split(r.get("ipv6.src")) or [""])[0]      # the outer sender
+                pkts.setdefault(k, []).append((t, src, n, "" if icmp else (_split(r.get("tcp.flags.str")) or [""])[0],
+                                               "" if icmp else (_split(r.get("quic.header_form")) or [""])[0],
+                                               0 if icmp else _payload(r, k), icmp))
+        if icmp:
+            continue                     # the quoted packet's CIDs / SNI / DNS are not this capture's (levi, w10 R2)
         for c in _split(r.get("quic.dcid")) + _split(r.get("quic.scid")):
             if len(c.replace(":", "")) >= 8:                      # zero-length / tiny CIDs say nothing about owners
                 s = cids.setdefault(c, [t, t])
@@ -148,7 +201,7 @@ def split_detail(s: dict, default: dict, platform: str) -> dict:
             continue
         cls = collections.Counter()
         gaps = []
-        for t, src, n, fl, qf in dp:
+        for t, src, n, fl, qf, *_ in dp:
             if t < mine[0]:
                 cls["before_first"] += 1
             elif t > mine[-1]:
@@ -162,15 +215,26 @@ def split_detail(s: dict, default: dict, platform: str) -> dict:
         main = ("mid_flow" if cls["mid_flow"] else "after_idle" if cls["after_idle"] else
                 "before_first" if cls["before_first"] else "after_last")
         classes[main] += 1
+        # levi (w10 R2): the kernel answering a packet for a closed socket (a RST, an ICMP error) carries no socket
+        # cgroup; such a row, with no payload, is reported as kernel_reply (informational)
+        kernel = all((len(p) > 6 and p[6]) or ("R" in (p[3] or "") and not (len(p) > 5 and (p[5] or 0) > 0)) for p in dp)
         rows.append({"flow": list(k), "media": k in media, "class": main, "per_class": dict(cls),
                      "default_packets": len(dp), "default_bytes": sum(p[2] for p in dp),
+                     # levi (pilot-0b): only payload-carrying packets in the default class gate; control ones are reported
+                     "payload_packets": sum(1 for p in dp if len(p) > 5 and (p[5] or 0) > 0),
+                     "kernel_reply": kernel, "icmp_packets": sum(1 for p in dp if len(p) > 6 and p[6]),
                      "up": sum(p[1] == me for p in dp), "down": sum(p[1] != me for p in dp),
                      "tcp_flags": dict(collections.Counter(p[3] for p in dp if p[3])),
                      "quic_forms": dict(collections.Counter(p[4] for p in dp if p[4])),
                      "max_gap_before_s": round(max(gaps), 2) if gaps else None,
+                     # levi (round 1, avahi's mDNS): a link-local multicast flow is a host-wide 5-tuple; its default
+                     # packets are another sender's when packet-disjoint (no (time, length) also in the session pcap)
+                     **({"link_local_multicast": True, "packets_in_both": len(
+                         {(round(p[0], 6), p[2]) for p in dp} & {(round(p[0], 6), p[2]) for p in s["pkts"].get(k, [])})}
+                        if is_linklocal(k) else {}),
                      "session_span": [round(mine[0], 3), round(mine[-1], 3)],
                      "default_span": [round(dp[0][0], 3), round(dp[-1][0], 3)]})
-    return {"flows": len(rows), "by_class": dict(classes),
+    return {"flows": len(rows), "by_class": dict(classes), "kernel_reply_flows": sum(1 for r in rows if r["kernel_reply"]),
             "media_flows_by_class": dict(collections.Counter(r["class"] for r in rows if r["media"])),
             "default_packets_by_direction": {"up": sum(r["up"] for r in rows), "down": sum(r["down"] for r in rows)},
             "rows": rows[:200]}
@@ -205,23 +269,6 @@ def is_media(name: str, platform: str) -> bool:
     return any(re.search(pt, name) for pt in MEDIA_HOSTS.get(platform, []))
 
 
-LINKLOCAL_MULTICAST = (ipaddress.ip_network("224.0.0.0/24"), ipaddress.ip_network("ff02::/16"))
-FLOW_LIST_MAX = 200
-
-
-def is_linklocal(k: tuple) -> bool:
-    """levi 02:07: a flow to or from a link-local multicast group (224.0.0.0/24, ff02::/16: mDNS, SSDP's neighbours,
-    IGMP-ish chatter) is the host's, seen by every capture on the link; reported in its own field, never a leak."""
-    for ip in (k[1][0], k[2][0]):
-        try:
-            a = ipaddress.ip_address(ip)
-        except ValueError:
-            continue
-        if any(a.version == n.version and a in n for n in LINKLOCAL_MULTICAST):
-            return True
-    return False
-
-
 def _spans_meet(a, b) -> bool:
     return a[0] <= b[1] and b[0] <= a[1]
 
@@ -235,12 +282,17 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
         for b in names[i + 1:]:
             fa, fb = sessions[a]["s"]["flows"], sessions[b]["s"]["flows"]
             ca, cb = sessions[a]["s"]["cids"], sessions[b]["s"]["cids"]
-            both = sorted(k for k in fa.keys() & fb.keys() if _spans_meet(fa[k], fb[k]))
-            shared = [k for k in both if not is_linklocal(k)]           # levi 02:07: unicast only reads as a leak
-            ll = [k for k in both if is_linklocal(k)]
+            shared = [k for k in fa.keys() & fb.keys() if _spans_meet(fa[k], fb[k])]
             shared_cids = sorted(c for c in ca.keys() & cb.keys())
+            uni = [k for k in shared if not is_linklocal(k)]
+            mc = []
+            for k in shared:
+                if is_linklocal(k):        # packet-disjoint? no (time, length) in both pcaps
+                    pa = {(round(x[0], 6), x[2]) for x in sessions[a]["s"]["pkts"].get(k, [])}
+                    pb = {(round(x[0], 6), x[2]) for x in sessions[b]["s"]["pkts"].get(k, [])}
+                    mc.append({"flow": list(k), "packets_a": len(pa), "packets_b": len(pb), "packets_in_both": len(pa & pb)})
             pairs.append({"a": a, "b": b, "shared_flows": len(shared), "shared_flow_examples": [list(k) for k in shared[:5]],
-                          "shared_linklocal_flows": len(ll), "shared_linklocal_examples": [list(k) for k in ll[:5]],
+                          "shared_unicast_flows": len(uni), "shared_link_local_multicast": mc,
                           "shared_quic_cids": len(shared_cids), "cid_examples": shared_cids[:5]})
     per = {}
     for n in names:
@@ -266,7 +318,8 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
             df = default["flows"]
             also = sorted(k for k, v in s["flows"].items() if k in df and _spans_meet(v, df[k]))
             uni = [k for k in also if not is_linklocal(k)]
-            rec["flows_also_in_default"] = len(uni)                      # levi 02:07: unicast; link-local beside it
+            rec["flows_also_in_default"] = len(also)
+            rec["unicast_flows_also_in_default"] = len(uni)               # levi 02:07: the leak term; link-local beside
             rec["linklocal_flows_also_in_default"] = len(also) - len(uni)
             rec["flows_also_in_default_list"] = [[k[0], list(k[1]), list(k[2]), "linklocal" if is_linklocal(k) else "unicast"]
                                                  for k in also[:FLOW_LIST_MAX]]
@@ -286,8 +339,8 @@ def report(sessions: dict[str, dict], default: dict | None) -> dict:
             rec["dns_answers_json"] = {"present": Path(dfile).exists(), "addresses": len(named),
                                        "media_addresses": len(media_addresses(s, plat)), "media_unnamed": unnamed}
         per[n] = rec
-    leak = (any(p["shared_flows"] or p["shared_quic_cids"] for p in pairs)
-            or any(r["sibling_family_snis"] or r.get("flows_also_in_default") or r.get("quic_cids_also_in_default")
+    leak = (any(p["shared_unicast_flows"] or p["shared_quic_cids"] for p in pairs)
+            or any(r["sibling_family_snis"] or r.get("unicast_flows_also_in_default") or r.get("quic_cids_also_in_default")
                    or r.get("default_media_snis_in_window") or (r.get("default_udp_from_media_addresses") or {}).get("packets")
                    for r in per.values()))
     dns_fail = [n for n, r in per.items() if (r.get("dns_answers_json") or {}).get("media_unnamed")
@@ -307,19 +360,26 @@ def _session_dirs_of_run(data: Path, run: str) -> list[Path]:
     return sorted(out)
 
 
+def _trio_root() -> Path:
+    """data_root.DATA_ROOT / _trio where the collector's data_root module exists (70973cd), else the repo's data/_trio:
+    one file for the reader line and the collector line (levi 11:37: the same blob on both)."""
+    try:
+        from data_root import DATA_ROOT
+    except ImportError:
+        return HERE.parent / "data" / "_trio"
+    return DATA_ROOT / "_trio"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--run", default=None, help="a trio run id (meta.json concurrency.trio_run)")
-    ap.add_argument("--data", type=Path, default=None, help="the trio root (default: data_root.DATA_ROOT / _trio)")
+    ap.add_argument("--data", type=Path, default=_trio_root(), help="the trio root (data_root.DATA_ROOT / _trio)")
     ap.add_argument("--sessions", nargs="*", type=Path, default=[])
     ap.add_argument("--default", type=Path, default=None, help="the run's default-capture dir (merged.pcap)")
     ap.add_argument("--tshark", default=shutil.which("tshark") or "tshark")
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--detail", action="store_true", help="the split flows' packets in the default class (split_detail)")
     a = ap.parse_args(argv)
-    if a.data is None:
-        from data_root import DATA_ROOT
-        a.data = DATA_ROOT / "_trio"
     dirs = list(a.sessions)
     dflt = a.default
     if a.run:
