@@ -1040,13 +1040,20 @@ def verdict(lab: dict, net: dict, shots: dict, meta_missing: list[str], max_bg: 
 # one watch poll: browser._room_watch_loop (the dead clock) and the ad watcher feeding _stuck_tick (T2) each wait
 # timeout=1 per loop (browser.py `while not self._stop.wait(timeout=1)` / `while not stop.wait(timeout=1)`)
 SHARED_DEADLINE_POLL_S = 1.0
+# levi 14:55: the re-entry must also come AT the shared deadline (before Y the two deadlines are equal by construction
+# whenever a dead run starts inside a low span): t_nav - the earlier deadline in [0, one poll + the dead path's
+# pre-navigation media snapshot cap] (browser.MEDIA_SNAPSHOT_MAX_S, 2.0: _room_watch_loop snapshots before
+# _reenter_room takes t_nav; the T2 path calls _reenter_room at once)
+SHARED_DEADLINE_SNAPSHOT_S = 2.0
+SHARED_DEADLINE_NAV_S = SHARED_DEADLINE_POLL_S + SHARED_DEADLINE_SNAPSHOT_S
 
 
 def shared_deadline_reentries(meta: dict, rows: list[dict], net_labels: list) -> list[dict]:
     """levi 14:41 (peter's 2fdf48cc: after a low-state hold tt's T2 deadline, stuck.T2_S above the rung, and the
     player_dead clock's T, its start + TT_STALL_GRACE_S after the hold, coincide; which watcher acts is poll phase).
     Per tt re-entry of ours (frozen_reentries, player_dead_reentries): the two deadlines from the meta timings and
-    shared = |T2 deadline - dead deadline| <= SHARED_DEADLINE_POLL_S; None when one cannot be read.
+    shared = |T2 deadline - dead deadline| <= SHARED_DEADLINE_POLL_S and the re-entry came at it (t_nav - the earlier
+    deadline in [0, SHARED_DEADLINE_NAV_S], nav_after_deadline_s); None when one cannot be read.
       T2: a frozen re-entry's t2_window[0] + T2_S; a dead re-entry's, as stuck.t2_clock would have run it, from the
           frozen run holding its t_nav and stuck.above_since on the session's rung (meta lowest_rung);
       dead: the player_dead_watch clock running at the re-entry (begun by t_nav; open, or ended within two polls of
@@ -1091,10 +1098,12 @@ def shared_deadline_reentries(meta: dict, rows: list[dict], net_labels: list) ->
                     start = max(run[0], (max(lows) + stuck.LOW_HOLD_GRACE_S) if lows else run[0])
                     dd, src = start + t_dead, "net_labels (no watch log)"
             diff = None if t2 is None or dd is None else round(t2 - dd, 3)
+            lag = None if diff is None else round(tn - min(t2, dd), 3)
             out.append({"kind": kind, "t_nav": tn, "outcome": r.get("outcome"), "dead_source": src,
                         "t2_deadline": None if t2 is None else round(t2, 3),
-                        "dead_deadline": None if dd is None else round(dd, 3), "diff_s": diff,
-                        "shared_deadline_reentry": None if diff is None else abs(diff) <= SHARED_DEADLINE_POLL_S})
+                        "dead_deadline": None if dd is None else round(dd, 3), "diff_s": diff, "nav_after_deadline_s": lag,
+                        "shared_deadline_reentry": None if diff is None else
+                        (abs(diff) <= SHARED_DEADLINE_POLL_S and 0.0 <= lag <= SHARED_DEADLINE_NAV_S)})
     return sorted(out, key=lambda x: x["t_nav"])
 
 

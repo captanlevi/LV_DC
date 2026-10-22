@@ -432,16 +432,26 @@ def test_ti100058_shared_deadline():
     (the labels-only player_dead before the tag); tagged, it is not compared with T, the length reported."""
     import check_session as CS
     low0, low1, onset, nav = 1792533814.56691, 1792533874.8294663, 1792533851.9217, 1792533964.9919012
-    ticks = [onset - 60 + k for k in range(60)] + [onset + k for k in range(int(nav - onset) + 1)] + \
-            [nav + 0.6 + k for k in range(4)] + [nav + 5.0 + k for k in range(30)]
-    rows = [{"ts": str(t * 1000), "type": "res_meta", "is_ad": "False", "paused": "False", "video_w": "720",
-             "current_time": "100.0" if onset <= t < nav + 4.7 else str(t - ticks[0]),
-             "ready_state": "0" if onset <= t < nav + 4.7 else "4"} for t in ticks]
+    def mk(nav):
+        ticks = [onset - 60 + k for k in range(60)] + [onset + k for k in range(int(nav - onset) + 1)] + \
+                [nav + 0.6 + k for k in range(4)] + [nav + 5.0 + k for k in range(30)]
+        return [{"ts": str(t * 1000), "type": "res_meta", "is_ad": "False", "paused": "False", "video_w": "720",
+                 "current_time": "100.0" if onset <= t < nav + 4.7 else str(t - ticks[0]),
+                 "ready_state": "0" if onset <= t < nav + 4.7 else "4"} for t in ticks]
+    rows = mk(nav)
     labels = [{"timestamp": low0, "speed": 203, "state": "1"}, {"timestamp": low1, "speed": 1219, "state": "5"}]
     meta = {"platform": "tiktok", "frozen_reentries": [{"t_nav": nav, "outcome": "continue",
                                                         "t2_window": [low1, 1792533964.9910736]}]}
     (tag,) = CS.shared_deadline_reentries(meta, rows, labels)
     assert tag["diff_s"] == 0.0 and tag["shared_deadline_reentry"] is True and tag["dead_source"].startswith("net_labels"), tag
+    assert abs(tag["nav_after_deadline_s"] - 0.162) < 0.002, tag
+    # levi 14:55: equal deadlines alone do not tag; a re-entry 30 s after the shared deadline (another cause) is not tagged
+    late = {"platform": "tiktok", "frozen_reentries": [{"t_nav": nav + 30.0, "outcome": "continue",
+                                                        "t2_window": [low1, nav + 30.0]}]}
+    (lt,) = CS.shared_deadline_reentries(late, mk(nav + 30.0), labels)
+    assert lt["diff_s"] == 0.0 and lt["shared_deadline_reentry"] is False and abs(lt["nav_after_deadline_s"] - 30.162) < 0.002, lt
+    import browser as B
+    assert CS.SHARED_DEADLINE_SNAPSHOT_S == B.MEDIA_SNAPSHOT_MAX_S
     navs = E.nav_times(meta)
     untagged = E.dead_player(rows, [], labels, navs)
     assert round(untagged["max_s"], 2) == 60.07 and E.dead_over_t(untagged["max_s"], 60.0), untagged
