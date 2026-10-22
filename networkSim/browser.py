@@ -1538,7 +1538,8 @@ def _export_via_service_worker(session_dir: Path) -> bool:
                   "dropped", "current_time", "tabId", "url", "event_id",
                   "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed",
                   "login_wall_text", "login_wall", "quality_countdown", "paused", "playhead_still_s", "ready_state",
-                  "visibility", "total_frames"]                        # t53 (am. 13 / gate-2 4a): additive
+                  "visibility", "total_frames",                        # t53 (am. 13 / gate-2 4a): additive
+                  "elem_id", "elem_src_hash", "n_videos", "attach_reason"]   # the sticky pick (record only): additive
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]

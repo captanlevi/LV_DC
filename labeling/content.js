@@ -15,6 +15,16 @@ let inStall = false;
 // v2 (LVQoE t35): element / source identity, to report a swap on the first tick after it
 let lastSrc = null;
 let lastElement = null;
+// the sticky pick (levi 03:22-03:23, peter's content-repick branch): the attached <video> is kept until it is detached,
+// ended, or not playing while another visible playing element is at least as large (a pause alone never releases it:
+// twitch self-pauses its player and a playing preview must not take over). Each re-attach records its reason on the
+// video_start tick; every tick records the attached element's identity (a per-page id, a hash of its source) and the
+// number of <video> elements, record only.
+const elemIds = new WeakMap();
+let elemNext = 0;
+let attachReason = null;
+const progress = new WeakMap();      // element -> {ct, stuck}: consecutive polls with readyState < 2 and no playhead move
+const NOT_PLAYING_POLLS = 2;
 // addendum N (LVQoE, 2026-10-17): the stall-only frozen-playhead run, computed on the emitted stream exactly as
 // check_session.frozen_runs() does (stall label on from a "stall" event to a "start" / "video_start" event; non-ad tick;
 // playhead within FROZEN_TOL_S of the run's first tick; any other tick ends it). The 2026-10-18 measure (a run ending
@@ -191,6 +201,11 @@ function buildEvent(type) {
     // overlapping-window layout must never hide an occluded window) and the rendered-frame counter (fps per tier).
     visibility: document.visibilityState ?? null,
     total_frames: video?.getVideoPlaybackQuality?.().totalVideoFrames ?? null,
+    // the sticky pick (record only): the attached element's identity, the page's <video> count, the re-attach reason
+    elem_id: video ? elemId(video) : null,
+    elem_src_hash: video ? srcHash(video) : null,
+    n_videos: document.querySelectorAll("video").length,
+    attach_reason: type === "video_start" ? attachReason : null,
   };
 }
 
@@ -319,17 +334,91 @@ function observeVideo(v) {
   }
 }
 
-function pickBestVideo() {
-  // Prefer the element that is actually playing over the first one in DOM
-  // order — after an element swap the dead one often remains in the DOM.
-  const candidates = [...document.querySelectorAll("video")];
-  return candidates.find((x) => !x.paused && !x.ended) ?? candidates[0] ?? null;
+function elemId(v) {
+  if (!elemIds.has(v)) elemIds.set(v, ++elemNext);
+  return elemIds.get(v);
 }
 
-function attachVideo(v) {
+function srcHash(v) {
+  // FNV-1a (32 bit) of the element's source: identity only, never the URL itself
+  const s = String(v.currentSrc || v.src || "");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return s ? h.toString(16).padStart(8, "0") : null;
+}
+
+function visibleArea(v) {
+  // the bounding rect clipped to the viewport, for an element with a decoded picture (videoWidth > 0); hidden,
+  // transparent or offscreen elements have none
+  if (!v || v.isConnected === false || !(v.videoWidth > 0)) return 0;
+  try {
+    const cs = getComputedStyle(v);
+    if (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity) === 0) return 0;
+  } catch (e) {}
+  if (typeof v.getBoundingClientRect !== "function") return (v.clientWidth || 0) * (v.clientHeight || 0);
+  const r = v.getBoundingClientRect();
+  const W = window.innerWidth, H = window.innerHeight;
+  if (!(W > 0 && H > 0)) return Math.max(0, r.width) * Math.max(0, r.height);
+  return Math.max(0, Math.min(r.right, W) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, H) - Math.max(r.top, 0));
+}
+
+function updateProgress(v) {
+  if (!v) return;
+  const p = progress.get(v) || { ct: null, stuck: 0 };
+  const ct = v.currentTime;
+  p.stuck = v.readyState < 2 && p.ct !== null && Math.abs(ct - p.ct) <= 0.05 ? p.stuck + 1 : 0;
+  p.ct = ct;
+  progress.set(v, p);
+}
+
+function notPlaying(v) {
+  // paused, or no data (readyState < 2) with the playhead unmoved over NOT_PLAYING_POLLS polls: a momentary
+  // "waiting" in a stall is still playing
+  return v.paused || (v.readyState < 2 && (progress.get(v)?.stuck ?? 0) >= NOT_PLAYING_POLLS);
+}
+
+function pickBestVideo(exclude = null) {
+  // the largest visible playing element; else the largest visible one; else (no element has a picture yet, e.g. at
+  // page load) the first playing one in DOM order, then the first. Equal areas keep DOM order. `exclude`: an element
+  // never returned (the attached one, when its replacement is sought).
+  const all = [...document.querySelectorAll("video")].filter((x) => x !== exclude);
+  const vis = all.filter((x) => !x.ended && visibleArea(x) > 0);
+  const largest = (xs) => xs.reduce((a, b) => (visibleArea(b) > visibleArea(a) ? b : a));
+  const playing = vis.filter((x) => !x.paused);
+  if (playing.length) return largest(playing);
+  if (vis.length) return largest(vis);
+  return all.find((x) => !x.paused && !x.ended) ?? all[0] ?? null;
+}
+
+function repick() {
+  // sticky: the attached element is kept unless it is detached, ended, or not playing while another visible playing
+  // element is at least as large (twitch's replacement player left beside a dead one); never on a pause alone
+  if (!video) {
+    const v = pickBestVideo();
+    if (v) attachVideo(v, "initial");
+    return;
+  }
+  const reason = !video.isConnected ? "detached" : video.ended ? "ended" : notPlaying(video) ? "replaced_same_size" : null;
+  if (!reason) return;
+  // a replacement for an element that is still connected must itself play (not paused, readyState >= 2) with a picture
+  // at least as large; a detached or ended one takes the best pick as before
+  const v = pickBestVideo(reason === "replaced_same_size" ? video : null);
+  if (!v || v === video) return;
+  if (reason === "replaced_same_size" && (v.paused || v.ended || v.readyState < 2 || visibleArea(v) <= 0 ||
+                                          visibleArea(v) < visibleArea(video))) {
+    return;
+  }
+  attachVideo(v, reason);
+}
+
+function attachVideo(v, reason = "initial") {
   if (video === v) return;
 
   video = v;
+  attachReason = reason;
   lastEventType = null;
   // stall state belongs to the element: re-evaluate it on the new one (the safety net emits "stall" if it is
   // buffering), instead of carrying the old element's flag past the "video_start" that clears the label
@@ -360,11 +449,8 @@ function endCollection(reason = "manual") {
 const observer = new MutationObserver((mutations) => {
   for (const m of mutations) {
     if (m.addedNodes.length > 0) {
-      const v = pickBestVideo();
-      if (v) {
-        attachVideo(v);
-        break;
-      }
+      repick();
+      break;
     }
   }
 });
@@ -375,10 +461,7 @@ observer.observe(document.documentElement, {
 });
 
 // Fallback: attach immediately if video already exists
-const existingVideo = pickBestVideo();
-if (existingVideo) {
-  attachVideo(existingVideo);
-}
+repick();
 
 // yt player stats (G3, ground truth only): page_stats.js runs in the page world and posts here; forwarded as a
 // separate stream (stored apart from the label events, exported to player_stats.jsonl, never into labels.csv).
@@ -412,12 +495,9 @@ setInterval(tryFlush, FLUSH_INTERVAL_MS);
 setInterval(() => {
   // Detachment recovery: if our element left the DOM (platform swapped the
   // player), re-attach to the live one instead of polling a dead reference.
-  if (video && !video.isConnected) {
-    const v = pickBestVideo();
-    if (v && v !== video) {
-      attachVideo(v);
-    }
-  }
+  // The sticky pick's release (repick) is evaluated here too, after the attached element's progress is updated.
+  updateProgress(video);
+  repick();
   if (!video) return;
   emit("res_meta");
 }, RESOLUTION_POLL_INTERVAL_MS);
