@@ -3659,7 +3659,7 @@ class BrowserSession:
             s = _tt_state(self._page)
             labels = getattr(self, "net_labels", None)
             try:
-                state = int(labels[-1].state) if labels else None
+                state = int(stuck.hold_state(labels[-1])) if labels else None     # §9: a trace row's band state
             except (ValueError, AttributeError, TypeError):
                 state = None
             # tt can pause itself (ti_8: a "pause" event, then flat until room_ended): click play while paused and flat,

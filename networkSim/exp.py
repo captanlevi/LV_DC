@@ -29,7 +29,7 @@ from utils.netStat import net_episode_generator, family_episode_generator, sessi
 from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
                            get_higher_state, get_lower_state, schedule_of)
-from utils.dataModels import NetLabel, NetStat
+from utils.dataModels import NetLabel, NetStat, net_label_row, trace_label_fields
 from browser import BrowserSession
 import session_meta
 import session_names
@@ -332,13 +332,17 @@ async def _ossilate(
         max_episodes=max_episodes,
         **SHAPER_OPTS,
     ):
+        scheduled = deadline if deadline is not None else time.time()
         _apply_net_stat(net_stat= net_stat)
         ts = time.time()
+        # §9 (levi efb5e4cc): a trace change carries its regime, band state, source position and the scheduled time
+        # (ts is the applied one: the apply-lag gate); a state change carries none of these (net_labels unchanged)
+        tr = trace_label_fields(net_stat, scheduled)
         net_labels.append(    # restart §2 (c): the realised rate / delay / loss beside the nominal state and the re-draw
             NetLabel(timestamp=ts, speed=net_stat.rate, state=net_stat.state, delay_ms=net_stat.delay_ms,
                      loss_pct=net_stat.loss_pct, redraw_kbit=net_stat.redraw_kbit,
                      redraw_delay_ms=net_stat.redraw_delay_ms, redraw_loss_pct=net_stat.redraw_loss_pct,
-                     walk_step=net_stat.walk_step)
+                     walk_step=net_stat.walk_step, **tr)
         )
         # restart §2: a change every 2 s, so the changes keep the schedule's own clock (deadline + duration); an apply's
         # time (make slow) and the tick's overshoot no longer add to the session per change
@@ -505,7 +509,8 @@ def _room_rx_source() -> str:
 
 
 def save_json(path: str | Path, data: list[NetLabel]):
-    save_data = [asdict(obj) for obj in data]
+    # §9: the trace fields only on a trace session's rows (a state session's net_labels.txt is byte-identical)
+    save_data = [net_label_row(obj) for obj in data]
     with open(path, "w") as f:
         for item in save_data:
             json.dump(item, f)
@@ -653,6 +658,19 @@ if __name__ == "__main__":
              "session (initial state, every transition back to it); recorded in meta.json hold_state.",
     )
     parser.add_argument(
+        "--trace-regime",
+        default=None,
+        help="§9 trace regime (orchestrate's per-session draw passes it, trio only): the session key the trace plan is "
+             "seeded by; the shaper replays a public throughput trace instead of the state walk (traces/replay.py). "
+             "Needs --slot, --episodes and --trace-upper-kbit; meta.json shaper.regime = trace.",
+    )
+    parser.add_argument(
+        "--trace-upper-kbit",
+        type=float,
+        default=None,
+        help="§9 (levi ruling 3): the window's upper clip, min(probe goodput, link capacity) / N, set by orchestrate.",
+    )
+    parser.add_argument(
         "--slot",
         default=None,
         help="t53 trio only (orchestrate.py --concurrent sets it): run in this slot, a tag of LVDC_TRIO_SLOTS' composition (trio_slots.py: its "
@@ -748,6 +766,25 @@ if __name__ == "__main__":
         SHAPER_OPTS = {"initial_state_fn": SHAPER_OPTS.get("initial_state_fn"), "redraw_s": tuple(SCHEDULE["redraw_s"]),
                        "low_cap_s": SCHEDULE["low_cap_s"], "self_loops": SCHEDULE["self_loops"]}
 
+    TRACE = None
+    if args.trace_regime is not None:      # §9 (levi efb5e4cc): trio record sessions only; fails closed before any dir
+        from traces import replay as _replay
+        if not args.slot or not args.episodes or args.trace_upper_kbit is None or args.hold_state is not None:
+            sys.exit("--trace-regime needs --slot, --episodes and --trace-upper-kbit, and never --hold-state")
+        _man = _replay.load_manifest()
+        _total_s = args.episodes * SCHEDULE["episode_s"]
+        _plan = _replay.plan(args.trace_regime, _total_s, _man)
+        _cache = _replay.cache_dir()
+        from traces.build_manifest import sha256_file
+        _bad = [s_["trace"] for s_ in _plan["segments"]
+                if not (_cache / _plan["source"] / s_["trace"]).exists()
+                or sha256_file(_cache / _plan["source"] / s_["trace"]) != s_["sha256"]]
+        if _bad:
+            sys.exit(f"trace cache {_cache}: {_bad} missing or not the manifest's sha256 (fail closed)")
+        TRACE = {"plan": _plan, "xs": _replay.series(_plan, _cache, _man), "total_s": _total_s,
+                 "lower": _replay.lower_kbit(), "upper": float(args.trace_upper_kbit), "cache": str(_cache),
+                 "manifest_sha256": sha256_file(_replay.MANIFEST)}
+
     is_capture: bool = True
 
     if args.save_dir:
@@ -764,12 +801,19 @@ if __name__ == "__main__":
     # record (rules, sigma per state, factor, seeds) goes to meta.json shaper
     WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)
     SHAPER_OPTS.update(walk_rng=WALK_RNG, dl_factor=SHAPING_REC["dl_factor"]["value"])
+    if TRACE is not None:                  # the trace replaces the walk: one change per trace second that moves the rate
+        TRACE["delay_ms"] = int(round(_replay.TRACE_DELAY_MS * SHAPING_REC["dl_factor"]["value"]))
+
+        def SHAPER_GEN(**_kw):             # noqa: N802 -- the module-level hook _ossilate calls
+            return _replay.trace_episode_generator(TRACE["xs"], TRACE["plan"], TRACE["lower"], TRACE["upper"],
+                                                  TRACE["delay_ms"], TRACE["total_s"])
+        SHAPER_OPTS = {}
     # prereg d32a48ce (label diversity at the 10-22 tip, item 2): with LVDC_STEER_TABLE set (orchestrate --trio-steer),
     # the session's dwell weights over the shaper states are drawn now, at session start, from the last post's deficit
     # table and the base matrix only; nothing during the session feeds back. A balancer band start (--initial-state)
     # still wins; the record goes to meta.json steering
     STEERING = None
-    if os.environ.get("LVDC_STEER_TABLE") is not None and args.hold_state is None:
+    if os.environ.get("LVDC_STEER_TABLE") is not None and args.hold_state is None and TRACE is None:
         import steering
         base_transition = transition
         transition, steer_start, STEERING = steering.steer(platform, transition,
@@ -791,10 +835,20 @@ if __name__ == "__main__":
                        profile_template=profile_template, shaping=SHAPING_REC)
     if args.hold_state is not None:
         session_meta.write(session_dir, hold_state=args.hold_state)
+    if TRACE is not None:                  # §9: meta.json shaper.regime = trace (the fold exclusion's marker) + the record
+        _m = json.loads((session_dir / "meta.json").read_text())
+        session_meta.write(session_dir, shaper={**(_m.get("shaper") or {}), "regime": "trace", "trace": {
+            "rule": _replay.TRACE_RULE, "key": args.trace_regime, "plan": TRACE["plan"], "lower_kbit": TRACE["lower"],
+            "upper_kbit": TRACE["upper"], "upper_record": json.loads(os.environ.get("LVDC_TRACE_UPPER") or "null"),
+            "delay_ms": TRACE["delay_ms"], "loss_pct": 0.0, "band_rule": _replay.BAND_RULE,
+            "clip": _replay.clip_shares(TRACE["xs"], TRACE["lower"], TRACE["upper"], TRACE["total_s"]),
+            "cache": TRACE["cache"], "manifest_sha256": TRACE["manifest_sha256"]}})
     if STEERING is not None:
         session_meta.write(session_dir, steering=STEERING)
     import steering as _steering           # levi 16:43 / 20:58 / 00:41: a session that is not steered says why, never silent
     _fb = _steering.fallback_of(os.environ, args.hold_state, STEERING)
+    if TRACE is not None:                  # §9: a trace session has no state for a table to steer
+        _fb = "trace regime"
     if _fb is not None:
         session_meta.write(session_dir, steering_fallback=_fb)
     if SLOT is None:

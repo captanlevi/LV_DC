@@ -54,6 +54,16 @@ def _ts(n) -> float | None:
         return None
 
 
+def hold_state(n):
+    """The state the low-state hold reads for a net label: its state; on a §9 trace row (state null, regime "trace")
+    its rate_band_state, the nominal state whose band holds the rate (levi efb5e4cc, ruling 2). None when neither."""
+    get = (lambda k: getattr(n, k, None)) if not isinstance(n, dict) else n.get
+    st = get("state")
+    if st is None and get("regime") == "trace":
+        return get("rate_band_state")
+    return st
+
+
 def _t2_rate(n) -> float | None:
     """The rate the T2 clock reads: the sub-step's re-draw (redraw_kbit) where the row has one, so restart §2's walk
     steps leave the stuck rule's calibration as it was (levi on 80af314); else the row's rate (rows before §2)."""
@@ -111,7 +121,7 @@ def low_hold_end(net_labels: list, t: float) -> float | None:
     end = None
     for a, b in zip(labs, labs[1:] + [None]):
         try:
-            low = int(a.state if hasattr(a, "state") else a.get("state")) in LOW_HOLD_STATES
+            low = int(hold_state(a)) in LOW_HOLD_STATES
         except (TypeError, ValueError):
             low = False
         if low:
@@ -138,7 +148,7 @@ def low_spans(net_labels: list) -> list[tuple[float, float]]:
     out = []
     for a, b in zip(labs, labs[1:] + [None]):
         try:
-            low = int(a.state if hasattr(a, "state") else a.get("state")) in LOW_HOLD_STATES
+            low = int(hold_state(a)) in LOW_HOLD_STATES
         except (TypeError, ValueError):
             low = False
         if low:
