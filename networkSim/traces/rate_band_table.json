@@ -1,0 +1,62 @@
+{
+ "rule": "half-open [rate_min, rate_max), the top state's max included; outside every band the nearest by log-rate",
+ "bands": [
+  {
+   "state": "1",
+   "lo_kbit": 150,
+   "hi_kbit": 280
+  },
+  {
+   "state": "2",
+   "lo_kbit": 280,
+   "hi_kbit": 450
+  },
+  {
+   "state": "3",
+   "lo_kbit": 450,
+   "hi_kbit": 700
+  },
+  {
+   "state": "4",
+   "lo_kbit": 700,
+   "hi_kbit": 1000
+  },
+  {
+   "state": "5",
+   "lo_kbit": 1000,
+   "hi_kbit": 1400
+  },
+  {
+   "state": "6",
+   "lo_kbit": 1400,
+   "hi_kbit": 1800
+  },
+  {
+   "state": "7",
+   "lo_kbit": 1800,
+   "hi_kbit": 2500
+  },
+  {
+   "state": "8",
+   "lo_kbit": 2500,
+   "hi_kbit": 4000
+  },
+  {
+   "state": "9",
+   "lo_kbit": 4000,
+   "hi_kbit": 6000
+  },
+  {
+   "state": "10",
+   "lo_kbit": 6000,
+   "hi_kbit": 9000
+  },
+  {
+   "state": "11",
+   "lo_kbit": 9000,
+   "hi_kbit": 12000
+  }
+ ],
+ "outside": "nearest band edge by |log(kbit) - log(edge)|",
+ "lower_clip_kbit": 150
+}

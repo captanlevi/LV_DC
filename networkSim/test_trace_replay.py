@@ -40,6 +40,18 @@ def test_rate_band_state():
     assert R.rate_band_state(100) == "1" and R.rate_band_state(50000) == "11"
 
 
+def test_band_table_golden():
+    """levi 16:53 (ruling 2, fixed before G2): the rate_band_state table is pinned by traces/rate_band_table.json; any
+    change to utils/shaping's bands or the rule shows here."""
+    import json
+    g = json.loads((HERE / "traces" / "rate_band_table.json").read_text())
+    assert g["rule"] == R.BAND_RULE and g["lower_clip_kbit"] == R.lower_kbit()
+    assert [(b["state"], b["lo_kbit"], b["hi_kbit"]) for b in g["bands"]] == R.bands()
+    for b in g["bands"]:                               # each band's own edges map to it (the top state's max included)
+        assert R.rate_band_state(b["lo_kbit"]) == b["state"]
+        assert R.rate_band_state(b["hi_kbit"] - 1e-6) == b["state"]
+
+
 def test_plan_and_generator():
     p1 = R.plan("R:yt1:3", 450, MAN)
     assert p1 == R.plan("R:yt1:3", 450, MAN) and p1["source"] in MAN["sources"]
