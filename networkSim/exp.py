@@ -764,6 +764,11 @@ if __name__ == "__main__":
         session_dir = Path(__file__).parent.parent / "current_data"
         session_dir.mkdir(parents=True, exist_ok=True)
     else:
+        import data_root as _dr_c8      # t67 C8 (levi 18:56): the session's kind and its data root agree, in exp.py too
+        _c8 = _dr_c8.kind_refusal(SLOT is not None and os.environ.get("LVDC_TRIO_RECORD") == "1", DATA_DIR)
+        if _c8:
+            print(f"C8 REFUSED: {_c8}")
+            sys.exit(2)
         session_dir = (make_session_dir(platform) if SLOT is None else
                        make_session_dir(platform, DATA_DIR / trio_slots.TRIO_DIR, trio_slots.TRIO_NAME_FLOOR))
     print(f"Session directory: {session_dir}")

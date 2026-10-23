@@ -20,7 +20,8 @@ import data_root as DR  # noqa: E402
 
 # t67 C8: a counted line needs the record root (RECORD_MARKER); every other concurrent line a dry root (none)
 _REC, _DRY = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
-(_REC / DR.RECORD_MARKER).write_text(json.dumps({"uuid": "unused-on-a-tmpfs"}))
+(_REC / DR.RECORD_MARKER).write_text(json.dumps({"uuid": "TEST-VOL"}))
+DR.volume_uuid = lambda p, run=None: "TEST-VOL"       # the volume under every tmp root, as findmnt would read it
 ENV = {"LVDC_DATA_ROOT_UUID": "0000-test", "LVDC_DATA_ROOT": str(_REC)}
 
 
@@ -104,17 +105,28 @@ if __name__ == "__main__":
 
 
 def test_c8_data_root_matches_the_run():
-    """t67 C8 (levi 18:45): every non-record run goes to a dry root, a counted run only to the record root (the marker,
-    with its volume's UUID when readable). Both refusals and both accepted combinations."""
+    """t67 C8 (levi 18:45 / 18:56, brad): fail closed both ways, every mode. A counted run needs the marker and its
+    volume's UUID (readable and equal); a run that is not of record is refused on any marked root, UUID readable or
+    not; single mode never writes under a marked root."""
     dry = {**ENV, "LVDC_DATA_ROOT": str(_DRY)}
     nonrec = without(RECORD, "--trio-record", "--n-draw", "--window-min")
-    assert refusal(RECORD) is None and refusal(nonrec, dry) is None
+    single = ["--batch", "youtube=1"]
+    assert refusal(RECORD) is None and refusal(nonrec, dry) is None and refusal(single, dry) is None
     r = refusal(RECORD, dry)
-    assert r and "not the record root" in r and "no marker" in r, r
-    r = refusal(nonrec)
-    assert r and "without --trio-record on the record root" in r, r
-    assert DR.record_root_check(_REC, uuid_of=lambda p: "AAAA")["is_record"] is False         # a copied marker
-    (_REC / DR.RECORD_MARKER).write_text(json.dumps({"uuid": "AAAA"}))
-    assert DR.record_root_check(_REC, uuid_of=lambda p: "AAAA")["reason"] == "marker + volume UUID"
-    assert DR.record_root_check(_REC, uuid_of=lambda p: None)["is_record"] is True            # UUID unreadable: stated
-
+    assert r and "not the verified record root" in r and "no marker" in r, r
+    for argv in (nonrec, single):
+        r = refusal(argv)
+        assert r and "not of record on a marked record root" in r, (argv, r)
+    saved = DR.volume_uuid
+    try:
+        DR.volume_uuid = lambda p, run=None: None                               # findmnt failing
+        r = refusal(RECORD)
+        assert r and "UUID unreadable" in r, r                                  # brad: a counted run refuses
+        r = refusal(nonrec)
+        assert r and "marked record root" in r, r                               # a dry run refuses any marker
+        DR.volume_uuid = lambda p, run=None: "OTHER"                            # a copied marker
+        assert "is not the volume's" in refusal(RECORD)
+    finally:
+        DR.volume_uuid = saved
+    src = (HERE / "exp.py").read_text()
+    assert '_dr_c8.kind_refusal(SLOT is not None and os.environ.get("LVDC_TRIO_RECORD") == "1", DATA_DIR)' in src

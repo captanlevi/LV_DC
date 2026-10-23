@@ -48,21 +48,36 @@ def volume_uuid(path: Path, run=subprocess.run) -> str | None:
         return None
 
 
-def record_root_check(root: Path | None = None, uuid_of=volume_uuid) -> dict:
-    """{is_record, reason, resolved}: the data root is the record root iff it holds RECORD_MARKER with the UUID of the
-    volume under it (when the volume's UUID can be read; else the marker alone, stated)."""
+def record_root_check(root: Path | None = None, uuid_of=None) -> dict:
+    """{marker, uuid_ok, is_record, reason, resolved} (brad / levi 18:56, fail closed both ways): `marker` = the root
+    holds RECORD_MARKER at all; `uuid_ok` = its UUID equals the volume's under it (None when either is unreadable);
+    is_record = marker and uuid_ok is True. A counted run needs is_record; a non-record run is refused on any marker."""
     import json
     res = Path(root or DATA_ROOT).resolve()
     m = res / RECORD_MARKER
-    if not m.is_file():
-        return {"is_record": False, "reason": "no marker", "resolved": str(res)}
+    out = {"marker": m.is_file(), "uuid_ok": None, "is_record": False, "resolved": str(res)}
+    if not out["marker"]:
+        return {**out, "reason": "no marker"}
     try:
         want = (json.loads(m.read_text()) or {}).get("uuid")
     except (OSError, ValueError, AttributeError):
-        return {"is_record": False, "reason": "marker unreadable", "resolved": str(res)}
-    have = uuid_of(res)
-    if have is None:
-        return {"is_record": True, "reason": "marker (volume UUID unreadable)", "resolved": str(res)}
+        return {**out, "reason": "marker unreadable"}
+    have = (uuid_of or volume_uuid)(res)       # looked up at call time (tests replace volume_uuid)
+    if have is None or not want:
+        return {**out, "reason": "marker present, volume UUID unreadable or marker without uuid"}
     if want != have:
-        return {"is_record": False, "reason": f"marker UUID {want} is not the volume's {have}", "resolved": str(res)}
-    return {"is_record": True, "reason": "marker + volume UUID", "resolved": str(res)}
+        return {**out, "uuid_ok": False, "reason": f"marker UUID {want} is not the volume's {have}"}
+    return {**out, "uuid_ok": True, "is_record": True, "reason": "marker + volume UUID"}
+
+
+def kind_refusal(of_record: bool, root: Path | None = None, uuid_of=None) -> str | None:
+    """levi 18:45 / 18:56 (C8, fail closed both ways, every mode): a counted run needs the verified record root (the
+    marker and its volume's UUID); a run that is not of record never writes under a marked root, UUID readable or not."""
+    chk = record_root_check(root, uuid_of)
+    if of_record and not chk["is_record"]:
+        return (f"a counted run on a data root that is not the verified record root ({chk['resolved']}: {chk['reason']}); "
+                "refused (C8: the marker and its volume's UUID)")
+    if not of_record and chk["marker"]:
+        return (f"a run that is not of record on a marked record root ({chk['resolved']}: {chk['reason']}); refused (C8: "
+                "every non-record run goes to a dry root)")
+    return None
