@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """v3 B4 STALL lever (prereg b6bc9246): the plan is drawn from the session's name only (reproducible, no overlap, inside
-the session), the rate is RATE_SHARE x the session's lowest rung with the platform fallback when it is unread or the
-read fails, the episode clock starts at the first apply, an abort inside an episode (or its grace) is counted, and
+the session), the rate is RATE_SHARE x the session's lowest rung read once at start (fallback when unread), fixed for
+every episode, with no live read in the shaper path (levi 19:49), the episode clock starts at the first apply, an abort inside an episode (or its grace) is counted, and
 _ossilate replaces only the rate inside an episode and tags the net_labels row.
 
     python3 test_lever.py        (exit 0 = pass)
@@ -40,20 +40,46 @@ def test_rate_source_and_fallback():
     assert L.rate_kbit("twitch", {"kbit": 160, "source": "hls_master"}) == (80, "hls_master")
     for r in (None, {}, {"kbit": 300, "source": "fallback"}, {"kbit": None, "source": "page_js"}):
         assert L.rate_kbit("tiktok", r) == (L.FALLBACK_KBIT["tiktok"], "fallback")
-    calls = []
-
-    def boom():
-        calls.append(1)
-        raise RuntimeError("cdp gone")
-    lv = L.Lever("youtube", "yt_1", 600, P, rung_fn=boom)
+    lv = L.Lever("youtube", "yt_1", 600, P)
     ep = lv.episodes[0]
     assert lv.rate_for(ep, 10.0) == L.FALLBACK_KBIT["youtube"] and lv.rate_for(ep, 12.0) == L.FALLBACK_KBIT["youtube"]
-    assert calls == [1]                                            # read once per episode
-    assert lv.rates[ep["id"]]["source"] == "fallback" and lv.rates[ep["id"]]["first_applied_t"] == 10.0
+    assert lv.rate["source"] == "fallback" and "no rate fixed at session start" in lv.rate["note"]
+    assert lv.first_applied == {ep["id"]: 10.0}
+    lv = L.Lever("tiktok", "tt_1", 600, P)
+    assert lv.fix_rate({"kbit": 2400, "source": "room_js"}, 5.0)["kbit"] == 1200
+    try:
+        lv.fix_rate({"kbit": 100, "source": "room_js"}, 6.0)
+        raise AssertionError("the rate is fixed once")
+    except RuntimeError:
+        pass
+    assert all(lv.rate_for(e, 100.0 + i) == 1200 for i, e in enumerate(lv.episodes))   # every episode, one rate
+
+
+def test_no_live_read_in_the_lever():
+    """levi 19:49: the shaper path makes no live player read. lever.py imports nothing that reaches the player; the rate
+    is fixed from a value (never a callable) once; _ossilate's body names no browser / rung read; exp.py fixes the rate
+    before the shaper starts."""
+    import ast
+    import inspect
+    tree = ast.parse((HERE / "lever.py").read_text())
+    mods = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names} | \
+           {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    assert mods <= {"__future__", "random"}, mods
+    code = (HERE / "lever.py").read_text().split('"""', 2)[2]
+    for word in ("browser", "_page", "eval(", "CDP", "rung_fn", "labels.csv", "net_labels"):
+        assert word not in code, word
+    assert list(inspect.signature(L.Lever).parameters) == ["platform", "session_name", "session_s", "params"]
+    src = (HERE / "exp.py").read_text()
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.AsyncFunctionDef) and n.name == "_ossilate")
+    body = ast.get_source_segment(src, fn)
+    for word in ("browser", "_current_rung", "eval(", "fix_rate"):
+        assert word not in body, word
+    i_fix = src.index("LEVER.fix_rate(_rung, time.time(), _note)")
+    assert i_fix < src.index("abort_reason = asyncio.run(experiment(") and src.count("_current_rung") == 1
 
 
 def test_clock_and_abort_record():
-    lv = L.Lever("twitch", "tw_1", 3600, P, rung_fn=lambda: {"kbit": 200, "source": "hls_master"})
+    lv = L.Lever("twitch", "tw_1", 3600, P)
     e1 = lv.episodes[0]
     lv.active(1000.0)
     assert lv.t0 == 1000.0                                          # t0 = the first apply
@@ -102,7 +128,8 @@ def test_ossilate_overlay():
 
         def time(self):
             return next(self.ts, 1e9)
-    lv = L.Lever("twitch", "tw_x", 600, P, rung_fn=lambda: {"kbit": 200, "source": "hls_master"})
+    lv = L.Lever("twitch", "tw_x", 600, P)
+    lv.fix_rate({"kbit": 200, "source": "hls_master"}, 99.0)
     lv.episodes = [{"id": 1, "onset_s": 5.0, "d_s": 20.0}]
     applied, labels = [], []
     ns = _ossilate_ns(SHAPER_GEN=lambda **kw: iter([NS(5000 + i, "s8", 40, 0.1) for i in range(3)]),
@@ -112,8 +139,8 @@ def test_ossilate_overlay():
     assert [x.rate for x in applied] == [5000, 100, 5002]          # t 0 / 5 / 40 s: only the episode's apply is replaced
     assert [(x.delay_ms, x.loss_pct, x.state) for x in applied] == [(40, 0.1, "s8")] * 3
     assert [n.lever for n in labels] == [None, 1, None] and [n.speed for n in labels] == [5000, 100, 5002]
-    assert lv.record()["rates"]["1"] == {"kbit": 100, "source": "hls_master", "first_applied_t": 105.0,
-                                         "rung": {"kbit": 200, "source": "hls_master"}}
+    r = lv.record()
+    assert r["rate"]["kbit"] == 100 and r["rate"]["at"] == 99.0 and r["first_applied"] == {"1": 105.0}
     ns = _ossilate_ns(SHAPER_GEN=lambda **kw: iter([NS(7000, "s9", 10, 0.0)]),     # no lever: untouched
                       _apply_net_stat=lambda net_stat: applied.append(net_stat), LEVER=None)
     labels = []
@@ -129,6 +156,7 @@ def test_exp_wiring():
 def main() -> int:
     test_plan_reproducible_non_overlapping()
     test_rate_source_and_fallback()
+    test_no_live_read_in_the_lever()
     test_clock_and_abort_record()
     test_ossilate_overlay()
     test_exp_wiring()

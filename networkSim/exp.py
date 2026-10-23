@@ -982,8 +982,7 @@ if __name__ == "__main__":
             if args.lever:                       # v3 B4: the plan is fixed now, before playback and before the shaper starts
                 import lever as _lever
                 _horizon = (args.episodes or coverage_report.SESSION_EPISODES.get(platform) or 1) * SCHEDULE["episode_s"]
-                LEVER = _lever.Lever(platform, session_dir.name, float(_horizon), json.loads(args.lever),
-                                     rung_fn=lambda: browser._current_rung(0.0))
+                LEVER = _lever.Lever(platform, session_dir.name, float(_horizon), json.loads(args.lever))
             browser.start()
             if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
                 TRIO["socket_owner_start"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
@@ -1021,6 +1020,12 @@ if __name__ == "__main__":
             print("="*60 + "\n")
             input()
 
+        if LEVER is not None:     # v3 B4 (levi 19:49): the lowest rung read ONCE here, before the shaper starts; fixed
+            try:                  # for every episode (the shaper path makes no live player read)
+                _rung, _note = (browser._current_rung(0.0) if browser is not None else None), None
+            except Exception as _e:
+                _rung, _note = None, f"rung read at start failed: {_e!r}"[:160]
+            print(f"[lever] rate fixed at start: {LEVER.fix_rate(_rung, time.time(), _note)}")
         abort_reason = asyncio.run(experiment(
             episode_time_in_seconds=SCHEDULE["episode_s"],
             net_labels=net_labels,

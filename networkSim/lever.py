@@ -4,8 +4,10 @@ the shaper's band drops below the session's lowest offered rung for d seconds, t
 - Episodes: onsets a Poisson process over session time at rate lambda_per_s, durations d ~ U[d_lo_s, d_hi_s], the whole
   plan drawn at session start from random.Random("lever:<session name>"): never tied to elapsed state, the player or
   the labels (an onset inside a running episode is skipped and counted).
-- Rate: RATE_SHARE x the session's lowest offered rung as read at the episode's onset (browser._current_rung: twitch's
-  HLS master, yt / tt page JS); FALLBACK_KBIT when only the fallback rung is known (logged per episode as fallback).
+- Rate: RATE_SHARE x the session's lowest offered rung, read ONCE at session start by exp.py's main thread before the
+  shaper starts (browser._current_rung: twitch's HLS master, yt / tt page JS) and fixed for every episode (levi 19:49:
+  the shaper path makes no live player read). FALLBACK_KBIT when the rung is unread or only the fallback is known, or
+  when no rate was fixed before the first episode (logged with its reason).
 - The episode replaces only the applied rate (a step's delay / loss stay the state's); net_labels rows carry its id.
 - meta.json lever: the parameters as passed, the plan, each episode's rate and its source, and the session's abort
   if it fell inside an episode (aborts_in_episode; the calibration requires 0).
@@ -46,15 +48,25 @@ def rate_kbit(platform: str, rung: dict | None) -> tuple[int, str]:
 
 
 class Lever:
-    """The session's lever: the plan, its clock (t0 = the shaper's first apply) and each episode's rate, read once."""
+    """The session's lever: the plan, its clock (t0 = the shaper's first apply) and the one rate every episode applies."""
 
-    def __init__(self, platform: str, session_name: str, session_s: float, params: dict, rung_fn=None):
-        self.platform, self.params, self.rung_fn = platform, dict(params), rung_fn
+    def __init__(self, platform: str, session_name: str, session_s: float, params: dict):
+        self.platform, self.params = platform, dict(params)
         p = plan(session_name, session_s, float(params["lambda_per_s"]), float(params["d_lo_s"]),
                  float(params["d_hi_s"]))
         self.episodes, self.skipped = p["episodes"], p["skipped_overlapping"]
         self.t0: float | None = None
-        self.rates: dict[int, dict] = {}
+        self.rate: dict | None = None
+        self.first_applied: dict[int, float] = {}
+
+    def fix_rate(self, rung: dict | None, at: float, note: str | None = None) -> dict:
+        """Once per session: the rate from the rung read at start (a dict, never a callable; nothing is read here)."""
+        if self.rate is not None:
+            raise RuntimeError("lever: the rate is fixed once per session")
+        kbit, src = rate_kbit(self.platform, rung)
+        self.rate = {"kbit": kbit, "source": src, "at": at, "note": note,
+                     "rung": {k: rung.get(k) for k in ("kbit", "source", "error")} if rung else None}
+        return self.rate
 
     def active(self, now: float) -> dict | None:
         if self.t0 is None:
@@ -66,16 +78,10 @@ class Lever:
         return None
 
     def rate_for(self, ep: dict, now: float) -> int:
-        if ep["id"] not in self.rates:
-            rung = None
-            try:
-                rung = self.rung_fn() if self.rung_fn else None
-            except Exception as exc:                         # never fatal: the fallback, stated
-                rung = {"source": "fallback", "error": repr(exc)[:120]}
-            kbit, src = rate_kbit(self.platform, rung)
-            self.rates[ep["id"]] = {"kbit": kbit, "source": src, "first_applied_t": now,
-                                    "rung": {k: rung.get(k) for k in ("kbit", "source")} if rung else None}
-        return self.rates[ep["id"]]["kbit"]
+        if self.rate is None:                                  # never read before the shaper: the fallback, stated
+            self.fix_rate(None, now, note="no rate fixed at session start; fallback at the first episode")
+        self.first_applied.setdefault(ep["id"], now)
+        return self.rate["kbit"]
 
     def record(self, abort_at: float | None = None, abort_reason: str | None = None) -> dict:
         hit = None
@@ -84,7 +90,7 @@ class Lever:
             hit = next((ep["id"] for ep in self.episodes if ep["onset_s"] <= t <= ep["onset_s"] + ep["d_s"] + ABORT_GRACE_S),
                        None)
         return {"params": self.params, "rate_share": RATE_SHARE, "fallback_kbit": FALLBACK_KBIT[self.platform],
-                "t0": self.t0, "episodes": self.episodes, "skipped_overlapping": self.skipped,
-                "rates": {str(k): v for k, v in self.rates.items()}, "abort_reason": abort_reason,
+                "t0": self.t0, "episodes": self.episodes, "skipped_overlapping": self.skipped, "rate": self.rate,
+                "first_applied": {str(k): v for k, v in self.first_applied.items()}, "abort_reason": abort_reason,
                 "aborts_in_episode": 1 if hit is not None else 0, "abort_episode": hit,
                 "abort_grace_s": ABORT_GRACE_S}
