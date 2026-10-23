@@ -161,6 +161,69 @@ function srcChanged(v) {
   return changed;
 }
 
+// v3 A2 / A10 (t67): the raw player-event stream and element identity. Every listed <video> event of an element we
+// attached, never deduped (emit() drops a repeat type, so a second resize in play was lost and that switch was poll-timed,
+// kb collector.tier.sampling_resize_poll_dedupe), each with both clocks and the element's state, in its own stream
+// (player_events.jsonl), never in the label events. el_id: a stable per-element counter; src_key: what feeds the element
+// (a blob URL's hash, the srcObject kind -- MediaStream on tt, MediaSourceHandle on twitch -- or a URL hash, no query).
+const PLAYER_EVENTS = ["resize", "waiting", "stalled", "playing", "play", "pause", "seeking", "seeked", "ratechange",
+                       "emptied", "loadstart", "loadedmetadata", "loadeddata", "durationchange", "ended"];
+const SIDE_MAX = 5000;
+const elIds = new WeakMap();
+let elNext = 0;
+function elId(v) {
+  if (!v) return null;
+  if (!elIds.has(v)) elIds.set(v, ++elNext);
+  return elIds.get(v);
+}
+function hash8(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
+function srcKey(v) {
+  if (!v) return null;
+  if (v.srcObject) return (v.srcObject.constructor && v.srcObject.constructor.name) || "srcObject";
+  const s = v.currentSrc || v.src || "";
+  if (!s) return "";
+  return s.startsWith("blob:") ? "blob:" + hash8(s) : "url:" + hash8(s.split("?")[0]);
+}
+const sideBuffers = { player_events: [] };
+function side(stream, rec) {
+  const buf = sideBuffers[stream];
+  buf.push(rec);
+  if (buf.length > SIDE_MAX) buf.shift();
+}
+function playerEvent(v, ev, extra) {
+  if (!collecting || !v) return;
+  const pn = performance.now();
+  side("player_events", {
+    ev, ts: performance.timeOrigin + pn, pn, wall: Date.now(), el: elId(v), src: srcKey(v), attached: v === video,
+    ct: v.currentTime ?? null, rs: v.readyState ?? null, ns: v.networkState ?? null, w: v.videoWidth ?? null,
+    h: v.videoHeight ?? null, paused: !!v.paused, ended: !!v.ended, rate: v.playbackRate ?? null,
+    buf: bufferedAhead(v), top: window === window.top, ...(extra || {}),
+  });
+}
+const peObserved = new WeakSet();
+function observePlayerEvents(v) {
+  if (peObserved.has(v)) return;
+  peObserved.add(v);
+  for (const ev of PLAYER_EVENTS) v.addEventListener(ev, () => playerEvent(v, ev));
+}
+function flushSide() {
+  for (const [stream, buf] of Object.entries(sideBuffers)) {
+    if (buf.length === 0) continue;
+    const batch = buf.splice(0, buf.length);
+    try {
+      chrome.runtime.sendMessage({ kind: "side-batch", stream, payload: batch }, (resp) => {
+        if (chrome.runtime.lastError || !resp?.ok) buf.unshift(...batch);
+      });
+    } catch (e) {
+      buf.unshift(...batch);
+    }
+  }
+}
+
 function buildEvent(type) {
   return {
     event_id: event_id++,
@@ -168,6 +231,8 @@ function buildEvent(type) {
     type,
     video_w: video?.videoWidth ?? null,
     video_h: video?.videoHeight ?? null,
+    el_id: elId(video),                 // v3 A10
+    src_key: srcKey(video),
     client_w: video?.clientWidth ?? null,
     client_h: video?.clientHeight ?? null,
     dropped: video?.getVideoPlaybackQuality?.().droppedVideoFrames ?? null,
@@ -326,10 +391,13 @@ function pickBestVideo() {
   return candidates.find((x) => !x.paused && !x.ended) ?? candidates[0] ?? null;
 }
 
-function attachVideo(v) {
+function attachVideo(v, reason = "unknown") {
   if (video === v) return;
 
+  const prev = video;
   video = v;
+  observePlayerEvents(v);                 // v3 A2: before video_start, so the attach precedes the element's events
+  playerEvent(v, "lvqoe_attach", { reason, prev_el: elId(prev) });
   lastEventType = null;
   // stall state belongs to the element: re-evaluate it on the new one (the safety net emits "stall" if it is
   // buffering), instead of carrying the old element's flag past the "video_start" that clears the label
@@ -362,7 +430,7 @@ const observer = new MutationObserver((mutations) => {
     if (m.addedNodes.length > 0) {
       const v = pickBestVideo();
       if (v) {
-        attachVideo(v);
+        attachVideo(v, "dom_added");
         break;
       }
     }
@@ -377,7 +445,7 @@ observer.observe(document.documentElement, {
 // Fallback: attach immediately if video already exists
 const existingVideo = pickBestVideo();
 if (existingVideo) {
-  attachVideo(existingVideo);
+  attachVideo(existingVideo, "initial");
 }
 
 // yt player stats (G3, ground truth only): page_stats.js runs in the page world and posts here; forwarded as a
@@ -403,10 +471,11 @@ window.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") tryFlush();
 });
 
-window.addEventListener("pagehide", () => tryFlush());
+window.addEventListener("pagehide", () => { tryFlush(); flushSide(); });
 
 // Periodic flush in case message channel was busy
 setInterval(tryFlush, FLUSH_INTERVAL_MS);
+setInterval(flushSide, FLUSH_INTERVAL_MS);                 // v3: the side streams (player_events)
 
 // Resolution polling — records current dimensions once per second
 setInterval(() => {
@@ -415,7 +484,7 @@ setInterval(() => {
   if (video && !video.isConnected) {
     const v = pickBestVideo();
     if (v && v !== video) {
-      attachVideo(v);
+      attachVideo(v, "detached");
     }
   }
   if (!video) return;
