@@ -273,6 +273,17 @@ def steering_start_applied(rows: list) -> str | None:
     return None
 
 
+def merge(session_dir: Path, key: str, **fields) -> dict:
+    """Merge `fields` into the dict at meta.json[key] (created if absent), keeping its other keys (brad 18:16: a finish
+    write never replaces a key another writer may have filled)."""
+    p = session_dir / "meta.json"
+    meta = json.loads(p.read_text()) if p.exists() else {}
+    cur = meta.get(key) if isinstance(meta.get(key), dict) else {}
+    meta[key] = {**cur, **fields}
+    p.write_text(json.dumps(meta, indent=1, default=str))
+    return meta
+
+
 def write(session_dir: Path, **fields) -> dict:
     """Merge `fields` into session_dir/meta.json (creating it)."""
     p = session_dir / "meta.json"

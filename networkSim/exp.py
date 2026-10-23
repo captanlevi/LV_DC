@@ -1123,7 +1123,7 @@ if __name__ == "__main__":
 
         save_json(session_dir / "net_labels.txt", net_labels)
         if STEERING is not None:            # t65: the start the shaper applied (its first row), beside the draw
-            session_meta.write(session_dir, steering={**STEERING, "start_applied": session_meta.steering_start_applied(net_labels)})
+            session_meta.merge(session_dir, "steering", start_applied=session_meta.steering_start_applied(net_labels))
         if platform == "tiktok":   # supervisor 2026-10-18: the stream regime (codec, ladder) per session, from http_v2
             try:
                 from tt_stream import tt_stream_regime

@@ -237,7 +237,15 @@ def test_start_applied_and_override():
     ex = (HERE / "exp.py").read_text()
     assert '"--initial-state-source"' in ex and 'choices=("coverage", "balance", "pin")' in ex
     assert 'STEERING["start_overridden_by"] = steering.start_override(args.initial_state, args.initial_state_source)' in ex
-    assert '"start_applied": session_meta.steering_start_applied(net_labels)' in ex
+    assert 'session_meta.merge(session_dir, "steering", start_applied=session_meta.steering_start_applied(net_labels))' in ex
+    import tempfile                                    # brad 18:16: a nested merge keeps every other key of meta.steering
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d)
+        SM.write(sd, steering={"start_state": "7", "weights": {"7": 1.0}, "later_writer": 1}, other=2)
+        SM.merge(sd, "steering", start_applied="5")
+        m = json.loads((sd / "meta.json").read_text())
+        assert m["steering"] == {"start_state": "7", "weights": {"7": 1.0}, "later_writer": 1, "start_applied": "5"}
+        assert m["other"] == 2
 
 
 def main() -> int:
