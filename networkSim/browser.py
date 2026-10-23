@@ -1549,16 +1549,27 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             session_meta.write(session_dir, ext_storage=ext)
         except Exception as exc:
             print(f"[browser] ext_storage not recorded: {exc!r}", flush=True)
-        # Clear storage so the next run starts fresh
-        sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s), r))"
-                % json.dumps(sorted(side)), await_promise=True)
-        import session_files   # brad / levi 23:10: one map of side stream -> session file (A1 is rvfc_frames.jsonl)
+        # brad / levi 23:10-23:21: one map of side stream -> session file (A1 is rvfc_frames.jsonl), every name resolved
+        # and every record written BEFORE storage is cleared; an unmapped stream goes to side_<stream>.jsonl, flagged
+        import session_files
+        unmapped = []
         for stream, recs in _side_streams(side).items():
-            fname = session_files.side_file(stream)
+            fname, mapped = session_files.side_file(stream)
+            if not mapped:
+                unmapped.append({"stream": stream, "file": fname, "records": len(recs)})
             with open(session_dir / fname, "w") as fh:
                 for rec in recs:
                     fh.write(json.dumps(rec) + "\n")
             print(f"[browser] {stream} ({len(recs)} records) → {session_dir / fname}", flush=True)
+        if unmapped:
+            try:
+                import session_meta
+                session_meta.write(session_dir, side_streams_unmapped=unmapped)
+            except Exception as exc:
+                print(f"[browser] side_streams_unmapped not recorded: {exc!r} {unmapped}", flush=True)
+        # Clear storage so the next run starts fresh (only after the side streams are on disk)
+        sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s), r))"
+                % json.dumps(sorted(side)), await_promise=True)
         sw.close()
         _close_target(tmp_tab)
         stats = json.loads(stats_json) if stats_json else []

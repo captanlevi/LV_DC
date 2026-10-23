@@ -31,8 +31,12 @@ NON_SESSION = frozenset({
 
 def test_disjoint():
     assert SF.collisions() == [], SF.collisions()
-    shared = sorted(c for c in SF.COLLECTOR_FILES for r in SF.READER_FILES if SF.collides(c, r))
-    assert set(shared) == set(SF.SHARED_BY_DESIGN), shared       # every overlap is a named, deliberate one
+    overlap = sorted((c, r) for c in SF.COLLECTOR_FILES for r in SF.READER_FILES if SF.collides(c, r))
+    assert overlap == [] and SF.SHARED_BY_DESIGN == frozenset(), overlap     # levi 23:21: one writer per name
+    for n in ("mergedFlows.csv", "mergedPackets.csv"):                        # LVQoE's at top level; ours are nested
+        assert n not in SF.COLLECTOR_FILES and f"check_nc/{n}" in SF.NESTED_FILES
+    for n in ("http_v2.json", "h1_raw.json", "h2_raw.pdml", "h3_raw.pdml"):   # the collector's alone
+        assert n in SF.COLLECTOR_FILES and not any(SF.collides(n, r) for r in SF.READER_FILES)
     assert not any(SF.collides(c, p) for c in SF.COLLECTOR_FILES for p in ("a5tt*", "a6tt*"))   # reserved prefixes
     assert "frames.jsonl" in SF.READER_FILES and "frames.jsonl" not in SF.COLLECTOR_FILES
     assert SF.collides("motion_gt_v2.json", "motion_gt*") and not SF.collides("motion.jsonl", "motion_gt*")
@@ -46,14 +50,15 @@ def test_side_streams_mapped():
     m = re.search(r"const sideBuffers = \{([^}]*)\}", js)
     keys = set(re.findall(r"(\w+)\s*:", m.group(1)))
     assert keys == set(SF.SIDE_STREAM_FILES), (keys, SF.SIDE_STREAM_FILES)
-    assert SF.side_file("frames") == "rvfc_frames.jsonl"
-    try:
-        SF.side_file("new_stream")
-        raise AssertionError("an unmapped stream must raise")
-    except KeyError:
-        pass
+    assert SF.side_file("frames") == ("rvfc_frames.jsonl", True)
+    assert SF.side_file("new/stream") == ("side_new_stream.jsonl", False)       # levi 23:21: written, flagged, never lost
+    assert not any(SF.collides("side_new_stream.jsonl", r) for r in SF.READER_FILES)
     src = (HERE / "browser.py").read_text()
     assert "session_files.side_file(stream)" in src and 'f"{stream}.jsonl"' not in src
+    i_write = src.index("session_files.side_file(stream)")                     # every name resolved and written ...
+    i_clear = src.index("chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s)")
+    assert i_write < i_clear                                                     # ... before storage is cleared
+    assert "side_streams_unmapped=unmapped" in src
 
 
 def test_every_literal_declared():
@@ -63,8 +68,10 @@ def test_every_literal_declared():
             continue
         for m in re.finditer(r'/ "([A-Za-z0-9_*-]+\.[A-Za-z0-9.]+)"', f.read_text()):
             names.setdefault(m.group(1), f.name)
+    nested = {x.rsplit("/", 1)[-1] for x in SF.NESTED_FILES}
     undeclared = sorted((n, f) for n, f in names.items()
-                        if n not in NON_SESSION and not any(fnmatch(n, p) or n == p for p in SF.COLLECTOR_FILES))
+                        if n not in NON_SESSION and n not in nested
+                        and not any(fnmatch(n, p) or n == p for p in SF.COLLECTOR_FILES))
     assert not undeclared, f"declare these in session_files.COLLECTOR_FILES or NON_SESSION: {undeclared}"
     assert not (NON_SESSION & set(SF.READER_FILES))
 
