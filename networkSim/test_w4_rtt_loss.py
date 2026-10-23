@@ -127,6 +127,10 @@ def test_loss_drops():
     noisy = down + up + [["1", "1", "8.8.8.8", "0", "1", "", "", "1.1.1.1"]] * 10    # 15 % of rows without ME
     assert LD.QP.client_of(noisy) == (ME, {"client_source": "inferred_private_src"})
     assert LD.QP.client_of([["1", "0", "8.8.8.8", "0", "1", "", "", "1.1.1.1"]]) == (None, {"client_source": "none"})
+    # brad 18:16: the standalone quic_pn_check reads the same record (meta) as loss_drops
+    import inspect
+    src = inspect.getsource(LD.QP.session)
+    assert "client_of(rs, meta)" in src and '"meta.json"' in src
     assert LD.verdict(10, 10, False, 0)["c6"] == "pass"
     assert LD.verdict(30, 10, False, 0)["c6"] == "fail"                     # more missing than the class dropped
     assert LD.verdict(0, 100, False, 0)["c6"] == "pass"                     # one-sided: fewer missing is allowed

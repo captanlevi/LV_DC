@@ -76,7 +76,12 @@ def client_of(rs: list[list[str]], meta: dict | None = None) -> tuple[str | None
 
 def session(sd: Path, tshark: str) -> dict:
     rs = rows(sd / "merged.pcap", sd / "ssl_keys.log", tshark)
-    me, _ = client_of(rs)
+    meta = {}
+    try:                                   # brad 18:16: the record's client address, as loss_drops reads it
+        meta = json.loads((sd / "meta.json").read_text())
+    except (OSError, ValueError):
+        pass
+    me, how = client_of(rs, meta)
     conns: dict = {}
     for r in rs:
         r = r + [""] * (len(FIELDS) - len(r))
@@ -102,7 +107,7 @@ def session(sd: Path, tshark: str) -> dict:
         tot[kind]["undecrypted"] += d["undecrypted"]
         tot[kind]["connections"] += 1
     media = sorted((v for v in per.values() if v["kind"] == "media"), key=lambda v: -v["packets"])
-    return {"session": str(sd), "client": me, "quic_packets": len(rs), "connections": len(conns),
+    return {"session": str(sd), "client": me, **how, "quic_packets": len(rs), "connections": len(conns),
             "totals": {k: dict(v) for k, v in tot.items()}, "media_connections": media[:40]}
 
 
