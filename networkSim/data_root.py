@@ -93,8 +93,11 @@ def path_kind_refusal(path: Path, of_record: bool, uuid_of=None) -> str | None:
             chk = record_root_check(a, uuid_of)
             if of_record and chk["is_record"]:
                 return None
-            return (f"{'a counted run on an unverified' if of_record else 'a run that is not of record under a marked'} "
-                    f"record root ({a}: {chk['reason']}); refused (C8: every non-record run goes to a dry root)")
+            if of_record:
+                return (f"a counted run on an unverified record root ({a}: {chk['reason']}); refused (C8: a counted run "
+                        "needs the marker and its volume's UUID)")
+            return (f"a run that is not of record under a marked record root ({a}: {chk['reason']}); refused (C8: every "
+                    "non-record run goes to a dry root)")
     if of_record:
         return f"a counted run outside the record root ({p}: no marker above it); refused (C8)"
     return None
