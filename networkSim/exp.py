@@ -18,7 +18,7 @@ if _venv_sp and not any(p in sys.path for p in _venv_sp):
 
 import subprocess
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace as dc_replace
 import json
 import signal
 import threading
@@ -50,6 +50,7 @@ PLATFORM_ABBREV = {
 
 
 CURRENT_NET_STAT : None | NetStat = None
+LEVER = None    # v3 B4 (lever.Lever): set in __main__ with --lever; _ossilate overlays its episodes on the drawn schedule
 SYSTEM_TICK : float = 0.1
 
 # t53 --concurrent (orchestrate.py run_trio): the session's trio slot (trio_slots.Slot) and the make variables that put
@@ -333,13 +334,17 @@ async def _ossilate(
         **SHAPER_OPTS,
     ):
         t_apply = time.time()                 # v3 A9: a change lies in [apply_start, timestamp]
+        ep = LEVER.active(t_apply) if LEVER is not None else None   # v3 B4: inside a lever episode only the rate changes
+        if ep is not None:
+            net_stat = dc_replace(net_stat, rate=LEVER.rate_for(ep, t_apply))
         _apply_net_stat(net_stat= net_stat)
         ts = time.time()
         net_labels.append(    # restart §2 (c): the realised rate / delay / loss beside the nominal state and the re-draw
             NetLabel(timestamp=ts, speed=net_stat.rate, state=net_stat.state, delay_ms=net_stat.delay_ms,
                      loss_pct=net_stat.loss_pct, redraw_kbit=net_stat.redraw_kbit,
                      redraw_delay_ms=net_stat.redraw_delay_ms, redraw_loss_pct=net_stat.redraw_loss_pct,
-                     walk_step=net_stat.walk_step, apply_start=t_apply, apply="rate" if net_stat.walk_step else "slow")
+                     walk_step=net_stat.walk_step, apply_start=t_apply, apply="rate" if net_stat.walk_step else "slow",
+                     lever=ep["id"] if ep is not None else None)
         )
         # restart §2: a change every 2 s, so the changes keep the schedule's own clock (deadline + duration); an apply's
         # time (make slow) and the tick's overshoot no longer add to the session per change
@@ -628,6 +633,13 @@ if __name__ == "__main__":
         default=None,
         help="Window / player geometry for this session, 'player:WxH' or 'window:WxH' (orchestrate.py's rotation, "
              "geometry.py); default: the platform's pinned player size. Recorded in meta.json.",
+    )
+    parser.add_argument(
+        "--lever",
+        default=None,
+        help="t67 B4 (prereg b6bc9246): the STALL lever, JSON {lambda_per_s, d_lo_s, d_hi_s} (a lever window only); "
+             "episodes drawn at session start from the session's name, each at 0.5 x the session's lowest rung "
+             "(lever.py); meta.json lever.",
     )
     parser.add_argument(
         "--geometry-name",
@@ -967,6 +979,11 @@ if __name__ == "__main__":
                                      entry_quality=eq_cfg,
                                      tw_low_latency=args.tw_low_latency if platform == "twitch" else None)
             browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)
+            if args.lever:                       # v3 B4: the plan is fixed now, before playback and before the shaper starts
+                import lever as _lever
+                _horizon = (args.episodes or coverage_report.SESSION_EPISODES.get(platform) or 1) * SCHEDULE["episode_s"]
+                LEVER = _lever.Lever(platform, session_dir.name, float(_horizon), json.loads(args.lever),
+                                     rung_fn=lambda: browser._current_rung(0.0))
             browser.start()
             if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
                 TRIO["socket_owner_start"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
@@ -1054,6 +1071,8 @@ if __name__ == "__main__":
                               instruments=browser.instruments,                         # v3 (t67; levi 18:33)
                               screen=browser.screen,                                   # v3 A8 (t67)
                               clock_offsets=browser.clock_offsets,                     # v3 A11 (t67)
+                              lever=(LEVER.record(browser.abort_at, browser.abort_reason)      # v3 B4
+                                     if LEVER is not None else None),
                               tw_playlist_ads=({"fetches": browser._master.playlist_fetches,          # v3 A3 src 2
                                                 "edges": browser._master.ad_edges,
                                                 "overflow": browser._master.ad_edges_overflow}

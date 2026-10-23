@@ -255,7 +255,13 @@ def test_geometry_tier_cap():
     import geometry as G
     assert G.tier_cap("youtube", "window:1263x710") == "Q_720p" and G.tier_cap("youtube", "fullscreen:1920x1080") == "Q_1080p"
     assert G.tier_cap("youtube", "theater:1920x1080") == "Q_720p"                          # an instruction keys the same
-    assert G.tier_cap("twitch", "player:1238x696") is None
+    assert G.tier_cap("twitch", "player:1238x696") is None and G.tier_cap("twitch", None) is None
+    for nm in (None, ""):                                  # brad 19:28: a steered yt session without a geometry refuses
+        try:
+            G.tier_cap("youtube", nm)
+            raise AssertionError(f"tier_cap(youtube, {nm!r}) must raise")
+        except ValueError as e:
+            assert "no geometry" in str(e)
     try:                                                         # levi 19:17: DPR 2 without its entry refuses, never uncapped
         G.tier_cap("youtube", "window:1263x710", 2.0)
         raise AssertionError("an unmeasured (mode, DPR) must refuse")

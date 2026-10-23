@@ -155,7 +155,7 @@ def test_the_session_record_and_factor():
 def test_net_labels_and_the_wiring():
     names = [x.name for x in fields(NetLabel)]
     assert names == ["timestamp", "speed", "state", "delay_ms", "loss_pct", "redraw_kbit", "redraw_delay_ms",
-                     "redraw_loss_pct", "walk_step", "apply_start", "apply"]            # v3 A9: the apply instants
+                     "redraw_loss_pct", "walk_step", "apply_start", "apply", "lever"]   # v3 A9 apply instants, B4 lever
     assert NetLabel(1.0, 500, "2").delay_ms is None                           # the old three-field rows still build
     src = (HERE / "exp.py").read_text()
     assert "WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)" in src
