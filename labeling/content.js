@@ -196,10 +196,15 @@ function srcKey(v) {
   return s.startsWith("blob:") ? "blob:" + hash8(s) : "url:" + hash8(s.split("?")[0]);
 }
 const sideBuffers = { player_events: [], frames: [] };
+const sideDropped = { player_events: 0, frames: 0 };   // brad 18:17: records lost to the SIDE_MAX cap, per stream
+const sideFailed = { player_events: 0, frames: 0 };    // batches the extension did not store (re-queued), per stream
 function side(stream, rec) {
   const buf = sideBuffers[stream];
   buf.push(rec);
-  if (buf.length > SIDE_MAX) buf.shift();
+  if (buf.length > SIDE_MAX) {
+    buf.shift();
+    sideDropped[stream] += 1;
+  }
 }
 function playerEvent(v, ev, extra) {
   if (!collecting || !v) return;
@@ -224,18 +229,36 @@ function observePlayerEvents(v) {
 // last frame's mediaTime / presentationTime and the callbacks since the last tick; (c) the first presented frame after
 // an attach or a src_key change (tt's per-stream anchor: a MediaStream's mediaTime restarts per stream). The callback
 // only reads metadata. lvqoe_config.rvfc === false (written by browser.py for the gate's off arm) registers nothing.
+// brad 18:17: no callback is registered before the config is read (an element attached at load would otherwise run
+// the off arm's callbacks); callbacks that still run while off are counted (off_arm_cb, the A/B asserts 0).
 let rvfcOn = true;
+let rvfcReady = false;
+let offArmCb = 0;
+function rvfcConfigured(on) {
+  rvfcOn = on;
+  rvfcReady = true;
+  if (rvfcOn && video) rvfcStart(video);
+}
 try {
-  chrome.storage?.local?.get({ lvqoe_config: {} }, (d) => {
-    if (d && d.lvqoe_config && d.lvqoe_config.rvfc === false) rvfcOn = false;
-  });
-} catch (e) { /* no storage: default on */ }
+  if (chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get({ lvqoe_config: {} }, (d) => rvfcConfigured(!(d && d.lvqoe_config && d.lvqoe_config.rvfc === false)));
+  } else {
+    rvfcReady = true;
+  }
+} catch (e) {
+  rvfcReady = true;                       // no storage: on
+}
 const rvfcState = new WeakMap();
 function rvfcStart(v) {
-  if (!rvfcOn || !v || typeof v.requestVideoFrameCallback !== "function" || rvfcState.has(v)) return;
+  if (!rvfcReady || !rvfcOn || !v || typeof v.requestVideoFrameCallback !== "function" || rvfcState.has(v)) return;
   const st = { w: null, h: null, src: null, n: 0, last: null };
   rvfcState.set(v, st);
   const cb = (now, md) => {
+    if (!rvfcOn) {
+      offArmCb += 1;
+      rvfcState.delete(v);
+      return;
+    }
     if (!collecting) return;
     st.n += 1;
     st.last = md;
@@ -266,7 +289,8 @@ function rvfcTick() {
                    tick: event_id - 1, cb: st ? st.n : null, pf: md ? md.presentedFrames ?? null : null,
                    mt: md ? md.mediaTime ?? null : null, pt: md ? md.presentationTime ?? null : null,
                    decoded: q ? q.totalVideoFrames : null, dropped: q ? q.droppedVideoFrames : null,
-                   ct: video.currentTime ?? null, rvfc: rvfcOn && !!st });
+                   ct: video.currentTime ?? null, rvfc: rvfcOn && !!st, off_arm_cb: offArmCb,
+                   side_dropped: { ...sideDropped }, side_failed: { ...sideFailed } });
   if (st) st.n = 0;
 }
 
@@ -276,7 +300,11 @@ function flushSide() {
     const batch = buf.splice(0, buf.length);
     try {
       chrome.runtime.sendMessage({ kind: "side-batch", stream, payload: batch }, (resp) => {
-        if (chrome.runtime.lastError || !resp?.ok) buf.unshift(...batch);
+        if (chrome.runtime.lastError || !resp?.ok) {
+          sideFailed[stream] += 1;
+          buf.unshift(...batch);
+          while (buf.length > SIDE_MAX) { buf.shift(); sideDropped[stream] += 1; }
+        }
       });
     } catch (e) {
       buf.unshift(...batch);

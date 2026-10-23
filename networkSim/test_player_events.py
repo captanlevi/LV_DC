@@ -74,13 +74,19 @@ const u = mkVideo("", new MediaStream()); videos = [u, v]; v.isConnected = false
 tick();                                                      // detachment recovery re-attaches u
 u.fire("resize");
 tick();
+for (let i = 0; i < 5010; i++) u.fire("ratechange");     // over SIDE_MAX before a flush: 10 oldest dropped, counted
+const dropped = vm.runInContext("JSON.stringify(sideDropped)", ctx);
+tick();
 const keys = { blob: ctx.__srcKey(v), ms: ctx.__srcKey(u), msh: ctx.__srcKey(mkVideo("", new MediaSourceHandle())),
                url: ctx.__srcKey(mkVideo("https://x.test/a.m3u8?token=1")), none: ctx.__srcKey(mkVideo("")) };
 // background.js: two side batches stored under two keys
 const store = {};
 let bgListener = null;
-const bg = { chrome: { runtime: { onMessage: { addListener: (f) => { bgListener = f; } } },
-                       storage: { local: { set: (o, cb) => { Object.assign(store, o); cb && cb(); },
+let bgFail = false;
+const bg = { chrome: { runtime: { lastError: null, onMessage: { addListener: (f) => { bgListener = f; } } },
+                       storage: { local: { set: (o, cb) => { if (bgFail) { bg.chrome.runtime.lastError = { message: "QUOTA_BYTES" }; cb && cb();
+                                                                              bg.chrome.runtime.lastError = null; return; }
+                                                             Object.assign(store, o); cb && cb(); },
                                            get: (d, cb) => cb({ ...d, ...store }) } },
                        tabs: { onRemoved: { addListener() {} } } }, Date: { now: () => 42 }, console, String };
 vm.createContext(bg);
@@ -88,7 +94,9 @@ vm.runInContext(fs.readFileSync(process.argv[4], "utf8"), bg);
 const acks = [];
 bgListener({ kind: "side-batch", stream: "player_events", payload: [{ ev: "resize", n: 1 }] }, { tab: { id: 7 } }, (r) => acks.push(r));
 bgListener({ kind: "side-batch", stream: "player_events", payload: [{ ev: "resize", n: 2 }] }, { tab: { id: 7 } }, (r) => acks.push(r));
-fs.writeFileSync(process.argv[3], JSON.stringify({ sent, side, keys, store, acks }));
+bgFail = true;
+bgListener({ kind: "side-batch", stream: "player_events", payload: [{ ev: "resize", n: 3 }] }, { tab: { id: 7 } }, (r) => acks.push(r));
+fs.writeFileSync(process.argv[3], JSON.stringify({ sent, side, keys, store, acks, dropped: JSON.parse(dropped) }));
 """
 
 
@@ -124,7 +132,10 @@ def test_player_events():
     assert not any(m.get("kind") == "video-events-batch" for m in r["side"])
     # background: one key per batch, tabbed; the export joins them in key order
     keys = sorted(r["store"])
-    assert len(keys) == 2 and all(x.startswith("side:player_events:") for x in keys) and r["acks"] == [{"ok": True}] * 2
+    assert len(keys) == 2 and all(x.startswith("side:player_events:") for x in keys)
+    # brad 18:17: a failed write is not acked (the sender re-queues it); the side cap's drops are counted per stream
+    assert r["acks"] == [{"ok": True, "err": None}] * 2 + [{"ok": False, "err": "QUOTA_BYTES"}], r["acks"]
+    assert r["dropped"] == {"player_events": 10, "frames": 0}
     joined = B._side_streams({**r["store"], "events": [{"x": 1}], "player_stats": []})
     assert list(joined) == ["player_events"] and [x["n"] for x in joined["player_events"]] == [1, 2]
     assert all(x["tabId"] == 7 for x in joined["player_events"])

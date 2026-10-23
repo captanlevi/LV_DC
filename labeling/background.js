@@ -24,7 +24,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.kind === "side-batch") {
     const tabId = sender.tab?.id ?? null;
     const key = `side:${msg.stream}:${String(Date.now()).padStart(15, "0")}:${String(sideSeq++).padStart(9, "0")}`;
-    chrome.storage.local.set({ [key]: msg.payload.map((r) => ({ ...r, tabId })) }, () => sendResponse({ ok: true }));
+    chrome.storage.local.set({ [key]: msg.payload.map((r) => ({ ...r, tabId })) }, () => {
+      const err = chrome.runtime.lastError;       // brad 18:17: a failed write is not acked, so the sender re-queues it
+      sendResponse({ ok: !err, err: err ? String(err.message || err) : null });
+    });
     return true;
   }
   if (msg.kind !== "video-events-batch") return;

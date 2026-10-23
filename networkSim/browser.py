@@ -1533,6 +1533,16 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             await_promise=True,
         )
         side = json.loads(side_json) if side_json else {}
+        ext = {"side_keys": len(side)}             # brad / levi 18:17: the storage use at export (meta.json ext_storage)
+        try:
+            ext["bytes_in_use"] = sw.eval("new Promise(r => chrome.storage.local.getBytesInUse(null, r))", await_promise=True)
+        except Exception as exc:
+            ext["error"] = repr(exc)[:200]
+        try:
+            import session_meta
+            session_meta.write(session_dir, ext_storage=ext)
+        except Exception as exc:
+            print(f"[browser] ext_storage not recorded: {exc!r}", flush=True)
         # Clear storage so the next run starts fresh
         sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'].concat(%s), r))"
                 % json.dumps(sorted(side)), await_promise=True)

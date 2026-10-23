@@ -4,7 +4,8 @@
   "version": "2.0",
   "description": "Observe live video playback",
   "permissions": [
-    "storage"
+    "storage",
+    "unlimitedStorage"
   ],
   "background": {
     "service_worker": "background.js"

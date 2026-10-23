@@ -22,7 +22,11 @@ HERE = Path(__file__).resolve().parent
 HARNESS = r"""
 const fs = require("fs"), vm = require("vm");
 const src = fs.readFileSync(process.argv[2], "utf8");
-const off = process.argv[4] === "off";
+const mode = process.argv[4];
+const off = mode.startsWith("off");
+const asyncCfg = mode.endsWith("async");
+const pendingCfg = [];
+let failNextSide = mode === "on";        // the first side write fails once (re-queued, counted)
 const timers = [], side = [], sent = [];
 let now = 1000;
 class MediaStream {}
@@ -39,8 +43,10 @@ const ctx = {
   MutationObserver: class { observe() {} disconnect() {} },
   XPathResult: { ORDERED_NODE_SNAPSHOT_TYPE: 7 },
   location: { href: "https://www.tiktok.com/@r/live", hostname: "www.tiktok.com" },
-  chrome: { storage: { local: { get: (d, cb) => cb(off ? { lvqoe_config: { rvfc: false } } : d) } },
+  chrome: { storage: { local: { get: (d, cb) => { const r = () => cb(off ? { lvqoe_config: { rvfc: false } } : d);
+                                                    if (asyncCfg) pendingCfg.push(r); else r(); } } },
             runtime: { lastError: null, sendMessage: (m, cb) => {
+              if (m.kind === "side-batch" && failNextSide) { failNextSide = false; cb && cb({ ok: false, err: "quota" }); return; }
               if (m.kind === "side-batch") side.push(m); if (m.kind === "video-events-batch") sent.push(...m.payload);
               cb && cb({ ok: true }); } } },
   addEventListener() {}, getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
@@ -50,6 +56,8 @@ ctx.document = { documentElement: { dataset: {} }, body: {}, visibilityState: "v
   querySelectorAll: (q) => (q === "video" ? [v] : []), querySelector: () => null, evaluate: () => ({ snapshotLength: 0 }) };
 vm.createContext(ctx);
 vm.runInContext(src, ctx);
+const registeredBeforeCfg = cbs.length;    // async config: nothing may register before the config is read
+for (const r of pendingCfg.splice(0)) r();
 let pf = 0, mt = 0;
 const present = (n, w, h) => { for (let i = 0; i < n; i++) {
   const f = cbs.shift(); if (!f) return; now += 33; pf += 1; mt += 1 / 30; decoded += 1;
@@ -61,7 +69,7 @@ tick();                                     // nothing presented in this second
 v.srcObject = new MediaStream(); mt = 0;   // a new stream (tt re-entry): mediaTime restarts
 present(3, 540, 960); tick();
 vm.runInContext("flushSide()", ctx);        // the last tick's rows
-fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length }));
+fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length, registeredBeforeCfg }));
 """
 
 
@@ -94,9 +102,17 @@ def test_rvfc_frames():
     assert [(t["cb"], t["pf"], t["decoded"], t["dropped"], t["rvfc"]) for t in ticks] == \
         [(30, 30, 30, 2, True), (15, 45, 45, 2, True), (0, 45, 45, 2, True), (3, 48, 48, 2, True)], ticks
     assert r["pending"] == 1                                                    # always one callback registered
-    off = run("off")
-    fo = [x for m in off["side"] if m["stream"] == "frames" for x in m["payload"]]
-    assert off["pending"] == 0 and {x["k"] for x in fo} == {"tick"} and all(x["rvfc"] is False and x["cb"] is None for x in fo)
+    # brad 18:17: the first side write failed once: re-queued (no row lost, the 4 ticks above), counted, nothing dropped
+    assert sum(ticks[-1]["side_failed"].values()) == 1 and ticks[-1]["side_dropped"] == {"player_events": 0, "frames": 0}
+    assert all(t["off_arm_cb"] == 0 for t in ticks)
+    for mode in ("off", "off_async"):                                           # the off arm, config read late or early
+        off = run(mode)
+        fo = [x for m in off["side"] if m["stream"] == "frames" for x in m["payload"]]
+        assert off["pending"] == 0 and off["registeredBeforeCfg"] == 0, mode
+        assert {x["k"] for x in fo} == {"tick"} and all(x["rvfc"] is False and x["cb"] is None and x["off_arm_cb"] == 0 for x in fo)
+    late = run("on_async")                                                      # on, config read after the attach
+    fl = [x for m in late["side"] if m["stream"] == "frames" for x in m["payload"]]
+    assert late["registeredBeforeCfg"] == 0 and late["pending"] == 1 and [x["k"] for x in fl][:2] == ["first_frame", "dims"]
 
 
 def main() -> int:
