@@ -84,10 +84,13 @@ function loginWallText(v) {
 // (v3 A14: the presented frame's height changes, rvfcStart; without A1, consecutive non-zero res_meta video_h differ)
 // and every ad start (is_ad false -> true)
 let shotReqN = 0;
+const shotTrig = { frame: 0, tick: 0, ad_start: 0 };   // levi 21:19: tier-change shots by trigger (pf = frame), ad starts
 let shotLastH = null;
 let shotLastAd = false;
 function requestShot(reason, eventId, pf = null) {
   shotReqN += 1;
+  if (reason === "tier_change") shotTrig[pf === null ? "tick" : "frame"] += 1;
+  else if (reason in shotTrig) shotTrig[reason] += 1;
   document.documentElement.dataset.lvqoeShotReq = `${shotReqN}|${reason}|${eventId}` + (pf === null ? "" : `|pf=${pf}`);
 }
 
@@ -283,6 +286,7 @@ try {
   v3Ready = true;                         // no storage: on
 }
 const rvfcState = new WeakMap();
+const RVFC_FRESH_MS = 2000;
 function rvfcStart(v) {
   if (!v3Ready || !v3On || !v || typeof v.requestVideoFrameCallback !== "function" || rvfcState.has(v)) return;
   const st = { w: null, h: null, src: null, n: 0, last: null };
@@ -296,6 +300,7 @@ function rvfcStart(v) {
     if (!collecting) return;
     st.n += 1;
     st.last = md;
+    st.lastAt = now;                         // A14: the res_meta trigger stands down only while frames are fresh
     const src = srcKey(v);
     const base = { ts: performance.timeOrigin + now, el: elId(v), src, pt: md.presentationTime ?? null,
                    edt: md.expectedDisplayTime ?? null, mt: md.mediaTime ?? null, pf: md.presentedFrames ?? null,
@@ -308,7 +313,10 @@ function rvfcStart(v) {
       side("frames", { k: "dims", ...base, prev_w: st.w, prev_h: st.h });
       // v3 A14 (t67): the tier-change shot fires on the presented frame whose height changed (A1), not on the next
       // res_meta tick; the request carries the tick it follows (A5) and that frame's presentedFrames
-      if (v === video && st.h !== null && (md.height || 0) > 0 && md.height !== st.h && window === window.top) {
+      // brad 21:19: a new element's first frame compares against the last tick's height (shotLastH), so a tier change
+      // carried by an element swap (tt per-stream elements, a yt / tw replace) still gets its shot
+      const prevH = st.h !== null ? st.h : shotLastH;
+      if (v === video && prevH !== null && (md.height || 0) > 0 && md.height !== prevH && window === window.top) {
         requestShot("tier_change", lastTick ? lastTick.id : null, md.presentedFrames ?? null);
       }
       st.w = md.width;
@@ -341,7 +349,7 @@ function rvfcTick() {
   if (window === window.top) {
     try {
       chrome.storage.local.set({ side_counters: { side_dropped: sideDropped, side_failed: sideFailed, off_arm_cb: offArmCb,
-                                                  at: performance.timeOrigin + performance.now() } });
+                                                  shot_triggers: shotTrig, at: performance.timeOrigin + performance.now() } });
     } catch (e) { /* counted in the tick rows */ }
   }
 }
@@ -513,7 +521,11 @@ function emit(type) {
     if (h > 0) {
       // v3 A14: with A1 running on this element the frame callback fires the tier-change shot; the res_meta trigger
       // stays only where rVFC is not running (the instruments-off arm, no requestVideoFrameCallback)
-      if (shotLastH !== null && h !== shotLastH && !(v3On && v3Ready && video && rvfcState.has(video))) {
+      // brad 21:19: rVFC does not fire for an element that is not rendered (hidden, not composited); the tick trigger
+      // stands down only while this element's frames arrived within RVFC_FRESH_MS
+      const rst = v3On && v3Ready && video ? rvfcState.get(video) : null;
+      const rvfcFresh = !!(rst && rst.lastAt !== undefined && performance.now() - rst.lastAt <= RVFC_FRESH_MS);
+      if (shotLastH !== null && h !== shotLastH && !rvfcFresh) {
         requestShot("tier_change", evt.event_id);
       }
       shotLastH = h;
