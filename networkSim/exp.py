@@ -796,10 +796,16 @@ if __name__ == "__main__":
         import steering
         base_transition = transition
         import geometry as _geometry     # t67 B1 (levi 19:03): no pull toward a tier the drawn geometry cannot show
+        _dpr = _geometry.device_scale(args.geometry) or 1.0   # brad 19:18: the session's own DPR (the instruction's @D)
+        try:
+            _cap = _geometry.tier_cap(platform, args.geometry_name or args.geometry, _dpr)
+        except ValueError as _e:             # levi 19:17: never uncapped
+            print(f"B1 REFUSED: {_e}")
+            sys.exit(2)
         transition, steer_start, STEERING = steering.steer(platform, transition,
                                                            os.environ.get("LVDC_STEER_TABLE") or None, session_dir.name,
-                                                           tier_cap=_geometry.tier_cap(platform, args.geometry_name
-                                                                                       or args.geometry, 1.0))
+                                                           tier_cap=_cap)
+        STEERING["tier_cap_dpr"] = _dpr
         STEERING["base_matrix"] = base_transition
         # t65 (shagun 12:46, tw_100110): steering's start_state is its draw only; a --initial-state wins, named here
         STEERING["start_overridden_by"] = steering.start_override(args.initial_state, args.initial_state_source)

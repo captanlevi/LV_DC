@@ -83,9 +83,14 @@ YT_TIER_CAP: dict[tuple[str, float], str] = {("fullscreen", 1.0): "Q_1080p", ("p
 
 
 def tier_cap(platform: str, name: str | None, dpr: float = 1.0) -> str | None:
+    """levi 19:17: a yt geometry with no (mode, DPR) entry raises (exp.py refuses the session) rather than run uncapped;
+    DPR 2 has no entry until its arm measures it (B2 is not built: a guard, not a path)."""
     if platform != "youtube" or not name:
         return None
-    return YT_TIER_CAP.get((name.split(":", 1)[0], float(dpr)))
+    key = (name.split(":", 1)[0], float(dpr))
+    if key not in YT_TIER_CAP:
+        raise ValueError(f"no yt tier cap for {key} (prereg c6fd071e: DPR 2 entries only after its arm); refused")
+    return YT_TIER_CAP[key]
 
 
 def parse(spec: str) -> tuple[str, int, int]:

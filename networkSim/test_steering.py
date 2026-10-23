@@ -255,7 +255,22 @@ def test_geometry_tier_cap():
     import geometry as G
     assert G.tier_cap("youtube", "window:1263x710") == "Q_720p" and G.tier_cap("youtube", "fullscreen:1920x1080") == "Q_1080p"
     assert G.tier_cap("youtube", "theater:1920x1080") == "Q_720p"                          # an instruction keys the same
-    assert G.tier_cap("twitch", "player:1238x696") is None and G.tier_cap("youtube", "window:1263x710", 2.0) is None
+    assert G.tier_cap("twitch", "player:1238x696") is None
+    try:                                                         # levi 19:17: DPR 2 without its entry refuses, never uncapped
+        G.tier_cap("youtube", "window:1263x710", 2.0)
+        raise AssertionError("an unmeasured (mode, DPR) must refuse")
+    except ValueError as e:
+        assert "c6fd071e" in str(e)
+    assert G.device_scale("theater:1920x1080@2") == 2.0 and G.device_scale("theater:1920x1080") is None
+    try:                                                         # brad 19:18: a DPR-2 spec reaches the lookup and refuses
+        G.tier_cap("youtube", "theater:1920x1080@2", G.device_scale("theater:1920x1080@2") or 1.0)
+        raise AssertionError("a DPR-2 theater spec must refuse")
+    except ValueError:
+        pass
+    assert G.tier_cap("youtube", "theater:1920x1080", G.device_scale("theater:1920x1080") or 1.0) == "Q_720p"
+    src = (Path(__file__).resolve().parent / "exp.py").read_text()
+    assert 'print(f"B1 REFUSED: {_e}")' in src and "_dpr = _geometry.device_scale(args.geometry) or 1.0" in src
+    assert "_geometry.tier_cap(platform, args.geometry_name or args.geometry, _dpr)" in src and 'STEERING["tier_cap_dpr"] = _dpr' in src
     from utils.shaping import YOUTUBE_TRANSITIONS
     assert "Q_1080p" in S.TARGETS_S["youtube"]
     # every tier met but Q_1080p: only a 1080 deficit pulls; under the cap nothing pulls (all weights 1, the base)
