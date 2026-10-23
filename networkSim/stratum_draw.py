@@ -28,9 +28,10 @@ from pathlib import Path
 STRATA = ("steered", "steered", "unsteered", "lever")
 BLOCK = len(STRATA)
 SEED_PREFIX = "v3-stratum"
-RULE = ("collector v3 B5 (levi 18:02): permuted blocks of 4 (2 steered, 1 unsteered, 1 lever); k = n_draw's round index of "
-        "this era and record flag; block b = k // 4, position k % 4; the block's order a Fisher-Yates shuffle with "
-        "j_i = int(sha256('v3-stratum|<era>|b<b>|<i>'), 16) % (i + 1), i = 3..1")
+RULE = ("collector v3 B5 (levi 18:02 / 18:57): permuted blocks of 4 (2 steered, 1 unsteered, 1 lever); k = the count of "
+        "earlier windows (trio_up with an n_draw of this era and record flag) that started at least one session, so a void "
+        "window keeps its k (it can differ from n_draw's round index after a void run); block b = k // 4, position k % 4; "
+        "the block's order a Fisher-Yates shuffle with j_i = int(sha256('v3-stratum|<era>|b<b>|<i>'), 16) % (i + 1), i = 3..1")
 
 
 def code_sha() -> str:

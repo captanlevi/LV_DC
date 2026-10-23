@@ -1213,9 +1213,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="--concurrent (t56): the composition, one slot per count (tags yt1, yt2, tw1 ...; at most "
                              "15); default the trio's, one each. Fixed for the run and recorded in every session.")
     parser.add_argument("--expect-stratum", choices=("steered", "unsteered", "lever"), default=None,
-                        help="collector v3 B5 (levi 18:02): the window's stratum as rounds_ref_n computed it (stratum_draw.py, "
-                             "permuted blocks of 4 over n_draw's round index); orchestrate recomputes it and refuses a "
-                             "mismatch before trio_up. Required with --trio-record.")
+                        help="collector v3 B5 (levi 18:02 / 18:57): the window's stratum as rounds_ref_n computed it "
+                             "(stratum_draw.py: permuted blocks of 4 over k = the earlier windows of the era and record flag "
+                             "that started a session); orchestrate recomputes it and refuses a mismatch before trio_up. "
+                             "Required with --trio-record.")
     parser.add_argument("--stratum-force", choices=("steered", "unsteered", "lever"), default=None,
                         help="a dry / gate run's stratum, stated (never with --trio-record); recorded like a drawn one.")
     parser.add_argument("--n-draw", action="store_true",
@@ -1288,8 +1289,8 @@ def stratum_apply(sd: dict | None, expect: str | None, force: str | None, trio_s
     run (logged); lever needs B4's lever flag, which does not exist yet: refused (stop-and-read)."""
     if not (expect or force):
         return None, trio_steer, None
-    if force:
-        sd = {**(sd or {}), "stratum": force, "forced": True}
+    if force:                                           # levi 19:00: stated, not drawn: {s, forced: true, k: null}
+        sd = {"stratum": force, "forced": True, "k": None, "code": __import__("stratum_draw").code_sha()}
     elif sd is None or sd.get("stratum") != expect:
         return sd, trio_steer, (f"stratum mismatch: rounds_ref_n expected {expect!r}, stratum_draw gives "
                                 f"{(sd or {}).get('stratum')!r} (k {(sd or {}).get('k')}); refused before trio_up")
@@ -1375,8 +1376,10 @@ def arg_refusal(args, environ) -> str | None:
         return "--stratum-force is for a dry / gate run only: never with --trio-record (a counted window's stratum is drawn)"
     if args.stratum_force and args.expect_stratum:
         return "--stratum-force and --expect-stratum exclude each other"
-    if (args.expect_stratum or args.stratum_force) and not (args.concurrent and args.n_draw):
-        return "--expect-stratum / --stratum-force need --concurrent and --n-draw (the stratum's k is n_draw's round index)"
+    if args.expect_stratum and not (args.concurrent and args.n_draw):
+        return "--expect-stratum needs --concurrent and --n-draw (the stratum is drawn per n_draw window)"
+    if args.stratum_force and not args.concurrent:     # levi 19:00: fixed-composition gate arms may force one without --n-draw
+        return "--stratum-force needs --concurrent"
     # t67 C8 (levi 18:45 / 18:56), last: the run's kind and its data root agree, fail closed both ways, every mode
     import data_root as _dr
     r = _dr.kind_refusal(bool(args.trio_record), Path(environ.get("LVDC_DATA_ROOT") or _dr.REPO_DATA))
@@ -1430,10 +1433,12 @@ if __name__ == "__main__":
             import record
             import stratum_draw
             import trio_slots as _ts
-            try:
-                _sd = stratum_draw.draw(_RUNS_DIR / _ts.TRIO_DIR / _ts.SLOTS_LOG, record.ERA, TRIO_RECORD)
-            except (RuntimeError, ValueError) as e:
-                sys.exit(str(e))
+            _sd = None
+            if args.expect_stratum:                         # a forced stratum is stated, never drawn (k null, levi 19:00)
+                try:
+                    _sd = stratum_draw.draw(_RUNS_DIR / _ts.TRIO_DIR / _ts.SLOTS_LOG, record.ERA, TRIO_RECORD)
+                except (RuntimeError, ValueError) as e:
+                    sys.exit(str(e))
             WINDOW_STRATUM, _steer, _ref = stratum_apply(_sd, args.expect_stratum, args.stratum_force, bool(args.trio_steer))
             if _ref:
                 sys.exit(_ref)
