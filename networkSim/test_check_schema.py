@@ -127,7 +127,20 @@ def test_tick_presence_is_phase_free() -> None:
     assert lab["entry_tick_presence"] == 1.0 and lab["tick_window"] == list(win)
 
 
+def test_hold_schedule_low_cap_is_complete() -> None:
+    """v3 C13 (shagun t59 yt_900048): a decode_stress hold (matrix_id hold:<state>) has no low-state cap by construction;
+    its None is not 'meta.json incomplete'. Any other matrix with a missing cap still is."""
+    for mid, cap, flagged in (("hold:8", None, False), ("TT-M", None, True), (None, None, True), ("hold:8", 2, False)):
+        with tempfile.TemporaryDirectory() as tmp:
+            sd = Path(tmp)
+            (sd / "meta.json").write_text(json.dumps({"platform": "tiktok", "shaper": {"matrix_id": mid,
+                                                                                       "low_state_cap": cap}}))
+            _, missing = CS.meta_check(sd)
+            assert ("shaper.low_state_cap" in missing) == flagged, (mid, cap, missing)
+
+
 def main() -> int:
+    test_hold_schedule_low_cap_is_complete()
     test_check_json_schema()
     test_tick_presence_is_phase_free()
     test_dead_recovery_revoked_by_a_frozen_continue()

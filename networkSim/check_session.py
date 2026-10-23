@@ -914,7 +914,11 @@ def meta_check(sd: Path) -> tuple[dict, list[str]]:
     if m.get("platform") in ("youtube", "tiktok", "twitch"):
         # t38 / addendum M: the matrix id and the low-state cap
         sh = m.get("shaper") or {}
-        missing += [f"shaper.{k}" for k in ("matrix_id", "low_state_cap") if sh.get(k) in (None, "")]
+        # v3 C13 (shagun t59 A2 yt_900048): a decode_stress hold (matrix_id "hold:<state>", utils.shaping.hold_schedule)
+        # has no low-state cap by construction (one state held), so its None is complete, not missing
+        held = str(sh.get("matrix_id") or "").startswith("hold:")
+        missing += [f"shaper.{k}" for k in ("matrix_id", "low_state_cap")
+                    if sh.get(k) in (None, "") and not (k == "low_state_cap" and held)]
     if m.get("platform") == "tiktok" and m.get("login_state") in (None, ""):
         missing.append("login_state (addendum M (a))")
     if m.get("platform") == "youtube":
