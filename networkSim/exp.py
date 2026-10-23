@@ -1020,12 +1020,30 @@ if __name__ == "__main__":
             print("="*60 + "\n")
             input()
 
-        if LEVER is not None:     # v3 B4 (levi 19:49): the lowest rung read ONCE here, before the shaper starts; fixed
-            try:                  # for every episode (the shaper path makes no live player read)
-                _rung, _note = (browser._current_rung(0.0) if browser is not None else None), None
-            except Exception as _e:
-                _rung, _note = None, f"rung read at start failed: {_e!r}"[:160]
-            print(f"[lever] rate fixed at start: {LEVER.fix_rate(_rung, time.time(), _note)}")
+        if LEVER is not None and browser is not None and LEVER.episodes:
+            # v3 B4 (levi 19:49 / 19:57 / 19:58): the lowest offered rung, read after playback started (browser.start
+            # returns then) and fixed ONCE for every episode: the first read here on the main thread; while only the
+            # fallback is known, retries every 5 s on a daemon thread until 2 s before the first onset (t0, the
+            # shaper's first apply, comes after this). The shaper path never reads the player.
+            def _lever_read():
+                try:
+                    r = browser._current_rung(0.0)
+                except Exception as e:
+                    print(f"[lever] rung read failed: {e!r}"[:200], flush=True)
+                    return False
+                if r and r.get("source") not in (None, "fallback"):
+                    print(f"[lever] rate fixed: {LEVER.fix_rate(r, time.time())}", flush=True)
+                    return True
+                return False
+            if not _lever_read():
+                _lever_deadline = time.time() + LEVER.first_onset_s - 2
+
+                def _lever_retry():
+                    while time.time() < _lever_deadline and LEVER.rate is None:
+                        time.sleep(5)
+                        if _lever_read():
+                            return
+                threading.Thread(target=_lever_retry, name="lever-rung", daemon=True).start()
         abort_reason = asyncio.run(experiment(
             episode_time_in_seconds=SCHEDULE["episode_s"],
             net_labels=net_labels,

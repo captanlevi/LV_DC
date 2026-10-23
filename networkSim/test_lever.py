@@ -43,15 +43,11 @@ def test_rate_source_and_fallback():
     lv = L.Lever("youtube", "yt_1", 600, P)
     ep = lv.episodes[0]
     assert lv.rate_for(ep, 10.0) == L.FALLBACK_KBIT["youtube"] and lv.rate_for(ep, 12.0) == L.FALLBACK_KBIT["youtube"]
-    assert lv.rate["source"] == "fallback" and "no rate fixed at session start" in lv.rate["note"]
+    assert lv.rate["source"] == "fallback" and "no offer read by the first onset" in lv.rate["note"]
     assert lv.first_applied == {ep["id"]: 10.0}
     lv = L.Lever("tiktok", "tt_1", 600, P)
     assert lv.fix_rate({"kbit": 2400, "source": "room_js"}, 5.0)["kbit"] == 1200
-    try:
-        lv.fix_rate({"kbit": 100, "source": "room_js"}, 6.0)
-        raise AssertionError("the rate is fixed once")
-    except RuntimeError:
-        pass
+    assert lv.fix_rate({"kbit": 100, "source": "room_js"}, 6.0) is None and lv.rate["kbit"] == 1200   # first fix wins
     assert all(lv.rate_for(e, 100.0 + i) == 1200 for i, e in enumerate(lv.episodes))   # every episode, one rate
 
 
@@ -64,7 +60,7 @@ def test_no_live_read_in_the_lever():
     tree = ast.parse((HERE / "lever.py").read_text())
     mods = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names} | \
            {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-    assert mods <= {"__future__", "random"}, mods
+    assert mods <= {"__future__", "random", "threading"}, mods
     code = (HERE / "lever.py").read_text().split('"""', 2)[2]
     for word in ("browser", "_page", "eval(", "CDP", "rung_fn", "labels.csv", "net_labels"):
         assert word not in code, word
@@ -74,8 +70,45 @@ def test_no_live_read_in_the_lever():
     body = ast.get_source_segment(src, fn)
     for word in ("browser", "_current_rung", "eval(", "fix_rate"):
         assert word not in body, word
-    i_fix = src.index("LEVER.fix_rate(_rung, time.time(), _note)")
+    i_fix = src.index("if not _lever_read():")
     assert i_fix < src.index("abort_reason = asyncio.run(experiment(") and src.count("_current_rung") == 1
+    assert "_lever_deadline = time.time() + LEVER.first_onset_s - 2" in src     # the retries end before the 1st onset
+
+
+def test_no_episode_before_the_fix():
+    """levi 19:57 / 19:58: t0 = the shaper's first apply; the first onset is >= FIRST_ONSET_MIN_S after it; the start
+    reader runs before t0 and stops 2 s before the first onset, so a fix it makes always precedes every episode."""
+    assert L.FIRST_ONSET_MIN_S == 60.0
+    for i in range(300):
+        p = L.plan(f"s_{i}", 3600, 1 / 30, 5, 20)
+        assert not p["episodes"] or p["episodes"][0]["onset_s"] >= L.FIRST_ONSET_MIN_S
+    lv = L.Lever("youtube", "yt_fix", 3600, P)
+    t_start = 500.0                                   # the reader's start (before asyncio.run, so <= t0)
+    lv.fix_rate({"kbit": 300, "source": "page_js"}, t_start + lv.first_onset_s - 2.5)   # the latest a retry can fix
+    t0 = t_start + 0.3
+    assert lv.active(t0) is None
+    e1 = lv.episodes[0]
+    assert lv.rate["at"] < t0 + e1["onset_s"]
+    lv.rate_for(e1, t0 + e1["onset_s"])
+    r = lv.record()
+    assert r["fix_t"] == lv.rate["at"] and r["rung_source"] == "page_js" and r["t0"] == t0
+    assert r["episodes_never_applied"] == [e["id"] for e in lv.episodes[1:]]
+
+
+def test_shaper_items_are_walk_steps():
+    """brad / levi 19:58: an episode applies only when a shaper item starts inside it. Items are the walk's sub-steps:
+    WALK_STEP_S 2 s, the last of a sub-step in [WALK_LAST_MIN_S, WALK_STEP_S + WALK_LAST_MIN_S), so < 3 s (not <= 2 s);
+    exp.py always runs the walk (walk_rng set from the session's name), without which an item is a whole sub-step."""
+    import random as _r
+    from utils import netStat as NS
+    rng, worst = _r.Random("items"), 0.0
+    for i in range(2000):
+        dur = _r.Random(i).uniform(0.5, 90.0)
+        rows = NS.substep_changes("5", 1200, dur, 40, 0.2, rng)
+        worst = max(worst, max(r.duration for r in rows))
+    assert worst < NS.WALK_STEP_S + NS.WALK_LAST_MIN_S and NS.WALK_STEP_S + NS.WALK_LAST_MIN_S == 3.0, worst
+    src = (HERE / "exp.py").read_text()
+    assert "SHAPER_OPTS.update(walk_rng=WALK_RNG" in src
 
 
 def test_clock_and_abort_record():
@@ -157,6 +190,8 @@ def main() -> int:
     test_plan_reproducible_non_overlapping()
     test_rate_source_and_fallback()
     test_no_live_read_in_the_lever()
+    test_no_episode_before_the_fix()
+    test_shaper_items_are_walk_steps()
     test_clock_and_abort_record()
     test_ossilate_overlay()
     test_exp_wiring()
