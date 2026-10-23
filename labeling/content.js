@@ -292,6 +292,14 @@ function rvfcTick() {
                    ct: video.currentTime ?? null, rvfc: rvfcOn && !!st, off_arm_cb: offArmCb,
                    side_dropped: { ...sideDropped }, side_failed: { ...sideFailed } });
   if (st) st.n = 0;
+  // levi 18:26: the counters also go to one small storage key each tick (top frame), so export records their final
+  // values in meta.json ext_storage even when the last flush fails after the last tick
+  if (window === window.top) {
+    try {
+      chrome.storage.local.set({ side_counters: { side_dropped: sideDropped, side_failed: sideFailed, off_arm_cb: offArmCb,
+                                                  at: performance.timeOrigin + performance.now() } });
+    } catch (e) { /* counted in the tick rows */ }
+  }
 }
 
 function flushSide() {

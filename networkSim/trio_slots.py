@@ -796,6 +796,34 @@ def dns_capture_start(staging: Path) -> subprocess.Popen:
     return subprocess.Popen(["sudo", "-n", "sh", "-c", cmd])
 
 
+# v3 A17 (t67; levi / supervisor 17:58, brad): the default class's TCP headers, beside its DNS, every session, so the
+# preregistered shared-path detector has its anchor (a default-class RTT sample) on v3 data; on t58 (c) of d2883c3c was
+# uncomputable for want of it. Headers only (snaplen DEFAULT_TCP_SNAPLEN), both mirrors of the unshaped default class.
+DEFAULT_TCP_SNAPLEN = 128
+DEFAULT_TCP_FILTER = "tcp"
+
+
+def default_tcp_capture_start(staging: Path) -> list[subprocess.Popen]:
+    out = []
+    for dev, side in (("lvi_def", "in"), ("lvo_def", "out")):
+        cmd = (f'exec tcpdump {TCPDUMP_Z} -B {TCPDUMP_B_KIB} -s {DEFAULT_TCP_SNAPLEN} -i {dev} -U -w - "{DEFAULT_TCP_FILTER}" '
+               f'> "{staging / f"default_tcp_{side}.pcap"}" 2> "{staging / f"default_tcp_{side}.err"}"')
+        out.append(subprocess.Popen(["sudo", "-n", "sh", "-c", cmd]))
+    return out
+
+
+def client_addr(iface: str, run=subprocess.run) -> dict:
+    """v3 A16 (t67; the W4 loss reader's client bug): the collection interface's IPv4 address(es) at session start
+    (`ip -4 -o addr show dev <iface>`), so readers take the client from the record, never infer it. All slots share it."""
+    import re
+    try:
+        out = run(["ip", "-4", "-o", "addr", "show", "dev", iface], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"iface": iface, "addr": None, "addrs": [], "error": repr(exc)[:200]}
+    addrs = re.findall(r"\binet (\d+\.\d+\.\d+\.\d+)/", out or "")
+    return {"iface": iface, "addr": addrs[0] if addrs else None, "addrs": addrs}
+
+
 def dns_capture_stop(p: subprocess.Popen | None) -> None:
     if p is None:
         return

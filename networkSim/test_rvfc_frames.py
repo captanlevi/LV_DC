@@ -26,6 +26,7 @@ const mode = process.argv[4];
 const off = mode.startsWith("off");
 const asyncCfg = mode.endsWith("async");
 const pendingCfg = [];
+const stored = {};
 let failNextSide = mode === "on";        // the first side write fails once (re-queued, counted)
 const timers = [], side = [], sent = [];
 let now = 1000;
@@ -44,7 +45,8 @@ const ctx = {
   XPathResult: { ORDERED_NODE_SNAPSHOT_TYPE: 7 },
   location: { href: "https://www.tiktok.com/@r/live", hostname: "www.tiktok.com" },
   chrome: { storage: { local: { get: (d, cb) => { const r = () => cb(off ? { lvqoe_config: { rvfc: false } } : d);
-                                                    if (asyncCfg) pendingCfg.push(r); else r(); } } },
+                                                    if (asyncCfg) pendingCfg.push(r); else r(); },
+                                set: (o) => Object.assign(stored, o) } },
             runtime: { lastError: null, sendMessage: (m, cb) => {
               if (m.kind === "side-batch" && failNextSide) { failNextSide = false; cb && cb({ ok: false, err: "quota" }); return; }
               if (m.kind === "side-batch") side.push(m); if (m.kind === "video-events-batch") sent.push(...m.payload);
@@ -69,7 +71,7 @@ tick();                                     // nothing presented in this second
 v.srcObject = new MediaStream(); mt = 0;   // a new stream (tt re-entry): mediaTime restarts
 present(3, 540, 960); tick();
 vm.runInContext("flushSide()", ctx);        // the last tick's rows
-fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length, registeredBeforeCfg }));
+fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length, registeredBeforeCfg, stored }));
 """
 
 
@@ -105,6 +107,8 @@ def test_rvfc_frames():
     # brad 18:17: the first side write failed once: re-queued (no row lost, the 4 ticks above), counted, nothing dropped
     assert sum(ticks[-1]["side_failed"].values()) == 1 and ticks[-1]["side_dropped"] == {"player_events": 0, "frames": 0}
     assert all(t["off_arm_cb"] == 0 for t in ticks)
+    sc = r["stored"]["side_counters"]                                          # levi 18:26: the final counters persisted
+    assert (sc["side_dropped"], sc["side_failed"], sc["off_arm_cb"]) == (ticks[-1]["side_dropped"], ticks[-1]["side_failed"], 0)
     for mode in ("off", "off_async"):                                           # the off arm, config read late or early
         off = run(mode)
         fo = [x for m in off["side"] if m["stream"] == "frames" for x in m["payload"]]

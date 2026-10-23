@@ -1536,6 +1536,9 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         ext = {"side_keys": len(side)}             # brad / levi 18:17: the storage use at export (meta.json ext_storage)
         try:
             ext["bytes_in_use"] = sw.eval("new Promise(r => chrome.storage.local.getBytesInUse(null, r))", await_promise=True)
+            # levi 18:26: the content script's final side_dropped / side_failed / off_arm_cb (the gate counters read meta)
+            ext["counters"] = json.loads(sw.eval("new Promise(r => chrome.storage.local.get({side_counters: null}, "
+                                                 "d => r(JSON.stringify(d.side_counters))))", await_promise=True) or "null")
         except Exception as exc:
             ext["error"] = repr(exc)[:200]
         try:
@@ -1544,7 +1547,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         except Exception as exc:
             print(f"[browser] ext_storage not recorded: {exc!r}", flush=True)
         # Clear storage so the next run starts fresh
-        sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'].concat(%s), r))"
+        sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s), r))"
                 % json.dumps(sorted(side)), await_promise=True)
         for stream, recs in _side_streams(side).items():
             with open(session_dir / f"{stream}.jsonl", "w") as fh:
@@ -1766,6 +1769,29 @@ _PLAYER_STATE_JS = """
                            ct: Math.round(v.currentTime * 1000) / 1000});
 })()
 """
+# v3 A8 (t67; levi n1): the screen as the page sees it (size, available size, DPR, colour depth) and the refresh it is
+# paced at, measured: the median requestAnimationFrame interval over up to SCREEN_RAF_FRAMES frames (3 s cap; with the
+# display off the pacing is what the session ran under, which A8's C5 reads against xrandr). Read-only; no request.
+SCREEN_RAF_FRAMES = 120
+_SCREEN_JS = """
+new Promise((res) => {
+  const t = [];
+  let done = false;
+  const fin = () => {
+    if (done) return;
+    done = true;
+    const d = t.slice(1).map((x, i) => x - t[i]).sort((a, b) => a - b);
+    const med = d.length ? d[Math.floor(d.length / 2)] : null;
+    res(JSON.stringify({w: screen.width, h: screen.height, avail_w: screen.availWidth, avail_h: screen.availHeight,
+                        dpr: window.devicePixelRatio || 1, color_depth: screen.colorDepth,
+                        raf_frames: t.length, raf_median_ms: med, refresh_hz: med ? Math.round(10000 / med) / 10 : null,
+                        visibility: document.visibilityState}));
+  };
+  const f = (ts) => { t.push(ts); if (t.length < %d) requestAnimationFrame(f); else fin(); };
+  requestAnimationFrame(f);
+  setTimeout(fin, 3000);
+})
+""" % (SCREEN_RAF_FRAMES + 1)
 _PLAY_JS = """
 (function() {
     const vs = [...document.querySelectorAll('video')].filter(v => v.getClientRects().length);
@@ -3329,6 +3355,7 @@ class BrowserSession:
         self.frozen_hold_bypassed: list = []         # yt / twitch: a frozen clock's low-state hold skipped, no starvation
         # v3 A1 (t67): content.js's rVFC aggregates, on unless LVQOE_RVFC=0 (the gate's callback-off arm); meta.json rvfc
         self.rvfc = {"enabled": os.environ.get("LVQOE_RVFC", "1") != "0", "config_set": False}
+        self.screen: dict | None = None             # v3 A8: meta.json screen
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
         self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
@@ -3416,6 +3443,10 @@ class BrowserSession:
         # 2026-10-16: visibilityState hidden, player unstarted until brought to front). Keep the tab visible and focused.
         self._page.call("Page.bringToFront")
         self._page.call("Emulation.setFocusEmulationEnabled", {"enabled": True})
+        try:                                     # v3 A8 (t67): what the page sees of the screen, once at start
+            self.screen = json.loads(self._page.eval(_SCREEN_JS, await_promise=True) or "null")
+        except Exception as exc:
+            self.screen = {"error": repr(exc)[:200]}
         self._start_time = time.time()
 
         # Direct extension CSV downloads into the session directory
@@ -3430,7 +3461,8 @@ class BrowserSession:
                 targets = json.loads(r.read())
             sw, tmp_tab = _ext_page()
             if sw is not None:
-                sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'], r))", await_promise=True)
+                sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'], r))",
+                        await_promise=True)
                 # v3: stale side-stream batches out; this session's extension config in (A1: rVFC on / off)
                 sw.eval("new Promise(r => chrome.storage.local.get(null, d => chrome.storage.local.remove("
                         "Object.keys(d).filter(k => k.startsWith('side:')), r)))", await_promise=True)

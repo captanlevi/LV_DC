@@ -819,6 +819,9 @@ if __name__ == "__main__":
             SLOT, staging=str(staging), link_capacity_kbit=args.link_capacity_kbit, shot_source=_browser_mod.SHOT_SOURCE,
             layout=LAYOUT,
             trio_run=os.environ.get("LVDC_TRIO_RUN"), slots_log=str(slots_log)))
+        import offloads as _offloads      # v3 A16: the client address from the record (readers never infer it)
+        _ca = trio_slots.client_addr(os.environ.get("LVDC_CAPTURE_IFACE") or _offloads.IFACE_DEFAULT)
+        TRIO.update(client_addr=_ca["addr"], client_iface=_ca)
         session_meta.write(session_dir, concurrency=TRIO)
         os.environ["LVDC_SLOT_TAG"] = SLOT.tag            # t56: browser.publish_stream / sibling_streams
         trio_slots.slots_log_append(slots_log, {"event": "start", "slot": SLOT.tag, "session": session_dir.name,
@@ -897,6 +900,7 @@ if __name__ == "__main__":
     tc_sampler = (trio_slots.TcSampler(session_dir, SLOT, capacity_kbit=args.link_capacity_kbit).start()
                   if SLOT is not None else None)
     dns_cap = trio_slots.dns_capture_start(staging) if SLOT is not None else None   # the default class's DNS (v3 §8)
+    tcp_def_caps = trio_slots.default_tcp_capture_start(staging) if SLOT is not None else []   # v3 A17: its TCP headers
 
     if is_capture and initialize_pcap(session_dir) == False:
         raise ValueError("Cannot initialize pcap capture")
@@ -1020,6 +1024,7 @@ if __name__ == "__main__":
                               player_errors=browser.player_errors, ad_wait=browser.error_watch.exposure(),
                               self_pause_resume=browser.resumer.record(),
                               rvfc=browser.rvfc,                                       # v3 A1 (t67)
+                              screen=browser.screen,                                   # v3 A8 (t67)
                               **({"channel_pick": {**channel_pick_start, **browser.channel_pick}}     # twitch: + the category draw
                                  if browser.channel_pick is not None else {}),
                               t2_skipped=browser.t2_skipped, player_ladder=browser.player_ladder,
@@ -1095,6 +1100,10 @@ if __name__ == "__main__":
             try:
                 import shutil as _shutil
                 trio_slots.dns_capture_stop(dns_cap)
+                for _p in tcp_def_caps:
+                    trio_slots.dns_capture_stop(_p)
+                TRIO["default_tcp"] = {"snaplen": trio_slots.DEFAULT_TCP_SNAPLEN, "filter": trio_slots.DEFAULT_TCP_FILTER,
+                                       "bytes": {f.name: f.stat().st_size for f in staging.glob("default_tcp_*.pcap")}}
                 TRIO["capture_drops"] = trio_slots.capture_drops_of(staging)
                 answers, TRIO["dns_answers"] = trio_slots.dns_answers_for(
                     session_dir / "merged.pcap", [staging / "dns_default.pcap"] + trio_slots.run_dns_pcaps(
@@ -1103,7 +1112,8 @@ if __name__ == "__main__":
                 if answers:        # as LVQoE writes it (save_dns_answers); none -> LVQoE scans the pcap, also none
                     (session_dir / "dns_answers.json").write_text(json.dumps(answers, indent=2, sort_keys=True))
                 (session_dir / trio_slots.SESSION_TRIO_DIR).mkdir(exist_ok=True)   # one pcap in the session dir
-                for _f in list(staging.glob("tcpdump_*.err")) + list(staging.glob("dns_default.*")):
+                for _f in (list(staging.glob("tcpdump_*.err")) + list(staging.glob("dns_default.*"))
+                           + list(staging.glob("default_tcp_*"))):
                     _shutil.move(str(_f), str(session_dir / trio_slots.SESSION_TRIO_DIR / _f.name))
                 TRIO["staging_left"] = sorted(x.name for x in staging.iterdir())
                 if not TRIO["staging_left"]:
