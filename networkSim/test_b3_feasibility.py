@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "ops" / "plan"))     # the suite of record collects networkSim/test_*.py only
 import b3_feasibility as B  # noqa: E402
 
 
@@ -71,3 +71,8 @@ def test_cli_writes_the_schema_and_prints_the_table(tmp_path, capsys):
     j = json.loads(out.read_text())
     assert j["schema"] == "b3_feasibility/1" and j["rules"]["ratio_lo"] == 0.9 and j["inputs"]["offers"]["sessions"] == 1
     assert "B3 youtube" in capsys.readouterr().out
+
+
+if __name__ == "__main__":                            # run_suite.sh runs each networkSim test_*.py as a script too
+    import pytest
+    sys.exit(pytest.main([__file__, "-q"]))
