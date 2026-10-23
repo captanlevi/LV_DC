@@ -721,8 +721,11 @@ class TTRoomWatch:
         self.dead_since = None
 
     def feed(self, s: dict | None, now: float, shaper_state: int | None = None, rx_bytes: int | None = None,
-             shaped_rx_bytes: int | None = None) -> str | None:
+             shaped_rx_bytes: int | None = None, lever_active: bool = False) -> str | None:
         s = s or {}
+        # v3 B4 (levi 21:12): a lever episode holds like TT_LOW_STATES (the rate is below the lowest rung whatever the
+        # scheduled state), with the same grace after it
+        low = shaper_state in TT_LOW_STATES or bool(lever_active)
         if shaped_rx_bytes is not None:
             self.srx.append((now, shaped_rx_bytes))
             self.srx = [x for x in self.srx if now - x[0] <= TT_RX_WINDOW_S]
@@ -756,7 +759,7 @@ class TTRoomWatch:
         # the player sits at readyState 0 while bytes arrive at the shaped rate: the shaping, never a dead page. The
         # player_dead clock holds there and for TT_STALL_GRACE_S after leaving them, as rule (b); a real page death at a
         # low state is caught once the state rises
-        if shaper_state in TT_LOW_STATES:
+        if low:
             self.last_low = now
             spans = self.log["low_spans"]
             if spans and now - spans[-1][1] <= 2.0:
@@ -786,7 +789,7 @@ class TTRoomWatch:
             return "ended_page"
         # (b) no progress for T with idle interfaces, outside stalls / their grace / low shaper states
         exempt = (s.get("stall_label") or (self.last_stall is not None and now - self.last_stall <= TT_STALL_GRACE_S)
-                  or (shaper_state in TT_LOW_STATES))
+                  or low)
         if progressed or exempt:
             self.no_progress_since = None
             return None
@@ -3812,6 +3815,7 @@ class BrowserSession:
                 state = int(labels[-1].state) if labels else None
             except (ValueError, AttributeError, TypeError):
                 state = None
+            lever_on = bool(labels) and getattr(labels[-1], "lever", None) is not None    # v3 B4 (levi 21:12)
             # tt can pause itself (ti_8: a "pause" event, then flat until room_ended): click play while paused and flat,
             # before the no-media rule can fire; each click is counted in meta.json room_play_clicks
             if s.get("paused") and w.flat_since is not None and time.time() - w.flat_since >= TT_AUTOPLAY_GRACE_S:
@@ -3822,7 +3826,7 @@ class BrowserSession:
                     pass
             own = _shaped_rx_bytes()
             dead = w.feed(s, time.time(), shaper_state=state, rx_bytes=own if RX_OWN_IFB else _rx_bytes(),
-                          shaped_rx_bytes=own)
+                          shaped_rx_bytes=own, lever_active=lever_on)
             self.room_discontinuities = w.discontinuities
             if dead:
                 rec = {"reason": dead, "at": time.time(), "sample": s, "shaper_state": state,

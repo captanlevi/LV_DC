@@ -103,18 +103,28 @@ LOW_HOLD_STATES = frozenset({1, 2, 3, 4})
 LOW_HOLD_GRACE_S = 30.0
 
 
+def is_low(label) -> bool:
+    """A net label is held: its state is in LOW_HOLD_STATES, or a v3 B4 lever episode was applied on it (`lever` set:
+    the rate is below the lowest rung whatever the scheduled state; levi 21:12, a B4 defect found before any lever
+    window ran). A NetLabel or its net_labels.txt dict; a pre-B4 row has no lever key (not a lever row)."""
+    st = label.state if hasattr(label, "state") else label.get("state")
+    lv = label.lever if hasattr(label, "lever") else label.get("lever")
+    if lv is not None:
+        return True
+    try:
+        return int(st) in LOW_HOLD_STATES
+    except (TypeError, ValueError):
+        return False
+
+
 def low_hold_end(net_labels: list, t: float) -> float | None:
-    """The time the low-state hold in force at t ends (the end of the shaper's last stretch in LOW_HOLD_STATES up to t,
+    """The time the low-state hold in force at t ends (the end of the shaper's last held stretch (is_low) up to t,
     plus LOW_HOLD_GRACE_S; a stretch still running at t ends at t), or None when no such stretch began by t. Held at t
     iff t <= the returned time."""
     labs = sorted([n for n in net_labels or [] if _ts(n) is not None and _ts(n) <= t], key=_ts)
     end = None
     for a, b in zip(labs, labs[1:] + [None]):
-        try:
-            low = int(a.state if hasattr(a, "state") else a.get("state")) in LOW_HOLD_STATES
-        except (TypeError, ValueError):
-            low = False
-        if low:
+        if is_low(a):
             end = (_ts(b) if b is not None else t) + LOW_HOLD_GRACE_S
     return end
 
@@ -133,15 +143,12 @@ def player_error_held(errors: list | None, net_labels: list) -> bool:
 
 
 def low_spans(net_labels: list) -> list[tuple[float, float]]:
-    """The shaper's stretches in LOW_HOLD_STATES: (first low label's time, the next label's time; inf if none)."""
+    """The shaper's held stretches (is_low: LOW_HOLD_STATES or a lever episode): (first low label's time, the next
+    label's time; inf if none)."""
     labs = sorted([n for n in net_labels or [] if _ts(n) is not None], key=_ts)
     out = []
     for a, b in zip(labs, labs[1:] + [None]):
-        try:
-            low = int(a.state if hasattr(a, "state") else a.get("state")) in LOW_HOLD_STATES
-        except (TypeError, ValueError):
-            low = False
-        if low:
+        if is_low(a):
             end = _ts(b) if b is not None else float("inf")
             if out and out[-1][1] == _ts(a):
                 out[-1] = (out[-1][0], end)
