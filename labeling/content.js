@@ -4,6 +4,7 @@
 
 let video = null;
 let event_id = 0;
+let lastTick = null;           // v3 A5: the latest res_meta tick {id, ts}, stamped onto every page-stats row
 let lastEventType = null;
 const eventBuffer = [];
 const MAX_BUFFER_SIZE = 1000;
@@ -475,6 +476,7 @@ function emit(type) {
   if (type === "stall") labelStall = true;
   else if (type === "start" || type === "video_start") labelStall = false;
   if (type === "res_meta") {
+    lastTick = { id: evt.event_id, ts: evt.ts };
     const ct = evt.current_time;
     if (ct === null || ct === undefined || stillCt === null || Math.abs(ct - stillCt) > 0.05) {
       stillCt = ct;
@@ -659,7 +661,9 @@ window.addEventListener("message", (e) => {
   }
   if (e.source !== window || !e.data || e.data.source !== "lvqoe-page-stats") return;
   if (!collecting) return;
-  statsBuffer.push({ ts: e.data.ts, stats: e.data.stats, url: location.href });
+  // v3 A5 (t67): both clocks and the content.js tick the row follows (the playing rendition joins the tick by id)
+  statsBuffer.push({ ts: e.data.ts, wall: Date.now(), tick_id: lastTick ? lastTick.id : null,
+                     tick_ts: lastTick ? lastTick.ts : null, stats: e.data.stats, url: location.href });
   if (statsBuffer.length > 200) statsBuffer.shift();
 });
 setInterval(() => {
