@@ -80,11 +80,11 @@ def test_wait4_reader():
         old = os.environ["PATH"]
         os.environ["PATH"] = f"{d}:{old}"
         try:
-            out, cpu = T._tc_classes("lvi_yt1")
-            bad, _ = T._tc_classes("bad")
+            out, cpu = T._tc_classes("lvi_yt1", timeout_s=60.0)   # a loaded box (suite of suites) must not
+            bad, _ = T._tc_classes("bad", timeout_s=60.0)         # trip the 2 s kill: a 74/75 flake at load ~21
         finally:
             os.environ["PATH"] = old
-    assert out.startswith("class htb 1:10") and cpu >= 0.0 and bad == ""
+    assert out.startswith("class htb 1:10") and cpu >= 0.0 and bad == "", (out, cpu, bad)
 
 
 def test_exp_wiring():
