@@ -338,8 +338,8 @@ function adCheck(reason) {
   const key = sig.join("|");
   if (adLast !== null && key === adLast) return;
   const pn = performance.now();
-  side("ad_edges", { ts: performance.timeOrigin + pn, pn, wall: Date.now(), is_ad: sig.length > 0, signals: key,
-                     prev: adLast, reason, el: elId(video), ct: video.currentTime ?? null });
+  side("ad_edges", { source: "dom", ts: performance.timeOrigin + pn, pn, wall: Date.now(), is_ad: sig.length > 0,
+                     signals: key, prev: adLast, reason, el: elId(video), ct: video.currentTime ?? null });
   adLast = key;
 }
 function queueAdCheck(reason) {
@@ -624,6 +624,11 @@ if (existingVideo) {
 // separate stream (stored apart from the label events, exported to player_stats.jsonl, never into labels.csv).
 const statsBuffer = [];
 window.addEventListener("message", (e) => {
+  if (e.source === window && e.data && e.data.source === "lvqoe-ad-src" && collecting && v3On && v3Ready) {
+    const { kind, ts, pn, wall, video_id, player_state } = e.data;   // v3 A3 source 3 (page_stats.js, yt player API)
+    side("ad_edges", { source: kind, ts, pn, wall, video_id, player_state, el: elId(video) });
+    return;
+  }
   if (e.source !== window || !e.data || e.data.source !== "lvqoe-page-stats") return;
   if (!collecting) return;
   statsBuffer.push({ ts: e.data.ts, stats: e.data.stats, url: location.href });

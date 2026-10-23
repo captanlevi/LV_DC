@@ -2035,6 +2035,10 @@ TICK_STARTUP_TIMEOUT_S = 15
 
 
 _USHER_RE = re.compile(r"usher\.ttvnw\.net/api/(?:v2/)?channel/hls/[^/?]+\.m3u8")
+# v3 A3 source 2 (levi 18:32): twitch's media playlists (fetched by the player's worker every few s) mark stitched ads;
+# the listener reads each body it already sees (no request of ours) and records every flip of "an ad marker present"
+_TW_MEDIA_RE = re.compile(r"\.m3u8(?:\?|$)")
+_TW_AD_MARK_RE = re.compile(r'stitched-ad|CLASS="twitch-ad|X-TV-TWITCH-AD', re.I)
 
 
 LADDER_PROBE_FROZEN_S = 60.0   # twitch, master unread: the quality menu is read only inside a frozen run this long
@@ -2193,6 +2197,9 @@ class MasterListener:
         self._t: threading.Thread | None = None
         self._wanted: dict = {}
         self._pending: dict = {}
+        self.playlist_fetches = 0                  # v3 A3 source 2: media playlists read
+        self.ad_edges: list[dict] = []             # their ad-marker flips (meta.json tw_playlist_ads)
+        self._in_ad: bool | None = None
 
     def start(self) -> "MasterListener":
         self._t = threading.Thread(target=self._run, daemon=True, name="master-listener")
@@ -2212,6 +2219,8 @@ class MasterListener:
             send("Network.enable", {"maxTotalBufferSize": 4_000_000, "maxResourceBufferSize": 500_000}, prm.get("sessionId"))
         elif m == "Network.responseReceived" and _USHER_RE.search((prm.get("response") or {}).get("url", "")):
             self._wanted[(sid, prm.get("requestId"))] = prm["response"]["url"]
+        elif m == "Network.responseReceived" and _TW_MEDIA_RE.search((prm.get("response") or {}).get("url", "")):
+            self._wanted[(sid, prm.get("requestId"))] = prm["response"]["url"]   # a media playlist (A3 source 2)
         elif m == "Network.loadingFinished" and (sid, prm.get("requestId")) in self._wanted:
             url = self._wanted.pop((sid, prm["requestId"]))
             self._pending[send("Network.getResponseBody", {"requestId": prm["requestId"]}, sid)] = (sid, url)
@@ -2220,9 +2229,24 @@ class MasterListener:
             body = res.get("body") or ""
             if res.get("base64Encoded"):
                 body = base64.b64decode(body).decode("utf-8", "replace")
-            kbit = stuck.rung_from_master(body)
-            if kbit:
-                self.latest = {"kbit": kbit, "t": time.time(), "path": urlsplit(url).path, "from_worker": req_sid is not None}
+            if _USHER_RE.search(url):
+                kbit = stuck.rung_from_master(body)
+                if kbit:
+                    self.latest = {"kbit": kbit, "t": time.time(), "path": urlsplit(url).path, "from_worker": req_sid is not None}
+            else:
+                self.playlist_ad(body, url, time.time())
+
+    def playlist_ad(self, body: str, url: str, t: float) -> None:
+        """v3 A3 source 2: one media playlist body: a flip of 'an ad marker present' is an edge (time.time; the A11 clock
+        offsets join it to the label clock)."""
+        from urllib.parse import urlsplit
+        self.playlist_fetches += 1
+        marks = _TW_AD_MARK_RE.findall(body or "")
+        in_ad = bool(marks)
+        if in_ad != self._in_ad and len(self.ad_edges) < WATCH_LOG_MAX:
+            self.ad_edges.append({"t": t, "in_ad": in_ad, "prev": self._in_ad, "marks": len(marks),
+                                  "path": urlsplit(url).path[-60:]})
+        self._in_ad = in_ad
 
     def _run(self) -> None:
         try:

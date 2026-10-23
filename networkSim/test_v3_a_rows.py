@@ -52,8 +52,10 @@ const ctx = {
   location: { href: "https://www.twitch.tv/x", hostname: "www.twitch.tv" },
   chrome: { storage: { local: { get: (d, cb) => cb(d), set() {} } },
             runtime: { lastError: null, sendMessage: (m, cb) => { if (m.kind === "side-batch") side.push(m); cb && cb({ ok: true }); } } },
-  addEventListener() {}, getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+  addEventListener(t, f) { (winLs[t] = winLs[t] || []).push(f); },
+  getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
 };
+const winLs = {};
 ctx.window = ctx; ctx.window.top = ctx;
 ctx.document = { documentElement: { dataset: {} }, body: {}, visibilityState: "visible", getElementById: () => null,
   querySelectorAll: (q) => (q === "video" ? [v] : (adLabel && q === '[data-a-target="video-ad-label"]' ? [label] : [])),
@@ -70,6 +72,10 @@ now += 5; adLabel = false; v.duration = Infinity; v.fire("durationchange");   //
 tick();
 adLabel = true;                           // a marker change no observer saw (outside the subtree): the tick backstop
 tick();
+const inWin = vm.runInContext("window", ctx);   // the context's own window (a vm global proxy, not ctx)
+for (const f of winLs.message || []) f({ source: inWin, data: { source: "lvqoe-ad-src", kind: "yt_player", ts: 5e11 + 7, pn: 7,
+                                                              wall: 5e11 + 7, video_id: "AD123", player_state: 1 } });
+for (const f of winLs.message || []) f({ source: {}, data: { source: "lvqoe-ad-src", kind: "yt_player", video_id: "X" } });
 vm.runInContext("flushSide()", ctx);
 fs.writeFileSync(process.argv[3], JSON.stringify({ side, rootId: obsRoot && obsRoot.id, opts: obsOpts }));
 """
@@ -89,6 +95,9 @@ def test_ad_edges_and_box():
     r = run()
     assert r["rootId"] == "p1" and r["opts"]["subtree"] and "class" in r["opts"]["attributeFilter"]   # 6 ancestors up
     edges = [x for m in r["side"] if m["stream"] == "ad_edges" for x in m["payload"]]
+    src3 = [e for e in edges if e["source"] == "yt_player"]                # levi 18:32 source 3, window messages only
+    assert [(e["video_id"], e["player_state"], e["ts"]) for e in src3] == [("AD123", 1, 5e11 + 7)], src3
+    edges = [e for e in edges if e["source"] == "dom"]
     assert [(e["signals"], e["prev"], e["reason"]) for e in edges] == [
         ("", None, "attach"), ("tw_ad_dom", "", "dom"), ("duration_finite|tw_ad_dom", "tw_ad_dom", "durationchange"),
         ("", "duration_finite|tw_ad_dom", "durationchange"), ("tw_ad_dom", "", "tick")], edges
@@ -106,6 +115,59 @@ def test_ad_edges_and_box():
     assert box == {"x": 0, "y": 50, "w": 1180, "h": 670, "el_w": 1280, "el_h": 720, "vw": 1280, "vh": 720, "dpr": 2,
                    "frac": round(1180 * 670 / (1280 * 720), 4)}, box
     assert all(t["top"] is True for t in ticks)
+
+
+PS_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const ivs = [], posted = [];
+let now = 0, i = 0;
+const ids = ["LIVE1", "LIVE1", "AD1", "AD1", "AD1", "LIVE1", "LIVE1"];
+const player = { getVideoData: () => ({ video_id: ids[Math.min(i, ids.length - 1)] }), getPlayerState: () => 1 };
+const ctx = { location: { hostname: "www.youtube.com" }, performance: { timeOrigin: 5e11, now: () => now },
+  Date: { now: () => 5e11 + now }, setInterval: (f, ms) => ivs.push([f, ms]),
+  document: { getElementById: (x) => (x === "movie_player" ? player : null), querySelectorAll: () => [], head: null },
+  window: { postMessage: (m) => posted.push(m) } };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const fast = ivs.filter(([f, ms]) => ms === 250).map(([f]) => f);
+for (i = 0; i < ids.length; i++) { now += 250; for (const f of fast) f(); }
+console.log(JSON.stringify(posted.filter(m => m.source === "lvqoe-ad-src")));
+"""
+
+
+def test_yt_player_source():
+    """levi 18:32 source 3: page_stats.js posts the yt player's video id / state at 4 Hz, on change only."""
+    node = shutil.which("node")
+    assert node, "node not found (install node)"
+    out = subprocess.run([node, "-e", PS_HARNESS, str(HERE.parent / "labeling" / "page_stats.js")], capture_output=True,
+                         text=True, check=True)
+    msgs = json.loads(out.stdout)
+    assert [(m["video_id"], m["kind"], m["ts"] - 5e11) for m in msgs] == [("LIVE1", "yt_player", 250), ("AD1", "yt_player", 750),
+                                                                          ("LIVE1", "yt_player", 1500)], msgs
+
+
+def test_tw_playlist_source():
+    """levi 18:32 source 2: MasterListener reads twitch's media playlists it already sees and records each flip of an
+    ad marker; the master still gives the rung."""
+    m = B.MasterListener("ws://x")
+    sent = []
+
+    def send(method, params, sid=None):
+        sent.append((method, params, sid))
+        return len(sent)
+    media = "https://video-weaver.syd03.hls.ttvnw.net/v1/playlist/AbC.m3u8"
+    m.handle({"method": "Network.responseReceived", "sessionId": "W", "params": {"requestId": "1", "response": {"url": media}}}, send)
+    m.handle({"method": "Network.loadingFinished", "sessionId": "W", "params": {"requestId": "1"}}, send)
+    assert sent[-1][0] == "Network.getResponseBody" and sent[-1][2] == "W"
+    m.handle({"id": len(sent), "result": {"body": "#EXTM3U\n#EXTINF:2.0,\nseg1.ts\n"}}, send)
+    m.playlist_ad('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad"\n#EXTINF:2.0,\nad.ts', media, 10.0)
+    m.playlist_ad('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad"', media, 12.0)
+    m.playlist_ad("#EXTINF:2.0,\nseg9.ts", media, 14.0)
+    assert m.playlist_fetches == 4 and [(e["t"] if e["t"] != 0 else 0, e["in_ad"], e["prev"]) for e in m.ad_edges][1:] == \
+        [(10.0, True, False), (14.0, False, True)] and m.ad_edges[0]["in_ad"] is False and m.ad_edges[0]["prev"] is None
+    assert m.latest is None                                                     # a media playlist is never the rung
+    src = (HERE / "exp.py").read_text()
+    assert 'tw_playlist_ads=({"fetches": browser._master.playlist_fetches' in src
 
 
 def test_apply_instants():
@@ -145,6 +207,8 @@ def main() -> int:
     test_ad_edges_and_box()
     test_apply_instants()
     test_clock_sample()
+    test_yt_player_source()
+    test_tw_playlist_source()
     print("test_v3_a_rows: ok")
     return 0
 

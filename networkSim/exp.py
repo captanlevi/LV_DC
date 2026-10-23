@@ -1027,6 +1027,9 @@ if __name__ == "__main__":
                               instruments=browser.instruments,                         # v3 (t67; levi 18:33)
                               screen=browser.screen,                                   # v3 A8 (t67)
                               clock_offsets=browser.clock_offsets,                     # v3 A11 (t67)
+                              tw_playlist_ads=({"fetches": browser._master.playlist_fetches,          # v3 A3 src 2
+                                                "edges": browser._master.ad_edges}
+                                               if getattr(browser, "_master", None) is not None else None),
                               **({"channel_pick": {**channel_pick_start, **browser.channel_pick}}     # twitch: + the category draw
                                  if browser.channel_pick is not None else {}),
                               t2_skipped=browser.t2_skipped, player_ladder=browser.player_ladder,

@@ -55,4 +55,23 @@
     const stats = read();
     if (stats) window.postMessage({ source: "lvqoe-page-stats", ts: performance.timeOrigin + performance.now(), stats }, "*");
   }, POLL_MS);
+  // v3 A3 source 3 (levi 18:32): yt's player API, read-only: the video id it plays (an ad plays under its own id: the
+  // record's stats-for-nerds show the live id plus 10-20 s stints of other ids) and its player state, 4 times a second,
+  // posted on change only, with both clocks; content.js puts it in ad_edges as source yt_player. getAdState() read -1 on
+  // every sample of the t58 record, so it is not used.
+  let lastVid = null;
+  setInterval(() => {
+    if (location.hostname.includes("twitch.tv")) return;
+    const p = document.getElementById("movie_player");
+    if (!p || typeof p.getVideoData !== "function") return;
+    let vid = null, state = null;
+    try { vid = (p.getVideoData() || {}).video_id || null; } catch (e) {}
+    try { if (typeof p.getPlayerState === "function") state = p.getPlayerState(); } catch (e) {}
+    const key = `${vid}|${state}`;
+    if (key === lastVid) return;
+    lastVid = key;
+    const pn = performance.now();
+    window.postMessage({ source: "lvqoe-ad-src", kind: "yt_player", ts: performance.timeOrigin + pn, pn, wall: Date.now(),
+                         video_id: vid, player_state: state }, "*");
+  }, 250);
 })();
