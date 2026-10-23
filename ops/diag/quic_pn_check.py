@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import ipaddress
 import json
 import re
 import shutil
@@ -43,10 +44,22 @@ def pn_stats(pns: list[int]) -> dict:
             "gaps": (u[-1] - u[0] + 1) - len(u), "reorders": sum(1 for a, b in zip(pns, pns[1:]) if b < a)}
 
 
+def client_of(rs: list[list[str]]) -> str | None:
+    """The capture's own address: the most frequent private source address of the QUIC packets. The most frequent
+    source overall is the busiest server on a video session (downstream outnumbers upstream), which inverted the
+    directions on most yt / twitch sessions (peter 2026-10-23). No private source: None."""
+    def private(a: str) -> bool:
+        try:
+            return ipaddress.ip_address(a).is_private
+        except ValueError:
+            return False
+    cnt = collections.Counter(r[2] for r in rs if len(r) > 2 and private(r[2]))
+    return cnt.most_common(1)[0][0] if cnt else None
+
+
 def session(sd: Path, tshark: str) -> dict:
     rs = rows(sd / "merged.pcap", sd / "ssl_keys.log", tshark)
-    cnt = collections.Counter(r[2] for r in rs if len(r) > 2)
-    me = cnt.most_common(1)[0][0] if cnt else None
+    me = client_of(rs)
     conns: dict = {}
     for r in rs:
         r = r + [""] * (len(FIELDS) - len(r))

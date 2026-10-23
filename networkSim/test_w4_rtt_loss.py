@@ -116,6 +116,10 @@ def test_loss_drops():
             ["0", "1.2.3.4", "1100", "100"],                     # a re-send of a captured segment: not missing
             ["0", ME, "5000", "50"]]                             # upstream: ignored
     assert LD.tcp_missing(rows, ME) == (5, 1)
+    # the client is the private source even when a server sends most QUIC packets (a video session's downstream
+    # dominates; the most frequent source picked the server and inverted every direction, peter 2026-10-23)
+    q = [["1", "0", "151.101.66.214", "0", "7"]] * 50 + [["1", "0", ME, "0", "3"]] * 5 + [["1", "1", "8.8.8.8", "0", "1"]]
+    assert LD.QP.client_of(q) == ME and LD.QP.client_of([["1", "0", "8.8.8.8"]]) is None
     assert LD.verdict(10, 10, False, 0)["c6"] == "pass"
     assert LD.verdict(30, 10, False, 0)["c6"] == "fail"                     # more missing than the class dropped
     assert LD.verdict(0, 100, False, 0)["c6"] == "pass"                     # one-sided: fewer missing is allowed

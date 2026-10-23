@@ -76,8 +76,7 @@ def tcp_missing(rows: list[list[str]], me: str) -> tuple[int, int]:
 def quic_down(sd: Path, tshark: str) -> dict:
     """Keyed downstream QUIC: packets and packet-number gaps; connections left undecrypted."""
     rs = QP.rows(sd / "merged.pcap", sd / "ssl_keys.log", tshark)
-    cnt = collections.Counter(r[2] for r in rs if len(r) > 2)
-    me = cnt.most_common(1)[0][0] if cnt else None
+    me = QP.client_of(rs)              # the private source; the busiest source overall is a server (peter 2026-10-23)
     conns: dict = {}
     for r in rs:
         r = r + [""] * (len(QP.FIELDS) - len(r))
