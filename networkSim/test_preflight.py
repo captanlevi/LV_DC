@@ -68,7 +68,7 @@ def main():
         r = P.check_data_uuid(data, env, good)
         ok &= check(r["ok"] and r["checked"] and r["writable"] and not list(data.iterdir()), f"expected uuid, rw, writable -> ok ({r})")
         r = P.check_data_uuid(data, {}, good)
-        ok &= check(r["ok"] and not r["checked"], "no expected uuid -> not checked")
+        ok &= check(not r["ok"] and not r["checked"] and "unset" in r["why"], "no expected uuid -> refused (t67 C4)")
         for line, why in (("4A1B-0001 rw,relatime /media/u/memories", "another volume"),
                           ("012F-AC14 ro,relatime,errors=remount-ro /media/u/chaoseater", "remounted ro"),
                           (" rw,relatime /", "an empty mount dir on the root fs"), ("", "findmnt finds nothing")):

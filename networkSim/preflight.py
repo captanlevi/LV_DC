@@ -90,8 +90,8 @@ def check_data_uuid(data_dir: Path, env: dict | None = None, sh=_sh) -> dict:
     want = (env.get("LVDC_DATA_ROOT_UUID") or "").strip()
     rp = Path(data_dir).resolve()
     out: dict = {"expected": want or None, "realpath": str(rp)}
-    if not want:
-        return {**out, "checked": False, "ok": True}
+    if not want:                          # t67 C4 (collector v3): fail closed, never "not checked"
+        return {**out, "checked": False, "ok": False, "why": "LVDC_DATA_ROOT_UUID unset (t67 C4: fail closed)"}
     rc, txt = sh(["findmnt", "-T", str(rp), "-n", "-o", "UUID,OPTIONS,TARGET"])
     f = txt.split() if rc == 0 else []
     out["uuid"], out["options"], out["mount"] = (f + [None] * 3)[:3]

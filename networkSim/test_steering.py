@@ -248,7 +248,26 @@ def test_start_applied_and_override():
         assert m["other"] == 2
 
 
+def test_table_guard():
+    """t67 C5 (the collector side of the reader's C1, 0693cea7): a NaN / inf / negative / non-numeric tier total, stall_s
+    or by_state cell refuses the table: the base schedule runs and the record names the cells; a clean table steers."""
+    tw = TWITCH_TRANSITIONS
+    good = table(tiers={"Q_720p": 100.0}, stall=5.0, by_state={"7": {"Q_720p": 10.0}})
+    _, start, rec = S.steer("twitch", tw, write(good), "seed")
+    assert rec["applied"] and start is not None
+    for bad in (table(tiers={"Q_720p": float("nan")}), table(stall=float("inf")), table(stall=-1.0),
+                table(by_state={"7": {"Q_720p": "12"}}), table(by_state={"7": {"Q_720p": True}}),
+                table(by_state={"7": {"Q_720p": -3.0}})):
+        m, start, rec = S.steer("twitch", tw, write(bad), "seed")
+        assert m == tw and start is None and not rec["applied"], bad
+        assert "non-numeric / NaN / inf / negative" in rec["table"]["error"] and "no table:" in rec["fallback"], rec
+    raw = Path(tempfile.mkdtemp()) / S.TABLE_NAME            # json NaN / Infinity literals
+    raw.write_text('{"per_platform": {"twitch": {"tiers": {"Q_720p": NaN}, "stall_s": Infinity, "by_state": {}}}}')
+    assert not S.steer("twitch", tw, raw, "seed")[2]["applied"]
+
+
 def main() -> int:
+    test_table_guard()
     test_start_applied_and_override()
     test_constants()
     test_deficits_and_weights()

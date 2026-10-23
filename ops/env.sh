@@ -4,12 +4,15 @@ OPS=${OPS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 [ -f "$OPS/env.local.sh" ] && . "$OPS/env.local.sh"
 : "${LVDC_ROOT:=$(dirname "$OPS")}"                 # the LV_DC checkout the batch runs from
 : "${LVDC_STATE:=$LVDC_ROOT/current_data}"               # flags BATCH_GO / RESUME_HOLD / SCREEN_OFF, batch_spec, logs (gitignored)
-: "${LVDC_MOUNT:=/media/$(id -un)/memories}"             # the data volume's mount point
-: "${LVDC_DEVICE:=/dev/sda1}"                            # its block device (resume_after_login.sh remounts it there)
-: "${LVDC_DATA:=$LVDC_MOUNT/LV_DC_v2_data}"              # where data/ resolves
-# the data volume's filesystem UUID (findmnt -o UUID); preflight refuses a session whose data root is not on it, not rw
-# or not writable (a USB disconnect, errors=remount-ro). Empty = not checked; set it in env.local.sh at the cutover
-export LVDC_DATA_ROOT_UUID="${LVDC_DATA_ROOT_UUID:-}"
+# t67 C4 (collector v3): the data volume is never a default. The mount point, the data root and the volume's filesystem
+# UUID come from the environment or ops/env.local.sh, or every script that sources this file stops here (fail closed:
+# a missing env.local.sh once defaulted to the old "memories" volume); the device is found by that UUID. preflight
+# refuses a session whose data root is not on that volume, not rw or not writable (a USB disconnect, errors=remount-ro).
+: "${LVDC_MOUNT:?LVDC_MOUNT unset: set it in ops/env.local.sh (t67 C4: no default data volume)}"
+: "${LVDC_DATA:?LVDC_DATA unset: set it in ops/env.local.sh (t67 C4: no default data root)}"
+: "${LVDC_DATA_ROOT_UUID:?LVDC_DATA_ROOT_UUID unset: set it in ops/env.local.sh (t67 C4: the data volume by UUID)}"
+export LVDC_DATA_ROOT_UUID
+: "${LVDC_DEVICE:=/dev/disk/by-uuid/$LVDC_DATA_ROOT_UUID}"   # its block device, by UUID (resume_after_login.sh remounts it)
 : "${LVDC_IFACE:=wlp0s20f3}"                             # the shaped interface
 : "${LVDC_NOIPV6_SYSCTL:=/etc/sysctl.d/99-lvqoe-collection-noipv6.conf}"
 : "${LVDC_BATCH_SPEC:=youtube=100,twitch=80,tiktok=80}"  # default floors; $LVDC_STATE/batch_spec overrides (apply_at_boundary.sh)

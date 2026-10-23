@@ -44,7 +44,7 @@ def run(tmp: Path, ntp_yes_at="1", hold=False, batch_go=True, wait_s="2"):
         (state / "RESUME_HOLD").write_text("concurrent mode (test)")
     env = {"PATH": f"{stub}:/usr/bin:/bin", "HOME": str(tmp), "STUB": str(stub), "NTP_YES_AT": ntp_yes_at,
            "LVDC_STATE": str(state), "LVDC_MOUNT": str(mount), "LVDC_DATA": str(mount / "LV_DC_v2_data"),
-           "LVDC_DEVICE": "/dev/null", "LVDC_UID": str(os.getuid()), "LVDC_NTP_WAIT_S": wait_s, "LVDC_NTP_POLL_S": "0.2",
+           "LVDC_DEVICE": "/dev/null", "LVDC_DATA_ROOT_UUID": "TEST-UUID", "LVDC_UID": str(os.getuid()), "LVDC_NTP_WAIT_S": wait_s, "LVDC_NTP_POLL_S": "0.2",
            "OPS": str(HOOK.parent)}
     before = {p for p in (mount).rglob("*")}
     r = subprocess.run(["bash", str(HOOK)], env=env, capture_output=True, text=True, timeout=60)

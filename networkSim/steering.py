@@ -57,11 +57,37 @@ def load_table(path: str | os.PathLike | None) -> tuple[dict | None, dict]:
                                                             for c in (row or {}))] if k not in CLASS_NAMES})
         if bad:                  # peter 16:43: a name mismatch would read every tier as unmet; refuse it, recorded
             raise ValueError(f"class names not in {CLASS_NAMES}: {bad[:6]}")
+        cells = _bad_cells(table)       # t67 C5 (the reader's C1, 0693cea7): a cell outside [0, inf) puts a pull outside
+        if cells:                       # [0, max] and a weight under the floor; refuse the table, the base schedule runs
+            raise ValueError(f"non-numeric / NaN / inf / negative cells: {cells[:6]}")
         rec["built_at"] = table.get("built_at")
         return table, rec
     except (OSError, ValueError) as e:
         rec["error"] = f"{type(e).__name__}: {e}"[:200]
         return None, rec
+
+
+def _bad_cells(table: dict) -> list[str]:
+    """Every tier total, stall_s and by_state cell that is not a finite number >= 0 (None counts as 0, as read), named
+    platform/field/key."""
+    out = []
+
+    def check(name, v):
+        if v is None:
+            return
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")) or v < 0:
+            out.append(f"{name}={v!r}")
+    for pf, pp in (table.get("per_platform") or {}).items():
+        if not isinstance(pp, dict):
+            out.append(f"{pf}=not an object")
+            continue
+        for k, v in (pp.get("tiers") or {}).items():
+            check(f"{pf}/tiers/{k}", v)
+        check(f"{pf}/stall_s", pp.get("stall_s"))
+        for st, row in (pp.get("by_state") or {}).items():
+            for c, v in (row or {}).items():
+                check(f"{pf}/by_state/{st}/{c}", v)
+    return out
 
 
 def deficits(table: dict, platform: str) -> dict[str, float]:
@@ -115,7 +141,7 @@ def steer(platform: str, transition: dict[str, dict[str, float]], table_path: st
     rec = {"rule": RULE, "floor": FLOOR, "targets_s": TARGETS_S.get(platform), "table": trec, "seed": seed,
            "applied": False}
     if table is None or platform not in TARGETS_S:
-        rec["fallback"] = "base schedule" + ("" if table is not None else " (no table)")
+        rec["fallback"] = "base schedule" + ("" if table is not None else f" (no table: {trec.get('error')})")
         return transition, None, rec
     states = sorted(transition, key=int)
     w, pulls = state_weights(table, platform, states)
