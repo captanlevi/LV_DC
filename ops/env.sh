@@ -16,11 +16,12 @@ export LVDC_DATA_ROOT_UUID="${LVDC_DATA_ROOT_UUID:-}"
 : "${LVDC_BATCH_OPTS:=--dpms-off}"
 : "${LVDC_LANG:=en_AU.UTF-8}"                            # LANG of the ssh-identical relaunch environment
 : "${LVDC_UID:=$(id -u)}"
-: "${LVQOE_PY:=$HOME/Desktop/LV/.venv/bin/python}"       # LVQoE's interpreter (was verify_loop.sh's; archived t69 C9)
-# the one LVQoE worktree the verify / frames loop runs (verify_session.py and extract_frames.py), at a pinned commit;
-# moving the loop to a new LVQoE commit = a new worktree + this default (supervisor 2026-10-18: master 010c47c)
+: "${LVQOE_PY:=$HOME/Desktop/LV/.venv/bin/python}"       # LVQoE's interpreter
+# LVQOE_PY / LVQOE_LOOP_DIR / LVDC_COMPUTE_PIN: unused in LV_DC since t69 C9 (verify_loop.sh archived). Kept because box-local
+# scripts in current_data (ckpt1_t52.sh, loop_to_*.sh, composite_apply_*.sh) and env.local.sh still read or set them.
+# LVQOE_LOOP_DIR was the one LVQoE worktree the verify / frames loop ran (supervisor 2026-10-18: master 010c47c)
 : "${LVQOE_LOOP_DIR:=$HOME/Desktop/LV/.worktrees/shagun-loop-010c47c}"
-# verify / frames jobs run away from the collector (shagun 2026-10-18, compute-load covariate): nice 19, pinned to the
+# compute jobs run away from the collector (shagun 2026-10-18, compute-load covariate): nice 19, pinned to the
 # upper half of the CPUs (chaos: 12-23, off the collector's P-cores); plain nice where taskset or cores are lacking
 if [ -z "${LVDC_COMPUTE_PIN+x}" ]; then
   _n=$(nproc 2>/dev/null || echo 1)
