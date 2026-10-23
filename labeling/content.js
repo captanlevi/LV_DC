@@ -81,13 +81,14 @@ function loginWallText(v) {
 }
 
 // event screenshots (t37): browser.py takes an extra screenshot when this request changes: at every tier change
-// (consecutive non-zero res_meta video_h differ) and every ad start (is_ad false -> true)
+// (v3 A14: the presented frame's height changes, rvfcStart; without A1, consecutive non-zero res_meta video_h differ)
+// and every ad start (is_ad false -> true)
 let shotReqN = 0;
 let shotLastH = null;
 let shotLastAd = false;
-function requestShot(reason, eventId) {
+function requestShot(reason, eventId, pf = null) {
   shotReqN += 1;
-  document.documentElement.dataset.lvqoeShotReq = `${shotReqN}|${reason}|${eventId}`;
+  document.documentElement.dataset.lvqoeShotReq = `${shotReqN}|${reason}|${eventId}` + (pf === null ? "" : `|pf=${pf}`);
 }
 
 // tt logged-out quality countdown (t37): "Current video quality lasts for N s. Log in to continue ..." on room pages;
@@ -305,6 +306,11 @@ function rvfcStart(v) {
     }
     if (md.width !== st.w || md.height !== st.h) {
       side("frames", { k: "dims", ...base, prev_w: st.w, prev_h: st.h });
+      // v3 A14 (t67): the tier-change shot fires on the presented frame whose height changed (A1), not on the next
+      // res_meta tick; the request carries the tick it follows (A5) and that frame's presentedFrames
+      if (v === video && st.h !== null && (md.height || 0) > 0 && md.height !== st.h && window === window.top) {
+        requestShot("tier_change", lastTick ? lastTick.id : null, md.presentedFrames ?? null);
+      }
       st.w = md.width;
       st.h = md.height;
     }
@@ -505,7 +511,11 @@ function emit(type) {
     if (evt.login_wall) document.documentElement.dataset.lvqoeWall = "1";   // browser.py aborts the session on it
     const h = evt.video_h || 0;
     if (h > 0) {
-      if (shotLastH !== null && h !== shotLastH) requestShot("tier_change", evt.event_id);
+      // v3 A14: with A1 running on this element the frame callback fires the tier-change shot; the res_meta trigger
+      // stays only where rVFC is not running (the instruments-off arm, no requestVideoFrameCallback)
+      if (shotLastH !== null && h !== shotLastH && !(v3On && v3Ready && video && rvfcState.has(video))) {
+        requestShot("tier_change", evt.event_id);
+      }
       shotLastH = h;
     }
     if (evt.is_ad && !shotLastAd) requestShot("ad_start", evt.event_id);
