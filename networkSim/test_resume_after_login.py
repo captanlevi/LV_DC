@@ -55,7 +55,7 @@ def run(tmp: Path, ntp_yes_at="1", hold=False, batch_go=True, wait_s="2"):
 
 
 def _guards(calls):
-    return "guard_stall_contradiction.sh" in calls or "ipv6_watchdog.sh" in calls
+    return "ipv6_watchdog.sh" in calls   # t69 C9: guard_stall_contradiction.sh archived
 
 
 def test_synced_starts_guards_and_launch():
@@ -71,7 +71,7 @@ def test_never_synced_fails_closed():
         assert rc != 0 and "ABORT: NTP not synced" in log, (rc, log)
         assert not _guards(calls) and "run_batch.sh" not in calls, calls
         assert not written, written                                   # nothing on the data volume
-        assert "ipv6_watchdog" in log and "guard_stall_contradiction" in log   # the withheld guards are named
+        assert "ipv6_watchdog" in log and "guard_stall_contradiction" not in log   # the withheld guards are named (t69 C9: no verifier)
         assert "disable_ipv6" in calls or "sysctl" in calls                    # IPv6-off still applied
 
 
