@@ -2200,6 +2200,7 @@ class MasterListener:
         self.playlist_fetches = 0                  # v3 A3 source 2: media playlists read
         self.ad_edges: list[dict] = []             # their ad-marker flips (meta.json tw_playlist_ads)
         self._in_ad: dict[str, bool] = {}          # brad 18:45: per playlist (rendition), so two renditions never alternate
+        self.ad_edges_overflow = 0                 # levi 18:51: edges past WATCH_LOG_MAX (0 expected)
 
     def start(self) -> "MasterListener":
         self._t = threading.Thread(target=self._run, daemon=True, name="master-listener")
@@ -2239,13 +2240,21 @@ class MasterListener:
     def playlist_ad(self, body: str, url: str, t: float) -> None:
         """v3 A3 source 2: one media playlist body: a flip of 'an ad marker present' is an edge (time.time; the A11 clock
         offsets join it to the label clock)."""
+        import hashlib
         from urllib.parse import urlsplit
         self.playlist_fetches += 1
         marks = _TW_AD_MARK_RE.findall(body or "")
-        in_ad, path = bool(marks), urlsplit(url).path[-60:]
+        full = urlsplit(url).path
+        in_ad, path = bool(marks), hashlib.sha256(full.encode()).hexdigest()[:16]   # levi 18:51: the whole path, hashed
         prev = self._in_ad.get(path)
-        if in_ad != prev and len(self.ad_edges) < WATCH_LOG_MAX:
-            self.ad_edges.append({"t": t, "in_ad": in_ad, "prev": prev, "marks": len(marks), "path": path})
+        # levi 18:51: a playlist's first sighting is an edge only when it carries a marker (rotated playlist tokens would
+        # otherwise fill the log with no-ad "edges"); an overflow past the cap is counted, never silent
+        if in_ad != (prev or False) or (prev is None and in_ad):
+            if len(self.ad_edges) < WATCH_LOG_MAX:
+                self.ad_edges.append({"t": t, "in_ad": in_ad, "prev": prev, "marks": len(marks), "path": path,
+                                      "path_tail": full[-40:]})
+            else:
+                self.ad_edges_overflow += 1
         self._in_ad[path] = in_ad
 
     def _run(self) -> None:

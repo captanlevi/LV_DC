@@ -32,3 +32,37 @@ def record(root: Path | None = None) -> dict:
     except (OSError, subprocess.SubprocessError):
         pass
     return out
+
+
+# t67 C8 (levi 18:45, collector v3): every non-record run goes to a dry root, and a counted run only to the record root.
+# The record root is the data root holding RECORD_MARKER ({"uuid": <the volume's filesystem UUID>}, written once by ops on
+# the record volume); a marker whose UUID is not the volume's under it (a copied marker) does not count.
+RECORD_MARKER = ".lvdc_record_root"
+
+
+def volume_uuid(path: Path, run=subprocess.run) -> str | None:
+    try:
+        r = run(["findmnt", "-no", "UUID", "--target", str(path)], capture_output=True, text=True, timeout=5)
+        return (r.stdout or "").strip() or None if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def record_root_check(root: Path | None = None, uuid_of=volume_uuid) -> dict:
+    """{is_record, reason, resolved}: the data root is the record root iff it holds RECORD_MARKER with the UUID of the
+    volume under it (when the volume's UUID can be read; else the marker alone, stated)."""
+    import json
+    res = Path(root or DATA_ROOT).resolve()
+    m = res / RECORD_MARKER
+    if not m.is_file():
+        return {"is_record": False, "reason": "no marker", "resolved": str(res)}
+    try:
+        want = (json.loads(m.read_text()) or {}).get("uuid")
+    except (OSError, ValueError, AttributeError):
+        return {"is_record": False, "reason": "marker unreadable", "resolved": str(res)}
+    have = uuid_of(res)
+    if have is None:
+        return {"is_record": True, "reason": "marker (volume UUID unreadable)", "resolved": str(res)}
+    if want != have:
+        return {"is_record": False, "reason": f"marker UUID {want} is not the volume's {have}", "resolved": str(res)}
+    return {"is_record": True, "reason": "marker + volume UUID", "resolved": str(res)}

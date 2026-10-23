@@ -1341,6 +1341,15 @@ def arg_refusal(args, environ) -> str | None:
         bad = names - {"youtube", "twitch", "tiktok"}
         if bad or not names:
             return f"--trio-steer-platforms: unknown or empty {sorted(bad)}"
+    if args.concurrent:                  # t67 C8 (levi 18:45), last: the run's kind and its data root agree
+        import data_root as _dr
+        chk = _dr.record_root_check(Path(environ.get("LVDC_DATA_ROOT") or _dr.REPO_DATA))
+        if args.trio_record and not chk["is_record"]:
+            return (f"--trio-record on a data root that is not the record root ({chk['resolved']}: {chk['reason']}); "
+                    "refused (C8: a counted run writes only to the record root)")
+        if not args.trio_record and chk["is_record"]:
+            return (f"a run without --trio-record on the record root ({chk['resolved']}); refused (C8, levi 18:45: every "
+                    "non-record run goes to a dry root)")
     return None
 
 

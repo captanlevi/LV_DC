@@ -184,17 +184,24 @@ def test_tw_playlist_source():
     m.playlist_ad('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad"\n#EXTINF:2.0,\nad.ts', media, 10.0)
     m.playlist_ad('#EXT-X-DATERANGE:ID="stitched-ad-1",CLASS="twitch-stitched-ad"', media, 12.0)
     m.playlist_ad("#EXTINF:2.0,\nseg9.ts", media, 14.0)
-    assert m.playlist_fetches == 4 and [(e["t"] if e["t"] != 0 else 0, e["in_ad"], e["prev"]) for e in m.ad_edges][1:] == \
-        [(10.0, True, False), (14.0, False, True)] and m.ad_edges[0]["in_ad"] is False and m.ad_edges[0]["prev"] is None
-    # brad 18:45: state per playlist (rendition): two renditions, one marked, alternating, give one edge each, not a storm
+    # levi 18:51: a first sighting without a marker is no edge; the full path is hashed; overflow counted
+    assert m.playlist_fetches == 4 and [(e["t"], e["in_ad"], e["prev"]) for e in m.ad_edges] == \
+        [(10.0, True, False), (14.0, False, True)], m.ad_edges
+    assert len(m.ad_edges[0]["path"]) == 16 and m.ad_edges[0]["path_tail"].endswith("AbC.m3u8") and m.ad_edges_overflow == 0
     other = "https://video-weaver.syd03.hls.ttvnw.net/v1/playlist/XyZ.m3u8"
     n0 = len(m.ad_edges)
-    for k in range(6):
+    for k in range(6):                                  # brad 18:45: two renditions alternating, one marked
         m.playlist_ad("stitched-ad" if k % 2 == 0 else "#EXTINF:2.0,", media if k % 2 == 0 else other, 20.0 + k)
-    assert [(e["path"][-12:], e["in_ad"]) for e in m.ad_edges[n0:]] == [("ist/AbC.m3u8", True), ("ist/XyZ.m3u8", False)]
+    assert [(e["path_tail"][-8:], e["in_ad"]) for e in m.ad_edges[n0:]] == [("AbC.m3u8", True)]   # XyZ never marked: none
+    for k in range(5):                                  # rotated tokens, no marker: no edges at all
+        m.playlist_ad("#EXTINF:2.0,", f"https://w.ttvnw.net/v1/playlist/rot{k}.m3u8", 40.0 + k)
+    assert len(m.ad_edges) == n0 + 1
+    m.ad_edges.extend([{}] * (B.WATCH_LOG_MAX - len(m.ad_edges)))                       # at the cap: counted, not silent
+    m.playlist_ad("stitched-ad", "https://w.ttvnw.net/v1/playlist/new.m3u8", 50.0)
+    assert m.ad_edges_overflow == 1 and len(m.ad_edges) == B.WATCH_LOG_MAX
     assert m.latest is None                                                     # a media playlist is never the rung
     src = (HERE / "exp.py").read_text()
-    assert 'tw_playlist_ads=({"fetches": browser._master.playlist_fetches' in src
+    assert 'tw_playlist_ads=({"fetches": browser._master.playlist_fetches' in src and '"overflow": browser._master.ad_edges_overflow' in src
 
 
 def test_apply_instants():

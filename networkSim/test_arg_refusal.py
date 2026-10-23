@@ -13,7 +13,15 @@ import orchestrate as O  # noqa: E402
 
 RECORD = ["--batch", "youtube=99,twitch=99,tiktok=99", "--concurrent", "--trio-record", "--n-draw", "--window-min", "120",
           "--trio-yt-fullscreen", "--trio-layout", "composite", "--trio-steer", "--trio-steer-platforms", "youtube,twitch"]
-ENV = {"LVDC_DATA_ROOT_UUID": "0000-test"}
+import json  # noqa: E402
+import tempfile  # noqa: E402
+
+import data_root as DR  # noqa: E402
+
+# t67 C8: a counted line needs the record root (RECORD_MARKER); every other concurrent line a dry root (none)
+_REC, _DRY = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+(_REC / DR.RECORD_MARKER).write_text(json.dumps({"uuid": "unused-on-a-tmpfs"}))
+ENV = {"LVDC_DATA_ROOT_UUID": "0000-test", "LVDC_DATA_ROOT": str(_REC)}
 
 
 def refusal(argv, env=ENV):
@@ -73,7 +81,8 @@ def test_each_refusal():
         assert got and want in got, (argv, got)
     assert "LVDC_DATA_ROOT_UUID" in refusal(RECORD, {}) and "LVDC_DATA_ROOT_UUID" in refusal(RECORD, {"LVDC_DATA_ROOT_UUID": " "})
     assert refusal(["--concurrent", "--platform", "youtube"]) == "--concurrent needs --batch"
-    assert refusal(["--batch", "youtube=2,twitch=2,tiktok=1", "--concurrent", "--trio-stress", "--uplink-cap-kbit", "40000"]) is None
+    assert refusal(["--batch", "youtube=2,twitch=2,tiktok=1", "--concurrent", "--trio-stress", "--uplink-cap-kbit", "40000"],
+                   {**ENV, "LVDC_DATA_ROOT": str(_DRY)}) is None                 # a stress arm on a dry root (C8)
 
 
 def test_main_refuses_first():
@@ -92,3 +101,20 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_c8_data_root_matches_the_run():
+    """t67 C8 (levi 18:45): every non-record run goes to a dry root, a counted run only to the record root (the marker,
+    with its volume's UUID when readable). Both refusals and both accepted combinations."""
+    dry = {**ENV, "LVDC_DATA_ROOT": str(_DRY)}
+    nonrec = without(RECORD, "--trio-record", "--n-draw", "--window-min")
+    assert refusal(RECORD) is None and refusal(nonrec, dry) is None
+    r = refusal(RECORD, dry)
+    assert r and "not the record root" in r and "no marker" in r, r
+    r = refusal(nonrec)
+    assert r and "without --trio-record on the record root" in r, r
+    assert DR.record_root_check(_REC, uuid_of=lambda p: "AAAA")["is_record"] is False         # a copied marker
+    (_REC / DR.RECORD_MARKER).write_text(json.dumps({"uuid": "AAAA"}))
+    assert DR.record_root_check(_REC, uuid_of=lambda p: "AAAA")["reason"] == "marker + volume UUID"
+    assert DR.record_root_check(_REC, uuid_of=lambda p: None)["is_record"] is True            # UUID unreadable: stated
+
