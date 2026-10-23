@@ -27,6 +27,8 @@ def main() -> int:
     ap.add_argument("--needed", action="store_true", help="also every spare needing promotion (Addendum P)")
     ap.add_argument("--leaves", type=Path, help="the collector's yt_list_leaves.jsonl (with --needed)")
     ap.add_argument("--log", type=Path, default=Y.LIVE_CHECKS_LOG)
+    ap.add_argument("--gap", type=float, default=15.0,
+                    help="seconds between two handles' fetches (supervisor 18:35: the lowest footprint; >= 15)")
     a = ap.parse_args()
     if a.needed:
         leaves = ([json.loads(l) for l in a.leaves.read_text().splitlines() if l.strip()]
@@ -36,7 +38,12 @@ def main() -> int:
         print("no handle to check")
         return 0
     a.log.parent.mkdir(parents=True, exist_ok=True)
-    for h in a.handles:
+    if a.gap < 15.0:
+        print("--gap must be >= 15 s (supervisor 18:35)")
+        return 2
+    for i, h in enumerate(a.handles):
+        if i:
+            time.sleep(a.gap)             # one plain GET per handle, spaced (no player, no cookies)
         errors: list = []
         probe = Y.yt_live_probe(h, errors=errors)
         row = {"ts": time.time(), "handle": h, "state": probe["state"], "top_height": probe["top_height"],
