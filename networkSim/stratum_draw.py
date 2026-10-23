@@ -2,8 +2,9 @@
 """The per-window stratum draw (collector v3 B5; t69 interface 8b48e25a, levi 2026-10-23 18:02 rulings). Each counted window
 is one of three strata: steered (2 / 4), unsteered (1 / 4), lever (1 / 4), in permuted blocks of 4, so every block of four
 consecutive windows holds exactly 2 steered, 1 unsteered and 1 lever, and the strata stay balanced through time-of-day and
-channel-availability drift. The window's index k is n_draw's round index (the count of earlier draws of this era and record
-flag in the slots log), so a void window relaunched before its trio_up keeps its k and its stratum. Block b = k // 4 and
+channel-availability drift. The window's index k is the count of earlier windows (trio_up with an n_draw of this era and record
+flag in the slots log that started at least one session), so a void window (no session started, before or after its trio_up)
+relaunched keeps its k and its stratum (levi 18:57). Block b = k // 4 and
 position p = k % 4 (k from 0). The block's order is a Fisher-Yates shuffle of (steered, steered, unsteered, lever) whose
 indices come from sha256("v3-stratum|<era>|b<b>|<i>"), portable across Python versions. Nothing observed enters the draw.
 
@@ -53,11 +54,33 @@ def draw_at(k: int, era: str, record: bool) -> dict:
             "seed": f"{SEED_PREFIX}|{era}|b{b}", "stratum": order[p], "code": code_sha()}
 
 
-def draw(slots_log: Path | None, era: str, record: bool) -> dict:
-    """This window's stratum: k from the slots log exactly as n_draw counts it (a record draw fails closed on an unreadable
-    log, through n_draw.prior_draws)."""
+def prior_windows(slots_log: Path | None, era: str, record: bool) -> list[str]:
+    """The earlier windows that count toward k: runs whose trio_up carries an n_draw of this era and record flag AND that
+    started at least one session (a "start" event). A void run that wrote trio_up but started nothing (2026-10-23 07:54, the
+    w11 data-root drain) does not advance k, so its relaunch keeps the stratum (levi 18:57). Reading fails closed for a
+    record draw exactly as n_draw does (n_draw.prior_draws is called first for that)."""
     import n_draw
-    return draw_at(len(n_draw.prior_draws(slots_log, era, record)), era, record)
+    n_draw.prior_draws(slots_log, era, record)          # raises on an unreadable log / undecodable trio_up (record)
+    if not slots_log or not Path(slots_log).exists():
+        return []
+    ups, started = [], set()
+    for ln in Path(slots_log).read_text().splitlines():
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if ev.get("event") == "start" and ev.get("run"):
+            started.add(ev["run"])
+        d = ev.get("n_draw") if ev.get("event") == "trio_up" else None
+        if isinstance(d, dict) and d.get("era") == era and bool(d.get("record")) == bool(record) and ev.get("run"):
+            ups.append(ev["run"])
+    return [r for r in ups if r in started]
+
+
+def draw(slots_log: Path | None, era: str, record: bool) -> dict:
+    """This window's stratum: k = the earlier windows of this era and record flag that started a session (prior_windows)."""
+    prior = prior_windows(slots_log, era, record)
+    return {**draw_at(len(prior), era, record), "prior_windows": len(prior)}
 
 
 def main(argv=None) -> int:
