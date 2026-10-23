@@ -527,6 +527,12 @@ if __name__ == "__main__":
         help="Force the first episode to start at this state (overrides weighted-random).",
     )
     parser.add_argument(
+        "--initial-state-source",
+        choices=("coverage", "balance", "pin"),
+        default=None,
+        help="Which orchestrate rule chose --initial-state (recorded in meta.json steering.start_overridden_by).",
+    )
+    parser.add_argument(
         "--episodes",
         type=int,
         default=None,
@@ -775,6 +781,8 @@ if __name__ == "__main__":
         transition, steer_start, STEERING = steering.steer(platform, transition,
                                                            os.environ.get("LVDC_STEER_TABLE") or None, session_dir.name)
         STEERING["base_matrix"] = base_transition
+        # t65 (shagun 12:46, tw_100110): steering's start_state is its draw only; a --initial-state wins, named here
+        STEERING["start_overridden_by"] = steering.start_override(args.initial_state, args.initial_state_source)
         if steer_start is not None and not args.initial_state:
             SHAPER_OPTS.update(initial_state_fn=lambda _t, _s=steer_start: _s)
     template = None if args.empty_profile else (args.profile_template or PROFILE_TEMPLATES / platform)
@@ -1113,6 +1121,8 @@ if __name__ == "__main__":
         # v2: the TLS keys (<session_dir>/ssl_keys.log) and raw decoder outputs stay in the session dir
 
         save_json(session_dir / "net_labels.txt", net_labels)
+        if STEERING is not None:            # t65: the start the shaper applied (its first row), beside the draw
+            session_meta.write(session_dir, steering={**STEERING, "start_applied": session_meta.steering_start_applied(net_labels)})
         if platform == "tiktok":   # supervisor 2026-10-18: the stream regime (codec, ladder) per session, from http_v2
             try:
                 from tt_stream import tt_stream_regime

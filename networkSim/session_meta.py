@@ -262,6 +262,17 @@ def shaper_config(platform: str, transitions: dict, episode_s: int, **extra) -> 
             "iface_default": iface, **extra}
 
 
+def steering_start_applied(rows: list) -> str | None:
+    """meta.json steering.start_applied (t65; shagun 12:46, tw_100110): the state of the shaper's first applied row
+    (exp.py's net labels, written at finish), the start the session actually ran, whatever chose it; None without rows.
+    Kept out of steering.py, whose draw must read nothing of the running session (test_steering's static proof)."""
+    for n in rows or []:
+        st = n.state if hasattr(n, "state") else (n or {}).get("state")
+        if st is not None:
+            return str(st)
+    return None
+
+
 def write(session_dir: Path, **fields) -> dict:
     """Merge `fields` into session_dir/meta.json (creating it)."""
     p = session_dir / "meta.json"

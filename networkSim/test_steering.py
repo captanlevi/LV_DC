@@ -214,7 +214,34 @@ def test_fallback_of():
     assert S.fallback_of(tab, None, {"applied": False}) == "not applied"
 
 
+def test_start_applied_and_override():
+    """t65 (shagun 12:46, tw_100110: 4 of 5 TW-H starts overrode the draw, unflagged): meta.json steering records the
+    rule that chose an exp.py --initial-state (start_overridden_by) and the start the shaper applied (start_applied,
+    its first net_labels row). orchestrate names the rule on every --initial-state it passes (coverage / balance / pin);
+    exp.py accepts it and writes both into meta.steering."""
+    from utils.dataModels import NetLabel
+    assert S.start_override(None, "pin") is None and S.start_override("", None) is None
+    assert S.start_override("7", "coverage") == "coverage" and S.start_override("7", None) == "unnamed"
+    import session_meta as SM
+    rows = [NetLabel(timestamp=1.0, speed=900, state="7"), NetLabel(timestamp=3.0, speed=800, state="5")]
+    assert SM.steering_start_applied(rows) == "7"
+    assert SM.steering_start_applied([{"timestamp": 1.0, "state": 4}]) == "4" and SM.steering_start_applied([]) is None
+    import orchestrate as O
+    cmd = O._collection_cmd("twitch", "7", 5, initial_state_source="pin")
+    i = cmd.index("--initial-state")
+    assert cmd[i + 1] == "7" and cmd[cmd.index("--initial-state-source") + 1] == "pin"
+    assert "--initial-state-source" not in O._collection_cmd("twitch", None, 5, initial_state_source="balance")
+    src = (HERE / "orchestrate.py").read_text()
+    assert 'init_source = "coverage" if fi else "balance"' in src and 'init, init_source = pin["state"], "pin"' in src
+    assert "initial_state_source=init_source" in src and 'initial_state_source="balance"' in src
+    ex = (HERE / "exp.py").read_text()
+    assert '"--initial-state-source"' in ex and 'choices=("coverage", "balance", "pin")' in ex
+    assert 'STEERING["start_overridden_by"] = steering.start_override(args.initial_state, args.initial_state_source)' in ex
+    assert '"start_applied": session_meta.steering_start_applied(net_labels)' in ex
+
+
 def main() -> int:
+    test_start_applied_and_override()
     test_constants()
     test_deficits_and_weights()
     test_fallback_of()

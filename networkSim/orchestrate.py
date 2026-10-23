@@ -149,7 +149,8 @@ TT_ROOM_ROTATION_S: float | None = None
 
 def _collection_cmd(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
                     yt_matrix: str | None = None, channel: dict | None = None, geom: str | None = None,
-                    tw_category: dict | None = None, matrix: str | None = None) -> list[str]:
+                    tw_category: dict | None = None, matrix: str | None = None,
+                    initial_state_source: str | None = None) -> list[str]:
     cmd = [
         sys.executable, "exp.py",
         "--platform", platform,
@@ -157,6 +158,8 @@ def _collection_cmd(platform: str, initial_state: str | None, episodes: int, aut
     ]
     if initial_state:
         cmd += ["--initial-state", initial_state]
+        if initial_state_source:            # t65: the rule that chose it, recorded as steering.start_overridden_by
+            cmd += ["--initial-state-source", initial_state_source]
     if auto:
         cmd += ["--auto"]
     if platform == "youtube" and (matrix or yt_matrix):
@@ -205,7 +208,8 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
         if not auto and not _prompt_ready(platform, target_state):
             print("  Skipped.")
             continue
-        rc = _run_collection(platform, initial_state=target_state, episodes=episodes_per_run, auto=auto,
+        rc = _run_collection(platform, initial_state=target_state, initial_state_source="balance",
+                             episodes=episodes_per_run, auto=auto,
                              yt_matrix=yt_matrix, channel=channel)
         if rc == EXIT_STOPPED:
             print("  Session stopped by the operator (SIGINT / SIGTERM): stopping the batch.")
@@ -638,6 +642,7 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             print(f"  initial state {fi['state']} (coupled to the coverage target {fi['class']}: band {fi['band']})")
         try:
             rc = _run_collection(p, initial_state=fi["state"] if fi else most_needed_state(p, _RUNS_DIR, yt_matrix=mid, matrix_id=mid),
+                                 initial_state_source="coverage" if fi else "balance",
                                  episodes=session_episodes(EPISODES_V2.get(p, 5), mid), auto=auto, yt_matrix=yt_matrix,
                                  channel=channel, geom=geom, tw_category=category, matrix=mid)
         except Exception as e:
@@ -789,11 +794,13 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     # t53 2026-10-19 (levi; supervisor): the balance start state counts the trio's sessions of record too (00265), as the
     # pick and the coverage rule do; at c1f9181 it read the single root (disclosed in the FROZEN log)
     init = fi["state"] if fi else most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record)
+    init_source = "coverage" if fi else "balance"
     pin = TRIO_PINS.get(tag) or TRIO_PINS.get(p)        # a tag's own pin, else its platform's
     if pin:                             # a recorded round pin (levi 00261), never silent
         if pin.get("category"):
             category = {"name": pin["category"], "type": "pinned", "channel": pin.get("channel")}
-        init = pin.get("state") or init
+        if pin.get("state"):
+            init, init_source = pin["state"], "pin"
         geom, pin = pin_geometry(pin, geom, running, tag)
         print(f"  PINNED {tag}: {json.dumps(pin)}")
     if gdraw is not None and geom != gdraw["geometry"]:
@@ -810,7 +817,7 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
             eps * schedule_of(mid, base_episodes=slen["minutes"], episode_s=fe["episode_s"] if fe else None)["episode_s"], 1)}
     if hold and TRIO_STRESS_EPISODES:                    # decode_stress --short / --minutes (never a counted run)
         eps = TRIO_STRESS_EPISODES
-    cmd = _collection_cmd(p, initial_state=init, episodes=eps, auto=True, yt_matrix=yt_matrix,
+    cmd = _collection_cmd(p, initial_state=init, initial_state_source=init_source, episodes=eps, auto=True, yt_matrix=yt_matrix,
                           channel=channel, geom=geom, tw_category=category, matrix=mid)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
     if slen:
