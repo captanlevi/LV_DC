@@ -6,7 +6,7 @@ inside the RTT the capture sees: RTT_obs = RTT_path + 2·D.
 
 Per connection, the capture's handshake RTT: TCP SYN out -> SYN-ACK in; QUIC the client's first Initial -> the server's
 first long-header packet (header fields only; no keys). D = net_labels' delay_ms in force at the client's first packet;
-a handshake within CHANGE_GUARD_S of a net_labels change is dropped (recorded).
+a handshake within CHANGE_GUARD_S of a delay_ms change (net_labels is a tick log) is dropped (recorded).
   C6: RTT_obs >= 2·D - SLACK_MS on every connection (netem's timer slack + capture timestamping); a violation means
       traffic that bypassed the shaper.
   C5: per platform, the within-/24 slope of RTT_obs on 2·D (connections to one server /24 hold RTT_path fixed; groups
@@ -101,12 +101,17 @@ def delays(sd: Path) -> list[tuple[float, float]]:
 
 
 def judge(hs: list[dict], dl: list[tuple[float, float]]) -> tuple[list[dict], int]:
-    """Attach D (ms) and the C6 verdict to each handshake; handshakes near a change or before the first row dropped."""
+    """Attach D (ms) and the C6 verdict to each handshake; handshakes near a change or before the first row dropped.
+
+    net_labels is a tick log (a row every ~2 s), so a change is the first row or a row whose delay_ms differs from the
+    previous row's; every row as a change put each handshake within CHANGE_GUARD_S of one and dropped nearly all."""
     ts = [t for t, _ in dl]
+    ch = [t for k, (t, d) in enumerate(dl) if k == 0 or d != dl[k - 1][1]]
     kept, dropped = [], 0
     for h in hs:
         i = bisect.bisect_right(ts, h["t"]) - 1
-        near = any(abs(h["t"] - t) < CHANGE_GUARD_S or abs(h["t"] + h["rtt_ms"] / 1000 - t) < CHANGE_GUARD_S for t in ts[max(0, i - 1):i + 2])
+        j = bisect.bisect_right(ch, h["t"]) - 1
+        near = any(abs(h["t"] - t) < CHANGE_GUARD_S or abs(h["t"] + h["rtt_ms"] / 1000 - t) < CHANGE_GUARD_S for t in ch[max(0, j - 1):j + 2])
         if i < 0 or near:
             dropped += 1
             continue

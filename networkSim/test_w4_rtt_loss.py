@@ -95,6 +95,11 @@ def test_rtt_delay():
         assert {x["proto"] for x in r["rows"]} == {"tcp", "quic"}
         s = RD.within_slope([x for x in r["rows"] if x["c6_ok"]])
         assert s["in_band"] and abs(s["slope"] - 1) < 0.01 and s["groups"] == 2, s          # 1.2.3.4 and 1.2.3.5 share a /24
+        # the record's net_labels is a tick log, a row every ~2 s: the same answer, only the change rows guard
+        (sd / "net_labels.txt").write_text("".join(json.dumps({"timestamp": T0 + 2.0 * k, "delay_ms": 40 if 2.0 * k < 30 else 100,
+                                                               "speed": 1000}) + "\n" for k in range(30)))
+        r2 = RD.session(sd, tshark)
+        assert r2["dropped_near_change"] == 1 and r2["handshakes"] == 19 and r2["n_c6_violations"] == 1, r2
 
 
 def test_loss_drops():
