@@ -46,12 +46,28 @@ def _log(path: Path, draws: list[tuple[str, bool]]):
             f.write(json.dumps({"event": "start", "run": f"r{i}", "slot": "yt1"}) + "\n")
 
 
-def test_k_is_n_draws_round_index_and_a_pilot_never_moves_the_record_sequence():
+def test_a_void_window_that_started_no_session_keeps_k():
+    """levi 18:57: a void run that wrote trio_up / trio_down but started nothing (the w11 07:54 drain) does not advance k"""
+    with tempfile.TemporaryDirectory() as t:
+        log = Path(t) / "trio_slots.jsonl"
+        _log(log, [(ERA, True), (ERA, True)])                               # two real windows (each started a session)
+        k0 = S.draw(log, ERA, True)["k"]
+        with open(log, "a") as f:
+            f.write(json.dumps({"event": "trio_up", "run": "void", "n_draw": {"era": ERA, "record": True, "n": 4}}) + "\n")
+            f.write(json.dumps({"event": "trio_down", "run": "void", "end_rc": 8}) + "\n")
+        assert k0 == 2 and S.draw(log, ERA, True)["k"] == k0                 # the relaunch gets the same stratum
+        with open(log, "a") as f:
+            f.write(json.dumps({"event": "trio_up", "run": "w", "n_draw": {"era": ERA, "record": True, "n": 3}}) + "\n")
+            f.write(json.dumps({"event": "start", "run": "w", "slot": "tw1"}) + "\n")
+        assert S.draw(log, ERA, True)["k"] == k0 + 1                         # a window that started a session counts
+
+
+def test_k_counts_earlier_record_windows_and_a_pilot_never_moves_the_record_sequence():
     with tempfile.TemporaryDirectory() as t:
         log = Path(t) / "trio_slots.jsonl"
         _log(log, [(ERA, True), (ERA, False), (ERA, True), ("older-era", True), (ERA, True)])
         d = S.draw(log, ERA, True)
-        assert d["k"] == 3 and d == S.draw_at(3, ERA, True)                # 3 earlier record draws of this era
+        assert d["k"] == 3 and {x: d[x] for x in d if x != "prior_windows"} == S.draw_at(3, ERA, True)   # 3 earlier record windows
         assert S.draw(log, ERA, False)["k"] == 1                           # the pilot sequence is its own
         log.write_text("")
         assert S.draw(log, ERA, True)["k"] == 0                            # an era's first window
