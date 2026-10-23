@@ -23,7 +23,8 @@ from pathlib import Path
 
 MEDIA = re.compile(r"(googlevideo\.com|ttvnw\.net|live-video\.net|tiktokcdn\.com|ttlivecdn\.com|fcdnstatic-intl\.com)$")
 FIELDS = ["frame.time_epoch", "udp.stream", "ip.src", "quic.header_form", "quic.packet_number",
-          "tls.handshake.extensions_server_name", "quic.remaining_payload"]
+          "tls.handshake.extensions_server_name", "quic.remaining_payload", "ip.dst"]
+EVERY_PACKET_SHARE = 0.99      # client_of: the capture's own address appears in (nearly) every packet
 
 
 def rows(pcap: Path, keylog: Path | None, tshark: str) -> list[list[str]]:
@@ -44,22 +45,38 @@ def pn_stats(pns: list[int]) -> dict:
             "gaps": (u[-1] - u[0] + 1) - len(u), "reorders": sum(1 for a, b in zip(pns, pns[1:]) if b < a)}
 
 
-def client_of(rs: list[list[str]]) -> str | None:
-    """The capture's own address: the most frequent private source address of the QUIC packets. The most frequent
-    source overall is the busiest server on a video session (downstream outnumbers upstream), which inverted the
-    directions on most yt / twitch sessions (peter 2026-10-23). No private source: None."""
+def client_of(rs: list[list[str]], meta: dict | None = None) -> tuple[str | None, dict]:
+    """The capture's own address and how it was found (levi 17:53: the record where it exists, else inferred, logged):
+      - meta: concurrency.client_addr (not recorded at T*: the slots share the host address; a v3 item);
+      - inferred_every_packet: the private address that is the source or the destination of >= EVERY_PACKET_SHARE of
+        the QUIC packets (a per-host capture's own address is in every packet);
+      - inferred_private_src: else the most frequent private source;
+      - none.
+    The most frequent source overall is the busiest server on a video session (downstream outnumbers upstream), which
+    inverted every direction on most yt / twitch record sessions at 2580d451 (peter 2026-10-23)."""
     def private(a: str) -> bool:
         try:
             return ipaddress.ip_address(a).is_private
         except ValueError:
             return False
+    rec = ((meta or {}).get("concurrency") or {}).get("client_addr")
+    if isinstance(rec, str) and rec:
+        return rec, {"client_source": "meta"}
+    ends = collections.Counter(a for r in rs for a in {r[2] if len(r) > 2 else "", r[7] if len(r) > 7 else ""}
+                               if a and private(a))
+    if ends and rs:
+        top, n = ends.most_common(1)[0]
+        if n / len(rs) >= EVERY_PACKET_SHARE:
+            return top, {"client_source": "inferred_every_packet", "client_share": round(n / len(rs), 4)}
     cnt = collections.Counter(r[2] for r in rs if len(r) > 2 and private(r[2]))
-    return cnt.most_common(1)[0][0] if cnt else None
+    if cnt:
+        return cnt.most_common(1)[0][0], {"client_source": "inferred_private_src"}
+    return None, {"client_source": "none"}
 
 
 def session(sd: Path, tshark: str) -> dict:
     rs = rows(sd / "merged.pcap", sd / "ssl_keys.log", tshark)
-    me = client_of(rs)
+    me, _ = client_of(rs)
     conns: dict = {}
     for r in rs:
         r = r + [""] * (len(FIELDS) - len(r))

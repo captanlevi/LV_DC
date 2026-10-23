@@ -118,8 +118,15 @@ def test_loss_drops():
     assert LD.tcp_missing(rows, ME) == (5, 1)
     # the client is the private source even when a server sends most QUIC packets (a video session's downstream
     # dominates; the most frequent source picked the server and inverted every direction, peter 2026-10-23)
-    q = [["1", "0", "151.101.66.214", "0", "7"]] * 50 + [["1", "0", ME, "0", "3"]] * 5 + [["1", "1", "8.8.8.8", "0", "1"]]
-    assert LD.QP.client_of(q) == ME and LD.QP.client_of([["1", "0", "8.8.8.8"]]) is None
+    # (levi 17:53) the busiest source public: the client is the address in every packet, logged as inferred; a recorded
+    # client_addr wins; with no private address in every packet, the most frequent private source; none at all: None
+    down = [["1", "0", "151.101.66.214", "0", "7", "", "", ME]] * 50
+    up = [["1", "0", ME, "0", "3", "", "", "151.101.66.214"]] * 5
+    assert LD.QP.client_of(down + up) == (ME, {"client_source": "inferred_every_packet", "client_share": 1.0})
+    assert LD.QP.client_of(down + up, {"concurrency": {"client_addr": "10.0.0.7"}}) == ("10.0.0.7", {"client_source": "meta"})
+    noisy = down + up + [["1", "1", "8.8.8.8", "0", "1", "", "", "1.1.1.1"]] * 10    # 15 % of rows without ME
+    assert LD.QP.client_of(noisy) == (ME, {"client_source": "inferred_private_src"})
+    assert LD.QP.client_of([["1", "0", "8.8.8.8", "0", "1", "", "", "1.1.1.1"]]) == (None, {"client_source": "none"})
     assert LD.verdict(10, 10, False, 0)["c6"] == "pass"
     assert LD.verdict(30, 10, False, 0)["c6"] == "fail"                     # more missing than the class dropped
     assert LD.verdict(0, 100, False, 0)["c6"] == "pass"                     # one-sided: fewer missing is allowed
@@ -135,7 +142,7 @@ def test_loss_drops():
         (sd / "meta.json").write_text(json.dumps({"platform": "youtube", "concurrency": {"capture_drops": {"dropped_kernel_total": 0}}}))
         (sd / "tc_stats.jsonl").write_text("".join(json.dumps({"ts": T0 + i, "in": {"drops": d}}) + "\n" for i, d in enumerate((0, 40, 100))))
         saved = (LD.quic_down, LD.tcp_rows)
-        LD.quic_down = lambda sd, ts: {"client": ME, "connections": 2, "keyed": 2, "unkeyed": 0, "packets": 10000, "gaps": 120}
+        LD.quic_down = lambda sd, ts, meta=None: {"client": ME, "connections": 2, "keyed": 2, "unkeyed": 0, "packets": 10000, "gaps": 120}
         LD.tcp_rows = lambda sd, ts: []
         try:
             r = LD.session(sd, "tshark", skip_rate=0.002)          # 120 gaps - 0.002 x 10000 skips = 100 missing

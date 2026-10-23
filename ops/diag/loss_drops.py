@@ -73,10 +73,11 @@ def tcp_missing(rows: list[list[str]], me: str) -> tuple[int, int]:
     return seg, miss
 
 
-def quic_down(sd: Path, tshark: str) -> dict:
-    """Keyed downstream QUIC: packets and packet-number gaps; connections left undecrypted."""
+def quic_down(sd: Path, tshark: str, meta: dict | None = None) -> dict:
+    """Keyed downstream QUIC: packets and packet-number gaps; connections left undecrypted. The client from the record
+    where it exists, else inferred (quic_pn_check.client_of; the busiest source overall is a server, peter 2026-10-23)."""
     rs = QP.rows(sd / "merged.pcap", sd / "ssl_keys.log", tshark)
-    me = QP.client_of(rs)              # the private source; the busiest source overall is a server (peter 2026-10-23)
+    me, how = QP.client_of(rs, meta)
     conns: dict = {}
     for r in rs:
         r = r + [""] * (len(QP.FIELDS) - len(r))
@@ -87,7 +88,7 @@ def quic_down(sd: Path, tshark: str) -> dict:
             d["down"] += [int(x) for x in r[4].split(",") if x.isdigit()]
     keyed = [c for c in conns.values() if not c["undecrypted"]]
     st = [QP.pn_stats(c["down"]) for c in keyed]
-    return {"client": me, "connections": len(conns), "keyed": len(keyed),
+    return {"client": me, **how, "connections": len(conns), "keyed": len(keyed),
             "unkeyed": len(conns) - len(keyed), "packets": sum(s.get("packets", 0) for s in st),
             "gaps": sum(s.get("gaps", 0) for s in st)}
 
@@ -120,7 +121,7 @@ def session(sd: Path, tshark: str, skip_rate: float = 0.0) -> dict:
         pass
     if not (sd / "merged.pcap").exists():
         return {"session": sd.name, "skipped": "missing merged.pcap"}
-    q = quic_down(sd, tshark)
+    q = quic_down(sd, tshark, meta)
     seg, tmiss = tcp_missing(tcp_rows(sd, tshark), q["client"]) if q["client"] else (0, 0)
     qmiss = max(0.0, q["gaps"] - skip_rate * q["packets"])
     drops = class_drops(sd)
