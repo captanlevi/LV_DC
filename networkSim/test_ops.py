@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ops/ (t43, shagun's on-box layer): every script parses, sources env.sh, and names no box-specific path outside
 env.sh (paths are variables, chaos's values the defaults); nothing in ops/ edits a tracked file (meta.json's
-lvdc_commit.dirty must stay false); the autostart template is filled by install_autostart.sh; the verify /
-frames loop names one LVQoE worktree (LVQOE_LOOP_DIR).
+lvdc_commit.dirty must stay false); the autostart template is filled by install_autostart.sh; no verifier loop exists or is
+launched (t69 C9: verify_loop.sh / guard_stall_contradiction.sh archived; the window post is the only trio verifier).
 
     python3 test_ops.py        (exit 0 = pass)
 """
