@@ -25,14 +25,18 @@ def _cell(res, pf, t, g, d):
     return next(c for c in res["cells"] if (c["platform"], c["tier"], c["geometry"], c["dpr"]) == (pf, t, g, d))
 
 
-def test_yt_1080_needs_a_1080_box_and_dpr2_opens_it():
-    boxes = {"youtube": {"theater:1920x1080@1": [1243, 699], "theater:1920x1080@2": [2486, 1398]}}
-    res = B.build([_meta("youtube", YT)], boxes, [1.0, 2.0], None, None, 0.0,
-                  geometry={"youtube": ["theater:1920x1080"]})
-    small = _cell(res, "youtube", "Q_1080p", "theater:1920x1080", 1.0)
-    big = _cell(res, "youtube", "Q_1080p", "theater:1920x1080", 2.0)
-    assert small["reasons"] == ["box_below_tier"] and not small["reachable"] and small["box_source"] == "measured"
-    assert big["reachable"] and _tier(res, "youtube", "Q_1080p")["reachable_cells"] == ["theater:1920x1080@2"]
+def test_yt_size_rule_is_b1s_tier_cap():
+    """B1's YT_TIER_CAP is the one yt size rule: 1080 only in fullscreen, 720 in a 855x481 box (which a box rule would
+    forbid), and a DPR with no entry reaches nothing (exp.py refuses the session)."""
+    boxes = {"youtube": {"theater:1243x699@1": [1243, 699]}}
+    g = ["theater:1243x699", "player:855x481", "fullscreen:1920x1080"]
+    res = B.build([_meta("youtube", YT)], boxes, [1.0, 2.0], None, None, 0.0, geometry={"youtube": g})
+    th = _cell(res, "youtube", "Q_1080p", "theater:1243x699", 1.0)
+    assert th["reasons"] == ["above_tier_cap"] and not th["size_ok"] and th["box_source"] == "measured"
+    assert _cell(res, "youtube", "Q_720p", "player:855x481", 1.0)["reachable"]
+    assert _cell(res, "youtube", "Q_1080p", "fullscreen:1920x1080", 1.0)["reachable"]
+    assert _cell(res, "youtube", "Q_720p", "player:855x481", 2.0)["reasons"] == ["no_tier_cap"]
+    assert _tier(res, "youtube", "Q_1080p")["reachable_cells"] == ["fullscreen:1920x1080@1"]
 
 
 def test_an_offered_tier_above_every_band_is_a_structural_zero():

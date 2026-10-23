@@ -7,8 +7,10 @@ the window's launch file and prints the per-tier table into the launch log.
 
 A cell (platform, tier, geometry, dpr) is reachable iff it has no reasons:
 - not_offered: no session of the previous window offered the tier (offered_share 0);
-- box_below_tier: a size-capped platform (yt, c14; tw / tt are not, c15) and the box's short side in device px is under
-  the tier's short side;
+- above_tier_cap (yt only; tw / tt have no cap, c15): the tier is above geometry.tier_cap(name, dpr), B1's evidence
+  table YT_TIER_CAP, the one cap steering uses (exp.py / steering.steer); the box (device px) stays in the cell as a
+  record, never a rule (B1: the 855x481 box reached 720, which a box rule would forbid);
+- no_tier_cap: yt (mode, DPR) with no YT_TIER_CAP entry: exp.py refuses such a session (B1 REFUSED), so nothing is reached;
 - no_band_reaches_need: no band's rate_max x RATIO_LO >= need_kbit x HEADROOM.
 band_share_reaching(state) = the share of [rate_min, rate_max] x RATIO_LO at or above the need (the walk spans the band).
 expected_hours = planned counted hours x draw mass of the reachable cells x sum_s pi(s) P(tier | s) band_share(s): a
@@ -29,13 +31,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent / "networkSim"))
 from coverage_report import RUNGS, quality_class  # noqa: E402
-from geometry import GEOMETRY_CHOICES, parse  # noqa: E402
+from geometry import GEOMETRY_CHOICES, parse, tier_cap  # noqa: E402
 from utils.shaping import SCENARIOS  # noqa: E402
 
 SCHEMA = "b3_feasibility/1"
 RATIO_LO = 0.9            # readers/shaper_math.RATIO_LO: the realised band's lower edge (levi efb5e4cc (1))
 HEADROOM = 1.0            # interface 61a8bf36 (peter): the build default; levi may set it in the gate prereg
-SIZE_CAP = {"youtube": True, "twitch": False, "tiktok": False}      # c14 / c15
 # levi 19:31 / 19:33 (W4 rate on t58: tt / yt PASS, tw FAIL, span 0.758): a platform listed here takes its REALISED rate
 # per state (shaper_realised, per span) as its band rate, never configured x RATIO_LO, until its shaper C5 passes on v3
 # (then levi restores configured, for v3 data only: --configured-ok)
@@ -136,13 +137,18 @@ def build(metas: list[dict], boxes: dict, dprs: list[float], joint: dict | None,
                     reasons = []
                     if share.get(t, 0.0) == 0.0:
                         reasons.append("not_offered")
-                    if SIZE_CAP[pf] and min(bx) < TIER_SHORT[t]:
-                        reasons.append("box_below_tier")
+                    try:                                # B1's cap of record (None off yt); a missing entry refuses
+                        cap = tier_cap(pf, g, d)
+                    except ValueError:
+                        reasons.append("no_tier_cap")
+                    else:
+                        if cap is not None and TIER_SHORT[t] > TIER_SHORT[cap]:
+                            reasons.append("above_tier_cap")
                     if not reach_states:
                         reasons.append("no_band_reaches_need")
                     cells.append({"platform": pf, "tier": t, "geometry": g, "dpr": d, "box_device_px": bx,
                                   "box_source": bsrc_box, "offered_share": round(share.get(t, 0.0), 4),
-                                  "need_kbit": nk, "size_ok": "box_below_tier" not in reasons,
+                                  "need_kbit": nk, "size_ok": not {"above_tier_cap", "no_tier_cap"} & set(reasons),
                                   "rate_ok": bool(reach_states), "bands_reaching": reach_states,
                                   "reachable": not reasons, "reasons": reasons})
                     if not reasons:
@@ -198,7 +204,7 @@ def main(argv=None) -> int:
                       "state_table": {s: [SCENARIOS[s].rate_min, SCENARIOS[s].rate_max] for s in SCENARIOS},
                       "boxes_sha256": _sha(a.boxes), "realised_sha256": _sha(a.realised), "joint_sha256": _sha(a.joint), "stationary_sha256": _sha(a.stationary),
                       "dprs": dprs, "planned_hours": a.planned_hours},
-           "rules": {"ratio_lo": RATIO_LO, "headroom": HEADROOM, "size_cap": SIZE_CAP, "draw": "equal weights (restart §7)"},
+           "rules": {"ratio_lo": RATIO_LO, "headroom": HEADROOM, "size_cap": "geometry.tier_cap (YT_TIER_CAP; B1)", "draw": "equal weights (restart §7)"},
            **res}
     a.out.write_text(json.dumps(out, indent=1) + "\n")
     for r in res["per_tier"]:                        # the per-tier table for the launch log
