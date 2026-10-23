@@ -97,7 +97,8 @@ def test_no_within_session_input():
     """The gate: the draw reads the table and the base matrix only. steer's parameters are (platform, transition,
     table_path, seed); steering.py imports nothing that touches the player, the page, the labels or the browser; and
     exp.py draws before the browser exists, never reassigning the matrix afterwards."""
-    assert list(inspect.signature(S.steer).parameters) == ["platform", "transition", "table_path", "seed"]
+    # t67 B1: tier_cap (geometry.tier_cap of the session's drawn geometry, drawn before the session) is not session input
+    assert list(inspect.signature(S.steer).parameters) == ["platform", "transition", "table_path", "seed", "tier_cap"]
     tree = ast.parse((HERE / "steering.py").read_text())
     mods = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names} | \
            {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
@@ -248,6 +249,26 @@ def test_start_applied_and_override():
         assert m["other"] == 2
 
 
+def test_geometry_tier_cap():
+    """t67 B1 (levi 19:03): yt's tier cap by (mode, DPR 1) from the record: 1080 only in fullscreen. A non-fullscreen yt
+    session gets no pull from a Q_1080p deficit; a fullscreen one does; twitch / tiktok have no cap; DPR 2 is unset."""
+    import geometry as G
+    assert G.tier_cap("youtube", "window:1263x710") == "Q_720p" and G.tier_cap("youtube", "fullscreen:1920x1080") == "Q_1080p"
+    assert G.tier_cap("youtube", "theater:1920x1080") == "Q_720p"                          # an instruction keys the same
+    assert G.tier_cap("twitch", "player:1238x696") is None and G.tier_cap("youtube", "window:1263x710", 2.0) is None
+    from utils.shaping import YOUTUBE_TRANSITIONS
+    assert "Q_1080p" in S.TARGETS_S["youtube"]
+    # every tier met but Q_1080p: only a 1080 deficit pulls; under the cap nothing pulls (all weights 1, the base)
+    met = {c: v for c, v in S.TARGETS_S["youtube"].items() if c not in ("Q_1080p", "STALL")}
+    by_state = {s: {"Q_1080p": 10.0, "Q_720p": 10.0} if s == "10" else {"Q_720p": 10.0} for s in YOUTUBE_TRANSITIONS}
+    t = table(tiers=met, stall=S.TARGETS_S["youtube"]["STALL"], by_state=by_state, pf="youtube")
+    assert S.deficits(t, "youtube", "Q_720p")["Q_1080p"] == 0.0 and S.deficits(t, "youtube")["Q_1080p"] == 1.0
+    _, _, free = S.steer("youtube", YOUTUBE_TRANSITIONS, write(t), "seed")
+    _, _, capped = S.steer("youtube", YOUTUBE_TRANSITIONS, write(t), "seed", tier_cap="Q_720p")
+    assert free["weights"]["10"] == 1.0 and min(free["weights"].values()) == S.FLOOR          # 1080 pulls state 10
+    assert capped["tier_cap"] == "Q_720p" and set(capped["weights"].values()) == {1.0}        # nothing pulls under the cap
+
+
 def test_table_guard():
     """t67 C5 (the collector side of the reader's C1, 0693cea7): a NaN / inf / negative / non-numeric tier total, stall_s
     or by_state cell refuses the table: the base schedule runs and the record names the cells; a clean table steers."""
@@ -267,6 +288,7 @@ def test_table_guard():
 
 
 def main() -> int:
+    test_geometry_tier_cap()
     test_table_guard()
     test_start_applied_and_override()
     test_constants()

@@ -284,47 +284,76 @@
   "DRAW_RULE": "restart \u00a77: per session, seeded, over GEOMETRY_CHOICES minus excluded modes, independent of the steering target; equal weights except yt fullscreen at 1/3 of the full support (prereg d32a48ce, the 10-22 tip); a fullscreen draw while a sibling holds the token is redrawn among the others",
   "DRAW_WEIGHTS": {
    "tiktok": {
-    "player:537x880": 1.0,
+    "player:537x728": 1.0,
     "player:783x604": 1.0,
-    "window:1920x1080": 1.0
+    "window:1182x728": 1.0
    },
    "twitch": {
-    "player:1274x717": 1.0,
-    "window:1920x1080": 1.0
+    "player:1238x696": 1.0,
+    "player:854x480": 1.0
    },
    "youtube": {
     "fullscreen:1920x1080": 1.9999999999999998,
-    "player:1280x720": 1.0,
-    "player:853x480": 1.0,
-    "theater:1920x1080": 1.0,
-    "window:1920x1080": 1.0
+    "player:1263x710": 1.0,
+    "player:855x481": 1.0,
+    "theater:1243x699": 1.0,
+    "window:1263x710": 1.0
    }
   },
   "GEOMETRY_CHOICES": {
    "tiktok": [
     "player:783x604",
-    "player:537x880",
-    "window:1920x1080"
+    "player:537x728",
+    "window:1182x728"
    ],
    "twitch": [
-    "player:1274x717",
-    "window:1920x1080"
+    "player:1238x696",
+    "player:854x480"
    ],
    "youtube": [
-    "player:853x480",
-    "player:1280x720",
-    "window:1920x1080",
-    "theater:1920x1080",
+    "player:855x481",
+    "player:1263x710",
+    "window:1263x710",
+    "theater:1243x699",
     "fullscreen:1920x1080"
    ]
   },
   "GEOMETRY_UNCOUPLED": "restart \u00a77: geometry drawn per session (geometry.draw_geometry), never forced by the target",
+  "INSTRUCTION": {
+   "tiktok": {
+    "player:537x728": "player:537x880",
+    "player:783x604": "player:783x604",
+    "window:1182x728": "window:1920x1080"
+   },
+   "twitch": {
+    "player:1238x696": "player:1274x717",
+    "player:854x480": "player:854x480"
+   },
+   "youtube": {
+    "fullscreen:1920x1080": "fullscreen:1920x1080",
+    "player:1263x710": "player:1280x720",
+    "player:855x481": "player:853x480",
+    "theater:1243x699": "theater:1920x1080",
+    "window:1263x710": "window:1920x1080"
+   }
+  },
+  "LEGACY_NAME": {
+   "twitch": {
+    "window:1920x1080": "player:1238x696"
+   }
+  },
   "MODE_CHROME_ARGS": {
    "fullscreen": [
     "--test-type"
    ]
   },
-  "SESSION_DRAW_SEED": 20261021
+  "SESSION_DRAW_SEED": 20261021,
+  "YT_TIER_CAP": {
+   "fullscreen@1.0": "Q_1080p",
+   "player@1.0": "Q_720p",
+   "theater@1.0": "Q_720p",
+   "window@1.0": "Q_720p"
+  }
  },
  "low_state": {
   "_LOW_STATE_THRESHOLD": 3,

@@ -177,8 +177,8 @@ def _collection_cmd(platform: str, initial_state: str | None, episodes: int, aut
         cmd += ["--tw-category", tw_category["name"]]
         if tw_category.get("channel"):
             cmd += ["--tw-channel", tw_category["channel"]]
-    if geom:
-        cmd += ["--geometry", geom]
+    if geom:                            # t67 B1: launched by its instruction, recorded (and steered) by its realised name
+        cmd += ["--geometry", geometry.instruction_of(platform, geom), "--geometry-name", geom]
     if DPMS_OFF:
         cmd += ["--dpms-off"]
     if ENTRY_QUALITY and platform in ("youtube", "twitch"):

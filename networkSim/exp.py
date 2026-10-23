@@ -630,6 +630,12 @@ if __name__ == "__main__":
              "geometry.py); default: the platform's pinned player size. Recorded in meta.json.",
     )
     parser.add_argument(
+        "--geometry-name",
+        default=None,
+        help="t67 B1: the drawn geometry's realised name (geometry.INSTRUCTION; --geometry is its launch instruction); "
+             "recorded in meta.json geometry_name and keys the steering's yt tier cap (geometry.tier_cap).",
+    )
+    parser.add_argument(
         "--entry-quality",
         action="store_true",
         help="Q am. 1 / am. 10 (yt / twitch, default off): at the unshaped entry pick one tier from the player's menu "
@@ -789,8 +795,11 @@ if __name__ == "__main__":
     if os.environ.get("LVDC_STEER_TABLE") is not None and args.hold_state is None:
         import steering
         base_transition = transition
+        import geometry as _geometry     # t67 B1 (levi 19:03): no pull toward a tier the drawn geometry cannot show
         transition, steer_start, STEERING = steering.steer(platform, transition,
-                                                           os.environ.get("LVDC_STEER_TABLE") or None, session_dir.name)
+                                                           os.environ.get("LVDC_STEER_TABLE") or None, session_dir.name,
+                                                           tier_cap=_geometry.tier_cap(platform, args.geometry_name
+                                                                                       or args.geometry, 1.0))
         STEERING["base_matrix"] = base_transition
         # t65 (shagun 12:46, tw_100110): steering's start_state is its draw only; a --initial-state wins, named here
         STEERING["start_overridden_by"] = steering.start_override(args.initial_state, args.initial_state_source)
@@ -810,6 +819,8 @@ if __name__ == "__main__":
                        profile_template=profile_template, shaping=SHAPING_REC)
     if args.hold_state is not None:
         session_meta.write(session_dir, hold_state=args.hold_state)
+    if args.geometry_name:              # t67 B1: the realised name (geometry_target stays the launch instruction)
+        session_meta.write(session_dir, geometry_name=args.geometry_name)
     if STEERING is not None:
         session_meta.write(session_dir, steering=STEERING)
     import steering as _steering           # levi 16:43 / 20:58 / 00:41: a session that is not steered says why, never silent

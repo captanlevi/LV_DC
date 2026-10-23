@@ -40,11 +40,52 @@ import json
 import random
 from pathlib import Path
 
-GEOMETRY_CHOICES: dict[str, list[str]] = {
-    "youtube": ["player:853x480", "player:1280x720", "window:1920x1080", "theater:1920x1080", "fullscreen:1920x1080"],
-    "twitch": ["player:1274x717", "window:1920x1080"],          # chat open on twitch (CLOSE_CHAT_DEFAULT)
-    "tiktok": ["player:783x604", "player:537x880", "window:1920x1080"],
+# t67 B1 (levi 19:03): a draw is NAMED by the player box it realises on chaos (DPR 1; the t58 record's median
+# meta.geometry.player_client per geometry_target, non-_failed: yt n 6 / 4 / 7 / 6 / 3, tw 15 / 13, tt 11 / 12 / 5) and
+# LAUNCHED by the instruction that produces it (the old name). twitch's two draws realised the same 1238x696, so tw keeps
+# that one and adds player:854x480 at the same weight (levi: it also tests c15's "tw is not size-capped", measured at one
+# box); its realised box is the A-window's to confirm (a different one is renamed by its own line).
+INSTRUCTION: dict[str, dict[str, str]] = {
+    "youtube": {"player:855x481": "player:853x480", "player:1263x710": "player:1280x720",
+                "window:1263x710": "window:1920x1080", "theater:1243x699": "theater:1920x1080",
+                "fullscreen:1920x1080": "fullscreen:1920x1080"},
+    "twitch": {"player:1238x696": "player:1274x717", "player:854x480": "player:854x480"},   # chat open (CLOSE_CHAT_DEFAULT)
+    "tiktok": {"player:783x604": "player:783x604", "player:537x728": "player:537x880", "window:1182x728": "window:1920x1080"},
 }
+GEOMETRY_CHOICES: dict[str, list[str]] = {p: list(m) for p, m in INSTRUCTION.items()}
+
+
+# instructions no longer drawn, by the realised name of the box they gave (twitch's window draw realised 1238x696)
+LEGACY_NAME: dict[str, dict[str, str]] = {"twitch": {"window:1920x1080": "player:1238x696"}}
+
+
+def name_of(platform: str, spec: str | None) -> str | None:
+    """A session's realised name from its launch instruction (the t58 record's geometry_target), else the spec as is."""
+    if not spec:
+        return spec
+    rev = {v: k for k, v in INSTRUCTION.get(platform, {}).items()}
+    return rev.get(spec) or LEGACY_NAME.get(platform, {}).get(spec) or spec
+
+
+def instruction_of(platform: str, name: str | None) -> str | None:
+    """The launch instruction of a realised name; any other spec (an instruction, a pin's raw spec) passes unchanged."""
+    if not name:
+        return name
+    return INSTRUCTION.get(platform, {}).get(name, name)
+
+
+# t67 B1 (levi 19:03): yt's tier cap by (mode, DPR), from the t58 record (n = 26 yt sessions): 1080 only in fullscreen
+# (3 / 6 sessions vs 0 / 20 in every other draw; even the 855x481 box reached 720). DPR 1 only: a DPR 2 entry is set after
+# its arm measures it (a missing key = no cap). twitch / tiktok: no cap (no evidence of one). Steering pulls no tier above
+# the session's cap (steering.steer tier_cap).
+YT_TIER_CAP: dict[tuple[str, float], str] = {("fullscreen", 1.0): "Q_1080p", ("player", 1.0): "Q_720p",
+                                             ("window", 1.0): "Q_720p", ("theater", 1.0): "Q_720p"}
+
+
+def tier_cap(platform: str, name: str | None, dpr: float = 1.0) -> str | None:
+    if platform != "youtube" or not name:
+        return None
+    return YT_TIER_CAP.get((name.split(":", 1)[0], float(dpr)))
 
 
 def parse(spec: str) -> tuple[str, int, int]:
@@ -106,11 +147,15 @@ def merge_make_vars(make_vars: list[str], extra_args: list[str]) -> list[str]:
     return out if done else out + ["CHROME_EXTRA_ARGS=" + " ".join(extra_args)]
 
 
-def _session_spec(meta: dict) -> str | None:
+def _session_spec(meta: dict, platform: str | None = None) -> str | None:
+    """The session's realised geometry name (t67 B1): v3 meta.geometry_name, else its launch instruction mapped back."""
+    if meta.get("geometry_name"):
+        return meta["geometry_name"]
     if meta.get("geometry_target"):
-        return meta["geometry_target"]
+        return name_of(platform, meta["geometry_target"]) if platform else meta["geometry_target"]
     tgt = (meta.get("player_pin") or {}).get("target")
-    return f"player:{tgt[0]}x{tgt[1]}" if tgt and len(tgt) == 2 else None
+    spec = f"player:{tgt[0]}x{tgt[1]}" if tgt and len(tgt) == 2 else None
+    return name_of(platform, spec) if platform else spec
 
 
 def collected_counts(data_dir: Path, platform: str, select=None) -> dict[str, int]:
@@ -122,7 +167,7 @@ def collected_counts(data_dir: Path, platform: str, select=None) -> dict[str, in
             continue
         try:
             meta = json.loads(m.read_text())
-            spec = _session_spec(meta)
+            spec = _session_spec(meta, platform)
         except Exception:
             continue
         if select is not None and not select(meta):
@@ -177,4 +222,5 @@ def draw_geometry(platform: str, seed: str, exclude_modes: tuple = (), token_hel
     rest = [g for g in support if not g.startswith("fullscreen")]
     if token_held and drawn.startswith("fullscreen") and rest:
         rec.update(geometry=rng.choices(rest, weights=[w[g] for g in rest], k=1)[0], token_deferred=drawn)
+    rec["instruction"] = instruction_of(platform, rec["geometry"])   # B1: the realised name drawn, launched by this
     return rec

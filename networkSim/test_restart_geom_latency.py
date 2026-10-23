@@ -22,7 +22,7 @@ import test_trio_slots as TS  # noqa: E402  (its run_trio harness)
 def test_geometry_draw():
     yt = G.draw_geometry("youtube", "s")
     assert yt["support"] == G.GEOMETRY_CHOICES["youtube"] and "fullscreen:1920x1080" in yt["support"]
-    assert "theater:1920x1080" in yt["support"], yt                                 # prereg d32a48ce: fullscreen 1/3
+    assert "theater:1243x699" in yt["support"], yt                                  # prereg d32a48ce: fullscreen 1/3 (B1 names)
     assert abs(yt["weights"]["fullscreen:1920x1080"] - 1 / 3) < 1e-6 and all(
         abs(v - 1 / 6) < 1e-6 for g, v in yt["weights"].items() if not g.startswith("fullscreen")), yt
     nofs = G.draw_geometry("youtube", "s", ("fullscreen",))                        # excluded: the other four, equal
@@ -71,7 +71,8 @@ def test_trio_wiring():
         assert gd["seed"].startswith(f"{O.SESSION_DRAW_SEED}:") and gd["seed"].endswith(f":{tag}:1"), gd
         # token_held is the run's state (yt1's own draw holds the token with p 0.2 from the run id), so it is passed
         assert gd == G.draw_geometry(p, gd["seed"], () if p == "youtube" else ("fullscreen",), gd["token_held"])
-        assert cmd[cmd.index("--geometry") + 1] == gd["geometry"]
+        assert cmd[cmd.index("--geometry-name") + 1] == gd["geometry"]                   # t67 B1: the realised name
+        assert cmd[cmd.index("--geometry") + 1] == gd["instruction"]                   # launched by its instruction
         if p == "twitch":
             ll = json.loads(env["LVDC_TW_LOW_LATENCY"])
             assert ll == L.draw(gd["seed"]) and cmd[cmd.index("--tw-low-latency") + 1] == ll["drawn"], (ll, cmd)

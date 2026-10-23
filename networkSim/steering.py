@@ -90,16 +90,24 @@ def _bad_cells(table: dict) -> list[str]:
     return out
 
 
-def deficits(table: dict, platform: str) -> dict[str, float]:
-    """d(c) in [0, 1] per class of the platform's targets; counted seconds from the table (absent = 0)."""
+TIER_ORDER = ("Q_144p", "Q_240p", "Q_360p", "Q_480p", "Q_720p", "Q_1080p")
+
+
+def deficits(table: dict, platform: str, tier_cap: str | None = None) -> dict[str, float]:
+    """d(c) in [0, 1] per class of the platform's targets; counted seconds from the table (absent = 0). t67 B1: a tier
+    above the session's tier_cap (geometry.tier_cap, drawn before the session) has d 0: no pull toward a tier its
+    geometry cannot show."""
     pp = (table.get("per_platform") or {}).get(platform) or {}
     counted = {**(pp.get("tiers") or {}), "STALL": pp.get("stall_s") or 0.0}
-    return {c: round(max(0.0, t - float(counted.get(c) or 0.0)) / t, 6) for c, t in TARGETS_S[platform].items()}
+    over = set(TIER_ORDER[TIER_ORDER.index(tier_cap) + 1:]) if tier_cap in TIER_ORDER else set()
+    return {c: 0.0 if c in over else round(max(0.0, t - float(counted.get(c) or 0.0)) / t, 6)
+            for c, t in TARGETS_S[platform].items()}
 
 
-def state_weights(table: dict, platform: str, states: list[str]) -> tuple[dict[str, float], dict[str, float]]:
+def state_weights(table: dict, platform: str, states: list[str],
+                  tier_cap: str | None = None) -> tuple[dict[str, float], dict[str, float]]:
     """(weights, pulls) per state: w = FLOOR + (1 - FLOOR) * pull / max pull; all 1 when nothing pulls."""
-    d = deficits(table, platform)
+    d = deficits(table, platform, tier_cap)
     by_state = ((table.get("per_platform") or {}).get(platform) or {}).get("by_state") or {}
     pulls: dict[str, float | None] = {}
     for s in states:
@@ -134,20 +142,20 @@ def start_state(transition: dict[str, dict[str, float]], seed: str) -> str:
 
 
 def steer(platform: str, transition: dict[str, dict[str, float]], table_path: str | os.PathLike | None,
-          seed: str) -> tuple[dict[str, dict[str, float]], str | None, dict]:
+          seed: str, tier_cap: str | None = None) -> tuple[dict[str, dict[str, float]], str | None, dict]:
     """(steered matrix, start state, meta record) from the table at table_path and the base matrix only. A missing or
     unreadable table, or a platform without targets: (the base matrix, None = the base start rule, the record)."""
     table, trec = load_table(table_path)
     rec = {"rule": RULE, "floor": FLOOR, "targets_s": TARGETS_S.get(platform), "table": trec, "seed": seed,
-           "applied": False}
+           "applied": False, "tier_cap": tier_cap}
     if table is None or platform not in TARGETS_S:
         rec["fallback"] = "base schedule" + ("" if table is not None else f" (no table: {trec.get('error')})")
         return transition, None, rec
     states = sorted(transition, key=int)
-    w, pulls = state_weights(table, platform, states)
+    w, pulls = state_weights(table, platform, states, tier_cap)
     steered = steer_matrix(transition, w)
     start = start_state(steered, seed)
-    rec.update(applied=True, deficits=deficits(table, platform), pulls={s: round(p, 6) for s, p in pulls.items()},
+    rec.update(applied=True, deficits=deficits(table, platform, tier_cap), pulls={s: round(p, 6) for s, p in pulls.items()},
                weights=w, start_state=start, table_list_sha=table.get("list_sha"), table_code=table.get("code"))
     return steered, start, rec
 

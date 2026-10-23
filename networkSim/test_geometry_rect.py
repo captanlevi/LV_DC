@@ -84,7 +84,8 @@ def test_theater():
     """supervisor 2026-10-18 (no 1080p on yt): geometry theater:WxH = window W x H, then yt's theater mode, once."""
     import geometry as G
     assert G.parse("theater:1920x1080") == ("theater", 1920, 1080)
-    assert "theater:1920x1080" in G.GEOMETRY_CHOICES["youtube"] and "player:853x480" in G.GEOMETRY_CHOICES["youtube"]
+    assert "theater:1243x699" in G.GEOMETRY_CHOICES["youtube"] and "player:855x481" in G.GEOMETRY_CHOICES["youtube"]  # B1 names
+    assert G.instruction_of("youtube", "theater:1243x699") == "theater:1920x1080"                      # launched as before
     assert not any(c.startswith("theater") for c in G.GEOMETRY_CHOICES["twitch"] + G.GEOMETRY_CHOICES["tiktok"])
     run = lambda *a: json.loads(subprocess.run([shutil.which("node"), "-e", THEATER_STUB, B._YT_THEATER_JS, json.dumps(list(a))],
                                                capture_output=True, text=True, check=True).stdout)

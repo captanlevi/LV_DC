@@ -148,7 +148,9 @@ def current() -> dict:
         "decode_path": {"PLATFORM_DECODE": DP.PLATFORM_DECODE, "DEFAULT": DP.DEFAULT},
         "geometry": {"GEOMETRY_CHOICES": GEO.GEOMETRY_CHOICES, "MODE_CHROME_ARGS": GEO.MODE_CHROME_ARGS,
                      "DRAW_RULE": GEO.DRAW_RULE, "DRAW_WEIGHTS": GEO.DRAW_WEIGHTS,
-                     "SESSION_DRAW_SEED": O.SESSION_DRAW_SEED, "GEOMETRY_UNCOUPLED": CR.GEOMETRY_UNCOUPLED},
+                     "SESSION_DRAW_SEED": O.SESSION_DRAW_SEED, "GEOMETRY_UNCOUPLED": CR.GEOMETRY_UNCOUPLED,
+                     "INSTRUCTION": GEO.INSTRUCTION, "LEGACY_NAME": GEO.LEGACY_NAME,          # t67 B1
+                     "YT_TIER_CAP": {f"{m}@{d}": c for (m, d), c in GEO.YT_TIER_CAP.items()}},
         "tw_low_latency": {"KEY": TL.KEY, "P_ON": TL.P_ON, "RULE": TL.RULE, "MODE_ON": TL.MODE_ON,
                            "MODE_OFF": TL.MODE_OFF, "READ_TRIES": TL.READ_TRIES, "READ_GAP_S": TL.READ_GAP_S},
         # brad's t58 F-2 (levi: pins, any time): the concurrent path's constants, unpinned before

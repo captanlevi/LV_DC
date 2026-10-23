@@ -747,7 +747,8 @@ def test_run_trio():
             yc, ye = by["youtube"]
             gd = json.loads(ye["LVDC_GEOMETRY_DRAW"])
             want = O.geometry.draw_geometry("youtube", gd["seed"], () if on else ("fullscreen",))
-            assert yc[yc.index("--geometry") + 1] == gd["geometry"] == want["geometry"] and gd == want, (on, gd)
+            assert yc[yc.index("--geometry-name") + 1] == gd["geometry"] == want["geometry"] and gd == want, (on, gd)
+            assert yc[yc.index("--geometry") + 1] == gd["instruction"] == O.geometry.instruction_of("youtube", gd["geometry"])
             assert ("fullscreen:1920x1080" in gd["support"]) is on and (ye.get("LVDC_TRIO_YT_FULLSCREEN") == "1") is on
             assert gd["seed"].startswith(f"{O.SESSION_DRAW_SEED}:") and gd["seed"].endswith(":yt1:1"), gd
             assert "LVDC_TRIO_YT_FULLSCREEN" not in by["twitch"][1]
