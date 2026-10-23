@@ -73,6 +73,7 @@ def test_no_live_read_in_the_lever():
     i_fix = src.index("if not _lever_read():")
     assert i_fix < src.index("abort_reason = asyncio.run(experiment(") and src.count("_current_rung") == 1
     assert "_lever_deadline = time.time() + LEVER.first_onset_s - 2" in src     # the retries end before the 1st onset
+    assert "LEVER.fix_rate(r, time.time(), deadline=_lever_deadline)" in src     # and a late read is refused
 
 
 def test_no_episode_before_the_fix():
@@ -90,8 +91,16 @@ def test_no_episode_before_the_fix():
     e1 = lv.episodes[0]
     assert lv.rate["at"] < t0 + e1["onset_s"]
     lv.rate_for(e1, t0 + e1["onset_s"])
+    late = L.Lever("youtube", "yt_fix", 3600, P)                  # brad 20:06: a read returning past the deadline
+    dl = t_start + late.first_onset_s - 2
+    assert late.fix_rate({"kbit": 300, "source": "page_js"}, dl + 20.0, deadline=dl) is None and late.rate is None
+    assert late.late_reads == [20.0]
+    late.active(t0)
+    late.rate_for(late.episodes[0], t0 + late.first_onset_s)
+    assert late.record()["rung_source"] == "fallback" and late.record()["fix_margin_s"] == 0.0
     r = lv.record()
     assert r["fix_t"] == lv.rate["at"] and r["rung_source"] == "page_js" and r["t0"] == t0
+    assert r["fix_margin_s"] > 0
     assert r["episodes_never_applied"] == [e["id"] for e in lv.episodes[1:]]
 
 

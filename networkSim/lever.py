@@ -11,7 +11,8 @@ the shaper's band drops below the session's lowest offered rung for d seconds, t
   path until the first onset (the first read on exp.py's main thread, the retries on a daemon thread; browser._current_rung: twitch's HLS master, yt / tt page JS). The shaper path makes no
   live player read. FALLBACK_KBIT when no offer was read by the first onset (noted in meta.json lever.rate).
 - The episode replaces only the applied rate (a step's delay / loss stay the state's); net_labels rows carry its id.
-- meta.json lever: the parameters as passed, the plan, t0, fix_t and rung_source, each episode's first apply and the
+- meta.json lever: the parameters as passed, the plan, t0, fix_t, rung_source, fix_margin_s = t0 + first onset - fix_t
+  (the calibration requires > 0 where rung_source is an offer), late_reads_s, each episode's first apply and the
   planned episodes never applied (an episode applies only when a shaper item starts inside it: items are the walk's
   sub-steps, < WALK_STEP_S + WALK_LAST_MIN_S = 3 s), and the session's abort if it fell inside an episode
   (aborts_in_episode; the calibration requires 0).
@@ -64,16 +65,23 @@ class Lever:
         self.t0: float | None = None
         self.rate: dict | None = None
         self.first_applied: dict[int, float] = {}
+        self.late_reads: list[float] = []                     # offers read past the deadline, never applied (s late)
         self._lock = threading.Lock()                          # the start reader and the shaper may race to fix it
 
     @property
     def first_onset_s(self) -> float | None:
         return self.episodes[0]["onset_s"] if self.episodes else None
 
-    def fix_rate(self, rung: dict | None, at: float, note: str | None = None) -> dict | None:
+    def fix_rate(self, rung: dict | None, at: float, note: str | None = None,
+                 deadline: float | None = None) -> dict | None:
         """Once per session: the rate from a rung already read (a dict, never a callable; nothing is read here). The
-        first fix wins; a later one returns None."""
+        first fix wins; a later one returns None. `at` is taken after the read returned: a fix at or past `deadline`
+        (the start reader's, 2 s before the first onset; brad 20:06: a slow read can return late) is refused and
+        counted, so a reader's fix always precedes every episode."""
         with self._lock:
+            if deadline is not None and at >= deadline:
+                self.late_reads.append(round(at - deadline, 3))
+                return None
             if self.rate is not None:
                 return None
             kbit, src = rate_kbit(self.platform, rung)
@@ -105,6 +113,10 @@ class Lever:
         r = self.rate or {}
         return {"params": self.params, "rate_share": RATE_SHARE, "fallback_kbit": FALLBACK_KBIT[self.platform],
                 "first_onset_min_s": FIRST_ONSET_MIN_S, "t0": self.t0, "fix_t": r.get("at"),
+                "fix_margin_s": (round((self.t0 + self.first_onset_s) - r["at"], 3)   # levi 20:06: > 0 required
+                                            if r.get("at") is not None and self.t0 is not None and self.episodes
+                                            else None),
+                "late_reads_s": self.late_reads,
                 "rung_source": r.get("source"), "episodes": self.episodes, "skipped_overlapping": self.skipped,
                 "rate": self.rate, "first_applied": {str(k): v for k, v in self.first_applied.items()},
                 "episodes_never_applied": [e["id"] for e in self.episodes if e["id"] not in self.first_applied],

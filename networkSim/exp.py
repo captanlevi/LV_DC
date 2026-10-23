@@ -1025,19 +1025,19 @@ if __name__ == "__main__":
             # returns then) and fixed ONCE for every episode: the first read here on the main thread; while only the
             # fallback is known, retries every 5 s on a daemon thread until 2 s before the first onset (t0, the
             # shaper's first apply, comes after this). The shaper path never reads the player.
+            _lever_deadline = time.time() + LEVER.first_onset_s - 2      # <= t0 + first onset - 2
+
             def _lever_read():
                 try:
                     r = browser._current_rung(0.0)
                 except Exception as e:
                     print(f"[lever] rung read failed: {e!r}"[:200], flush=True)
                     return False
-                if r and r.get("source") not in (None, "fallback"):
-                    print(f"[lever] rate fixed: {LEVER.fix_rate(r, time.time())}", flush=True)
+                if r and r.get("source") not in (None, "fallback"):     # the fix's time is taken after the read
+                    print(f"[lever] rate fix: {LEVER.fix_rate(r, time.time(), deadline=_lever_deadline)}", flush=True)
                     return True
                 return False
             if not _lever_read():
-                _lever_deadline = time.time() + LEVER.first_onset_s - 2
-
                 def _lever_retry():
                     while time.time() < _lever_deadline and LEVER.rate is None:
                         time.sleep(5)
