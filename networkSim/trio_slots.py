@@ -665,74 +665,116 @@ FAST_TC_S = 0.1                                      # v3 A18: the shaped classe
 FAST_TC_FIELDS = ("bytes", "packets", "drops", "overlimits", "backlog", "qlen")
 
 
-def _tc_classes(dev: str) -> str:
+def _tc_classes(dev: str) -> tuple[str, float]:
+    """`tc -s class show dev <dev>` (exec, no shell): (stdout, that child's own CPU seconds from os.wait4; brad / levi
+    21:27-21:28: the exact cost of the reads, never every child of exp.py). The child is reaped here by wait4, not by
+    Popen (whose returncode is then set from the status); a read over 2 s is killed and reads empty."""
     try:
-        return subprocess.run(["tc", "-s", "class", "show", "dev", dev], text=True, capture_output=True,
-                              timeout=2).stdout
+        p = subprocess.Popen(["tc", "-s", "class", "show", "dev", dev], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True)
     except Exception:
-        return ""
+        return "", 0.0
+    killer = threading.Timer(2.0, p.kill)
+    killer.start()
+    try:
+        out = p.stdout.read()
+    except Exception:
+        out = ""
+    finally:
+        killer.cancel()
+        try:
+            p.stdout.close()
+        except Exception:
+            pass
+    try:
+        _, status, ru = os.wait4(p.pid, 0)
+        p.returncode = os.waitstatus_to_exitcode(status)
+        return (out if p.returncode == 0 else ""), ru.ru_utime + ru.ru_stime
+    except ChildProcessError:
+        return out or "", 0.0
 
 
 class FastTcSampler:
     """v3 A18 (levi / supervisor 19:33-19:41): the session's own shaped classes (its IFB ingress 1:10 and its egress class
     on the interface) every FAST_TC_S, so 'backlogged' is read at 100 ms (the tw W4 rate FAIL is a 1 s classifier
-    artifact by the 100 ms bin diagnostic). One row per tick to <session>/tc_fast.jsonl, compact: t, then each class's
-    FAST_TC_FIELDS as a list (null when unread). Ticks run on a fixed grid (t0 + k x FAST_TC_S); a tick that cannot keep
-    the grid is skipped and counted, never bunched. The cost is measured, not assumed: this thread's CPU
-    (time.thread_time) and the tc children's (RUSAGE_CHILDREN delta: every reaped child of exp.py, so an upper bound),
-    over the wall time. Bound (levi 19:41): <= 5 % of one core on chaos, else the netlink fallback before a counted
-    window. Runs in both arms of the instrumentation A/B (it is base truth, not an instrument under test)."""
+    artifact by the 100 ms bin diagnostic). One row per tick to <session>/tc_fast.jsonl, compact: t (the tick), then per
+    class its FAST_TC_FIELDS as a list (null when unread) and its read instants [start, end] (t_in / t_out; brad / levi
+    21:27-21:28: each exec takes milliseconds, so readers bin on the class's own instants, never on t). Every instant is
+    time.monotonic(); the session's wall anchor {wall0, mono0} (taken together once) is the file's first line and in
+    meta, so wall = wall0 + (m - mono0) and an NTP step cannot move or gap them. Ticks run on a
+    fixed grid (mono0 + k x FAST_TC_S); a tick that cannot keep the grid is skipped and counted, never bunched. Cost,
+    measured: this thread's CPU (time.thread_time) plus each tc child's own CPU (os.wait4), over the wall time.
+    Bound (levi 19:41 / 21:27): the SUM over a window's concurrent samplers <= 5 % of one core on chaos, else the
+    netlink fallback before a counted window. Runs in both arms of the instrumentation A/B (base truth)."""
 
     def __init__(self, session_dir: Path, slot: Slot, iface: str = IFACE_DEFAULT, period_s: float = FAST_TC_S,
                  read=_tc_classes):
         self.path = Path(session_dir) / "tc_fast.jsonl"
         self.slot, self.iface, self.period, self.read = slot, iface, period_s, read
-        self.n = self.skipped = self.unread = 0
+        self.n = self.skipped = self.unread_in = self.unread_out = 0
+        self.child_cpu = 0.0
         self.gaps: list[float] = []
         self._stop = threading.Event()
         self._t: threading.Thread | None = None
         self._cost: dict = {}
+        self.mono0 = time.monotonic()
+        self.wall0 = time.time()
+
+    @staticmethod
+    def _m() -> float:
+        return round(time.monotonic(), 4)
+
+    def _class(self, dev: str, cid: str) -> tuple[list | None, list]:
+        t0 = self._m()
+        r = self.read(dev)
+        text, cpu = r if isinstance(r, tuple) else (r, 0.0)
+        t1 = self._m()
+        self.child_cpu += cpu
+        c = parse_classes(text).get(cid)
+        return ([c.get(k) for k in FAST_TC_FIELDS] if c and c.get("bytes") is not None else None), [t0, t1]
 
     def row(self) -> dict:
         s = self.slot
-        cin = parse_classes(self.read(s.ifb_in)).get("1:10")
-        cout = parse_classes(self.read(self.iface)).get(s.egress_class)
-        vec = lambda c: [c.get(k) for k in FAST_TC_FIELDS] if c and c.get("bytes") is not None else None
-        return {"t": round(time.time(), 4), "in": vec(cin), "out": vec(cout)}
+        t = self._m()
+        cin, t_in = self._class(s.ifb_in, "1:10")
+        cout, t_out = self._class(self.iface, s.egress_class)
+        return {"t": t, "in": cin, "t_in": t_in, "out": cout, "t_out": t_out}
 
     def _run(self):
-        import resource
-        c0, w0, th0 = resource.getrusage(resource.RUSAGE_CHILDREN), time.time(), time.thread_time()
+        w0, th0 = time.monotonic(), time.thread_time()
         nxt, last = time.monotonic(), None
         try:
             with open(self.path, "a", buffering=1 << 16) as fh:
+                fh.write(json.dumps({"anchor": self.anchor()}) + "\n")
                 while not self._stop.is_set():
                     now = time.monotonic()
                     if now - nxt >= self.period:             # behind the grid: skip to the next slot, counted
                         k = int((now - nxt) // self.period)
                         self.skipped += k
                         nxt += k * self.period
+                    m = time.monotonic()
                     try:
                         r = self.row()
                     except Exception:
-                        r = {"t": round(time.time(), 4), "in": None, "out": None}
-                    if r["in"] is None:
-                        self.unread += 1
+                        r = {"t": self._m(), "in": None, "t_in": None, "out": None, "t_out": None}
+                    self.unread_in += r["in"] is None
+                    self.unread_out += r["out"] is None
                     if last is not None:
-                        self.gaps.append(r["t"] - last)
-                    last = r["t"]
+                        self.gaps.append(m - last)
+                    last = m
                     fh.write(json.dumps(r, separators=(",", ":")) + "\n")
                     self.n += 1
                     nxt += self.period
                     self._stop.wait(max(0.0, nxt - time.monotonic()))
         except OSError:
             pass
-        c1, w1 = resource.getrusage(resource.RUSAGE_CHILDREN), time.time()
-        wall = max(1e-9, w1 - w0)
+        wall = max(1e-9, time.monotonic() - w0)
         th = time.thread_time() - th0
-        ch = (c1.ru_utime + c1.ru_stime) - (c0.ru_utime + c0.ru_stime)
-        self._cost = {"wall_s": round(wall, 1), "thread_cpu_s": round(th, 2), "children_cpu_s": round(ch, 2),
-                      "cpu_share_of_core": round((th + ch) / wall, 4)}
+        self._cost = {"wall_s": round(wall, 1), "thread_cpu_s": round(th, 2), "tc_child_cpu_s": round(self.child_cpu, 2),
+                      "cpu_share_of_core": round((th + self.child_cpu) / wall, 4)}
+
+    def anchor(self) -> dict:
+        return {"wall0": self.wall0, "mono0": self.mono0}
 
     def start(self) -> "FastTcSampler":
         self._t = threading.Thread(target=self._run, name="tc_fast", daemon=True)
@@ -746,9 +788,10 @@ class FastTcSampler:
         g = sorted(self.gaps)
         q = lambda p: round(g[min(len(g) - 1, int(p * len(g)))], 4) if g else None
         return {"file": self.path.name, "period_s": self.period, "samples": self.n, "skipped_ticks": self.skipped,
-                "unread": self.unread, "gap_p50_s": q(0.5), "gap_p99_s": q(0.99), "gap_max_s": g[-1] if g else None,
-                **self._cost, "cpu_note": "children_cpu_s is every reaped child of exp.py over the window (upper bound)"}
-
+                "unread_in": self.unread_in, "unread_out": self.unread_out, "gap_p50_s": q(0.5), "gap_p99_s": q(0.99),
+                "gap_max_s": round(g[-1], 4) if g else None, "anchor": self.anchor(),
+                "clock": "instants monotonic; wall = wall0 + (m - mono0)",
+                **self._cost}
 
 def shaper_bound(prev: dict | None, cur: dict | None) -> bool:
     """One interval shaper-bound, between two samples of a class's tc counters (prev, cur: parse_classes rows): its
