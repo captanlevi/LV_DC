@@ -1803,9 +1803,10 @@ PAUSE_GROWTH_EPS_S = 0.1
 # watchdog's re-entry (a reload) stays the fallback. Every press and its outcome go to ad_actions.jsonl.
 RESUME_CHECK_S = 1.0
 FROZEN_HOLD_POLL_MAX_AGE_S = 5.0     # _on_frozen's starvation evidence: the resumer's last poll at most this old
-FROZEN_HOLD_RULE = ("levi 13:09 / 17:51 (2026-10-23, tw_100109): the low-state hold of addendum N's frozen clock and of "
-                    "the stuck rule's T2 applies only with starvation evidence at the last poll (readyState <= 2 or "
-                    "buffer ahead < 1.5 s); no poll within 5 s: held")
+FROZEN_HOLD_RULE = ("levi 13:09 / 17:51 / 18:16 (2026-10-23, tw_100109): the low-state hold of addendum N's frozen clock "
+                    "and of the stuck rule's T2 lifts only after 30 s of polls paused with data (readyState >= 3, buffer "
+                    ">= 1.5 s, buffer and playhead flat within 0.1 s), and both clocks count from the lift; a last poll "
+                    "older than 5 s: held")
 TW_BUTTON_MAX_FAILS = 3
 _TW_BUTTON_JS = """
 (function() {
@@ -1847,7 +1848,9 @@ class SelfPauseResumer:
         self.deadlock_press_at = None # this pause's deadlock press (once per pause)
         self.ct_last = None           # the last poll's playhead
         self.deadlocks: list[dict] = []   # meta.json self_pause_resume.deadlocks (capped)
-        self.last_poll = None         # (time, state) of the last poll with a state: _on_frozen's starvation evidence
+        self.last_poll = None         # (time, state) of the last poll with a state
+        self.data_flat_since = None   # levi 18:16: start of the current run of polls paused with data and flat (the lift)
+        self._df_ref = (None, None)   # that run's first (buffer, playhead)
 
     def record(self) -> dict:
         return {"rule": RESUME_RULE, "hold_s": self.hold_s, "min_buffer_s": self.min_buffer_s,
@@ -1893,6 +1896,19 @@ class SelfPauseResumer:
                                "stall_label": rec["stall_label"]})
         return rec
 
+    def _track_data_flat(self, state: dict, now: float) -> None:
+        """levi 18:16: the run of polls that are paused with data (readyState >= 3, buffer >= the floor, not an ad, not
+        ended) and flat (buffer and playhead within PAUSE_GROWTH_EPS_S of the run's first poll), the press trigger's test.
+        Growth starts a new run; any other poll ends it."""
+        buf, ct = state.get("buf"), state.get("ct")
+        ok = (bool(state.get("paused")) and not state.get("ad") and not state.get("ended")
+              and (state.get("rs") or 0) >= 3 and buf is not None and buf >= self.min_buffer_s)
+        b0, c0 = self._df_ref
+        if ok and self.data_flat_since is not None and abs(buf - b0) <= PAUSE_GROWTH_EPS_S \
+                and (ct is None or c0 is None or abs(ct - c0) <= PAUSE_GROWTH_EPS_S):
+            return
+        self.data_flat_since, self._df_ref = (now, (buf, ct)) if ok else (None, (None, None))
+
     def note_button_fail(self) -> None:
         self.button_fails += 1
         self.gave_up = self.button_fails >= TW_BUTTON_MAX_FAILS
@@ -1901,6 +1917,7 @@ class SelfPauseResumer:
         paused = bool(state and state.get("paused"))
         if state is not None:
             self.last_poll = (now, state)
+            self._track_data_flat(state, now)
             if self.was_paused and not paused:
                 self.restart_at = now
             self.was_paused = paused
@@ -3925,8 +3942,9 @@ class BrowserSession:
             return
         if self.platform in PLAYER_ERROR_PLATFORMS:     # levi 10:27: the clock holds in the low states + grace
             he = self._low_hold_end(now)
-            if he is not None and not self._hold_applies(now, frozen_s, "t2"):   # levi 17:51: only when starved
-                he = None
+            lift = self._hold_lifted(now, frozen_s, "t2") if he is not None else None   # levi 17:51 / 18:16
+            if lift is not None:
+                he, frozen_s = None, min(frozen_s, now - lift)   # T2 counts from the lift
             if he is not None:
                 if now <= he:
                     return
@@ -4150,44 +4168,43 @@ class BrowserSession:
         self.abort_reason, self.abort_at = "login_wall", time.time()
         print("[browser] LOGIN WALL detected (content.js login_wall) — aborting the session", flush=True)
 
-    def _starved(self, now: float) -> tuple[bool, dict]:
-        """levi 13:09 (tw_100109): starvation evidence for the frozen clock's low-state hold, from the self-pause
-        resumer's last poll (the largest visible video): readyState <= 2 or the buffer ahead under
-        SELF_PAUSE_MIN_BUFFER_S. No poll within FROZEN_HOLD_POLL_MAX_AGE_S: starved (the hold as before), recorded."""
-        last = getattr(getattr(self, "resumer", None), "last_poll", None)
-        if last is None or now - last[0] > FROZEN_HOLD_POLL_MAX_AGE_S:
-            return True, {"poll": None}
-        st = last[1]
-        buf = st.get("buf")
-        ev = {"poll_age_s": round(now - last[0], 3), **{k: st.get(k) for k in ("paused", "rs", "buf", "stall")}}
-        return (st.get("rs") or 0) <= 2 or (buf is not None and buf < SELF_PAUSE_MIN_BUFFER_S), ev
-
-    def _hold_applies(self, now: float, frozen_s: float, clock: str) -> bool:
-        """levi 13:09 / 17:51 (tw_100109): a low-state hold on a frozen clock (addendum N's or the stuck rule's T2) applies
-        only with starvation evidence (_starved). Without it the run counts unheld; the bypass is recorded once per frozen
-        run and clock (meta.json frozen_hold.bypassed)."""
-        starved, ev = self._starved(now)
-        if starved:
-            return True
+    def _hold_lifted(self, now: float, frozen_s: float, clock: str) -> float | None:
+        """levi 13:09 / 17:51 / 18:16 (tw_100109): a low-state hold on a frozen clock (addendum N's or the stuck rule's T2)
+        lifts only once the resumer's polls have shown the player paused with data and flat for PAUSE_DEADLOCK_S (the
+        press trigger's test: readyState >= 3, buffer >= the floor, buffer and playhead flat), so a stall that starts
+        recovering is never cut; the clocks then count from the lift. A last poll older than FROZEN_HOLD_POLL_MAX_AGE_S:
+        held. Returns the lift time, else None; each lift is recorded once per frozen run and clock (meta.json
+        frozen_hold.bypassed)."""
+        r = getattr(self, "resumer", None)
+        last = getattr(r, "last_poll", None)
+        since = getattr(r, "data_flat_since", None)
+        if last is None or now - last[0] > FROZEN_HOLD_POLL_MAX_AGE_S or since is None or now < since + PAUSE_DEADLOCK_S:
+            return None
+        lift = since + PAUSE_DEADLOCK_S
         run0 = round(now - frozen_s)
         if not any(x.get("clock") == clock and abs(x.get("frozen_since", 0) - run0) <= 2 for x in self.frozen_hold_bypassed) \
                 and len(self.frozen_hold_bypassed) < WATCH_LOG_MAX:
+            st = last[1]
             self.frozen_hold_bypassed.append({"clock": clock, "t": now, "frozen_s": round(frozen_s, 1), "frozen_since": run0,
-                                              **ev})
-        return False
+                                              "data_flat_since": since, "lift": lift,
+                                              **{k: st.get(k) for k in ("paused", "rs", "buf", "stall")}})
+        return lift
 
     def _on_frozen(self, frozen_s: float) -> bool:
         # addendum N: the player froze in a stall and has not recovered within T; no reload (that would be a user
         # action inside the session). exp.py exits EXIT_PLAYER_FROZEN, which the batch does not count as a failure.
         # levi gate 49d (C), yt_900027: on yt / twitch this clock holds in the low states as the T2 rule does
         # (_stuck_tick): no abort while held, then T counts from the hold's end + grace; False = held, not aborted.
-        # levi 13:09 (tw_100109): the hold applies only with starvation evidence (_starved); a frozen player with data
-        # in a low state is not the network's, and its run counts as unheld (meta.json frozen_hold.bypassed)
+        # levi 13:09 / 18:16 (tw_100109): the hold lifts after 30 s of polls paused with data and flat (_hold_lifted); a
+        # frozen player with data in a low state is not the network's, and T counts from the lift (frozen_hold.bypassed)
         if self.platform in PLAYER_ERROR_PLATFORMS:
             now = time.time()
             he = self._low_hold_end(now)
-            if he is not None and not self._hold_applies(now, frozen_s, "addendum_n"):
-                he = None
+            lift = self._hold_lifted(now, frozen_s, "addendum_n") if he is not None else None
+            if lift is not None:                          # levi 18:16: T counts from the lift
+                he, frozen_s = None, min(frozen_s, now - lift)
+                if frozen_s <= FROZEN_PLAYHEAD_MAX_S[self.platform]:
+                    return False
             if he is not None:
                 if now <= he or min(frozen_s, now - he) <= FROZEN_PLAYHEAD_MAX_S[self.platform]:
                     return False
