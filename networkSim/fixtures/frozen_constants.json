@@ -63,7 +63,7 @@
   "TRIO_STAGGER_S": 30.0,
   "resume": {
    "FROZEN_HOLD_POLL_MAX_AGE_S": 5.0,
-   "FROZEN_HOLD_RULE": "levi 13:09 (2026-10-23, tw_100109): the frozen clock's low-state hold applies only with starvation evidence at the last poll (readyState <= 2 or buffer ahead < 1.5 s); no poll within 5 s: held",
+   "FROZEN_HOLD_RULE": "levi 13:09 / 17:51 (2026-10-23, tw_100109): the low-state hold of addendum N's frozen clock and of the stuck rule's T2 applies only with starvation evidence at the last poll (readyState <= 2 or buffer ahead < 1.5 s); no poll within 5 s: held",
    "PAUSE_DEADLOCK_S": 30.0,
    "PAUSE_GROWTH_EPS_S": 0.1,
    "RESUME_BACKOFF_S": 10.0,

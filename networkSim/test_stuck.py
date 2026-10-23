@@ -401,7 +401,7 @@ def test_on_frozen_hold_needs_starvation(monkeypatch):
     genuine TW-L starvation stall in the same states (readyState 2, or the buffer under the floor) stays held; no poll,
     or one older than FROZEN_HOLD_POLL_MAX_AGE_S: held as before."""
     fx = json.loads((FX / "tw_100109_selfpause_2026-10-23.json").read_text())
-    labels = [{"timestamp": t, "speed": 0.0, "state": st} for t, st in fx["shaper_states"]]
+    labels = [{"timestamp": t, "speed": float(k), "state": st} for t, st, k in fx["shaper_states"]]
     Tw, now = CS.FROZEN_PLAYHEAD_MAX_S["twitch"], 1100.0
     assert S.low_hold_end(labels, now) >= now                              # tw_100109 at 1100 s: in the hold
     monkeypatch.setattr(B.time, "time", lambda: now)
@@ -426,6 +426,43 @@ def test_on_frozen_hold_needs_starvation(monkeypatch):
         assert s._on_frozen(frozen) is False and s.abort_reason is None and s.frozen_hold_bypassed == [], (poll, age)
     s = tw({**data, "buf": B.SELF_PAUSE_MIN_BUFFER_S})                    # at the floor: data, not starvation
     assert s._on_frozen(frozen) is True
+
+
+def test_stuck_tick_hold_needs_starvation(monkeypatch):
+    """levi 17:51 (tw_100109): the stuck rule's T2 hold takes the same starvation condition as addendum N's, so the
+    designed recovery comes first. tw_100109's own shaper rows, rung (230 kbit, the HLS master's lowest) and poll
+    (readyState 4, 4.04 s buffered): one re-entry once T2 passes T2_S, long before addendum N's T. A TW-L starvation
+    stall in the same rows (readyState 2, buffer 0.09 s) holds both clocks for the whole run: no re-entry, no abort."""
+    fx = json.loads((FX / "tw_100109_selfpause_2026-10-23.json").read_text())
+    labels = [{"timestamp": t, "speed": float(k), "state": st} for t, st, k in fx["shaper_states"]]
+    Tw, t_pause = CS.FROZEN_PLAYHEAD_MAX_S["twitch"], fx["paused_run"][0]
+    data = {"paused": True, "rs": 4, "buf": 4.044, "stall": True, "ad": False, "ended": False}
+
+    def replay(poll, seconds):
+        s = _session("twitch")
+        s.net_labels, s.frozen_hold_bypassed, s.resumer = labels, [], B.SelfPauseResumer()
+        s._current_rung = lambda frozen_s: dict(fx["lowest_rung"])
+        s._reenter_frozen = types.MethodType(lambda self, rec: (self.frozen_reentries.append({**rec, "outcome": "continue"})
+                                                                or {**rec, "outcome": "continue"}), s)
+        for k in range(1, seconds):
+            now = t_pause + k
+            monkeypatch.setattr(B.time, "time", lambda now=now: now)
+            s.resumer.last_poll = (now - 1, poll)
+            s._stuck_tick(float(k))
+            if k > Tw and s._on_frozen(float(k)) is not False:
+                return s, k
+            if s.frozen_reentries:
+                return s, k
+        return s, None
+    s, k = replay(data, 1900)
+    assert s.frozen_reentries and k < Tw and s.abort_reason is None, (k, s.abort_reason)
+    rung = S.t2_rung(fx["lowest_rung"])
+    t2, _ = S.t2_clock(float(k), t_pause + k, labels, rung)
+    t2_before, _ = S.t2_clock(float(k - 1), t_pause + k - 1, labels, rung)
+    assert t2 >= S.T2_S > (t2_before or 0) and k == 138, (k, t2, t2_before)    # the first second T2 reaches T2_S
+    assert [b["clock"] for b in s.frozen_hold_bypassed] == ["t2"] and s.frozen_hold_bypassed[0]["rs"] == 4
+    s, k = replay({**data, "rs": 2, "buf": 0.09}, 1900)                  # a genuine TW-L starvation stall: held
+    assert k is None and not s.frozen_reentries and s.abort_reason is None and s.frozen_hold_bypassed == []
 
 
 def test_watcher_loop_asks_on_frozen_again_while_held():

@@ -1780,8 +1780,9 @@ PAUSE_GROWTH_EPS_S = 0.1
 # watchdog's re-entry (a reload) stays the fallback. Every press and its outcome go to ad_actions.jsonl.
 RESUME_CHECK_S = 1.0
 FROZEN_HOLD_POLL_MAX_AGE_S = 5.0     # _on_frozen's starvation evidence: the resumer's last poll at most this old
-FROZEN_HOLD_RULE = ("levi 13:09 (2026-10-23, tw_100109): the frozen clock's low-state hold applies only with starvation "
-                    "evidence at the last poll (readyState <= 2 or buffer ahead < 1.5 s); no poll within 5 s: held")
+FROZEN_HOLD_RULE = ("levi 13:09 / 17:51 (2026-10-23, tw_100109): the low-state hold of addendum N's frozen clock and of "
+                    "the stuck rule's T2 applies only with starvation evidence at the last poll (readyState <= 2 or "
+                    "buffer ahead < 1.5 s); no poll within 5 s: held")
 TW_BUTTON_MAX_FAILS = 3
 _TW_BUTTON_JS = """
 (function() {
@@ -3275,7 +3276,7 @@ class BrowserSession:
         self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
         self.error_watch.held_fn = self._lowstate_held
         self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
-        self.frozen_hold_bypassed: list = []         # yt / twitch: _on_frozen's low-state hold skipped, no starvation
+        self.frozen_hold_bypassed: list = []         # yt / twitch: a frozen clock's low-state hold skipped, no starvation
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
         self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
@@ -3893,6 +3894,8 @@ class BrowserSession:
             return
         if self.platform in PLAYER_ERROR_PLATFORMS:     # levi 10:27: the clock holds in the low states + grace
             he = self._low_hold_end(now)
+            if he is not None and not self._hold_applies(now, frozen_s, "t2"):   # levi 17:51: only when starved
+                he = None
             if he is not None:
                 if now <= he:
                     return
@@ -4128,6 +4131,20 @@ class BrowserSession:
         ev = {"poll_age_s": round(now - last[0], 3), **{k: st.get(k) for k in ("paused", "rs", "buf", "stall")}}
         return (st.get("rs") or 0) <= 2 or (buf is not None and buf < SELF_PAUSE_MIN_BUFFER_S), ev
 
+    def _hold_applies(self, now: float, frozen_s: float, clock: str) -> bool:
+        """levi 13:09 / 17:51 (tw_100109): a low-state hold on a frozen clock (addendum N's or the stuck rule's T2) applies
+        only with starvation evidence (_starved). Without it the run counts unheld; the bypass is recorded once per frozen
+        run and clock (meta.json frozen_hold.bypassed)."""
+        starved, ev = self._starved(now)
+        if starved:
+            return True
+        run0 = round(now - frozen_s)
+        if not any(x.get("clock") == clock and abs(x.get("frozen_since", 0) - run0) <= 2 for x in self.frozen_hold_bypassed) \
+                and len(self.frozen_hold_bypassed) < WATCH_LOG_MAX:
+            self.frozen_hold_bypassed.append({"clock": clock, "t": now, "frozen_s": round(frozen_s, 1), "frozen_since": run0,
+                                              **ev})
+        return False
+
     def _on_frozen(self, frozen_s: float) -> bool:
         # addendum N: the player froze in a stall and has not recovered within T; no reload (that would be a user
         # action inside the session). exp.py exits EXIT_PLAYER_FROZEN, which the batch does not count as a failure.
@@ -4138,10 +4155,7 @@ class BrowserSession:
         if self.platform in PLAYER_ERROR_PLATFORMS:
             now = time.time()
             he = self._low_hold_end(now)
-            starved, ev = (True, None) if he is None else self._starved(now)
-            if he is not None and not starved:
-                if len(self.frozen_hold_bypassed) < WATCH_LOG_MAX:
-                    self.frozen_hold_bypassed.append({"t": now, "frozen_s": round(frozen_s, 1), "hold_end": he, **ev})
+            if he is not None and not self._hold_applies(now, frozen_s, "addendum_n"):
                 he = None
             if he is not None:
                 if now <= he or min(frozen_s, now - he) <= FROZEN_PLAYHEAD_MAX_S[self.platform]:
