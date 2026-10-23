@@ -35,7 +35,8 @@ def test_disjoint():
     assert overlap == [] and SF.SHARED_BY_DESIGN == frozenset(), overlap     # levi 23:21: one writer per name
     for n in ("mergedFlows.csv", "mergedPackets.csv"):                        # LVQoE's at top level; ours are nested
         assert n not in SF.COLLECTOR_FILES and f"check_nc/{n}" in SF.NESTED_FILES
-    for n in ("http_v2.json", "h1_raw.json", "h2_raw.pdml", "h3_raw.pdml"):   # the collector's alone
+    for n in ("http_v2.json", "h1_raw.json", "h2_raw.pdml", "h3_raw.pdml",    # the collector repo's alone
+              "h2_raw.pdml.zst", "h3_raw.pdml.zst", "compress_record.json"):
         assert n in SF.COLLECTOR_FILES and not any(SF.collides(n, r) for r in SF.READER_FILES)
     assert not any(SF.collides(c, p) for c in SF.COLLECTOR_FILES for p in ("a5tt*", "a6tt*"))   # reserved prefixes
     assert "frames.jsonl" in SF.READER_FILES and "frames.jsonl" not in SF.COLLECTOR_FILES
