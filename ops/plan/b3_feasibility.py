@@ -36,6 +36,10 @@ SCHEMA = "b3_feasibility/1"
 RATIO_LO = 0.9            # readers/shaper_math.RATIO_LO: the realised band's lower edge (levi efb5e4cc (1))
 HEADROOM = 1.0            # interface 61a8bf36 (peter): the build default; levi may set it in the gate prereg
 SIZE_CAP = {"youtube": True, "twitch": False, "tiktok": False}      # c14 / c15
+# levi 19:31 / 19:33 (W4 rate on t58: tt / yt PASS, tw FAIL, span 0.758): a platform listed here takes its REALISED rate
+# per state (shaper_realised, per span) as its band rate, never configured x RATIO_LO, until its shaper C5 passes on v3
+# (then levi restores configured, for v3 data only: --configured-ok)
+REALISED_REQUIRED = ("twitch",)
 TIER_SHORT = {"Q_144p": 144, "Q_240p": 240, "Q_360p": 360, "Q_480p": 480, "Q_720p": 720, "Q_1080p": 1080}
 PLATFORMS = ("youtube", "twitch", "tiktok")
 
@@ -72,9 +76,17 @@ def offers(metas: list[dict], platform: str) -> tuple[dict, dict, str]:
     return share, need, src if rates else "declared_rungs"
 
 
-def band_share(state: str, need: float) -> float:
+def band_edges(state: str, platform: str | None = None, realised: dict | None = None) -> tuple[float, float]:
+    """The band's [lo, hi] effective kbit: configured x RATIO_LO, or for a REALISED platform configured x its state's
+    realised ratio (realised[platform][state], shaper_realised's per-span median of delivered / applied)."""
     sc = SCENARIOS[state]
-    lo, hi = sc.rate_min * RATIO_LO, sc.rate_max * RATIO_LO
+    f = ((realised or {}).get(platform) or {}).get(state) if platform else None
+    k = RATIO_LO if f is None else float(f)
+    return sc.rate_min * k, sc.rate_max * k
+
+
+def band_share(state: str, need: float, platform: str | None = None, realised: dict | None = None) -> float:
+    lo, hi = band_edges(state, platform, realised)
     req = need * HEADROOM
     if req <= lo:
         return 1.0
@@ -94,9 +106,19 @@ def box(platform: str, geom: str, dpr: float, boxes: dict) -> tuple[list[int], s
 
 
 def build(metas: list[dict], boxes: dict, dprs: list[float], joint: dict | None, stationary: dict | None,
-          planned_hours: float, geometry: dict = GEOMETRY_CHOICES) -> dict:
-    cells, per_tier = [], []
+          planned_hours: float, geometry: dict = GEOMETRY_CHOICES, realised: dict | None = None,
+          configured_ok: tuple = ()) -> dict:
+    cells, per_tier, rate_src = [], [], {}
     for pf in PLATFORMS:
+        if not geometry.get(pf):                    # not drawn in this build: nothing to rate
+            rate_src[pf] = "not built"
+        elif pf in REALISED_REQUIRED and pf not in configured_ok:
+            if not (realised or {}).get(pf):
+                raise ValueError(f"{pf}: its realised rate per state is required (levi 19:31; W4 tw FAIL): pass --realised")
+            rate_src[pf] = "realised"
+        else:
+            rate_src[pf] = "configured x RATIO_LO"
+        rz = realised if rate_src[pf] == "realised" else None
         share, need, bsrc = offers(metas, pf)
         tiers = sorted({*share, *RUNGS.get(pf, {})}, key=lambda t: TIER_SHORT[t])
         geoms = geometry.get(pf, [])
@@ -106,7 +128,7 @@ def build(metas: list[dict], boxes: dict, dprs: list[float], joint: dict | None,
         by_state = ((joint or {}).get("per_platform", {}).get(pf) or {}).get("by_state") or {}
         for t in tiers:
             nk = need.get(t)
-            reach_states = [s for s in SCENARIOS if nk is not None and SCENARIOS[s].rate_max * RATIO_LO >= nk * HEADROOM]
+            reach_states = [s for s in SCENARIOS if nk is not None and band_edges(s, pf, rz)[1] >= nk * HEADROOM]
             reach_cells = []
             for g in geoms:
                 for d in dprs:
@@ -131,15 +153,16 @@ def build(metas: list[dict], boxes: dict, dprs: list[float], joint: dict | None,
                 row = by_state.get(s) or {}
                 tot = sum(row.values())
                 if tot and nk is not None:
-                    exp += p * row.get(t, 0.0) / tot * band_share(s, nk)
+                    exp += p * row.get(t, 0.0) / tot * band_share(s, nk, pf, rz)
             per_tier.append({"platform": pf, "tier": t, "structural_zero": not reach_cells,
                              "reachable_cells": reach_cells, "draw_mass_reachable": round(m_reach, 4),
-                             "band_share_reaching": {s: round(band_share(s, nk), 3) for s in SCENARIOS} if nk else {},
+                             "band_share_reaching": {s: round(band_share(s, nk, pf, rz), 3) for s in SCENARIOS} if nk else {},
+                             "rate_source": rate_src[pf],
                              "expected_hours_next_window": round(planned_hours * m_reach * exp, 3),
                              "bitrate_source": bsrc})
     for c in cells:                                  # levi's C5: no tier marked feasible with zero offered
         assert not (c["reachable"] and c["offered_share"] == 0.0), c
-    return {"cells": cells, "per_tier": per_tier}
+    return {"cells": cells, "per_tier": per_tier, "rate_source": rate_src}
 
 
 def main(argv=None) -> int:
@@ -152,6 +175,9 @@ def main(argv=None) -> int:
     ap.add_argument("--stationary", type=Path, default=None, help="{platform: {state: probability}} planned")
     ap.add_argument("--planned-hours", type=float, default=0.0, help="planned counted hours per platform")
     ap.add_argument("--dprs", default="1", help="the window's DPR draw support (B2), e.g. 1 or 1,2")
+    ap.add_argument("--realised", type=Path, default=None,
+                    help="{platform: {state: realised ratio}} from shaper_realised (required for twitch, levi 19:31)")
+    ap.add_argument("--configured-ok", default="", help="platforms whose shaper C5 passed on v3 (levi restores configured)")
     ap.add_argument("--code-sha", default=None)
     a = ap.parse_args(argv)
     metas = []
@@ -163,12 +189,14 @@ def main(argv=None) -> int:
     joint = json.loads(a.joint.read_text()) if a.joint else None
     stat = json.loads(a.stationary.read_text()) if a.stationary else None
     dprs = [float(x) for x in a.dprs.split(",")]
-    res = build(metas, boxes, dprs, joint, stat, a.planned_hours)
+    realised = json.loads(a.realised.read_text()) if a.realised else None
+    res = build(metas, boxes, dprs, joint, stat, a.planned_hours, realised=realised,
+                configured_ok=tuple(x for x in a.configured_ok.split(",") if x))
     offers_sha = hashlib.sha256("".join(sorted(_sha(p) or "" for p in a.offers_metas)).encode()).hexdigest()
     out = {"schema": SCHEMA, "window": a.window, "built_at": time.time(), "code_sha": a.code_sha,
            "inputs": {"offers": {"sessions": len(metas), "sha256": offers_sha},
                       "state_table": {s: [SCENARIOS[s].rate_min, SCENARIOS[s].rate_max] for s in SCENARIOS},
-                      "boxes_sha256": _sha(a.boxes), "joint_sha256": _sha(a.joint), "stationary_sha256": _sha(a.stationary),
+                      "boxes_sha256": _sha(a.boxes), "realised_sha256": _sha(a.realised), "joint_sha256": _sha(a.joint), "stationary_sha256": _sha(a.stationary),
                       "dprs": dprs, "planned_hours": a.planned_hours},
            "rules": {"ratio_lo": RATIO_LO, "headroom": HEADROOM, "size_cap": SIZE_CAP, "draw": "equal weights (restart §7)"},
            **res}
