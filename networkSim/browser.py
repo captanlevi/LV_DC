@@ -1493,6 +1493,15 @@ def _set_download_dir(page: CDPPage, download_path: str) -> None:
     })
 
 
+def _side_streams(store: dict) -> dict[str, list]:
+    """v3 (t67 A2): the extension's side-stream batches (chrome.storage.local keys side:<stream>:<ms>:<seq>, one per
+    batch) joined per stream in key order, i.e. arrival order."""
+    out: dict[str, list] = {}
+    for k in sorted(x for x in store if isinstance(x, str) and x.startswith("side:")):
+        out.setdefault(k.split(":")[1], []).extend(store[k] or [])
+    return out
+
+
 def _export_via_service_worker(session_dir: Path) -> bool:
     """
     Read QoE events from the extension's chrome.storage.local via CDP,
@@ -1517,8 +1526,21 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             "new Promise(r => chrome.storage.local.get({player_stats:[]}, d => r(JSON.stringify(d.player_stats))))",
             await_promise=True,
         )
+        # v3 (t67 A2): the side streams (player_events, ...), one key per batch, each to <stream>.jsonl
+        side_json = sw.eval(
+            "new Promise(r => chrome.storage.local.get(null, d => r(JSON.stringify(Object.fromEntries("
+            "Object.entries(d).filter(([k]) => k.startsWith('side:')))))))",
+            await_promise=True,
+        )
+        side = json.loads(side_json) if side_json else {}
         # Clear storage so the next run starts fresh
-        sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'], r))", await_promise=True)
+        sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'].concat(%s), r))"
+                % json.dumps(sorted(side)), await_promise=True)
+        for stream, recs in _side_streams(side).items():
+            with open(session_dir / f"{stream}.jsonl", "w") as fh:
+                for rec in recs:
+                    fh.write(json.dumps(rec) + "\n")
+            print(f"[browser] {stream} ({len(recs)} records) → {session_dir / (stream + '.jsonl')}", flush=True)
         sw.close()
         _close_target(tmp_tab)
         stats = json.loads(stats_json) if stats_json else []
@@ -1538,7 +1560,8 @@ def _export_via_service_worker(session_dir: Path) -> bool:
                   "dropped", "current_time", "tabId", "url", "event_id",
                   "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed",
                   "login_wall_text", "login_wall", "quality_countdown", "paused", "playhead_still_s", "ready_state",
-                  "visibility", "total_frames"]                        # t53 (am. 13 / gate-2 4a): additive
+                  "visibility", "total_frames",                        # t53 (am. 13 / gate-2 4a): additive
+                  "el_id", "src_key"]                                  # v3 A10 (t67): additive
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]
