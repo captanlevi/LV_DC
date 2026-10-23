@@ -177,7 +177,7 @@ The on-box scripts for every step below are in `ops/` (`ops/README.md`; paths in
   - **one boundary script per pause** (`ops/apply_at_boundary.sh`): two at once (one CONTs, the other TERMs) killed the next session's Chrome (tw_15, an operator artifact).
 - **Waiting for a session to end under a paused orchestrate:** a finished exp.py is a zombie while its parent is stopped, so `kill -0 <pid>` stays true. Wait for the pid to exit **or** show state `Z` (`ps -o stat= -p <pid>`).
 - **Copying data off the box:** tailscale (UDP, tailscaled's port) and ssh (TCP 22) bypass shaping and capture; `meta.json` `mgmt_exclusion` records this. A DERP-relayed tailscale link runs over TCP 443 and is not excluded, so check `tailscale status` shows `direct`. Without the exclusion, copy only between sessions.
-- **Per-session verify and frames:** on the box, every PASS is verified as it lands: `verify_session.py --ingest` and `extract_frames.py` (`ops/verify_loop.sh`; chaos-built caches are QA only, never cited). The canonical caches are built on the laptop after the copy (LVQoE `verify_session`, the frozen-manifest rules).
+- **Per-session verify and frames:** in the trio era each window's post (LVQoE ops/chaos round_post) runs `verify_session.py --ingest` and `extract_frames.py` for the window's sessions; it is the only verifier (t69 C9: `ops/verify_loop.sh` archived; chaos-built caches are QA only, never cited). The canonical caches are built on the laptop after the copy (LVQoE `verify_session`, the frozen-manifest rules).
 
 ## 5. Guards: `check_session.py`
 

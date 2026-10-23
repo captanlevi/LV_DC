@@ -19,7 +19,7 @@ export LVDC_DATA_ROOT_UUID
 : "${LVDC_BATCH_OPTS:=--dpms-off}"
 : "${LVDC_LANG:=en_AU.UTF-8}"                            # LANG of the ssh-identical relaunch environment
 : "${LVDC_UID:=$(id -u)}"
-: "${LVQOE_PY:=$HOME/Desktop/LV/.venv/bin/python}"       # LVQoE's interpreter (verify_loop.sh)
+: "${LVQOE_PY:=$HOME/Desktop/LV/.venv/bin/python}"       # LVQoE's interpreter (was verify_loop.sh's; archived t69 C9)
 # the one LVQoE worktree the verify / frames loop runs (verify_session.py and extract_frames.py), at a pinned commit;
 # moving the loop to a new LVQoE commit = a new worktree + this default (supervisor 2026-10-18: master 010c47c)
 : "${LVQOE_LOOP_DIR:=$HOME/Desktop/LV/.worktrees/shagun-loop-010c47c}"
@@ -45,6 +45,7 @@ launch_wrapper() {
 }
 start_guards() {   # the on-box watchdogs, each started once
   [ ! -f "$LVDC_STATE/SCREEN_OFF" ] || pgrep -f "[k]eep_display_off.sh" >/dev/null || setsid nohup "$OPS/keep_display_off.sh" >/dev/null 2>&1 < /dev/null &
-  pgrep -f "[g]uard_stall_contradiction.sh" >/dev/null || setsid nohup "$OPS/guard_stall_contradiction.sh" >/dev/null 2>&1 < /dev/null &
+  # t69 C9 (levi 2026-10-23 18:03, collector v3): no verifier loop; the window post is the only trio verifier. verify_loop.sh and
+  # guard_stall_contradiction.sh (superseded by player_frozen / I10) are archived in ops/_archive
   pgrep -f "[i]pv6_watchdog.sh" >/dev/null || setsid -f "$OPS/ipv6_watchdog.sh" >/dev/null 2>&1 < /dev/null
 }
