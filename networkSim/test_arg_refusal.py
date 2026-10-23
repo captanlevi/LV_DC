@@ -57,7 +57,9 @@ def test_each_refusal():
         (without(RECORD, "--expect-stratum"), "--trio-record needs --expect-stratum"),                 # collector v3 B5
         (RECORD + ["--stratum-force", "lever"], "never with --trio-record"),
         (without(RECORD, "--trio-record") + ["--stratum-force", "lever"], "exclude each other"),
-        (without(RECORD, "--trio-record", "--n-draw", "--expect-stratum") + ["--stratum-force", "lever"], "need --concurrent and --n-draw"),
+        (without(RECORD, "--trio-record", "--n-draw") + ["--trio-steer"], "--expect-stratum needs --concurrent and --n-draw"),
+        (without(RECORD, "--trio-record", "--n-draw", "--expect-stratum", "--concurrent", "--window-min", "--trio-yt-fullscreen",
+                 "--trio-layout", "--trio-steer", "--trio-steer-platforms") + ["--stratum-force", "lever"], "--stratum-force needs --concurrent"),
         (RECORD + ["--session-range", "10,20"], "never the record"),
         (without(RECORD, "--trio-record", "--n-draw", "--window-min") + ["--session-range", "x"], "LO,HI (minutes)"),
         (without(RECORD, "--trio-record", "--n-draw", "--window-min") + ["--session-range", "20,10"], "0 < LO <= HI"),

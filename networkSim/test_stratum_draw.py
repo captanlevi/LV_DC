@@ -1,5 +1,5 @@
 """Collector v3 B5 (t69 interface 8b48e25a; levi / peter 2026-10-23 18:02-18:03): the per-window stratum, in permuted blocks of 4
-(2 steered, 1 unsteered, 1 lever), keyed by n_draw's round index so a void window keeps its stratum; one function that
+(2 steered, 1 unsteered, 1 lever), keyed by the count of earlier windows that started a session, so a void window keeps its stratum; one function that
 rounds_ref_n and orchestrate both compute; orchestrate refuses a mismatch, a steered window without --trio-steer and any lever
 window (B4's arm not in this collector), turns steering off for an unsteered one, and records the stratum in trio_up and every
 session's meta.concurrency.window_stratum.
@@ -89,7 +89,7 @@ def test_stratum_apply_refusals_and_steering():
     assert ref is None and steer is False and rec["steering_off_by_stratum"] is True
     assert "lever" in O.stratum_apply(sd("lever"), "lever", None, True)[2]
     rec, steer, ref = O.stratum_apply(sd("lever"), None, "unsteered", False)    # a dry run's stated stratum
-    assert ref is None and rec["stratum"] == "unsteered" and rec["forced"] is True
+    assert ref is None and rec["stratum"] == "unsteered" and rec["forced"] is True and rec["k"] is None   # stated, k null
 
 
 def test_arg_refusals():
@@ -104,7 +104,11 @@ def test_arg_refusals():
     assert r(dry + ["--stratum-force", "unsteered"]) is None
     assert "exclude each other" in r(dry + ["--stratum-force", "unsteered", "--expect-stratum", "steered"])
     nodraw = [a for a in dry if a != "--n-draw"]
-    assert "--n-draw" in r(nodraw + ["--stratum-force", "steered"])
+    got = r(nodraw + ["--stratum-force", "steered"])                          # levi 19:00: a fixed-composition gate arm
+    assert got is None or "stratum" not in got, got                           # may force a stratum without --n-draw
+    assert "--expect-stratum needs --concurrent and --n-draw" in r(nodraw + ["--expect-stratum", "steered"])
+    forced = O.build_parser().parse_args(["--batch", "youtube=1", "--stratum-force", "lever"])
+    assert O.arg_refusal(forced, env) == "--stratum-force needs --concurrent"
 
 
 def test_the_stratum_reaches_every_sessions_meta():
