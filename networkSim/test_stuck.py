@@ -394,6 +394,40 @@ def test_on_frozen_holds_in_low_states():
     assert tt._on_frozen(CS.FROZEN_PLAYHEAD_MAX_S["tiktok"] + 5) is True and tt.abort_reason == "player_frozen"
 
 
+def test_on_frozen_hold_needs_starvation(monkeypatch):
+    """levi 13:09 (tw_100109): addendum N's low-state hold applies only with starvation evidence at the resumer's last
+    poll (readyState <= 2 or buffer < 1.5 s). tw_100109's own shaper states (1-4 all session) and poll (paused,
+    readyState 4, 4.04 s buffered, stall label on): not held, aborts once the run passes T, the bypass recorded. A
+    genuine TW-L starvation stall in the same states (readyState 2, or the buffer under the floor) stays held; no poll,
+    or one older than FROZEN_HOLD_POLL_MAX_AGE_S: held as before."""
+    fx = json.loads((FX / "tw_100109_selfpause_2026-10-23.json").read_text())
+    labels = [{"timestamp": t, "speed": 0.0, "state": st} for t, st in fx["shaper_states"]]
+    Tw, now = CS.FROZEN_PLAYHEAD_MAX_S["twitch"], 1100.0
+    assert S.low_hold_end(labels, now) >= now                              # tw_100109 at 1100 s: in the hold
+    monkeypatch.setattr(B.time, "time", lambda: now)
+    frozen = now - fx["paused_run"][0]
+    assert frozen > Tw
+
+    def tw(poll, age=1.0):
+        s = _session("twitch")
+        s.net_labels, s.frozen_hold_bypassed = labels, []
+        s.resumer = B.SelfPauseResumer()
+        if poll is not None:
+            s.resumer.last_poll = (now - age, poll)
+        return s
+    data = {"paused": True, "rs": 4, "buf": 4.044, "stall": True, "ad": False, "ended": False, "ct": 292.605}
+    s = tw(data)
+    assert s._on_frozen(frozen) is True and s.abort_reason == "player_frozen"
+    assert [{k: b[k] for k in ("rs", "buf", "stall", "paused")} for b in s.frozen_hold_bypassed] == \
+        [{"rs": 4, "buf": 4.044, "stall": True, "paused": True}], s.frozen_hold_bypassed
+    for poll, age in (({**data, "rs": 2, "buf": 0.09}, 1.0), ({**data, "buf": 0.3}, 1.0), ({**data, "rs": 1}, 1.0),
+                      (None, 0.0), (data, B.FROZEN_HOLD_POLL_MAX_AGE_S + 1)):
+        s = tw(poll, age)
+        assert s._on_frozen(frozen) is False and s.abort_reason is None and s.frozen_hold_bypassed == [], (poll, age)
+    s = tw({**data, "buf": B.SELF_PAUSE_MIN_BUFFER_S})                    # at the floor: data, not starvation
+    assert s._on_frozen(frozen) is True
+
+
 def test_watcher_loop_asks_on_frozen_again_while_held():
     """The ad-watch loop calls on_frozen once the run passes T and again each tick while it answers False (held); the
     deadlocked-pause run (resumer.stuck_frozen_s, 3c10fbc; levi 00:44 condition 2) reaches the same gate."""

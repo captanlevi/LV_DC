@@ -30,7 +30,7 @@ from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANS
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
                            get_higher_state, get_lower_state, schedule_of)
 from utils.dataModels import NetLabel, NetStat
-from browser import BrowserSession
+from browser import BrowserSession, FROZEN_HOLD_RULE
 import session_meta
 import session_names
 import compute_load
@@ -1004,6 +1004,8 @@ if __name__ == "__main__":
                               tt_codec=browser.tt_codec.record() if browser.tt_codec else None,
                               lowstate_hold_available=browser.lowstate_hold_available,
                               frozen_clock_hold=True if browser.platform in ("youtube", "twitch") else None,  # 032f6d31
+                              frozen_hold=({"rule": FROZEN_HOLD_RULE, "bypassed": browser.frozen_hold_bypassed}
+                                           if browser.platform in ("youtube", "twitch") else None),     # levi 13:09
                               player_dead_watch=browser.player_dead_watch if browser.platform == "tiktok" else None,
                               player_dead=browser.player_dead, player_dead_reentries=browser.player_dead_reentries,
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,

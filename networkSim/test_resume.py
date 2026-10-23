@@ -69,7 +69,8 @@ def test_pause_deadlock():
     assert [(t, x["reason"], x["flat_s"]) for t, x in p] == [(130, "paused_no_buffer_growth", 30)], p
     assert r.stuck_frozen_s(159) == 0.0 and r.stuck_frozen_s(160) == 60.0 and r.stuck_frozen_s(199) == 99.0
     rec = r.record()
-    assert rec["deadlocks"] == [{"t": 130, "paused_since": 100, "buffer_s": 0.4}] and rec["presses"] == 1
+    assert rec["deadlocks"] == [{"t": 130, "paused_since": 100, "buffer_s": 0.4, "reason": "paused_no_buffer_growth",
+                                 "stall_label": False}] and rec["presses"] == 1
     r.step(S(paused=False), 200)                                           # resumed: cleared, the resume stamped
     assert r.stuck_frozen_s(260) == 0.0 and r.record()["deadlocks"][0]["resumed_at"] == 200
     # brad's startup rebuffer: readyState 2, buffered ahead ~0, under a stall label, 172 s, then resumes by itself
@@ -86,15 +87,46 @@ def test_pause_deadlock():
         assert [t for t, st in seq if (x := r.step(st, t)) and x["reason"] == "paused_no_buffer_growth"] == [55], later
 
 
+def test_tw_100109_replay():
+    """levi 13:09 (tw_100109, w12): paused at readyState 4 with 4.04 s buffered and the playhead still from 324.4 s to
+    the end, under a stall label that never cleared; recorded 0 presses (held "stall" 1999). On its ticks the resumer
+    presses once, 30 s after the buffer last grew, reason paused_flat_above_floor under the label; the element still
+    paused 30 s later (as recorded), the pause feeds the stuck-player rule from its start. The old resumer: no press."""
+    fx = json.loads((HERE / "fixtures" / "tw_100109_selfpause_2026-10-23.json").read_text())
+    assert fx["recorded_self_pause_resume"]["presses"] == 0 and fx["recorded_self_pause_resume"]["held_polls"]["stall"] == 1999
+    r, made = B.SelfPauseResumer(), []
+    for t, paused, rs, buf, ad, stall, ct in fx["ticks"]:
+        if (p := r.step({"paused": paused, "rs": rs, "buf": buf, "ad": ad, "stall": stall, "ended": False, "ct": ct}, t)):
+            made.append((t, p))
+    grew = min(t for t, paused, rs, buf, ad, stall, ct in fx["ticks"] if t >= 324.4 and buf == 4.044)   # last growth
+    assert [(x["reason"], x["stall_label"], x["buffer_s"]) for _, x in made] == [("paused_flat_above_floor", True, 4.044)], made
+    t_press, t_pause = made[0][0], min(t for t, paused, *_ in fx["ticks"] if t >= fx["paused_run"][0] and paused)
+    assert t_press - grew == 30 and made[0][1]["paused_s"] == round(t_press - t_pause, 3) == 38.0, (grew, made)
+    assert r.stuck_frozen_s(t_press + 29) == 0.0 and r.stuck_frozen_s(t_press + 30) == t_press + 30 - t_pause
+    assert r.stuck_frozen_s(fx["ticks"][-1][0]) > 0                      # 620 s: still paused, still fed
+    # after twitch's button gave up (TW_BUTTON_MAX_FAILS), the above-floor pause without a stall label gets the same
+    # one press (before: _deadlock reset on the buffer, the self_pause path stopped at gave_up: no press ever)
+    r = B.SelfPauseResumer()
+    for _ in range(B.TW_BUTTON_MAX_FAILS):
+        r.note_button_fail()
+    r.step({**S(), "ct": 50.0}, 0)
+    r.note_button_fail()
+    assert r.gave_up
+    p = [(t, x) for t in range(1, 100) if (x := r.step({**S(), "ct": 50.0}, t))]
+    assert [(t, x["reason"], x["stall_label"]) for t, x in p] == [(30, "paused_flat_above_floor", False)], p
+
+
 def test_decision():
     assert (B.SELF_PAUSE_HOLD_S, B.SELF_PAUSE_MIN_BUFFER_S, B.RESUME_BACKOFF_S) == (2.0, 1.5, 10.0)
     # a self-pause with the buffer: eligible from 10, held 2 s, pressed at 12, its buffer and the pause duration logged
     p = presses([(t, S()) for t in range(10, 13)])
     assert p == [(12, {"action": "resume_after_self_pause", "reason": "self_pause", "buffer_s": 2.0, "paused_s": 2})], p
     assert presses([(t, S()) for t in range(10, 12)]) == []                      # 1 s: not yet
-    # never in a stall, whatever the buffer (levi 00130: the after_stall press is gone), nor under the floor
-    for st in (S(stall=True, buf=8.0), S(rs=2, stall=True)):
-        assert presses([(t, st) for t in range(10, 120)]) == [], st      # levi 15:40: a pause in a stall never
+    # never a self_pause press in a stall, whatever the buffer (levi 00130: the after_stall press is gone); under a stall
+    # label with no data, never any press (levi 15:40); with data and flat for 30 s, the one deadlock press (levi 13:09)
+    assert presses([(t, S(rs=2, stall=True)) for t in range(10, 120)]) == []
+    p = presses([(t, S(stall=True, buf=8.0)) for t in range(10, 120)])
+    assert [(t, x["reason"], x["stall_label"]) for t, x in p] == [(40, "paused_flat_above_floor", True)], p
     for st in (S(buf=1.4), S(buf=None)):                                  # under the floor: no self_pause press (the
         p = presses([(t, st) for t in range(10, 120)])                    # deadlock press, test_pause_deadlock, once)
         assert [x["reason"] for t, x in p] == ["paused_no_buffer_growth"], (st, p)
@@ -241,6 +273,7 @@ def test_button_js_on_the_fixture():
 
 def main() -> int:
     test_pause_deadlock()
+    test_tw_100109_replay()
     test_decision()
     test_tw_100010_replay_no_press_in_the_loops()
     test_twitch_resume_through_the_button()

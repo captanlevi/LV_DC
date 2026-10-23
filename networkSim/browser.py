@@ -1755,7 +1755,9 @@ SELF_PAUSE_MIN_BUFFER_S = 1.5
 RESUME_BACKOFF_S = 10.0
 RESUME_RULE = ("levi 00130 (2026-10-20): no press in a stall; a self-pause pressed at buffer >= 1.5 s held 2 s, "
                "10 s after the last restart; levi w6 (2026-10-21): paused outside a stall label with no buffer growth for "
-               "30 s -> one press, still paused 30 s later -> a stuck player")
+               "30 s -> one press, still paused 30 s later -> a stuck player; levi 13:09 (2026-10-23, tw_100109): "
+               "paused at readyState >= 3 with buffer >= 1.5 s, flat for 30 s -> the same one press, whatever the stall "
+               "label")
 # levi w6 (15:38, tw_100079): 00130's buffer floor deadlocks a live player that paused itself: paused, it stops
 # fetching, so the buffer never reaches the floor, nothing presses, and the frozen watchdog (content.js) skips paused
 # ticks. A pause whose polls are held for "buffer" (levi / supervisor 15:40: never "stall"; the twitch startup
@@ -1763,6 +1765,11 @@ RESUME_RULE = ("levi 00130 (2026-10-20): no press in a stall; a self-pause press
 # (PAUSE_GROWTH_EPS_S) for PAUSE_DEADLOCK_S gets one press (logged, reason paused_no_buffer_growth); still paused PAUSE_DEADLOCK_S after it, the pause is fed to the
 # stuck-player rule as a frozen run from the pause's start (stuck_frozen_s): re-entry / abort by the normal rules, the
 # low-state hold applying there.
+# levi 13:09 (2026-10-23, tw_100109: 1908 s paused at readyState 4 with 4 s buffered and the playhead still, under a
+# stall label that never cleared, since content.js clears it only on "start"): the stall label does not hold this press
+# back when the poll shows data (readyState >= 3, buffer >= SELF_PAUSE_MIN_BUFFER_S). Under a stall label a poll with
+# no data (buffer under the floor or unknown) still restarts the clock: a viewer waits through a stall (00130). The
+# one press is also reached after TW_BUTTON_MAX_FAILS (gave_up), which before held the above-floor pause for good.
 PAUSE_DEADLOCK_S = 30.0
 PAUSE_GROWTH_EPS_S = 0.1
 # t53 (supervisor, peter's tw_100005 / tw_100006 read): after a state-1 underrun Twitch's own controller stays "paused" and
@@ -1772,6 +1779,9 @@ PAUSE_GROWTH_EPS_S = 0.1
 # TW_BUTTON_MAX_FAILS button presses that leave it paused, the collector stops pressing for that pause and the frozen
 # watchdog's re-entry (a reload) stays the fallback. Every press and its outcome go to ad_actions.jsonl.
 RESUME_CHECK_S = 1.0
+FROZEN_HOLD_POLL_MAX_AGE_S = 5.0     # _on_frozen's starvation evidence: the resumer's last poll at most this old
+FROZEN_HOLD_RULE = ("levi 13:09 (2026-10-23, tw_100109): the frozen clock's low-state hold applies only with starvation "
+                    "evidence at the last poll (readyState <= 2 or buffer ahead < 1.5 s); no poll within 5 s: held")
 TW_BUTTON_MAX_FAILS = 3
 _TW_BUTTON_JS = """
 (function() {
@@ -1813,6 +1823,7 @@ class SelfPauseResumer:
         self.deadlock_press_at = None # this pause's deadlock press (once per pause)
         self.ct_last = None           # the last poll's playhead
         self.deadlocks: list[dict] = []   # meta.json self_pause_resume.deadlocks (capped)
+        self.last_poll = None         # (time, state) of the last poll with a state: _on_frozen's starvation evidence
 
     def record(self) -> dict:
         return {"rule": RESUME_RULE, "hold_s": self.hold_s, "min_buffer_s": self.min_buffer_s,
@@ -1827,13 +1838,14 @@ class SelfPauseResumer:
         return now - self.paused_since if now - self.deadlock_press_at >= PAUSE_DEADLOCK_S else 0.0
 
     def _deadlock(self, state: dict, now: float) -> dict | None:
-        """levi / supervisor 15:40 (the row's wording): one press when the paused poll is held for "buffer" (never
-        "stall": not an ad, not ended, no stall label, readyState >= 3, the buffer under the floor) and the buffer is
-        flat AND the playhead still for PAUSE_DEADLOCK_S. Any other poll restarts the clock (the startup rebuffer:
-        readyState 2 under a stall label)."""
+        """One press when the paused poll is not an ad, not ended, readyState >= 3, and either without a stall label
+        (levi / supervisor 15:40; at any buffer) or with the buffer >= the floor (levi 13:09; whatever the label), and
+        the buffer is flat AND the playhead still for PAUSE_DEADLOCK_S. Any other poll restarts the clock (the startup
+        rebuffer: readyState 2 under a stall label; a stall label over a buffer under the floor)."""
         buf, ct = state.get("buf"), state.get("ct")
-        if (state.get("ad") or state.get("ended") or state.get("stall") or (state.get("rs") or 0) < 3
-                or (buf is not None and buf >= self.min_buffer_s)):
+        above = buf is not None and buf >= self.min_buffer_s
+        if (state.get("ad") or state.get("ended") or (state.get("rs") or 0) < 3
+                or (state.get("stall") and not above)):
             self.flat_since, self.buf_peak, self.ct_last = now, buf, ct
             return None
         grew = buf is not None and (self.buf_peak is None or buf > self.buf_peak + PAUSE_GROWTH_EPS_S)
@@ -1850,9 +1862,11 @@ class SelfPauseResumer:
             return None
         self.deadlock_press_at = now
         self.presses += 1
-        rec = {"action": "resume_after_self_pause", "reason": "paused_no_buffer_growth", "buffer_s": buf,
-               "paused_s": round(now - self.paused_since, 3), "flat_s": round(now - self.flat_since, 3)}
-        self.deadlocks.append({"t": now, "paused_since": self.paused_since, "buffer_s": buf})
+        rec = {"action": "resume_after_self_pause", "reason": "paused_flat_above_floor" if above else
+               "paused_no_buffer_growth", "buffer_s": buf, "paused_s": round(now - self.paused_since, 3),
+               "flat_s": round(now - self.flat_since, 3), "stall_label": bool(state.get("stall"))}
+        self.deadlocks.append({"t": now, "paused_since": self.paused_since, "buffer_s": buf, "reason": rec["reason"],
+                               "stall_label": rec["stall_label"]})
         return rec
 
     def note_button_fail(self) -> None:
@@ -1862,6 +1876,7 @@ class SelfPauseResumer:
     def step(self, state: dict | None, now: float) -> dict | None:
         paused = bool(state and state.get("paused"))
         if state is not None:
+            self.last_poll = (now, state)
             if self.was_paused and not paused:
                 self.restart_at = now
             self.was_paused = paused
@@ -3260,6 +3275,7 @@ class BrowserSession:
         self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
         self.error_watch.held_fn = self._lowstate_held
         self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
+        self.frozen_hold_bypassed: list = []         # yt / twitch: _on_frozen's low-state hold skipped, no starvation
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
         self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
@@ -4100,14 +4116,33 @@ class BrowserSession:
         self.abort_reason, self.abort_at = "login_wall", time.time()
         print("[browser] LOGIN WALL detected (content.js login_wall) — aborting the session", flush=True)
 
+    def _starved(self, now: float) -> tuple[bool, dict]:
+        """levi 13:09 (tw_100109): starvation evidence for the frozen clock's low-state hold, from the self-pause
+        resumer's last poll (the largest visible video): readyState <= 2 or the buffer ahead under
+        SELF_PAUSE_MIN_BUFFER_S. No poll within FROZEN_HOLD_POLL_MAX_AGE_S: starved (the hold as before), recorded."""
+        last = getattr(getattr(self, "resumer", None), "last_poll", None)
+        if last is None or now - last[0] > FROZEN_HOLD_POLL_MAX_AGE_S:
+            return True, {"poll": None}
+        st = last[1]
+        buf = st.get("buf")
+        ev = {"poll_age_s": round(now - last[0], 3), **{k: st.get(k) for k in ("paused", "rs", "buf", "stall")}}
+        return (st.get("rs") or 0) <= 2 or (buf is not None and buf < SELF_PAUSE_MIN_BUFFER_S), ev
+
     def _on_frozen(self, frozen_s: float) -> bool:
         # addendum N: the player froze in a stall and has not recovered within T; no reload (that would be a user
         # action inside the session). exp.py exits EXIT_PLAYER_FROZEN, which the batch does not count as a failure.
         # levi gate 49d (C), yt_900027: on yt / twitch this clock holds in the low states as the T2 rule does
-        # (_stuck_tick): no abort while held, then T counts from the hold's end + grace; False = held, not aborted
+        # (_stuck_tick): no abort while held, then T counts from the hold's end + grace; False = held, not aborted.
+        # levi 13:09 (tw_100109): the hold applies only with starvation evidence (_starved); a frozen player with data
+        # in a low state is not the network's, and its run counts as unheld (meta.json frozen_hold.bypassed)
         if self.platform in PLAYER_ERROR_PLATFORMS:
             now = time.time()
             he = self._low_hold_end(now)
+            starved, ev = (True, None) if he is None else self._starved(now)
+            if he is not None and not starved:
+                if len(self.frozen_hold_bypassed) < WATCH_LOG_MAX:
+                    self.frozen_hold_bypassed.append({"t": now, "frozen_s": round(frozen_s, 1), "hold_end": he, **ev})
+                he = None
             if he is not None:
                 if now <= he or min(frozen_s, now - he) <= FROZEN_PLAYHEAD_MAX_S[self.platform]:
                     return False
