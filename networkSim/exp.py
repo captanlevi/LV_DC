@@ -939,6 +939,8 @@ if __name__ == "__main__":
         raise ValueError(f"P3: capture IFB offloads not off: {({d: r['after'] for d, r in ifb_off.items() if not r['ok']})}")
     tc_sampler = (trio_slots.TcSampler(session_dir, SLOT, capacity_kbit=args.link_capacity_kbit).start()
                   if SLOT is not None else None)
+    # v3 A18 (levi 19:41): the session's own shaped classes every 100 ms (base truth, both instrumentation arms)
+    tc_fast = trio_slots.FastTcSampler(session_dir, SLOT).start() if SLOT is not None else None
     dns_cap = trio_slots.dns_capture_start(staging) if SLOT is not None else None   # the default class's DNS (v3 §8)
     tcp_def_caps = trio_slots.default_tcp_capture_start(staging) if SLOT is not None else []   # v3 A17: its TCP headers
 
@@ -1152,6 +1154,7 @@ if __name__ == "__main__":
             try:
                 TRIO["cgroup_sweeper"] = sweeper.stop() if sweeper is not None else None
                 TRIO["tc"] = tc_sampler.stop()
+                TRIO["tc_fast"] = tc_fast.stop() if tc_fast is not None else None     # v3 A18
                 TRIO["socket_owner_end"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
                 t_start = json.loads((session_dir / "meta.json").read_text())["started_at"]
                 TRIO["siblings"] = trio_slots.siblings(slots_log, session_dir.name, t_start, None)
