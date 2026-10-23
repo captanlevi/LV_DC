@@ -116,7 +116,7 @@ def test_rvfc_frames():
         assert {x["k"] for x in fo} == {"tick"} and all(x["rvfc"] is False and x["cb"] is None and x["off_arm_cb"] == 0 for x in fo)
         # levi 18:33: the off arm starts no instrument at all: no player events, no ad edges, no box, none counted
         assert not [m for m in off["side"] if m["stream"] in ("player_events", "ad_edges") and m["payload"]], mode
-        assert all(x["instruments"] is False and x["box"] is None and x["ad_checks"] == 0 for x in fo)
+        assert all(x["instruments"] is False and x["box"] is None and x["ad_checks"] == 0 and x["src3_polls"] == 0 for x in fo)
     late = run("on_async")                                                      # on, config read after the attach
     fl = [x for m in late["side"] if m["stream"] == "frames" for x in m["payload"]]
     assert late["registeredBeforeCfg"] == 0 and late["pending"] == 1 and [x["k"] for x in fl][:2] == ["first_frame", "dims"]

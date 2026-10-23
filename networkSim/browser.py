@@ -2199,7 +2199,7 @@ class MasterListener:
         self._pending: dict = {}
         self.playlist_fetches = 0                  # v3 A3 source 2: media playlists read
         self.ad_edges: list[dict] = []             # their ad-marker flips (meta.json tw_playlist_ads)
-        self._in_ad: bool | None = None
+        self._in_ad: dict[str, bool] = {}          # brad 18:45: per playlist (rendition), so two renditions never alternate
 
     def start(self) -> "MasterListener":
         self._t = threading.Thread(target=self._run, daemon=True, name="master-listener")
@@ -2242,11 +2242,11 @@ class MasterListener:
         from urllib.parse import urlsplit
         self.playlist_fetches += 1
         marks = _TW_AD_MARK_RE.findall(body or "")
-        in_ad = bool(marks)
-        if in_ad != self._in_ad and len(self.ad_edges) < WATCH_LOG_MAX:
-            self.ad_edges.append({"t": t, "in_ad": in_ad, "prev": self._in_ad, "marks": len(marks),
-                                  "path": urlsplit(url).path[-60:]})
-        self._in_ad = in_ad
+        in_ad, path = bool(marks), urlsplit(url).path[-60:]
+        prev = self._in_ad.get(path)
+        if in_ad != prev and len(self.ad_edges) < WATCH_LOG_MAX:
+            self.ad_edges.append({"t": t, "in_ad": in_ad, "prev": prev, "marks": len(marks), "path": path})
+        self._in_ad[path] = in_ad
 
     def _run(self) -> None:
         try:

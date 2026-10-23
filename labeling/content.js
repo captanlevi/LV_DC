@@ -250,6 +250,14 @@ function v3Configured(on) {
   v3On = on;
   v3Ready = true;
   if (v3On && video) v3Start(video, "config", null);
+  announceInstruments();
+}
+let src3Polls = 0;                        // page_stats.js's yt player polls since the last tick (0 in the off arm)
+function announceInstruments() {          // brad 18:45: the page world's poller starts only on this message
+  if (!(v3Ready && v3On && window === window.top)) return;
+  try {
+    window.postMessage({ source: "lvqoe-instruments", on: true }, "*");
+  } catch (e) { /* no page world to start: source 3 stays silent (counted 0) */ }
 }
 try {
   if (chrome.storage && chrome.storage.local) {
@@ -307,9 +315,11 @@ function rvfcTick() {
                    ct: video.currentTime ?? null, box: v3On ? playerBox(video) : null, top: window === window.top,
                    instruments: v3On && v3Ready, rvfc: v3On && !!st, off_arm_cb: offArmCb,
                    ad_cb: adStats.cb, ad_checks: adStats.runs, ad_ms: Math.round(adStats.ms * 1000) / 1000,
+                   src3_polls: src3Polls,
                    side_dropped: { ...sideDropped }, side_failed: { ...sideFailed } });
   if (st) st.n = 0;
   adStats.cb = adStats.runs = adStats.ms = 0;
+  src3Polls = 0;
   // levi 18:26: the counters also go to one small storage key each tick (top frame), so export records their final
   // values in meta.json ext_storage even when the last flush fails after the last tick
   if (window === window.top) {
@@ -624,6 +634,14 @@ if (existingVideo) {
 // separate stream (stored apart from the label events, exported to player_stats.jsonl, never into labels.csv).
 const statsBuffer = [];
 window.addEventListener("message", (e) => {
+  if (e.source === window && e.data && e.data.source === "lvqoe-instruments-query") {
+    announceInstruments();
+    return;
+  }
+  if (e.source === window && e.data && e.data.source === "lvqoe-ad-src-polls") {
+    src3Polls += Number(e.data.polls) || 0;
+    return;
+  }
   if (e.source === window && e.data && e.data.source === "lvqoe-ad-src" && collecting && v3On && v3Ready) {
     const { kind, ts, pn, wall, video_id, player_state } = e.data;   // v3 A3 source 3 (page_stats.js, yt player API)
     side("ad_edges", { source: kind, ts, pn, wall, video_id, player_state, el: elId(video) });

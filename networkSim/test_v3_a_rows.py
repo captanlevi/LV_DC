@@ -52,10 +52,11 @@ const ctx = {
   location: { href: "https://www.twitch.tv/x", hostname: "www.twitch.tv" },
   chrome: { storage: { local: { get: (d, cb) => cb(d), set() {} } },
             runtime: { lastError: null, sendMessage: (m, cb) => { if (m.kind === "side-batch") side.push(m); cb && cb({ ok: true }); } } },
-  addEventListener(t, f) { (winLs[t] = winLs[t] || []).push(f); },
+  addEventListener(t, f) { (winLs[t] = winLs[t] || []).push(f); }, postMessage: (m) => pagePosts.push(m),
   getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
 };
 const winLs = {};
+const pagePosts = [];
 ctx.window = ctx; ctx.window.top = ctx;
 ctx.document = { documentElement: { dataset: {} }, body: {}, visibilityState: "visible", getElementById: () => null,
   querySelectorAll: (q) => (q === "video" ? [v] : (adLabel && q === '[data-a-target="video-ad-label"]' ? [label] : [])),
@@ -76,8 +77,12 @@ const inWin = vm.runInContext("window", ctx);   // the context's own window (a v
 for (const f of winLs.message || []) f({ source: inWin, data: { source: "lvqoe-ad-src", kind: "yt_player", ts: 5e11 + 7, pn: 7,
                                                               wall: 5e11 + 7, video_id: "AD123", player_state: 1 } });
 for (const f of winLs.message || []) f({ source: {}, data: { source: "lvqoe-ad-src", kind: "yt_player", video_id: "X" } });
+for (const f of winLs.message || []) f({ source: inWin, data: { source: "lvqoe-instruments-query" } });
+for (const f of winLs.message || []) f({ source: inWin, data: { source: "lvqoe-ad-src-polls", polls: 4 } });
+tick();
 vm.runInContext("flushSide()", ctx);
-fs.writeFileSync(process.argv[3], JSON.stringify({ side, rootId: obsRoot && obsRoot.id, opts: obsOpts }));
+fs.writeFileSync(process.argv[3], JSON.stringify({ side, rootId: obsRoot && obsRoot.id, opts: obsOpts,
+                                                   announces: pagePosts.filter(m => m.source === "lvqoe-instruments" && m.on).length }));
 """
 
 
@@ -108,6 +113,7 @@ def test_ad_edges_and_box():
     tk = [x for m in r["side"] if m["stream"] == "frames" for x in m["payload"] if x["k"] == "tick"]
     assert sum(x["ad_cb"] for x in tk) == 4 and sum(x["ad_checks"] for x in tk) >= 6 and all(x["ad_ms"] >= 0 for x in tk)
     assert all(x["instruments"] is True for x in tk)
+    assert r["announces"] == 2 and tk[-1]["src3_polls"] == 4 and tk[-2]["src3_polls"] == 0   # config + the query; counted
     e = edges[1]
     assert e["ts"] == 5e11 + e["pn"] and e["wall"] == 5e11 + e["pn"] and e["el"] == 1
     ticks = [x for m in r["side"] if m["stream"] == "frames" for x in m["payload"] if x["k"] == "tick"]
@@ -123,15 +129,27 @@ const ivs = [], posted = [];
 let now = 0, i = 0;
 const ids = ["LIVE1", "LIVE1", "AD1", "AD1", "AD1", "LIVE1", "LIVE1"];
 const player = { getVideoData: () => ({ video_id: ids[Math.min(i, ids.length - 1)] }), getPlayerState: () => 1 };
+const ls = {};
+const win = { postMessage: (m) => posted.push(m), addEventListener: (t, f) => (ls[t] = ls[t] || []).push(f) };
 const ctx = { location: { hostname: "www.youtube.com" }, performance: { timeOrigin: 5e11, now: () => now },
   Date: { now: () => 5e11 + now }, setInterval: (f, ms) => ivs.push([f, ms]),
   document: { getElementById: (x) => (x === "movie_player" ? player : null), querySelectorAll: () => [], head: null },
-  window: { postMessage: (m) => posted.push(m) } };
+  window: win, addEventListener: win.addEventListener };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const before = ivs.filter(([f, ms]) => ms === 250).length;    // brad 18:45: no poller before "instruments on"
+const query = posted.filter(m => m.source === "lvqoe-instruments-query").length;
+const inWin = vm.runInContext("window", ctx);
+for (const f of ls.message || []) f({ source: inWin, data: { source: "lvqoe-instruments", on: false } });
+const afterOff = ivs.filter(([f, ms]) => ms === 250).length;
+for (const f of ls.message || []) f({ source: inWin, data: { source: "lvqoe-instruments", on: true } });
+for (const f of ls.message || []) f({ source: inWin, data: { source: "lvqoe-instruments", on: true } });   // once only
 const fast = ivs.filter(([f, ms]) => ms === 250).map(([f]) => f);
+const sec = ivs.filter(([f, ms]) => ms === 1000).map(([f]) => f);      // [stats poll, the poll count]
 for (i = 0; i < ids.length; i++) { now += 250; for (const f of fast) f(); }
-console.log(JSON.stringify(posted.filter(m => m.source === "lvqoe-ad-src")));
+for (const f of sec.slice(-1)) f();
+console.log(JSON.stringify({ before, afterOff, query, fast: fast.length, msgs: posted.filter(m => m.source === "lvqoe-ad-src"),
+                             polls: posted.filter(m => m.source === "lvqoe-ad-src-polls") }));
 """
 
 
@@ -141,9 +159,12 @@ def test_yt_player_source():
     assert node, "node not found (install node)"
     out = subprocess.run([node, "-e", PS_HARNESS, str(HERE.parent / "labeling" / "page_stats.js")], capture_output=True,
                          text=True, check=True)
-    msgs = json.loads(out.stdout)
+    r = json.loads(out.stdout)
+    assert r["before"] == 0 and r["afterOff"] == 0 and r["query"] == 1 and r["fast"] == 1, r   # starts once, only on "on"
+    msgs = r["msgs"]
     assert [(m["video_id"], m["kind"], m["ts"] - 5e11) for m in msgs] == [("LIVE1", "yt_player", 250), ("AD1", "yt_player", 750),
                                                                           ("LIVE1", "yt_player", 1500)], msgs
+    assert [m["polls"] for m in r["polls"]] == [7]                              # counted back once a second
 
 
 def test_tw_playlist_source():
@@ -165,6 +186,12 @@ def test_tw_playlist_source():
     m.playlist_ad("#EXTINF:2.0,\nseg9.ts", media, 14.0)
     assert m.playlist_fetches == 4 and [(e["t"] if e["t"] != 0 else 0, e["in_ad"], e["prev"]) for e in m.ad_edges][1:] == \
         [(10.0, True, False), (14.0, False, True)] and m.ad_edges[0]["in_ad"] is False and m.ad_edges[0]["prev"] is None
+    # brad 18:45: state per playlist (rendition): two renditions, one marked, alternating, give one edge each, not a storm
+    other = "https://video-weaver.syd03.hls.ttvnw.net/v1/playlist/XyZ.m3u8"
+    n0 = len(m.ad_edges)
+    for k in range(6):
+        m.playlist_ad("stitched-ad" if k % 2 == 0 else "#EXTINF:2.0,", media if k % 2 == 0 else other, 20.0 + k)
+    assert [(e["path"][-12:], e["in_ad"]) for e in m.ad_edges[n0:]] == [("ist/AbC.m3u8", True), ("ist/XyZ.m3u8", False)]
     assert m.latest is None                                                     # a media playlist is never the rung
     src = (HERE / "exp.py").read_text()
     assert 'tw_playlist_ads=({"fetches": browser._master.playlist_fetches' in src

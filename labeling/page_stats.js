@@ -59,9 +59,22 @@
   // record's stats-for-nerds show the live id plus 10-20 s stints of other ids) and its player state, 4 times a second,
   // posted on change only, with both clocks; content.js puts it in ad_edges as source yt_player. getAdState() read -1 on
   // every sample of the t58 record, so it is not used.
+  // brad 18:45: the poller starts only once content.js says the instruments are on (it holds the config; this world
+  // cannot read chrome.storage), so the A/B's off arm never polls. Either side may speak first: page_stats asks at load,
+  // content.js answers, and also announces when its config arrives. Its poll count goes back once a second.
   let lastVid = null;
-  setInterval(() => {
+  let started = false;
+  let polls = 0;
+  window.addEventListener("message", (e) => {
+    if (e.source !== window || !e.data || e.data.source !== "lvqoe-instruments" || !e.data.on || started) return;
+    started = true;
+    setInterval(poll, 250);
+    setInterval(() => { window.postMessage({ source: "lvqoe-ad-src-polls", polls }, "*"); polls = 0; }, 1000);
+  });
+  window.postMessage({ source: "lvqoe-instruments-query" }, "*");
+  function poll() {
     if (location.hostname.includes("twitch.tv")) return;
+    polls += 1;
     const p = document.getElementById("movie_player");
     if (!p || typeof p.getVideoData !== "function") return;
     let vid = null, state = null;
@@ -73,5 +86,5 @@
     const pn = performance.now();
     window.postMessage({ source: "lvqoe-ad-src", kind: "yt_player", ts: performance.timeOrigin + pn, pn, wall: Date.now(),
                          video_id: vid, player_state: state }, "*");
-  }, 250);
+  }
 })();
