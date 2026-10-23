@@ -8,8 +8,8 @@ renormalise; a composition that fails its decode stress leaves its rotation (--n
 doubled / N = 5's single platform), stated in every draw, and an N with no composition left leaves the support.
 
 A round is one orchestrate --concurrent run. Its index k is the number of earlier draws of the same era and record
-flag in the trio root's slots log (trio_up events carrying n_draw), so a run that ends before its trio_up re-draws
-the same N, and a pilot never moves the record's sequence. The draw for round k is random.Random("<seed>:<era>:
+flag in the trio root's slots log (trio_up events carrying n_draw; outside the T* era only runs that started a session,
+levi 18:58), so a run that ends before its trio_up, or a void run that started nothing, re-draws the same N, and a pilot never moves the record's sequence. The draw for round k is random.Random("<seed>:<era>:
 <record|pilot>:<k>").random() against the cumulative renormalised weights; an N's rotation index is the count of
 earlier draws of that N in the sequence (the counters persist per era in the slots log, never per process or day). The
 draw is recorded in trio_up (n_draw) and in every session's meta.json concurrency.n_draw. A window (orchestrate
@@ -88,11 +88,18 @@ def composition(n: int, index: int = 0, exclude: tuple = ()) -> dict[str, int]:
     return {p: (2 if p == r else 1) if n == 4 else (1 if p == r else 2) for p in ROTATION}
 
 
+# levi 2026-10-23 18:58 (collector v3): a void run (trio_up, no session started; the w11 07:54 data-root drain) is not a draw,
+# so the relaunch redraws the same round with no operator step (on 07:57 the void lines were stripped by hand). The eras
+# below keep the T* behaviour (every trio_up with an n_draw counts), so T*'s sequence never changes under newer code.
+VOID_COUNTS_ERAS = frozenset({"t58-restart-2026-10-21"})
+
+
 def prior_draws(slots_log: Path | None, era: str, record: bool) -> list[dict]:
     """The earlier draws of this era and record flag (trio_up events carrying n_draw), in log order. A record draw
     fails closed (levi 00138): no or an unreadable slots log, or an undecodable trio_up line, raises (k and the
-    rotation counters would otherwise restart at 0)."""
-    out = []
+    rotation counters would otherwise restart at 0). Outside VOID_COUNTS_ERAS a run that started no session (no "start"
+    event in the log) is not a draw."""
+    out, runs, started = [], [], set()
     try:
         if not slots_log:
             raise OSError("no slots log")
@@ -109,10 +116,15 @@ def prior_draws(slots_log: Path | None, era: str, record: bool) -> list[dict]:
             if record and "trio_up" in ln:
                 raise RuntimeError(f"n_draw: an undecodable trio_up line in {slots_log}; a record draw fails closed")
             continue
+        if ev.get("event") == "start" and ev.get("run"):
+            started.add(ev["run"])
         d = ev.get("n_draw") if ev.get("event") == "trio_up" else None
         if isinstance(d, dict) and d.get("era") == era and bool(d.get("record")) == bool(record):
             out.append(d)
-    return out
+            runs.append(ev.get("run"))
+    if era in VOID_COUNTS_ERAS:
+        return out
+    return [d for d, r in zip(out, runs) if r in started]
 
 
 def draw_at(k: int, index: dict[int, int], era: str, record: bool, support: tuple[int, ...] = N_SUPPORT,
