@@ -1015,6 +1015,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                                        "slots": {k: s.record() for k, s in T.SLOTS.items()},
                                        "composition": T.composition_of(T.SLOTS),
                                        **({"n_draw": n_draw} if n_draw else {}),
+                                       **({"stratum": json.loads(os.environ["LVDC_WINDOW_STRATUM"])}
+                                          if os.environ.get("LVDC_WINDOW_STRATUM") else {}),
                                        **({"window": window} if window else {}),
                                        "conntrack_timeouts_before": ct_before, "conntrack_timeouts": T.conntrack_timeouts(),
                                        "conntrack_set": ct_set[0], "resolver_cache_flushed": flush[0],
@@ -1210,6 +1212,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slots", default=None, metavar="youtube=2,twitch=2,tiktok=2",
                         help="--concurrent (t56): the composition, one slot per count (tags yt1, yt2, tw1 ...; at most "
                              "15); default the trio's, one each. Fixed for the run and recorded in every session.")
+    parser.add_argument("--expect-stratum", choices=("steered", "unsteered", "lever"), default=None,
+                        help="collector v3 B5 (levi 18:02): the window's stratum as rounds_ref_n computed it (stratum_draw.py, "
+                             "permuted blocks of 4 over n_draw's round index); orchestrate recomputes it and refuses a "
+                             "mismatch before trio_up. Required with --trio-record.")
+    parser.add_argument("--stratum-force", choices=("steered", "unsteered", "lever"), default=None,
+                        help="a dry / gate run's stratum, stated (never with --trio-record); recorded like a drawn one.")
     parser.add_argument("--n-draw", action="store_true",
                         help="--concurrent (restart prereg §1): draw this round's N from {3, 4, 5} (weights 0.2 / 0.3 / "
                              "0.5, seeded by the era, the record flag and the round's index in the slots log; n_draw.py) "
@@ -1272,6 +1280,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print balance report without collecting.",
     )
     return parser
+
+
+def stratum_apply(sd: dict | None, expect: str | None, force: str | None, trio_steer: bool) -> tuple[dict | None, bool, str | None]:
+    """collector v3 B5 (levi / peter 18:02-18:03): (the stratum record, steering on?, a refusal or None). sd is stratum_draw's
+    draw for this window (None when neither flag is given). steered needs --trio-steer; unsteered turns steering off for the
+    run (logged); lever needs B4's lever flag, which does not exist yet: refused (stop-and-read)."""
+    if not (expect or force):
+        return None, trio_steer, None
+    if force:
+        sd = {**(sd or {}), "stratum": force, "forced": True}
+    elif sd is None or sd.get("stratum") != expect:
+        return sd, trio_steer, (f"stratum mismatch: rounds_ref_n expected {expect!r}, stratum_draw gives "
+                                f"{(sd or {}).get('stratum')!r} (k {(sd or {}).get('k')}); refused before trio_up")
+    s = sd["stratum"]
+    if s == "steered":
+        return (sd, True, None) if trio_steer else (sd, False, "stratum steered needs --trio-steer; refused")
+    if s == "unsteered":
+        return {**sd, "steering_off_by_stratum": bool(trio_steer)}, False, None
+    return sd, trio_steer, "stratum lever: B4's lever arm is not in this collector; refused (stop-and-read, levi 18:02)"
 
 
 def arg_refusal(args, environ) -> str | None:
@@ -1341,6 +1368,15 @@ def arg_refusal(args, environ) -> str | None:
         bad = names - {"youtube", "twitch", "tiktok"}
         if bad or not names:
             return f"--trio-steer-platforms: unknown or empty {sorted(bad)}"
+    # collector v3 B5 (last, so every earlier refusal keeps its order)
+    if args.trio_record and not args.expect_stratum:   # collector v3 B5: the counted window's stratum, checked twice
+        return "--trio-record needs --expect-stratum (the window's stratum from rounds_ref_n; stratum_draw.py)"
+    if args.stratum_force and args.trio_record:
+        return "--stratum-force is for a dry / gate run only: never with --trio-record (a counted window's stratum is drawn)"
+    if args.stratum_force and args.expect_stratum:
+        return "--stratum-force and --expect-stratum exclude each other"
+    if (args.expect_stratum or args.stratum_force) and not (args.concurrent and args.n_draw):
+        return "--expect-stratum / --stratum-force need --concurrent and --n-draw (the stratum's k is n_draw's round index)"
     return None
 
 
@@ -1383,6 +1419,27 @@ if __name__ == "__main__":
                 sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1 (yt fullscreen needs --trio-yt-fullscreen)")
             TRIO_PINS[plat] = pin
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
+        WINDOW_STRATUM = None
+        if args.expect_stratum or args.stratum_force:      # collector v3 B5: before steering is set up and before trio_up
+            import n_draw
+            import record
+            import stratum_draw
+            import trio_slots as _ts
+            try:
+                _sd = stratum_draw.draw(_RUNS_DIR / _ts.TRIO_DIR / _ts.SLOTS_LOG, record.ERA, TRIO_RECORD)
+            except (RuntimeError, ValueError) as e:
+                sys.exit(str(e))
+            WINDOW_STRATUM, _steer, _ref = stratum_apply(_sd, args.expect_stratum, args.stratum_force, bool(args.trio_steer))
+            if _ref:
+                sys.exit(_ref)
+            if args.trio_steer and not _steer:
+                print("  steering off by stratum (unsteered window; --trio-steer ignored for this run)")
+            args.trio_steer = _steer
+            print(f"  STRATUM: {WINDOW_STRATUM['stratum']} (k {WINDOW_STRATUM.get('k')}, block {WINDOW_STRATUM.get('block')} "
+                  f"pos {WINDOW_STRATUM.get('pos')}{', forced' if WINDOW_STRATUM.get('forced') else ''}; code {WINDOW_STRATUM.get('code')})")
+            os.environ["LVDC_WINDOW_STRATUM"] = json.dumps(WINDOW_STRATUM)
+        else:
+            os.environ.pop("LVDC_WINDOW_STRATUM", None)
         TRIO_STEER = bool(args.trio_steer)
         if args.trio_steer_platforms is not None:          # arg_refusal checked the names
             TRIO_STEER_PLATFORMS = {x.strip() for x in args.trio_steer_platforms.split(",") if x.strip()}

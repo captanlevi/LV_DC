@@ -12,7 +12,8 @@ sys.path.insert(0, str(HERE))
 import orchestrate as O  # noqa: E402
 
 RECORD = ["--batch", "youtube=99,twitch=99,tiktok=99", "--concurrent", "--trio-record", "--n-draw", "--window-min", "120",
-          "--trio-yt-fullscreen", "--trio-layout", "composite", "--trio-steer", "--trio-steer-platforms", "youtube,twitch"]
+          "--trio-yt-fullscreen", "--trio-layout", "composite", "--trio-steer", "--trio-steer-platforms", "youtube,twitch",
+          "--expect-stratum", "steered"]                                       # collector v3 B5: a counted window states its stratum
 ENV = {"LVDC_DATA_ROOT_UUID": "0000-test"}
 
 
@@ -53,6 +54,10 @@ def test_each_refusal():
         (without(RECORD, "--window-min") + ["--window-min", "60"], "--trio-record needs --window-min 120"),
         (without(RECORD, "--trio-yt-fullscreen"), "--trio-record needs --trio-yt-fullscreen"),
         (RECORD + ["--max-per-slot", "1"], "--max-per-slot does not apply inside a window"),
+        (without(RECORD, "--expect-stratum"), "--trio-record needs --expect-stratum"),                 # collector v3 B5
+        (RECORD + ["--stratum-force", "lever"], "never with --trio-record"),
+        (without(RECORD, "--trio-record") + ["--stratum-force", "lever"], "exclude each other"),
+        (without(RECORD, "--trio-record", "--n-draw", "--expect-stratum") + ["--stratum-force", "lever"], "need --concurrent and --n-draw"),
         (RECORD + ["--session-range", "10,20"], "never the record"),
         (without(RECORD, "--trio-record", "--n-draw", "--window-min") + ["--session-range", "x"], "LO,HI (minutes)"),
         (without(RECORD, "--trio-record", "--n-draw", "--window-min") + ["--session-range", "20,10"], "0 < LO <= HI"),
