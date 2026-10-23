@@ -129,6 +129,15 @@ def steer(platform: str, transition: dict[str, dict[str, float]], table_path: st
 PINNED = "pinned"
 
 
+def start_override(initial_state: str | None, source: str | None) -> str | None:
+    """meta.json steering.start_overridden_by (t65; shagun 12:46, tw_100110): which orchestrate rule chose an exp.py
+    --initial-state, which wins over steering's drawn start_state (coverage / balance / pin; "unnamed" when the caller
+    did not say); None when no --initial-state was given and the drawn start applied."""
+    if not initial_state:
+        return None
+    return source or "unnamed"
+
+
 def fallback_of(env, hold_state: str | None, rec: dict | None) -> str | None:
     """meta.json steering_fallback for one session (exp.py), None when it was steered or steering was off: an unlisted
     platform's LVDC_STEER_SKIPPED (levi 20:58); "pinned" for a held state under a steering table (levi 00:41, gate 7b:
