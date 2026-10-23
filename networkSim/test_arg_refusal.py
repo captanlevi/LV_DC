@@ -116,7 +116,7 @@ def test_c8_data_root_matches_the_run():
     volume's UUID (readable and equal); a run that is not of record is refused on any marked root, UUID readable or
     not; single mode never writes under a marked root."""
     dry = {**ENV, "LVDC_DATA_ROOT": str(_DRY)}
-    nonrec = without(RECORD, "--trio-record", "--n-draw", "--window-min")
+    nonrec = without(RECORD, "--trio-record", "--n-draw", "--window-min", "--expect-stratum")   # B5: a non-record line states none
     single = ["--batch", "youtube=1"]
     assert refusal(RECORD) is None and refusal(nonrec, dry) is None and refusal(single, dry) is None
     r = refusal(RECORD, dry)
