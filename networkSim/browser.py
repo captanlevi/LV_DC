@@ -1552,11 +1552,13 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         # Clear storage so the next run starts fresh
         sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s), r))"
                 % json.dumps(sorted(side)), await_promise=True)
+        import session_files   # brad / levi 23:10: one map of side stream -> session file (A1 is rvfc_frames.jsonl)
         for stream, recs in _side_streams(side).items():
-            with open(session_dir / f"{stream}.jsonl", "w") as fh:
+            fname = session_files.side_file(stream)
+            with open(session_dir / fname, "w") as fh:
                 for rec in recs:
                     fh.write(json.dumps(rec) + "\n")
-            print(f"[browser] {stream} ({len(recs)} records) → {session_dir / (stream + '.jsonl')}", flush=True)
+            print(f"[browser] {stream} ({len(recs)} records) → {session_dir / fname}", flush=True)
         sw.close()
         _close_target(tmp_tab)
         stats = json.loads(stats_json) if stats_json else []
