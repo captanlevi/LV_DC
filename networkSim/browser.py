@@ -3359,8 +3359,9 @@ class BrowserSession:
         self.error_watch.held_fn = self._lowstate_held
         self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
         self.frozen_hold_bypassed: list = []         # yt / twitch: a frozen clock's low-state hold skipped, no starvation
-        # v3 A1 (t67): content.js's rVFC aggregates, on unless LVQOE_RVFC=0 (the gate's callback-off arm); meta.json rvfc
-        self.rvfc = {"enabled": os.environ.get("LVQOE_RVFC", "1") != "0", "config_set": False}
+        # v3 (t67; levi 18:33): content.js's whole v3 instrument set (A1 / A2 / A3 / A7), on unless LVQOE_INSTRUMENTS=0
+        # (the gate's instrumentation A/B off arm); meta.json instruments
+        self.instruments = {"enabled": os.environ.get("LVQOE_INSTRUMENTS", "1") != "0", "config_set": False}
         self.screen: dict | None = None             # v3 A8: meta.json screen
         self.clock_offsets: list = []               # v3 A11: meta.json clock_offsets (time.time vs the page clock)
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
@@ -3475,11 +3476,11 @@ class BrowserSession:
                 sw.eval("new Promise(r => chrome.storage.local.get(null, d => chrome.storage.local.remove("
                         "Object.keys(d).filter(k => k.startsWith('side:')), r)))", await_promise=True)
                 sw.eval("new Promise(r => chrome.storage.local.set({lvqoe_config: %s}, r))"
-                        % json.dumps({"rvfc": self.rvfc["enabled"]}), await_promise=True)
-                self.rvfc["config_set"] = True
+                        % json.dumps({"instruments": self.instruments["enabled"]}), await_promise=True)
+                self.instruments["config_set"] = True
                 sw.close()
                 _close_target(tmp_tab)
-                print(f"[browser] Extension storage cleared; config rvfc={self.rvfc['enabled']}", flush=True)
+                print(f"[browser] Extension storage cleared; config instruments={self.instruments['enabled']}", flush=True)
         except Exception as e:
             print(f"[browser] Could not pre-clear extension storage: {e}", flush=True)
 

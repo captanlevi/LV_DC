@@ -1024,7 +1024,7 @@ if __name__ == "__main__":
                               frozen_reentries=browser.frozen_reentries, censored=browser.censored,
                               player_errors=browser.player_errors, ad_wait=browser.error_watch.exposure(),
                               self_pause_resume=browser.resumer.record(),
-                              rvfc=browser.rvfc,                                       # v3 A1 (t67)
+                              instruments=browser.instruments,                         # v3 (t67; levi 18:33)
                               screen=browser.screen,                                   # v3 A8 (t67)
                               clock_offsets=browser.clock_offsets,                     # v3 A11 (t67)
                               **({"channel_pick": {**channel_pick_start, **browser.channel_pick}}     # twitch: + the category draw

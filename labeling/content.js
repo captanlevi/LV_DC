@@ -231,33 +231,45 @@ function observePlayerEvents(v) {
 // still records while nothing is presented): presentedFrames, decoded (totalVideoFrames) and dropped side by side, the
 // last frame's mediaTime / presentationTime and the callbacks since the last tick; (c) the first presented frame after
 // an attach or a src_key change (tt's per-stream anchor: a MediaStream's mediaTime restarts per stream). The callback
-// only reads metadata. lvqoe_config.rvfc === false (written by browser.py for the gate's off arm) registers nothing.
-// brad 18:17: no callback is registered before the config is read (an element attached at load would otherwise run
-// the off arm's callbacks); callbacks that still run while off are counted (off_arm_cb, the A/B asserts 0).
-let rvfcOn = true;
-let rvfcReady = false;
+// only reads metadata.
+// levi 18:33: ONE flag for the whole v3 JS instrument set (A1 callbacks, A2 listeners, A3 observer, A7 box): the gate's
+// instrumentation A/B. lvqoe_config.instruments === false (written by browser.py, LVQOE_INSTRUMENTS=0) starts none of
+// them; nothing starts before the config is read (brad 18:17), and when it says on, the current element is started then.
+// rVFC callbacks that still run while off are counted (off_arm_cb; the A/B asserts 0).
+let v3On = true;
+let v3Ready = false;
 let offArmCb = 0;
-function rvfcConfigured(on) {
-  rvfcOn = on;
-  rvfcReady = true;
-  if (rvfcOn && video) rvfcStart(video);
+function v3Start(v, reason, prev) {
+  if (!v3Ready || !v3On || !v) return;
+  observePlayerEvents(v);
+  playerEvent(v, "lvqoe_attach", { reason, prev_el: elId(prev) });
+  rvfcStart(v);
+  adObserve(v);
+}
+function v3Configured(on) {
+  v3On = on;
+  v3Ready = true;
+  if (v3On && video) v3Start(video, "config", null);
 }
 try {
   if (chrome.storage && chrome.storage.local) {
-    chrome.storage.local.get({ lvqoe_config: {} }, (d) => rvfcConfigured(!(d && d.lvqoe_config && d.lvqoe_config.rvfc === false)));
+    chrome.storage.local.get({ lvqoe_config: {} }, (d) => {
+      const cfg = (d && d.lvqoe_config) || {};
+      v3Configured(!(cfg.instruments === false || cfg.rvfc === false));
+    });
   } else {
-    rvfcReady = true;
+    v3Ready = true;
   }
 } catch (e) {
-  rvfcReady = true;                       // no storage: on
+  v3Ready = true;                         // no storage: on
 }
 const rvfcState = new WeakMap();
 function rvfcStart(v) {
-  if (!rvfcReady || !rvfcOn || !v || typeof v.requestVideoFrameCallback !== "function" || rvfcState.has(v)) return;
+  if (!v3Ready || !v3On || !v || typeof v.requestVideoFrameCallback !== "function" || rvfcState.has(v)) return;
   const st = { w: null, h: null, src: null, n: 0, last: null };
   rvfcState.set(v, st);
   const cb = (now, md) => {
-    if (!rvfcOn) {
+    if (!v3On) {
       offArmCb += 1;
       rvfcState.delete(v);
       return;
@@ -292,10 +304,12 @@ function rvfcTick() {
                    tick: event_id - 1, cb: st ? st.n : null, pf: md ? md.presentedFrames ?? null : null,
                    mt: md ? md.mediaTime ?? null : null, pt: md ? md.presentationTime ?? null : null,
                    decoded: q ? q.totalVideoFrames : null, dropped: q ? q.droppedVideoFrames : null,
-                   ct: video.currentTime ?? null, box: playerBox(video), top: window === window.top,
-                   rvfc: rvfcOn && !!st, off_arm_cb: offArmCb,
+                   ct: video.currentTime ?? null, box: v3On ? playerBox(video) : null, top: window === window.top,
+                   instruments: v3On && v3Ready, rvfc: v3On && !!st, off_arm_cb: offArmCb,
+                   ad_cb: adStats.cb, ad_checks: adStats.runs, ad_ms: Math.round(adStats.ms * 1000) / 1000,
                    side_dropped: { ...sideDropped }, side_failed: { ...sideFailed } });
   if (st) st.n = 0;
+  adStats.cb = adStats.runs = adStats.ms = 0;
   // levi 18:26: the counters also go to one small storage key each tick (top frame), so export records their final
   // values in meta.json ext_storage even when the last flush fails after the last tick
   if (window === window.top) {
@@ -313,10 +327,14 @@ function rvfcTick() {
 let adObs = null;
 let adLast = null;
 let adQueued = false;
+const adStats = { cb: 0, runs: 0, ms: 0 };   // brad 18:33: observer callbacks, checks and their main-thread ms, per tick
 function adCheck(reason) {
   adQueued = false;
-  if (!collecting || !video) return;
+  if (!collecting || !video || !v3On) return;
+  const t0 = performance.now();
   const sig = adSignals(video);
+  adStats.runs += 1;
+  adStats.ms += performance.now() - t0;
   const key = sig.join("|");
   if (adLast !== null && key === adLast) return;
   const pn = performance.now();
@@ -334,9 +352,16 @@ function adObserve(v) {
   if (adObs) adObs.disconnect();
   let root = v;
   for (let i = 0; i < 6 && root.parentElement; i++) root = root.parentElement;
-  adObs = new MutationObserver(() => queueAdCheck("dom"));
+  let depth = 0;
+  for (let e = v; e !== root; e = e.parentElement) depth += 1;
+  adObs = new MutationObserver(() => { adStats.cb += 1; queueAdCheck("dom"); });
   adObs.observe(root, { subtree: true, childList: true, attributes: true,
                         attributeFilter: ["class", "style", "hidden", "data-a-target"] });
+  // brad 18:33: the root, once per attach, so the A-window can check it holds what adSignals() reads
+  const mp = document.getElementById ? document.getElementById("movie_player") : null;
+  playerEvent(v, "lvqoe_ad_root", { root_tag: root.tagName || null, root_id: root.id || null,
+                                    root_cls: String(root.className || "").slice(0, 80), depth,
+                                    has_movie_player: !!(mp && root.contains && root.contains(mp)) });
   queueAdCheck("attach");
 }
 
@@ -544,10 +569,7 @@ function attachVideo(v, reason = "unknown") {
 
   const prev = video;
   video = v;
-  observePlayerEvents(v);                 // v3 A2: before video_start, so the attach precedes the element's events
-  rvfcStart(v);                           // v3 A1
-  adObserve(v);                           // v3 A3
-  playerEvent(v, "lvqoe_attach", { reason, prev_el: elId(prev) });
+  v3Start(v, reason, prev);               // v3 A1 / A2 / A3 (one flag), before video_start
   lastEventType = null;
   // stall state belongs to the element: re-evaluate it on the new one (the safety net emits "stall" if it is
   // buffering), instead of carrying the old element's flag past the "video_start" that clears the label
@@ -639,6 +661,7 @@ setInterval(() => {
   }
   if (!video) return;
   emit("res_meta");
+  if (v3On && v3Ready) adCheck("tick");   // brad 18:33: an ad edge is never later than the tick
   rvfcTick();                             // v3 A1: the 1 Hz counters, joined to this tick's event_id
 }, RESOLUTION_POLL_INTERVAL_MS);
 

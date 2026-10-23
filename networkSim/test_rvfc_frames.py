@@ -44,7 +44,7 @@ const ctx = {
   MutationObserver: class { observe() {} disconnect() {} },
   XPathResult: { ORDERED_NODE_SNAPSHOT_TYPE: 7 },
   location: { href: "https://www.tiktok.com/@r/live", hostname: "www.tiktok.com" },
-  chrome: { storage: { local: { get: (d, cb) => { const r = () => cb(off ? { lvqoe_config: { rvfc: false } } : d);
+  chrome: { storage: { local: { get: (d, cb) => { const r = () => cb(off ? { lvqoe_config: { instruments: false } } : d);
                                                     if (asyncCfg) pendingCfg.push(r); else r(); },
                                 set: (o) => Object.assign(stored, o) } },
             runtime: { lastError: null, sendMessage: (m, cb) => {
@@ -114,6 +114,9 @@ def test_rvfc_frames():
         fo = [x for m in off["side"] if m["stream"] == "frames" for x in m["payload"]]
         assert off["pending"] == 0 and off["registeredBeforeCfg"] == 0, mode
         assert {x["k"] for x in fo} == {"tick"} and all(x["rvfc"] is False and x["cb"] is None and x["off_arm_cb"] == 0 for x in fo)
+        # levi 18:33: the off arm starts no instrument at all: no player events, no ad edges, no box, none counted
+        assert not [m for m in off["side"] if m["stream"] in ("player_events", "ad_edges") and m["payload"]], mode
+        assert all(x["instruments"] is False and x["box"] is None and x["ad_checks"] == 0 for x in fo)
     late = run("on_async")                                                      # on, config read after the attach
     fl = [x for m in late["side"] if m["stream"] == "frames" for x in m["payload"]]
     assert late["registeredBeforeCfg"] == 0 and late["pending"] == 1 and [x["k"] for x in fl][:2] == ["first_frame", "dims"]

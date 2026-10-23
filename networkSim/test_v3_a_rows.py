@@ -68,6 +68,8 @@ now += 5; obsCb([]);                      // unchanged
 now += 5; v.duration = 15; v.fire("durationchange");      // the ad's finite duration: a second edge
 now += 5; adLabel = false; v.duration = Infinity; v.fire("durationchange");   // back: a third edge
 tick();
+adLabel = true;                           // a marker change no observer saw (outside the subtree): the tick backstop
+tick();
 vm.runInContext("flushSide()", ctx);
 fs.writeFileSync(process.argv[3], JSON.stringify({ side, rootId: obsRoot && obsRoot.id, opts: obsOpts }));
 """
@@ -89,8 +91,14 @@ def test_ad_edges_and_box():
     edges = [x for m in r["side"] if m["stream"] == "ad_edges" for x in m["payload"]]
     assert [(e["signals"], e["prev"], e["reason"]) for e in edges] == [
         ("", None, "attach"), ("tw_ad_dom", "", "dom"), ("duration_finite|tw_ad_dom", "tw_ad_dom", "durationchange"),
-        ("", "duration_finite|tw_ad_dom", "durationchange")], edges
-    assert [e["is_ad"] for e in edges] == [False, True, True, False]
+        ("", "duration_finite|tw_ad_dom", "durationchange"), ("tw_ad_dom", "", "tick")], edges
+    assert [e["is_ad"] for e in edges] == [False, True, True, False, True]
+    pe = [x for m in r["side"] if m["stream"] == "player_events" for x in m["payload"]]
+    root = [x for x in pe if x["ev"] == "lvqoe_ad_root"]
+    assert [(x["root_id"], x["depth"], x["has_movie_player"]) for x in root] == [("p1", 6, False)], root
+    tk = [x for m in r["side"] if m["stream"] == "frames" for x in m["payload"] if x["k"] == "tick"]
+    assert sum(x["ad_cb"] for x in tk) == 4 and sum(x["ad_checks"] for x in tk) >= 6 and all(x["ad_ms"] >= 0 for x in tk)
+    assert all(x["instruments"] is True for x in tk)
     e = edges[1]
     assert e["ts"] == 5e11 + e["pn"] and e["wall"] == 5e11 + e["pn"] and e["el"] == 1
     ticks = [x for m in r["side"] if m["stream"] == "frames" for x in m["payload"] if x["k"] == "tick"]
