@@ -72,7 +72,7 @@ def test_twitch_needs_its_realised_rate():
                   geometry={"twitch": ["player:1274x717"]}, realised={"twitch": {s: 0.75 for s in B.SCENARIOS}})
     c = _cell(res, "twitch", "Q_1080p", "player:1274x717", 1.0)
     assert c["bands_reaching"] == ["11"] and res["rate_source"]["twitch"] == "realised"
-    assert res["rate_source"]["youtube"] == "configured x RATIO_LO"
+    assert res["rate_source"]["youtube"] == "not built"                      # no youtube geometry in this build
 
 
 def test_cli_writes_the_schema_and_prints_the_table(tmp_path, capsys):
