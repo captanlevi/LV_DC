@@ -6,7 +6,8 @@ inside the RTT the capture sees: RTT_obs = RTT_path + 2·D.
 
 Per connection, the capture's handshake RTT: TCP SYN out -> SYN-ACK in; QUIC the client's first Initial -> the server's
 first long-header packet (header fields only; no keys). D = net_labels' delay_ms in force at the client's first packet;
-a handshake within CHANGE_GUARD_S of a delay_ms change (net_labels is a tick log) is dropped (recorded).
+a handshake within CHANGE_GUARD_S of a delay_ms change's interval (previous row, change row] is dropped
+(recorded).
   C6: RTT_obs >= 2·D - SLACK_MS on every connection (netem's timer slack + capture timestamping); a violation means
       traffic that bypassed the shaper.
   C5: per platform, the within-/24 slope of RTT_obs on 2·D (connections to one server /24 hold RTT_path fixed; groups
@@ -103,15 +104,18 @@ def delays(sd: Path) -> list[tuple[float, float]]:
 def judge(hs: list[dict], dl: list[tuple[float, float]]) -> tuple[list[dict], int]:
     """Attach D (ms) and the C6 verdict to each handshake; handshakes near a change or before the first row dropped.
 
-    net_labels is a tick log (a row every ~2 s), so a change is the first row or a row whose delay_ms differs from the
-    previous row's; every row as a change put each handshake within CHANGE_GUARD_S of one and dropped nearly all."""
+    net_labels has a row per shaper apply (~2 s), not per delay change; every row as a change put each handshake within
+    CHANGE_GUARD_S of one and dropped nearly all. A delay change is the first row, or a row whose delay_ms differs from
+    the previous row's. exp.py (T*) takes a row's timestamp after its blocking `make slow` returns, and that apply
+    starts after the previous row's timestamp, so the change lies in (previous row, change row]: the guard covers that
+    interval widened by CHANGE_GUARD_S, against the handshake's span [t, t + rtt]."""
     ts = [t for t, _ in dl]
-    ch = [t for k, (t, d) in enumerate(dl) if k == 0 or d != dl[k - 1][1]]
+    ch = [(dl[k - 1][0] if k else t, t) for k, (t, d) in enumerate(dl) if k == 0 or d != dl[k - 1][1]]
     kept, dropped = [], 0
     for h in hs:
         i = bisect.bisect_right(ts, h["t"]) - 1
-        j = bisect.bisect_right(ch, h["t"]) - 1
-        near = any(abs(h["t"] - t) < CHANGE_GUARD_S or abs(h["t"] + h["rtt_ms"] / 1000 - t) < CHANGE_GUARD_S for t in ch[max(0, j - 1):j + 2])
+        end = h["t"] + h["rtt_ms"] / 1000
+        near = any(end > lo - CHANGE_GUARD_S and h["t"] < hi + CHANGE_GUARD_S for lo, hi in ch)
         if i < 0 or near:
             dropped += 1
             continue
