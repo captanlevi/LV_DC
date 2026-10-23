@@ -128,5 +128,18 @@ def test_c8_data_root_matches_the_run():
         assert "is not the volume's" in refusal(RECORD)
     finally:
         DR.volume_uuid = saved
+    # brad / levi 19:00: exp.py's wall in every branch, by the nearest marked ancestor, before any dir is made
+    assert DR.path_kind_refusal(_REC / "x", False) and "not of record under a marked" in DR.path_kind_refusal(_REC / "x", False)
+    assert DR.path_kind_refusal(_REC / "_trio" / "deep" / "x", False)                       # --save-dir deep under it
+    assert DR.path_kind_refusal(_REC / "_trio", True) is None                                # a counted slot run: allowed
+    assert DR.path_kind_refusal(_DRY / "x", False) is None and "outside the record root" in DR.path_kind_refusal(_DRY / "x", True)
+    saved = DR.volume_uuid
+    try:
+        DR.volume_uuid = lambda p, run=None: None
+        assert "unverified" in DR.path_kind_refusal(_REC / "_trio", True)                    # findmnt failing: refused
+    finally:
+        DR.volume_uuid = saved
     src = (HERE / "exp.py").read_text()
-    assert '_dr_c8.kind_refusal(SLOT is not None and os.environ.get("LVDC_TRIO_RECORD") == "1", DATA_DIR)' in src
+    i = src.index("_c8 = _dr_c8.path_kind_refusal(_target, _of_record)")
+    assert i < src.index("session_dir = args.save_dir", i) and i < src.index('session_dir = Path(__file__).parent.parent / "current_data"', i)
+    assert '_of_record = bool(args.auto and SLOT is not None and os.environ.get("LVDC_TRIO_RECORD") == "1")' in src

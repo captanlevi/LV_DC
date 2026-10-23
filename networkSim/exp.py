@@ -757,6 +757,16 @@ if __name__ == "__main__":
 
     is_capture: bool = True
 
+    # t67 C8 (levi 18:56 / 19:00, brad): the session's kind and where it writes agree, in every branch, before any dir is
+    # made: only a counted slot run (--auto, a trio slot, LVDC_TRIO_RECORD=1) may write under the verified record root
+    import data_root as _dr_c8
+    _of_record = bool(args.auto and SLOT is not None and os.environ.get("LVDC_TRIO_RECORD") == "1")
+    _target = (args.save_dir if args.save_dir else Path(__file__).parent.parent / "current_data" if not args.auto
+               else (DATA_DIR / trio_slots.TRIO_DIR if SLOT is not None else DATA_DIR))
+    _c8 = _dr_c8.path_kind_refusal(_target, _of_record)
+    if _c8:
+        print(f"C8 REFUSED: {_c8}")
+        sys.exit(2)
     if args.save_dir:
         session_dir = args.save_dir
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -764,11 +774,6 @@ if __name__ == "__main__":
         session_dir = Path(__file__).parent.parent / "current_data"
         session_dir.mkdir(parents=True, exist_ok=True)
     else:
-        import data_root as _dr_c8      # t67 C8 (levi 18:56): the session's kind and its data root agree, in exp.py too
-        _c8 = _dr_c8.kind_refusal(SLOT is not None and os.environ.get("LVDC_TRIO_RECORD") == "1", DATA_DIR)
-        if _c8:
-            print(f"C8 REFUSED: {_c8}")
-            sys.exit(2)
         session_dir = (make_session_dir(platform) if SLOT is None else
                        make_session_dir(platform, DATA_DIR / trio_slots.TRIO_DIR, trio_slots.TRIO_NAME_FLOOR))
     print(f"Session directory: {session_dir}")

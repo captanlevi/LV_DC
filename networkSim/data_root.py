@@ -81,3 +81,20 @@ def kind_refusal(of_record: bool, root: Path | None = None, uuid_of=None) -> str
         return (f"a run that is not of record on a marked record root ({chk['resolved']}: {chk['reason']}); refused (C8: "
                 "every non-record run goes to a dry root)")
     return None
+
+
+def path_kind_refusal(path: Path, of_record: bool, uuid_of=None) -> str | None:
+    """brad / levi 19:00: exp.py's wall in every branch (--auto, --save-dir, current_data), before any dir is made: the
+    nearest ancestor of `path` (itself included) holding RECORD_MARKER decides. Under one, only a counted slot run on
+    the verified record root passes; under none, a counted run is refused (it must write to the record root)."""
+    p = Path(path).resolve()
+    for a in (p, *p.parents):
+        if (a / RECORD_MARKER).is_file():
+            chk = record_root_check(a, uuid_of)
+            if of_record and chk["is_record"]:
+                return None
+            return (f"{'a counted run on an unverified' if of_record else 'a run that is not of record under a marked'} "
+                    f"record root ({a}: {chk['reason']}); refused (C8: every non-record run goes to a dry root)")
+    if of_record:
+        return f"a counted run outside the record root ({p}: no marker above it); refused (C8)"
+    return None
