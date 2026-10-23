@@ -818,6 +818,7 @@ def concurrency_record(s: Slot | None, **extra) -> dict:
             "era": record.ERA, "n": len(SLOTS), "composition": composition_of(SLOTS),
             "lvdc_commit": session_meta.lvdc_commit(), "mgmt_udp_port": mgmt_udp_port_record(),
             **({"n_draw": json.loads(os.environ["LVDC_N_DRAW"])} if os.environ.get("LVDC_N_DRAW") else {}),
+            **({"window_stratum": json.loads(os.environ["LVDC_WINDOW_STRATUM"])} if os.environ.get("LVDC_WINDOW_STRATUM") else {}),
             **({"window": json.loads(os.environ["LVDC_TRIO_WINDOW"])} if os.environ.get("LVDC_TRIO_WINDOW") else {}),
             **extra}
 
