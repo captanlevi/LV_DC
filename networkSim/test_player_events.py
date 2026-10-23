@@ -135,7 +135,7 @@ def test_player_events():
     assert len(keys) == 2 and all(x.startswith("side:player_events:") for x in keys)
     # brad 18:17: a failed write is not acked (the sender re-queues it); the side cap's drops are counted per stream
     assert r["acks"] == [{"ok": True, "err": None}] * 2 + [{"ok": False, "err": "QUOTA_BYTES"}], r["acks"]
-    assert r["dropped"] == {"player_events": 10, "frames": 0}
+    assert r["dropped"] == {"player_events": 10, "frames": 0, "ad_edges": 0}
     joined = B._side_streams({**r["store"], "events": [{"x": 1}], "player_stats": []})
     assert list(joined) == ["player_events"] and [x["n"] for x in joined["player_events"]] == [1, 2]
     assert all(x["tabId"] == 7 for x in joined["player_events"])

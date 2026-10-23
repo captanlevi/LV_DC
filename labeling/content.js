@@ -195,9 +195,9 @@ function srcKey(v) {
   if (!s) return "";
   return s.startsWith("blob:") ? "blob:" + hash8(s) : "url:" + hash8(s.split("?")[0]);
 }
-const sideBuffers = { player_events: [], frames: [] };
-const sideDropped = { player_events: 0, frames: 0 };   // brad 18:17: records lost to the SIDE_MAX cap, per stream
-const sideFailed = { player_events: 0, frames: 0 };    // batches the extension did not store (re-queued), per stream
+const sideBuffers = { player_events: [], frames: [], ad_edges: [] };
+const sideDropped = { player_events: 0, frames: 0, ad_edges: 0 };   // brad 18:17: records lost to the SIDE_MAX cap
+const sideFailed = { player_events: 0, frames: 0, ad_edges: 0 };    // batches the extension did not store (re-queued)
 function side(stream, rec) {
   const buf = sideBuffers[stream];
   buf.push(rec);
@@ -221,6 +221,9 @@ function observePlayerEvents(v) {
   if (peObserved.has(v)) return;
   peObserved.add(v);
   for (const ev of PLAYER_EVENTS) v.addEventListener(ev, () => playerEvent(v, ev));
+  for (const ev of ["durationchange", "loadedmetadata", "emptied"]) {
+    v.addEventListener(ev, () => { if (v === video) queueAdCheck(ev); });   // v3 A3: duration_finite flips here
+  }
 }
 // v3 A1 (t67; rushi-approved, levi 17:41): requestVideoFrameCallback aggregates in the side stream "frames", never
 // per frame: (a) each change of the presented frame's dims, with that first frame's presentationTime,
@@ -289,7 +292,8 @@ function rvfcTick() {
                    tick: event_id - 1, cb: st ? st.n : null, pf: md ? md.presentedFrames ?? null : null,
                    mt: md ? md.mediaTime ?? null : null, pt: md ? md.presentationTime ?? null : null,
                    decoded: q ? q.totalVideoFrames : null, dropped: q ? q.droppedVideoFrames : null,
-                   ct: video.currentTime ?? null, rvfc: rvfcOn && !!st, off_arm_cb: offArmCb,
+                   ct: video.currentTime ?? null, box: playerBox(video), top: window === window.top,
+                   rvfc: rvfcOn && !!st, off_arm_cb: offArmCb,
                    side_dropped: { ...sideDropped }, side_failed: { ...sideFailed } });
   if (st) st.n = 0;
   // levi 18:26: the counters also go to one small storage key each tick (top frame), so export records their final
@@ -300,6 +304,54 @@ function rvfcTick() {
                                                   at: performance.timeOrigin + performance.now() } });
     } catch (e) { /* counted in the tick rows */ }
   }
+}
+
+// v3 A3 (t67; brad 3, prereg dcb64415): ad state at the change, not at the next 1 s tick. A MutationObserver on the
+// attached element's player container (6 ancestors up) and the element's duration / metadata events re-evaluate the
+// tick's own adSignals() (one definition: the tick's is_ad / ad_signals are unchanged); each change of the signal set
+// is an ad_edges record with both clocks. One check per mutation batch.
+let adObs = null;
+let adLast = null;
+let adQueued = false;
+function adCheck(reason) {
+  adQueued = false;
+  if (!collecting || !video) return;
+  const sig = adSignals(video);
+  const key = sig.join("|");
+  if (adLast !== null && key === adLast) return;
+  const pn = performance.now();
+  side("ad_edges", { ts: performance.timeOrigin + pn, pn, wall: Date.now(), is_ad: sig.length > 0, signals: key,
+                     prev: adLast, reason, el: elId(video), ct: video.currentTime ?? null });
+  adLast = key;
+}
+function queueAdCheck(reason) {
+  if (adQueued) return;
+  adQueued = true;
+  (typeof queueMicrotask === "function" ? queueMicrotask : (f) => f())(() => adCheck(reason));
+}
+function adObserve(v) {
+  if (typeof MutationObserver !== "function" || !v) return;
+  if (adObs) adObs.disconnect();
+  let root = v;
+  for (let i = 0; i < 6 && root.parentElement; i++) root = root.parentElement;
+  adObs = new MutationObserver(() => queueAdCheck("dom"));
+  adObs.observe(root, { subtree: true, childList: true, attributes: true,
+                        attributeFilter: ["class", "style", "hidden", "data-a-target"] });
+  queueAdCheck("attach");
+}
+
+// v3 A7 (t67; brad 5, c14): the player box at the tick: the element's rect, its part inside the viewport (CSS px) and
+// the DPR, so device px and the visible fraction are on the record per tick, not once per session.
+function playerBox(v) {
+  if (!v || typeof v.getBoundingClientRect !== "function") return null;
+  const r = v.getBoundingClientRect();
+  const vw = window.innerWidth ?? null, vh = window.innerHeight ?? null;
+  const x0 = Math.max(0, r.left), y0 = Math.max(0, r.top);
+  const x1 = vw === null ? r.right : Math.min(vw, r.right), y1 = vh === null ? r.bottom : Math.min(vh, r.bottom);
+  const w = Math.max(0, x1 - x0), h = Math.max(0, y1 - y0);
+  const area = r.width * r.height;
+  return { x: x0, y: y0, w, h, el_w: r.width, el_h: r.height, vw, vh, dpr: window.devicePixelRatio || 1,
+           frac: area > 0 ? Math.round((w * h / area) * 1e4) / 1e4 : 0 };
 }
 
 function flushSide() {
@@ -494,6 +546,7 @@ function attachVideo(v, reason = "unknown") {
   video = v;
   observePlayerEvents(v);                 // v3 A2: before video_start, so the attach precedes the element's events
   rvfcStart(v);                           // v3 A1
+  adObserve(v);                           // v3 A3
   playerEvent(v, "lvqoe_attach", { reason, prev_el: elId(prev) });
   lastEventType = null;
   // stall state belongs to the element: re-evaluate it on the new one (the safety net emits "stall" if it is

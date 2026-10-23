@@ -1773,6 +1773,7 @@ _PLAYER_STATE_JS = """
 # paced at, measured: the median requestAnimationFrame interval over up to SCREEN_RAF_FRAMES frames (3 s cap; with the
 # display off the pacing is what the session ran under, which A8's C5 reads against xrandr). Read-only; no request.
 SCREEN_RAF_FRAMES = 120
+CLOCK_SAMPLE_S = 60          # v3 A11: the watcher samples the time.time <-> page clock offset this often
 _SCREEN_JS = """
 new Promise((res) => {
   const t = [];
@@ -2641,7 +2642,7 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                      on_wall=None, on_frozen=None, on_stuck=None, on_player_error=None,
                      error_watch: PlayerErrorWatch | None = None, resumer: "SelfPauseResumer | None" = None,
                      on_stream_ended=None, stream_watch: "StreamEndedWatch | None" = None,
-                     yt_ladder: "YtLadderRecorder | None" = None) -> None:
+                     yt_ladder: "YtLadderRecorder | None" = None, clock_sample=None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
     Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
     calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table); passes the
@@ -2655,6 +2656,11 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
     n = 0
     while not stop.wait(timeout=1):
         n += 1
+        if clock_sample is not None and n % CLOCK_SAMPLE_S == 0:   # v3 A11
+            try:
+                clock_sample("tick")
+            except Exception:
+                pass
         if platform == "youtube" and n % CAPTIONS_CHECK_S == 0:
             try:
                 cap = page.eval(_CAPTIONS_OFF_JS)
@@ -3356,6 +3362,7 @@ class BrowserSession:
         # v3 A1 (t67): content.js's rVFC aggregates, on unless LVQOE_RVFC=0 (the gate's callback-off arm); meta.json rvfc
         self.rvfc = {"enabled": os.environ.get("LVQOE_RVFC", "1") != "0", "config_set": False}
         self.screen: dict | None = None             # v3 A8: meta.json screen
+        self.clock_offsets: list = []               # v3 A11: meta.json clock_offsets (time.time vs the page clock)
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
         self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
@@ -3447,6 +3454,7 @@ class BrowserSession:
             self.screen = json.loads(self._page.eval(_SCREEN_JS, await_promise=True) or "null")
         except Exception as exc:
             self.screen = {"error": repr(exc)[:200]}
+        self._clock_sample("start")                # v3 A11
         self._start_time = time.time()
 
         # Direct extension CSV downloads into the session directory
@@ -3648,7 +3656,7 @@ class BrowserSession:
                   self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
                   self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch,
                   self.resumer, self._stream_ended if self.platform in STREAM_ENDED_PLATFORMS else None,
-                  self._stream_watch(), self.yt_ladder or self.tt_codec),
+                  self._stream_watch(), self.yt_ladder or self.tt_codec, self._clock_sample),
             daemon=True,
             name="ad-watcher",
         )
@@ -4210,6 +4218,25 @@ class BrowserSession:
         self.abort_reason, self.abort_at = "login_wall", time.time()
         print("[browser] LOGIN WALL detected (content.js login_wall) — aborting the session", flush=True)
 
+    def _clock_sample(self, reason: str) -> None:
+        """v3 A11 (t67; levi n5): one time.time <-> page clock (performance.timeOrigin + now, the label events' ts) sample:
+        the page clock read between two time.time reads, kept with that round trip, so every Python record (presses,
+        net_labels, shots) joins the label clock by a measured offset. At start, every CLOCK_SAMPLE_S, and at stop."""
+        if not hasattr(self, "clock_offsets"):
+            self.clock_offsets = []
+        if getattr(self, "_page", None) is None or len(self.clock_offsets) >= WATCH_LOG_MAX:
+            return
+        try:
+            t0 = time.time()
+            js = float(self._page.eval("performance.timeOrigin + performance.now()"))
+            t1 = time.time()
+        except Exception as exc:
+            self.clock_offsets.append({"reason": reason, "t": time.time(), "error": repr(exc)[:120]})
+            return
+        mid = (t0 + t1) / 2 * 1000.0
+        self.clock_offsets.append({"reason": reason, "t": t1, "js_ms": round(js, 3), "py_mid_ms": round(mid, 3),
+                                   "offset_ms": round(js - mid, 3), "rtt_ms": round((t1 - t0) * 1000.0, 3)})
+
     def _hold_lifted(self, now: float, frozen_s: float, clock: str) -> float | None:
         """levi 13:09 / 17:51 / 18:16 (tw_100109): a low-state hold on a frozen clock (addendum N's or the stuck rule's T2)
         lifts only once the resumer's polls have shown the player paused with data and flat for PAUSE_DEADLOCK_S (the
@@ -4262,6 +4289,7 @@ class BrowserSession:
         if k is not None:
             k.stop()
             self.fs_keeper = {**(self.fs_keeper or {}), **k.record()}
+        self._clock_sample("stop")                 # v3 A11: the last offset, before the tab closes
         # Read QoE events from the extension service worker before closing the tab
         if self._session_dir:
             _export_via_service_worker(self._session_dir)

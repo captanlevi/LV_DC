@@ -332,13 +332,14 @@ async def _ossilate(
         max_episodes=max_episodes,
         **SHAPER_OPTS,
     ):
+        t_apply = time.time()                 # v3 A9: a change lies in [apply_start, timestamp]
         _apply_net_stat(net_stat= net_stat)
         ts = time.time()
         net_labels.append(    # restart §2 (c): the realised rate / delay / loss beside the nominal state and the re-draw
             NetLabel(timestamp=ts, speed=net_stat.rate, state=net_stat.state, delay_ms=net_stat.delay_ms,
                      loss_pct=net_stat.loss_pct, redraw_kbit=net_stat.redraw_kbit,
                      redraw_delay_ms=net_stat.redraw_delay_ms, redraw_loss_pct=net_stat.redraw_loss_pct,
-                     walk_step=net_stat.walk_step)
+                     walk_step=net_stat.walk_step, apply_start=t_apply, apply="rate" if net_stat.walk_step else "slow")
         )
         # restart §2: a change every 2 s, so the changes keep the schedule's own clock (deadline + duration); an apply's
         # time (make slow) and the tick's overshoot no longer add to the session per change
@@ -1025,6 +1026,7 @@ if __name__ == "__main__":
                               self_pause_resume=browser.resumer.record(),
                               rvfc=browser.rvfc,                                       # v3 A1 (t67)
                               screen=browser.screen,                                   # v3 A8 (t67)
+                              clock_offsets=browser.clock_offsets,                     # v3 A11 (t67)
                               **({"channel_pick": {**channel_pick_start, **browser.channel_pick}}     # twitch: + the category draw
                                  if browser.channel_pick is not None else {}),
                               t2_skipped=browser.t2_skipped, player_ladder=browser.player_ladder,

@@ -105,7 +105,7 @@ def test_rvfc_frames():
         [(30, 30, 30, 2, True), (15, 45, 45, 2, True), (0, 45, 45, 2, True), (3, 48, 48, 2, True)], ticks
     assert r["pending"] == 1                                                    # always one callback registered
     # brad 18:17: the first side write failed once: re-queued (no row lost, the 4 ticks above), counted, nothing dropped
-    assert sum(ticks[-1]["side_failed"].values()) == 1 and ticks[-1]["side_dropped"] == {"player_events": 0, "frames": 0}
+    assert sum(ticks[-1]["side_failed"].values()) == 1 and ticks[-1]["side_dropped"] == {"player_events": 0, "frames": 0, "ad_edges": 0}
     assert all(t["off_arm_cb"] == 0 for t in ticks)
     sc = r["stored"]["side_counters"]                                          # levi 18:26: the final counters persisted
     assert (sc["side_dropped"], sc["side_failed"], sc["off_arm_cb"]) == (ticks[-1]["side_dropped"], ticks[-1]["side_failed"], 0)

@@ -16,6 +16,8 @@ class NetLabel:
     redraw_delay_ms: int | None = None
     redraw_loss_pct: float | None = None
     walk_step: int | None = None
+    apply_start: float | None = None    # v3 A9 (t67): the apply began (before `make slow` / `make rate`); timestamp = it returned
+    apply: str | None = None            # "slow" (delay / loss / rate re-set) or "rate" (a walk step: the HTB rate only)
 
 
 @dataclass
