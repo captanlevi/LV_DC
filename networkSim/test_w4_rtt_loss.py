@@ -91,7 +91,7 @@ def test_rtt_delay():
                (T0 + 29.7, _tcp("1.2.3.4", ME, 443, 50002, dpkt.tcp.TH_SYN | dpkt.tcp.TH_ACK))]
         _write(sd / "merged.pcap", pk)
         r = RD.session(sd, tshark)
-        assert r["client"] == ME and r["dropped_near_change"] == 1, r
+        assert r["client"] == ME and r["dropped_near_change"] == 1 and r["dropped_before_labels"] == 0, r
         assert r["handshakes"] == 19 and r["n_c6_violations"] == 1 and r["c6_violations"][0]["server"] == "9.9.9.9", r
         assert {x["proto"] for x in r["rows"]} == {"tcp", "quic"}
         s = RD.within_slope([x for x in r["rows"] if x["c6_ok"]])
@@ -102,6 +102,11 @@ def test_rtt_delay():
                                                                else 100, "speed": 1000}) + "\n" for k in range(30)))
         r3 = RD.session(sd, tshark)
         assert r3["dropped_near_change"] == 1 and r3["handshakes"] == 19 and r3["n_c6_violations"] == 1, r3
+        # the shaper's first row after the page load's handshakes: those are counted apart, never as near a change
+        (sd / "net_labels.txt").write_text("".join(json.dumps({"timestamp": T0 + 12 + 2.0 * k, "delay_ms": 40 if 12 + 2.0 * k < 30
+                                                               else 100, "speed": 1000}) + "\n" for k in range(25)))
+        r4 = RD.session(sd, tshark)
+        assert r4["dropped_before_labels"] == 6 and r4["dropped_near_change"] == 1 and r4["handshakes"] == 13, r4
 
 
 def test_loss_drops():

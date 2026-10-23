@@ -101,8 +101,9 @@ def delays(sd: Path) -> list[tuple[float, float]]:
     return sorted(out)
 
 
-def judge(hs: list[dict], dl: list[tuple[float, float]]) -> tuple[list[dict], int]:
-    """Attach D (ms) and the C6 verdict to each handshake; handshakes near a change or before the first row dropped.
+def judge(hs: list[dict], dl: list[tuple[float, float]]) -> tuple[list[dict], int, int]:
+    """Attach D (ms) and the C6 verdict to each handshake; handshakes near a change or before the first row dropped,
+    counted apart (kept, dropped near a change, dropped before the first row: the page load precedes the shaper).
 
     net_labels has a row per shaper apply (~2 s), not per delay change; every row as a change put each handshake within
     CHANGE_GUARD_S of one and dropped nearly all. A delay change is the first row, or a row whose delay_ms differs from
@@ -111,17 +112,20 @@ def judge(hs: list[dict], dl: list[tuple[float, float]]) -> tuple[list[dict], in
     interval widened by CHANGE_GUARD_S, against the handshake's span [t, t + rtt]."""
     ts = [t for t, _ in dl]
     ch = [(dl[k - 1][0] if k else t, t) for k, (t, d) in enumerate(dl) if k == 0 or d != dl[k - 1][1]]
-    kept, dropped = [], 0
+    kept, near_n, before_n = [], 0, 0
     for h in hs:
         i = bisect.bisect_right(ts, h["t"]) - 1
         end = h["t"] + h["rtt_ms"] / 1000
         near = any(end > lo - CHANGE_GUARD_S and h["t"] < hi + CHANGE_GUARD_S for lo, hi in ch)
-        if i < 0 or near:
-            dropped += 1
+        if i < 0:
+            before_n += 1
+            continue
+        if near:
+            near_n += 1
             continue
         d = dl[i][1]
         kept.append({**h, "delay_ms": d, "c6_ok": h["rtt_ms"] >= 2 * d - SLACK_MS})
-    return kept, dropped
+    return kept, near_n, before_n
 
 
 def within_slope(rows: list[dict]) -> dict:
@@ -159,10 +163,10 @@ def session(sd: Path, tshark: str) -> dict:
         return {"session": sd.name, "skipped": "missing merged.pcap"}
     rows = tshark_rows(pcap, tshark)
     me = client_of(rows)
-    kept, dropped = judge(handshakes(rows, me), delays(sd)) if me else ([], 0)
+    kept, dropped, before = judge(handshakes(rows, me), delays(sd)) if me else ([], 0, 0)
     bad = [k for k in kept if not k["c6_ok"]]
     return {"session": sd.name, "platform": meta.get("platform"), "client": me, "handshakes": len(kept),
-            "dropped_near_change": dropped, "c6_violations": bad[:50], "n_c6_violations": len(bad), "rows": kept}
+            "dropped_near_change": dropped, "dropped_before_labels": before, "c6_violations": bad[:50], "n_c6_violations": len(bad), "rows": kept}
 
 
 def main(argv=None) -> int:
