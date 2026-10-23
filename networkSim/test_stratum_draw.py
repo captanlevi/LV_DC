@@ -93,10 +93,23 @@ def test_stratum_apply_refusals_and_steering():
 
 
 def test_arg_refusals():
+    import data_root as DR
     base = ["--batch", "youtube=99,twitch=99,tiktok=99", "--concurrent", "--trio-record", "--n-draw", "--window-min",
             str(O.RECORD_WINDOW_MIN), "--trio-yt-fullscreen", "--trio-layout", "composite", "--trio-steer"]
-    env = {"LVDC_DATA_ROOT_UUID": "0000-test"}
-    r = lambda argv: O.arg_refusal(O.build_parser().parse_args(argv), env)
+    rec, dry_root = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())        # C8: a record line on the marked root, the rest
+    (rec / DR.RECORD_MARKER).write_text(json.dumps({"uuid": "TEST-VOL"}))     # on an unmarked dry root
+    saved_uuid = DR.volume_uuid
+    DR.volume_uuid = lambda p, run=None: "TEST-VOL"
+    env = {"LVDC_DATA_ROOT_UUID": "0000-test", "LVDC_DATA_ROOT": str(rec)}
+    denv = {**env, "LVDC_DATA_ROOT": str(dry_root)}
+    try:
+        _arg_refusals(base, env, denv)
+    finally:
+        DR.volume_uuid = saved_uuid
+
+
+def _arg_refusals(base, env, denv):
+    r = lambda argv: O.arg_refusal(O.build_parser().parse_args(argv), env if "--trio-record" in argv else denv)
     assert r(base + ["--expect-stratum", "steered"]) is None
     assert "--expect-stratum" in r(base)                                       # a counted window states its stratum
     assert "dry / gate run only" in r(base + ["--expect-stratum", "steered", "--stratum-force", "lever"])
@@ -108,7 +121,7 @@ def test_arg_refusals():
     assert got is None or "stratum" not in got, got                           # may force a stratum without --n-draw
     assert "--expect-stratum needs --concurrent and --n-draw" in r(nodraw + ["--expect-stratum", "steered"])
     forced = O.build_parser().parse_args(["--batch", "youtube=1", "--stratum-force", "lever"])
-    assert O.arg_refusal(forced, env) == "--stratum-force needs --concurrent"
+    assert O.arg_refusal(forced, denv) == "--stratum-force needs --concurrent"
 
 
 def test_the_stratum_reaches_every_sessions_meta():
