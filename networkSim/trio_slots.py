@@ -665,16 +665,16 @@ FAST_TC_S = 0.1                                      # v3 A18: the shaped classe
 FAST_TC_FIELDS = ("bytes", "packets", "drops", "overlimits", "backlog", "qlen")
 
 
-def _tc_classes(dev: str) -> tuple[str, float]:
+def _tc_classes(dev: str, timeout_s: float = 2.0) -> tuple[str, float]:
     """`tc -s class show dev <dev>` (exec, no shell): (stdout, that child's own CPU seconds from os.wait4; brad / levi
     21:27-21:28: the exact cost of the reads, never every child of exp.py). The child is reaped here by wait4, not by
-    Popen (whose returncode is then set from the status); a read over 2 s is killed and reads empty."""
+    Popen (whose returncode is then set from the status); a read over timeout_s (2 s) is killed and reads empty."""
     try:
         p = subprocess.Popen(["tc", "-s", "class", "show", "dev", dev], stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, text=True)
     except Exception:
         return "", 0.0
-    killer = threading.Timer(2.0, p.kill)
+    killer = threading.Timer(timeout_s, p.kill)
     killer.start()
     try:
         out = p.stdout.read()
