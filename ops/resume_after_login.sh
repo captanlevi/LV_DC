@@ -31,7 +31,7 @@ while [ $((SECONDS - t0)) -le "$LVDC_NTP_WAIT_S" ]; do
 done
 llog "NTP synchronized=$ntp after $((SECONDS - t0)) s (clock now $(date -Is))"
 if [ "$ntp" != yes ]; then
-  llog "ABORT: NTP not synced within $LVDC_NTP_WAIT_S s: guards (guard_stall_contradiction, ipv6_watchdog, keep_display_off) and the launch withheld"
+  llog "ABORT: NTP not synced within $LVDC_NTP_WAIT_S s: guards (ipv6_watchdog, keep_display_off) and the launch withheld"
   exit 1
 fi
 start_guards; llog "guards started (display keeper only with SCREEN_OFF)"
