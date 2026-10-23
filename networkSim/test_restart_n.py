@@ -117,6 +117,32 @@ def test_round_index_from_the_slots_log():
         assert N.draw(log, era, False)["round"] == 1
 
 
+def test_a_void_run_is_not_a_draw_outside_the_t58_era():
+    """levi 2026-10-23 18:58 (collector v3): a run that wrote trio_up but started no session (the w11 07:54 drain) is not a
+    draw, so its relaunch redraws the same round with no operator step; the T* era (VOID_COUNTS_ERAS) keeps counting it."""
+    era = "v3-test-era"
+    seq = N.simulate(6, era)
+    with tempfile.TemporaryDirectory() as t:
+        log = Path(t) / "trio_slots.jsonl"
+        with open(log, "w") as fh:
+            for i, d in enumerate(seq[:2]):
+                fh.write(json.dumps({"event": "trio_up", "run": f"r{i}", "n_draw": d}) + "\n")
+                fh.write(json.dumps({"event": "start", "run": f"r{i}", "slot": "yt1"}) + "\n")
+        assert N.draw(log, era, True) == seq[2]
+        with open(log, "a") as fh:                              # the void run: trio_up + trio_down, no start
+            fh.write(json.dumps({"event": "trio_up", "run": "void", "n_draw": seq[2]}) + "\n")
+            fh.write(json.dumps({"event": "trio_down", "run": "void", "end_rc": 8}) + "\n")
+        assert N.draw(log, era, True) == seq[2]                 # the relaunch redraws round 2
+        with open(log, "a") as fh:
+            fh.write(json.dumps({"event": "trio_up", "run": "w2", "n_draw": seq[2]}) + "\n")
+            fh.write(json.dumps({"event": "start", "run": "w2", "slot": "tw1"}) + "\n")
+        assert N.draw(log, era, True) == seq[3]
+        t58 = record.ERA if record.ERA in N.VOID_COUNTS_ERAS else "t58-restart-2026-10-21"
+        with open(log, "a") as fh:                              # the T* era: a void trio_up still counts (unchanged)
+            fh.write(json.dumps({"event": "trio_up", "run": "v58", "n_draw": N.simulate(1, t58)[0]}) + "\n")
+        assert N.draw(log, t58, True)["round"] == 1
+
+
 def test_support_and_exclusions_frozen_per_era():
     """levi 00138: a record draw's support / exclusions are the era's last record draw's; a change needs a signed
     reference and may only narrow (an N out, a composition excluded), recorded in the draw."""
