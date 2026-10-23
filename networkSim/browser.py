@@ -1574,7 +1574,8 @@ def _export_via_service_worker(session_dir: Path) -> bool:
                   "buffered_ahead_s", "playback_rate", "duration_s", "is_ad", "ad_signals", "src_changed",
                   "login_wall_text", "login_wall", "quality_countdown", "paused", "playhead_still_s", "ready_state",
                   "visibility", "total_frames",                        # t53 (am. 13 / gate-2 4a): additive
-                  "el_id", "src_key"]                                  # v3 A10 (t67): additive
+                  "el_id", "src_key",                                  # v3 A10 (t67): additive
+                  "buffered_ranges"]                                   # v3 A6 (t67): additive
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]

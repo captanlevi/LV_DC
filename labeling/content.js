@@ -152,6 +152,15 @@ function bufferedAhead(v) {
   return 0;
 }
 
+function bufferedRanges(v) {
+  // v3 A6 (t67): every buffered range at the tick, "start:end;..." in media seconds (3 dp), beside buffered_ahead_s;
+  // null when the element exposes none (tt: a MediaStream source, probe 00093), never an empty string
+  if (!v || !v.buffered || v.buffered.length === 0) return null;
+  const out = [];
+  for (let i = 0; i < v.buffered.length; i++) out.push(v.buffered.start(i).toFixed(3) + ":" + v.buffered.end(i).toFixed(3));
+  return out.join(";");
+}
+
 function srcChanged(v) {
   if (!v) return false;
   const src = v.currentSrc || v.src || null;
@@ -424,6 +433,7 @@ function buildEvent(type) {
     current_time: video?.currentTime ?? null,
     // v2 (LVQoE t35): additive columns
     buffered_ahead_s: bufferedAhead(video),
+    buffered_ranges: bufferedRanges(video),   // v3 A6
     playback_rate: video?.playbackRate ?? null,
     duration_s: video ? (isFinite(video.duration) ? video.duration : "inf") : null,
     is_ad: null,
