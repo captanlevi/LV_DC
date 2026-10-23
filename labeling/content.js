@@ -165,7 +165,8 @@ function srcChanged(v) {
 // attached, never deduped (emit() drops a repeat type, so a second resize in play was lost and that switch was poll-timed,
 // kb collector.tier.sampling_resize_poll_dedupe), each with both clocks and the element's state, in its own stream
 // (player_events.jsonl), never in the label events. el_id: a stable per-element counter; src_key: what feeds the element
-// (a blob URL's hash, the srcObject kind -- MediaStream on tt, MediaSourceHandle on twitch -- or a URL hash, no query).
+// (a blob URL's hash, the srcObject kind and identity -- MediaStream#n on tt, MediaSourceHandle#n on twitch -- or a
+// URL hash, no query).
 const PLAYER_EVENTS = ["resize", "waiting", "stalled", "playing", "play", "pause", "seeking", "seeked", "ratechange",
                        "emptied", "loadstart", "loadedmetadata", "loadeddata", "durationchange", "ended"];
 const SIDE_MAX = 5000;
@@ -181,14 +182,20 @@ function hash8(s) {
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
   return h.toString(16).padStart(8, "0");
 }
+const objIds = new WeakMap();
+let objNext = 0;
 function srcKey(v) {
   if (!v) return null;
-  if (v.srcObject) return (v.srcObject.constructor && v.srcObject.constructor.name) || "srcObject";
+  if (v.srcObject) {                      // its kind and identity: tt's MediaStream is replaced per stream
+    const o = v.srcObject;
+    if (!objIds.has(o)) objIds.set(o, ++objNext);
+    return `${(o.constructor && o.constructor.name) || "srcObject"}#${objIds.get(o)}`;
+  }
   const s = v.currentSrc || v.src || "";
   if (!s) return "";
   return s.startsWith("blob:") ? "blob:" + hash8(s) : "url:" + hash8(s.split("?")[0]);
 }
-const sideBuffers = { player_events: [] };
+const sideBuffers = { player_events: [], frames: [] };
 function side(stream, rec) {
   const buf = sideBuffers[stream];
   buf.push(rec);
@@ -210,6 +217,59 @@ function observePlayerEvents(v) {
   peObserved.add(v);
   for (const ev of PLAYER_EVENTS) v.addEventListener(ev, () => playerEvent(v, ev));
 }
+// v3 A1 (t67; rushi-approved, levi 17:41): requestVideoFrameCallback aggregates in the side stream "frames", never
+// per frame: (a) each change of the presented frame's dims, with that first frame's presentationTime,
+// expectedDisplayTime, mediaTime and presentedFrames; (b) once per 1 s tick (rvfcTick, from the res_meta timer, so it
+// still records while nothing is presented): presentedFrames, decoded (totalVideoFrames) and dropped side by side, the
+// last frame's mediaTime / presentationTime and the callbacks since the last tick; (c) the first presented frame after
+// an attach or a src_key change (tt's per-stream anchor: a MediaStream's mediaTime restarts per stream). The callback
+// only reads metadata. lvqoe_config.rvfc === false (written by browser.py for the gate's off arm) registers nothing.
+let rvfcOn = true;
+try {
+  chrome.storage?.local?.get({ lvqoe_config: {} }, (d) => {
+    if (d && d.lvqoe_config && d.lvqoe_config.rvfc === false) rvfcOn = false;
+  });
+} catch (e) { /* no storage: default on */ }
+const rvfcState = new WeakMap();
+function rvfcStart(v) {
+  if (!rvfcOn || !v || typeof v.requestVideoFrameCallback !== "function" || rvfcState.has(v)) return;
+  const st = { w: null, h: null, src: null, n: 0, last: null };
+  rvfcState.set(v, st);
+  const cb = (now, md) => {
+    if (!collecting) return;
+    st.n += 1;
+    st.last = md;
+    const src = srcKey(v);
+    const base = { ts: performance.timeOrigin + now, el: elId(v), src, pt: md.presentationTime ?? null,
+                   edt: md.expectedDisplayTime ?? null, mt: md.mediaTime ?? null, pf: md.presentedFrames ?? null,
+                   w: md.width ?? null, h: md.height ?? null };
+    if (src !== st.src) {
+      side("frames", { k: "first_frame", ...base, prev_src: st.src });
+      st.src = src;
+    }
+    if (md.width !== st.w || md.height !== st.h) {
+      side("frames", { k: "dims", ...base, prev_w: st.w, prev_h: st.h });
+      st.w = md.width;
+      st.h = md.height;
+    }
+    if (v === video || v.isConnected) v.requestVideoFrameCallback(cb);
+    else rvfcState.delete(v);
+  };
+  v.requestVideoFrameCallback(cb);
+}
+function rvfcTick() {
+  if (!collecting || !video) return;
+  const st = rvfcState.get(video);
+  const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+  const md = st && st.last;
+  side("frames", { k: "tick", ts: performance.timeOrigin + performance.now(), el: elId(video), src: srcKey(video),
+                   tick: event_id - 1, cb: st ? st.n : null, pf: md ? md.presentedFrames ?? null : null,
+                   mt: md ? md.mediaTime ?? null : null, pt: md ? md.presentationTime ?? null : null,
+                   decoded: q ? q.totalVideoFrames : null, dropped: q ? q.droppedVideoFrames : null,
+                   ct: video.currentTime ?? null, rvfc: rvfcOn && !!st });
+  if (st) st.n = 0;
+}
+
 function flushSide() {
   for (const [stream, buf] of Object.entries(sideBuffers)) {
     if (buf.length === 0) continue;
@@ -397,6 +457,7 @@ function attachVideo(v, reason = "unknown") {
   const prev = video;
   video = v;
   observePlayerEvents(v);                 // v3 A2: before video_start, so the attach precedes the element's events
+  rvfcStart(v);                           // v3 A1
   playerEvent(v, "lvqoe_attach", { reason, prev_el: elId(prev) });
   lastEventType = null;
   // stall state belongs to the element: re-evaluate it on the new one (the safety net emits "stall" if it is
@@ -489,6 +550,7 @@ setInterval(() => {
   }
   if (!video) return;
   emit("res_meta");
+  rvfcTick();                             // v3 A1: the 1 Hz counters, joined to this tick's event_id
 }, RESOLUTION_POLL_INTERVAL_MS);
 
 // Stall safety-net: catches buffering that doesn't fire a 'waiting' event
