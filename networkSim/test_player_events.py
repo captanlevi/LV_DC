@@ -117,10 +117,10 @@ def test_player_events():
     assert x["ts"] == 5e11 + x["pn"] and x["wall"] == 5e11 + x["pn"] and x["el"] == 1 and x["attached"] is True
     assert {"ct", "rs", "ns", "w", "h", "paused", "ended", "rate", "buf", "top", "src"} <= set(x)
     # el_id / src_key on the label events; a new element, a new id
-    assert {(e["el_id"], e["src_key"]) for e in r["sent"]} == {(1, r["keys"]["blob"]), (2, "MediaStream")}
+    assert {(e["el_id"], e["src_key"]) for e in r["sent"]} == {(1, r["keys"]["blob"]), (2, "MediaStream#1")}
     k = r["keys"]
-    assert k["blob"].startswith("blob:") and len(k["blob"]) == 13 and k["ms"] == "MediaStream"
-    assert k["msh"] == "MediaSourceHandle" and k["url"].startswith("url:") and k["none"] == ""
+    assert k["blob"].startswith("blob:") and len(k["blob"]) == 13 and k["ms"] == "MediaStream#1"
+    assert k["msh"] == "MediaSourceHandle#2" and k["url"].startswith("url:") and k["none"] == ""
     assert not any(m.get("kind") == "video-events-batch" for m in r["side"])
     # background: one key per batch, tabbed; the export joins them in key order
     keys = sorted(r["store"])

@@ -3283,6 +3283,8 @@ class BrowserSession:
         self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
         self.error_watch.held_fn = self._lowstate_held
         self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
+        # v3 A1 (t67): content.js's rVFC aggregates, on unless LVQOE_RVFC=0 (the gate's callback-off arm); meta.json rvfc
+        self.rvfc = {"enabled": os.environ.get("LVQOE_RVFC", "1") != "0", "config_set": False}
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
         self.censored: dict | None = None         # the stuck-player censoring (am. 6): time, reason, shaper state
         self.lowest_rung: dict | None = None      # the stuck-player rule's rung (kbit, source; meta.json)
@@ -3385,9 +3387,15 @@ class BrowserSession:
             sw, tmp_tab = _ext_page()
             if sw is not None:
                 sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats'], r))", await_promise=True)
+                # v3: stale side-stream batches out; this session's extension config in (A1: rVFC on / off)
+                sw.eval("new Promise(r => chrome.storage.local.get(null, d => chrome.storage.local.remove("
+                        "Object.keys(d).filter(k => k.startsWith('side:')), r)))", await_promise=True)
+                sw.eval("new Promise(r => chrome.storage.local.set({lvqoe_config: %s}, r))"
+                        % json.dumps({"rvfc": self.rvfc["enabled"]}), await_promise=True)
+                self.rvfc["config_set"] = True
                 sw.close()
                 _close_target(tmp_tab)
-                print("[browser] Extension storage cleared", flush=True)
+                print(f"[browser] Extension storage cleared; config rvfc={self.rvfc['enabled']}", flush=True)
         except Exception as e:
             print(f"[browser] Could not pre-clear extension storage: {e}", flush=True)
 
