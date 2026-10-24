@@ -1110,6 +1110,7 @@ if __name__ == "__main__":
                               video_stats=browser.video_stats, geometry_target=browser.geometry_target,
                               login_state=browser.login_state, room_rotation=browser.room_rotation,
                               tt_room_choice=browser.tt_room_choice, room_ended=browser.room_ended,
+                              pin_check=browser.pin_check,                             # WA2 r1: landed vs given
                               stream_ended=browser.stream_ended,
                               stream_read_timing=({**(browser.stream_watch.timing() if browser.stream_watch else {}),
                                                    **({"yt_ladder": browser.yt_ladder.timing()} if browser.yt_ladder

@@ -1627,6 +1627,54 @@ def _video_is_advancing(page: CDPPage) -> bool:
     return t1 is not None and t1 > t0
 
 
+# WA2 r1 (00:07, peter): a pinned tt room page (/@user/live) ran the tt pick, whose `a[href*="/@"][href*="/live"]` took
+# the side nav's first "Suggested LIVE creator" (another room), and nothing compared the landed room with the intended
+# one. A room page is never picked from, and every given first_url / picked room is checked after navigation (levi 00:09:
+# every path): the identity is the tt @user, the twitch channel, the yt channel @handle; None = not verifiable, recorded.
+_TT_ROOM_RE = re.compile(r"tiktok\.com/@([^/?#]+)/live", re.I)
+_TW_CHANNEL_RE = re.compile(r"twitch\.tv/([A-Za-z0-9_]{2,})/?(?:[?#]|$)", re.I)
+_TW_NOT_CHANNEL = {"directory", "videos", "search", "settings", "p", "downloads", "turbo", "jobs"}
+_YT_HANDLE_RE = re.compile(r"youtube\.com/(@[^/?#]+)", re.I)
+# the yt player's own owner (the watch page a /@handle/live lands on carries no handle in its URL)
+_YT_OWNER_JS = ("(function(){try{const p=document.querySelector('#movie_player');const r=p&&p.getPlayerResponse&&"
+                "p.getPlayerResponse();const m=r&&r.microformat&&r.microformat.playerMicroformatRenderer;"
+                "return (m&&m.ownerProfileUrl)||null}catch(e){return null}})()")
+
+
+def page_identity(platform: str, url: str | None) -> str | None:
+    """The room / channel a URL names (lower case): tt @user of a /@user/live page, a twitch channel page's channel, a
+    youtube /@handle; None for anything else (a directory, a watch page, a feed)."""
+    u = url or ""
+    if platform == "tiktok":
+        m = _TT_ROOM_RE.search(u)
+        return ("@" + m.group(1).lstrip("@")).lower() if m else None
+    if platform == "twitch":
+        m = _TW_CHANNEL_RE.search(u)
+        return m.group(1).lower() if m and m.group(1).lower() not in _TW_NOT_CHANNEL else None
+    if platform == "youtube":
+        m = _YT_HANDLE_RE.search(u)
+        return m.group(1).lower() if m else None
+    return None
+
+
+def identity_check(platform: str, intended_url: str | None, page) -> dict:
+    """{intended, landed, ok}: ok False = the page landed elsewhere (a named startup failure), None = not verifiable
+    (no intended identity, or the landed one unreadable: recorded, never an abort)."""
+    intended = page_identity(platform, intended_url)
+    rec: dict = {"intended_url": intended_url, "intended": intended, "landed": None, "ok": None}
+    try:
+        href = page.eval("location.href")
+        rec["landed_url"] = href
+        landed = page_identity(platform, page.eval(_YT_OWNER_JS)) if platform == "youtube" else page_identity(platform, href)
+    except Exception as exc:
+        rec["error"] = repr(exc)[:200]
+        landed = None
+    rec["landed"] = landed
+    if intended and landed:
+        rec["ok"] = intended == landed
+    return rec
+
+
 def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first_url: str | None = None,
                       exclude: list[str] | None = None, record: dict | None = None, claim=None) -> str | None:
     """Returns the list URL that delivered a playing live video (None if none did). claim(url), when given, is called with
@@ -1661,6 +1709,8 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
         pick_js = _PICK_STREAM_JS.get(platform, "null")
         if platform == "twitch" and "/directory/" not in url:
             pick_js = "null"          # a channel page (esports rotation): no card to click; never click away from it
+        if platform == "tiktok" and _TT_ROOM_RE.search(url):
+            pick_js = "null"          # a room page (a W-A pin): never click into the side nav's suggested rooms (WA2 r1)
         if pick_js.strip() != "null":
             card_js = _CARD_READY_JS.get(platform)
             if card_js:
@@ -3558,6 +3608,7 @@ class BrowserSession:
         self.video_stats: str | None = None      # twitch Video Stats overlay result (meta.json)
         self.abort_at: float | None = None
         self.tt_room_choice: dict | None = None   # tt: candidates, tries and the chosen room (meta.json)
+        self.pin_check: dict | None = None        # the landed room / channel vs the given first_url (meta.json; WA2 r1)
         self.channel_pick: dict | None = None     # twitch / tt: the channel cap's state at the pick (meta.json channel_pick)
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.stream_ended: dict | None = None     # yt / twitch: the stream_ended abort's detail (meta.json)
@@ -3729,15 +3780,21 @@ class BrowserSession:
             if first and "/directory/" not in first and _norm_room(first) in set(sib):
                 self.tw_pick["first_url_held_by_sibling"] = first     # t58 L-7: never the channel a sibling plays
                 first = None
+            nav_first = first
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=first,
                                               exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)
                                                              | set((cap or {}).get("capped") or [])),
                                               record=self.tw_pick,
                                               claim=lambda u: publish_stream(self._session_dir, "twitch", u, "intent"))
         else:
+            nav_first = self.first_url
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
         if not self.list_url:
             raise RuntimeError(f"Failed to navigate to a live {self.platform} stream")
+        if self.platform != "tiktok" or self.first_url:          # tt unpinned: checked per try in _tt_choose_room
+            nav = self.first_url if self.platform != "twitch" else nav_first
+            if nav:
+                self._check_landed(nav)
         publish_stream(self._session_dir, self.platform, self._page.eval("location.href") or self.list_url)
 
         self._t_entry = time.time()   # the stream entry: Q am. 10's 60 s for an ad-free pick count from here
@@ -3903,6 +3960,14 @@ class BrowserSession:
             self._shooter.start()
             print(f"[browser] Screenshots every {SHOT_INTERVAL_S:.0f} s → {self._session_dir / 'shots'}", flush=True)
 
+    def _check_landed(self, nav: str) -> None:
+        """The landed room / channel vs the URL navigated (WA2 r1): a mismatch is a named startup failure (pin_mismatch),
+        recorded in meta pin_check; an unverifiable identity is recorded, never an abort."""
+        self.pin_check = identity_check(self.platform, nav, self._page)
+        if self.pin_check["ok"] is False:
+            raise RuntimeError(f"pin_mismatch: wanted {self.pin_check['intended']}, landed {self.pin_check['landed']} "
+                               f"({self.pin_check.get('landed_url')})")
+
     def _tt_choose_room(self) -> str | None:
         """tt: pick a live, playing room that no recent session used (see TT_* above); returns the list URL or None."""
         page = self._page
@@ -3967,6 +4032,10 @@ class BrowserSession:
                     page.navigate(c["href"])
                     _wait_for_load(page, timeout=15)
                 ok, detail = _tt_confirm_playing(page, TT_QUICK_CONFIRM_S)
+                if ok and not c.get("fallback"):        # levi 00:09: the landed room is the picked one, else next
+                    t["identity"] = idc = identity_check("tiktok", c["href"], page)
+                    if idc["ok"] is False:
+                        ok, detail = False, {"dead": "room_mismatch", "landed": idc["landed"]}
                 if ok:
                     t["t_playing"] = time.time()
                     ok, detail = _tt_preroll(page, TT_PREROLL_S)
