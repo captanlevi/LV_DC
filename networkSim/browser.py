@@ -2348,12 +2348,13 @@ DRAIN_POLL_S = 0.1
 class CaptureDrain:
     """v3 A12 (levi 21:06 / 23:19; peter's test 23:20: a frozen page stalls in-flight bodies, Fetch blocking does not):
     after the label export and before Page.close (which aborts in-flight responses), a CDP client of its own on the page
-    fails every NEW request (Fetch.enable {urlPattern "*", stage Request} on the page and on every worker target it
-    auto-attaches; each Fetch.requestPaused -> Fetch.failRequest Aborted, counted) while in-flight responses finish, then
+    fails every NEW request (Fetch.enable {urlPattern "*", stage Request} on the page and on every worker and out-of-process
+    iframe target it auto-attaches; each Fetch.requestPaused -> Fetch.failRequest Aborted, counted) while in-flight responses finish, then
     waits until the session's downstream bytes are flat for DRAIN_FLAT_S, or DRAIN_MAX_S. The connection stays open
     (interception on) until close(), called after Page.close. Never fatal: errors are recorded. run() -> meta.json drain."""
 
     WORKER_TYPES = ("worker", "shared_worker", "service_worker")
+    FRAME_TYPES = ("iframe",)       # brad 16:39: an out-of-process iframe (a yt ad iframe, an embed) is its own target
     PATTERNS = {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]}
 
     def __init__(self, ws_url: str, read_bytes, source: str, ws_factory=None, clock=time.monotonic, sleep=time.sleep):
@@ -2361,8 +2362,10 @@ class CaptureDrain:
         self.ws_factory = ws_factory or (lambda: websocket.WebSocket())
         self.ws = None
         self.seq = 0
-        self.failed = {"page": 0, "worker": 0}
+        self.failed = {"page": 0, "worker": 0, "frame": 0}
         self.workers = 0
+        self.frames = 0
+        self.kind: dict[str, str] = {}             # attached session id -> "worker" | "frame"
 
     def _send(self, method: str, params: dict, session_id: str | None = None) -> None:
         self.seq += 1
@@ -2371,12 +2374,18 @@ class CaptureDrain:
 
     def handle(self, msg: dict) -> None:
         m, prm, sid = msg.get("method"), msg.get("params") or {}, msg.get("sessionId")
-        if m == "Target.attachedToTarget" and (prm.get("targetInfo") or {}).get("type") in self.WORKER_TYPES:
-            self.workers += 1
+        ttype = (prm.get("targetInfo") or {}).get("type") if m == "Target.attachedToTarget" else None
+        if ttype in self.WORKER_TYPES or ttype in self.FRAME_TYPES:
+            kind = "worker" if ttype in self.WORKER_TYPES else "frame"
+            self.kind[prm.get("sessionId")] = kind
+            if kind == "worker":
+                self.workers += 1
+            else:
+                self.frames += 1
             self._send("Fetch.enable", self.PATTERNS, prm.get("sessionId"))
             self._send("Runtime.runIfWaitingForDebugger", {}, prm.get("sessionId"))
         elif m == "Fetch.requestPaused":
-            self.failed["worker" if sid else "page"] += 1
+            self.failed[self.kind.get(sid, "worker") if sid else "page"] += 1
             self._send("Fetch.failRequest", {"requestId": prm.get("requestId"), "errorReason": "Aborted"}, sid)
 
     def _pump(self, until: float) -> None:
@@ -2428,6 +2437,7 @@ class CaptureDrain:
         rec["wait_s"] = round(self.clock() - t0, 3)
         rec["requests_failed"] = dict(self.failed)
         rec["workers_attached"] = self.workers
+        rec["frames_attached"] = self.frames
         return rec
 
     def close(self) -> None:

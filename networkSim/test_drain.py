@@ -70,16 +70,21 @@ def test_quiet_and_blocking():
     c = Clock()
     ev = [{"method": "Target.attachedToTarget", "params": {"sessionId": "W1", "targetInfo": {"type": "worker"}}},
           {"method": "Fetch.requestPaused", "params": {"requestId": "p1"}},
-          {"method": "Fetch.requestPaused", "params": {"requestId": "w1"}, "sessionId": "W1"}]
+          {"method": "Fetch.requestPaused", "params": {"requestId": "w1"}, "sessionId": "W1"},
+          {"method": "Target.attachedToTarget", "params": {"sessionId": "F1", "targetInfo": {"type": "iframe"}}},
+          {"method": "Fetch.requestPaused", "params": {"requestId": "f1"}, "sessionId": "F1"},
+          {"method": "Target.attachedToTarget", "params": {"sessionId": "X1", "targetInfo": {"type": "other"}}}]
     ws = FakeWS(c, ev)
     d = B.CaptureDrain("ws://x", _bytes(c, 1.0), "lvi_yt1", ws_factory=lambda: ws, clock=c, sleep=c.sleep)
     r = d.run()
     assert r["blocked"] is True and r["reason"] == "quiet" and r["error"] is None, r
     assert 1.0 + B.DRAIN_FLAT_S - 0.15 <= r["wait_s"] <= 1.0 + B.DRAIN_FLAT_S + 0.3, r
-    assert r["bytes_during"] == 1000 and r["requests_failed"] == {"page": 1, "worker": 1} and r["workers_attached"] == 1
+    assert r["bytes_during"] == 1000 and r["requests_failed"] == {"page": 1, "worker": 1, "frame": 1}
+    assert r["workers_attached"] == 1 and r["frames_attached"] == 1             # brad 16:39: OOPIF targets blocked too
     m = [(x["method"], x.get("sessionId")) for x in ws.sent]
     assert m[:2] == [("Target.setAutoAttach", None), ("Fetch.enable", None)]
     assert ("Fetch.enable", "W1") in m and ("Fetch.failRequest", None) in m and ("Fetch.failRequest", "W1") in m
+    assert ("Fetch.enable", "F1") in m and ("Fetch.failRequest", "F1") in m and ("Fetch.enable", "X1") not in m
     assert all(x["params"].get("errorReason") == "Aborted" for x in ws.sent if x["method"] == "Fetch.failRequest")
     assert not ws.closed
     d.close()
