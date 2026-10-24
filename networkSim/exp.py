@@ -1139,6 +1139,7 @@ if __name__ == "__main__":
                 if hit:
                     meta_extra.update(channel_handle=hit["handle"], channel_type=hit["type"])
             browser.stop()
+            meta_extra["drain"] = browser.drain       # v3 A12: run inside stop(), after the label export
             if browser.fs_keeper is not None:           # t53 (a): fullscreen in trio, the focus keeper's record
                 meta_extra["fullscreen_keeper"] = browser.fs_keeper
             meta_extra["media_decoders"] = browser.media_decoders       # decision A item 3 (every platform)
