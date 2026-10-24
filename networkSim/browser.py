@@ -1662,6 +1662,22 @@ def page_identity(platform: str, url: str | None) -> str | None:
     return None
 
 
+# brad / levi 00:45: after a re-entry the reload's player response / owner link can still be loading, and "unverifiable"
+# on a pinned session stops the whole A/B: the re-entry read is retried while unreadable (the start path reads once)
+IDENTITY_RETRY_S, IDENTITY_POLL_S = 5.0, 0.5
+
+
+def identity_check_settled(platform: str, intended_url: str | None, page, retry_s: float = IDENTITY_RETRY_S) -> dict:
+    """identity_check, re-read every IDENTITY_POLL_S for up to retry_s while the landed identity is unreadable (ok None
+    with an intended identity); the attempts are recorded."""
+    rec, n, end = identity_check(platform, intended_url, page), 1, time.time() + retry_s
+    while rec["ok"] is None and rec["intended"] and time.time() < end:
+        time.sleep(IDENTITY_POLL_S)
+        rec, n = identity_check(platform, intended_url, page), n + 1
+    rec["attempts"] = n
+    return rec
+
+
 def identity_check(platform: str, intended_url: str | None, page) -> dict:
     """{intended, landed, ok}: ok False = the page landed elsewhere (a named startup failure), None = not verifiable
     (no intended identity, or the landed one unreadable: recorded, never an abort)."""
@@ -4031,7 +4047,7 @@ class BrowserSession:
         named abort "<pin|room>_mismatch (reentry): ..." (the session never silently changes room), recorded in the
         re-entry record (identity)."""
         nav = self.first_url if self.first_url and page_identity(self.platform, self.first_url) else self.channel_url
-        idc = identity_check(self.platform, nav, self._page)
+        idc = identity_check_settled(self.platform, nav, self._page)
         r["identity"] = idc
         why = self._identity_failure(idc)
         if why:

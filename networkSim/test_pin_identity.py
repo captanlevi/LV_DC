@@ -118,7 +118,8 @@ def test_a_landed_mismatch_is_a_named_startup_failure():
         assert _raises(s._check_landed, ROOM).startswith("pin_mismatch: wanted @stef_gamingg")
         # levi 00:38 S2: a PINNED session whose identity cannot be read is refused, never passed
         yt = _session("youtube", Page("https://www.youtube.com/watch?v=x", owner=None))
-        assert _raises(yt._check_landed, "https://www.youtube.com/@AlJazeeraEnglish/live").startswith("pin_mismatch: unverifiable")
+        assert _raises(yt._check_landed, "https://www.youtube.com/@AlJazeeraEnglish/live").startswith(
+            "pin_mismatch: unverifiable")                       # the start path reads once (levi 00:45)
         s._page = Page(ROOM)
         s._check_landed(ROOM)
         assert s.pin_check["ok"] is True
@@ -158,6 +159,50 @@ def test_every_reentry_checks_the_sessions_own_room():
             os.environ["LVDC_PICK_PINNED"] = saved
 
 
+def test_an_unreadable_identity_is_re_read_before_refusing():
+    """levi 00:45: at a re-entry the owner read is retried every 0.5 s for <= 5 s while unreadable: readable at 2 s ->
+    no abort; unreadable for 5 s -> pin_mismatch (reentry): unverifiable; the attempts recorded."""
+    import os
+
+    class Clock:                                     # fake time: sleep advances it
+        t = 1000.0
+
+        def time(self):
+            return Clock.t
+
+        def sleep(self, s):
+            Clock.t += s
+
+    class Owner(Page):
+        def __init__(self, ready_after_s):
+            super().__init__("https://www.youtube.com/watch?v=x")
+            self.ready_at = Clock.t + ready_after_s
+
+        def eval(self, js, await_promise=False):
+            if js == B._YT_OWNER_JS:
+                return "http://www.youtube.com/@AlJazeeraEnglish" if Clock.t >= self.ready_at else None
+            return super().eval(js)
+    saved_t, saved_env = B.time, os.environ.get("LVDC_PICK_PINNED")
+    try:
+        B.time = Clock()
+        os.environ["LVDC_PICK_PINNED"] = "{}"
+        yt = "https://www.youtube.com/@AlJazeeraEnglish/live"
+        s = _session("youtube", Owner(2.0), first_url=yt)
+        r = {"ok": True}
+        s._check_reentry_identity(r)
+        assert r["ok"] is True and s.abort_reason is None and r["identity"]["attempts"] == 5
+        s = _session("youtube", Owner(60.0), first_url=yt)
+        r = {"ok": True}
+        s._check_reentry_identity(r)
+        assert r["ok"] is False and s.abort_reason.startswith("pin_mismatch (reentry): unverifiable")
+        assert r["identity"]["attempts"] == 11                           # 0, 0.5, ..., 5.0 s
+    finally:
+        B.time = saved_t
+        os.environ.pop("LVDC_PICK_PINNED", None)
+        if saved_env is not None:
+            os.environ["LVDC_PICK_PINNED"] = saved_env
+
+
 def test_wiring():
     src = (HERE / "browser.py").read_text()
     assert 'if ok and not c.get("fallback"):' in src and '{"dead": "room_mismatch"' in src   # unpinned tt tries
@@ -170,6 +215,7 @@ def main() -> int:
     test_identity_check_names_a_mismatch_and_never_aborts_unverifiable()
     test_a_landed_mismatch_is_a_named_startup_failure()
     test_every_reentry_checks_the_sessions_own_room()
+    test_an_unreadable_identity_is_re_read_before_refusing()
     test_wiring()
     print("test_pin_identity: ok")
     return 0
