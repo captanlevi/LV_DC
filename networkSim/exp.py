@@ -25,7 +25,7 @@ import threading
 import argparse
 import asyncio
 
-from utils.netStat import net_episode_generator, family_episode_generator, session_shaping
+from utils.netStat import net_episode_generator, family_episode_generator, session_shaping, replay_generator, replay_record
 from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
                            get_higher_state, get_lower_state, schedule_of)
@@ -635,6 +635,18 @@ if __name__ == "__main__":
              "geometry.py); default: the platform's pinned player size. Recorded in meta.json.",
     )
     parser.add_argument(
+        "--replay-schedule",
+        default=None,
+        help="v3 W-A (levi 17:1x): replay one fixed schedule (states 1->10->1, --replay-step-s each, every draw seeded by "
+             "this seed only) so every round shares it; dry only; never with --hold-state, --lever or steering.",
+    )
+    parser.add_argument(
+        "--replay-step-s",
+        type=float,
+        default=None,
+        help="v3 W-A: the replayed schedule's step (default utils.netStat.REPLAY_STEP_S, 79 s: a 25 min session).",
+    )
+    parser.add_argument(
         "--lever",
         default=None,
         help="t67 B4 (prereg b6bc9246): the STALL lever, JSON {lambda_per_s, d_lo_s, d_hi_s} (a lever window only); "
@@ -801,6 +813,14 @@ if __name__ == "__main__":
     # record (rules, sigma per state, factor, seeds) goes to meta.json shaper
     WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)
     SHAPER_OPTS.update(walk_rng=WALK_RNG, dl_factor=SHAPING_REC["dl_factor"]["value"])
+    if args.replay_schedule:              # v3 W-A: one fixed schedule for every round; the session-name draws are unused
+        if args.hold_state is not None or args.lever or os.environ.get("LVDC_STEER_TABLE") is not None:
+            sys.exit("--replay-schedule excludes --hold-state, --lever and steering (W-A's arms differ only in the flag)")
+        import functools
+        _step = args.replay_step_s or None
+        SHAPER_GEN = functools.partial(replay_generator, replay_seed=args.replay_schedule,
+                                       **({"step_s": _step} if _step else {}))
+        SHAPING_REC = {**SHAPING_REC, "replay": replay_record(args.replay_schedule, *([_step] if _step else []))}
     # prereg d32a48ce (label diversity at the 10-22 tip, item 2): with LVDC_STEER_TABLE set (orchestrate --trio-steer),
     # the session's dwell weights over the shaper states are drawn now, at session start, from the last post's deficit
     # table and the base matrix only; nothing during the session feeds back. A balancer band start (--initial-state)

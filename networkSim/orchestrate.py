@@ -308,6 +308,7 @@ LAST_COVERAGE: dict[str, dict] = {}       # platform -> the latest coverage reco
 # t53 round pins (levi 00261: allowed steering if recorded; default off, trio only): platform -> {category, channel, state,
 # geometry, reason}; the slot's pick is overridden where given and the session's meta.json records pick_pinned
 TRIO_PINS: dict[str, dict] = {}
+REPLAY: dict | None = None   # v3 W-A: --replay-schedule {seed, step_s}, passed to every trio session
 TRIO_RECORD = False      # --trio-record: this run's sessions are of record (counted; record.ERA), steering counts only those
 # t53 (a), default off: fullscreen is in the yt slots' geometry support (restart §7: the per-session draw; before it, the
 # coverage target's coupling); the slot's process then runs single mode's fullscreen path with a focus keeper. Off: the
@@ -828,6 +829,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         cmd += ["--tw-low-latency", ll["drawn"]]
     if hold:
         cmd += ["--hold-state", pin["state"]]
+    if REPLAY and not hold:                               # v3 W-A: every session replays the same schedule
+        cmd += ["--replay-schedule", REPLAY["seed"]] + (["--replay-step-s", str(REPLAY["step_s"])] if REPLAY.get("step_s") else [])
     lever_args = lever_cmd(p, hold)
     if lever_args is None:
         raise RuntimeError(f"lever window but no lever params for {p}; refused")   # load_params guarantees all three
@@ -1223,6 +1226,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "Required with --trio-record.")
     parser.add_argument("--stratum-force", choices=("steered", "unsteered", "lever"), default=None,
                         help="a dry / gate run's stratum, stated (never with --trio-record); recorded like a drawn one.")
+    parser.add_argument("--replay-schedule", default=None,
+                        help="v3 W-A (levi 17:1x): every session replays one fixed schedule seeded by this seed (exp.py "
+                             "--replay-schedule: states 1->10->1); dry only (never with --trio-record), steering off.")
+    parser.add_argument("--replay-step-s", type=float, default=None,
+                        help="v3 W-A: the replayed schedule's step (exp.py default 79 s, a 25 min session).")
     parser.add_argument("--lever-params", default=None,
                         help="collector v3 B4 x B5: the lever window's values per platform, JSON {youtube|twitch|tiktok: "
                              "{lambda_per_s, d_lo_s, d_hi_s}} (the frozen line's; lever_params.load_params). Needed when the "
@@ -1410,6 +1418,16 @@ def arg_refusal(args, environ) -> str | None:
         return "--stratum-force needs --concurrent"
     if args.lever_params and not (args.expect_stratum or args.stratum_force):
         return "--lever-params only with --expect-stratum / --stratum-force (a lever window's values)"
+    if args.replay_schedule and args.trio_record:     # v3 W-A: a replayed schedule is a dry instrument test, never record
+        return "--replay-schedule is dry only: never with --trio-record"
+    if args.replay_schedule and args.trio_steer:
+        return "--replay-schedule needs steering off (W-A's arms differ only in the instrument flag)"
+    if args.replay_step_s is not None and not args.replay_schedule:
+        return "--replay-step-s only with --replay-schedule"
+    if args.replay_step_s is not None and not (10.0 <= args.replay_step_s <= 600.0):
+        return f"--replay-step-s {args.replay_step_s}: outside [10, 600] s"
+    if args.replay_schedule and args.stratum_force == "lever":
+        return "--replay-schedule excludes a lever window (the schedule is fixed)"
     if args.lever_params_sha256 and not args.lever_params:
         return "--lever-params-sha256 only with --lever-params"
     if args.lever_params:
@@ -1470,6 +1488,7 @@ if __name__ == "__main__":
                 sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1 (yt fullscreen needs --trio-yt-fullscreen)")
             TRIO_PINS[plat] = pin
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
+        REPLAY = ({"seed": args.replay_schedule, "step_s": args.replay_step_s} if args.replay_schedule else None)
         WINDOW_STRATUM = None
         if args.expect_stratum or args.stratum_force:      # collector v3 B5: before steering is set up and before trio_up
             import n_draw
