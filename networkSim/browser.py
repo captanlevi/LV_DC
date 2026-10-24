@@ -2339,6 +2339,104 @@ class MasterListener:
                 pass
 
 
+
+DRAIN_FLAT_S = 0.5     # v3 A12: downstream bytes flat this long = the in-flight responses landed
+DRAIN_MAX_S = 5.0      # ... or this cap (the pcap end moves by at most this)
+DRAIN_POLL_S = 0.1
+
+
+class CaptureDrain:
+    """v3 A12 (levi 21:06 / 23:19; peter's test 23:20: a frozen page stalls in-flight bodies, Fetch blocking does not):
+    after the label export and before Page.close (which aborts in-flight responses), a CDP client of its own on the page
+    fails every NEW request (Fetch.enable {urlPattern "*", stage Request} on the page and on every worker target it
+    auto-attaches; each Fetch.requestPaused -> Fetch.failRequest Aborted, counted) while in-flight responses finish, then
+    waits until the session's downstream bytes are flat for DRAIN_FLAT_S, or DRAIN_MAX_S. The connection stays open
+    (interception on) until close(), called after Page.close. Never fatal: errors are recorded. run() -> meta.json drain."""
+
+    WORKER_TYPES = ("worker", "shared_worker", "service_worker")
+    PATTERNS = {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]}
+
+    def __init__(self, ws_url: str, read_bytes, source: str, ws_factory=None, clock=time.monotonic, sleep=time.sleep):
+        self.ws_url, self.read_bytes, self.source, self.clock, self.sleep = ws_url, read_bytes, source, clock, sleep
+        self.ws_factory = ws_factory or (lambda: websocket.WebSocket())
+        self.ws = None
+        self.seq = 0
+        self.failed = {"page": 0, "worker": 0}
+        self.workers = 0
+
+    def _send(self, method: str, params: dict, session_id: str | None = None) -> None:
+        self.seq += 1
+        self.ws.send(json.dumps({"id": self.seq, "method": method, "params": params,
+                                 **({"sessionId": session_id} if session_id else {})}))
+
+    def handle(self, msg: dict) -> None:
+        m, prm, sid = msg.get("method"), msg.get("params") or {}, msg.get("sessionId")
+        if m == "Target.attachedToTarget" and (prm.get("targetInfo") or {}).get("type") in self.WORKER_TYPES:
+            self.workers += 1
+            self._send("Fetch.enable", self.PATTERNS, prm.get("sessionId"))
+            self._send("Runtime.runIfWaitingForDebugger", {}, prm.get("sessionId"))
+        elif m == "Fetch.requestPaused":
+            self.failed["worker" if sid else "page"] += 1
+            self._send("Fetch.failRequest", {"requestId": prm.get("requestId"), "errorReason": "Aborted"}, sid)
+
+    def _pump(self, until: float) -> None:
+        while self.clock() < until:
+            try:
+                raw = self.ws.recv()
+            except websocket.WebSocketTimeoutException:
+                return
+            if raw:
+                self.handle(json.loads(raw))
+
+    def run(self) -> dict:
+        rec = {"blocked": None, "error": None, "wait_s": None, "reason": None, "bytes_during": None,
+               "source": self.source, "flat_s": DRAIN_FLAT_S, "max_s": DRAIN_MAX_S}
+        t0 = self.clock()
+        try:
+            self.ws = self.ws_factory()
+            self.ws.settimeout(DRAIN_POLL_S / 2)
+            self.ws.connect(self.ws_url)
+            self._send("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
+            self._send("Fetch.enable", self.PATTERNS)
+            rec["blocked"] = True
+        except Exception as exc:                        # never fatal: the session ends as before, recorded
+            rec["blocked"], rec["error"] = False, repr(exc)[:200]
+        b0 = self.read_bytes()
+        if b0 is None:
+            rec["reason"] = "no_counter"
+        else:
+            last_b, last_change = b0, self.clock()
+            while True:
+                if self.ws is not None and rec["blocked"]:
+                    try:
+                        self._pump(self.clock() + DRAIN_POLL_S)
+                    except Exception as exc:
+                        rec["error"] = rec["error"] or repr(exc)[:200]
+                        self.sleep(DRAIN_POLL_S)
+                else:
+                    self.sleep(DRAIN_POLL_S)
+                b, now = self.read_bytes(), self.clock()
+                if b is not None and b != last_b:
+                    last_b, last_change = b, now
+                if now - last_change >= DRAIN_FLAT_S:
+                    rec["reason"] = "quiet"
+                    break
+                if now - t0 >= DRAIN_MAX_S:
+                    rec["reason"] = "cap"
+                    break
+            rec["bytes_during"] = last_b - b0
+        rec["wait_s"] = round(self.clock() - t0, 3)
+        rec["requests_failed"] = dict(self.failed)
+        rec["workers_attached"] = self.workers
+        return rec
+
+    def close(self) -> None:
+        try:
+            if self.ws is not None:
+                self.ws.close()
+        except Exception:
+            pass
+
 def _confirm_advancing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
     """After a re-entry (yt / twitch): play pressed while paused; the playhead advancing >= 2 s at readyState >= 3 within
     `seconds`."""
@@ -3451,6 +3549,7 @@ class BrowserSession:
         self.room_ended: dict | None = None       # tt: the dead-room abort's detail (meta.json)
         self.stream_ended: dict | None = None     # yt / twitch: the stream_ended abort's detail (meta.json)
         self.stream_watch: "StreamEndedWatch | None" = None
+        self.drain: dict | None = None             # v3 A12: meta.json drain (CaptureDrain.run, inside stop())
         self.lowstate_hold_available: bool | None = None   # yt / twitch: False when a hold check found no net labels
         self.player_dead_watch: dict = {"low_spans": [], "dead_clocks": []}   # tt: TTRoomWatch's own view (record)
         self.player_dead: dict | None = None      # tt: the dead-player abort's detail (meta.json)
@@ -4408,12 +4507,25 @@ class BrowserSession:
         if self._session_dir:
             _export_via_service_worker(self._session_dir)
 
+        # v3 A12: the labels are exported; new requests now fail while in-flight responses land (bytes flat or 5 s), so
+        # Page.close no longer cuts the last media body short (yt_100048)
+        drain = None
+        if self._page and getattr(self, "_ws_url", None):   # a start that failed early never set it
+            try:
+                drain = CaptureDrain(self._ws_url, _shaped_rx_bytes if RX_OWN_IFB else _rx_bytes, room_rx_source())
+                self.drain = drain.run()
+            except Exception as exc:
+                self.drain = {"blocked": False, "error": repr(exc)[:200]}
+            print(f"[browser] drain: {self.drain}", flush=True)
+
         # Close the tab — triggers chrome.tabs.onRemoved in the extension
         if self._page:
             try:
                 self._page.call("Page.close")
             except Exception:
                 pass
+        if drain is not None:
+            drain.close()                          # interception off only after the tab is gone
 
         self._stop.set()
         if self._master is not None:
