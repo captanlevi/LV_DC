@@ -68,6 +68,54 @@ def test_error_onset_shot():
     assert b._pop_shot_reason() == "error_page" and b._pop_shot_reason() is None
 
 
+def test_pending_trigger_shoots():
+    """The shooter's `pending` (the error-page onset) behaviourally: a content.js request in the same poll wins and the
+    Python reason waits for the next poll; a raising `pending` costs no shot and does not stop the loop."""
+    import base64
+    import io
+    import json
+    import tempfile
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36)).save(buf, format="JPEG")
+    jpeg = base64.b64encode(buf.getvalue()).decode()
+
+    class Page:
+        def eval(self, js):
+            if "lvqoeShotReq" in js:                   # the same content.js request on every poll: one event shot
+                return json.dumps(["7", "1000", "1|stall_onset|e1"])
+            return "null"                              # _PLAYER_RECT_JS
+
+        def call(self, method, params):
+            assert method == "Page.captureScreenshot"
+            return {"data": jpeg}
+
+    class Polls:                                       # four polls, no real waiting
+        n = 0
+
+        def wait(self, timeout=None):
+            self.n += 1
+            return self.n > 4
+    queue, calls = ["error_page"], []
+
+    def pending():
+        calls.append(1)
+        if len(calls) == 1:                            # poll 2: the queue raises: no shot, the loop goes on
+            raise RuntimeError("queue broke")
+        return queue.pop(0) if queue else None
+    saved = B.SHOT_SOURCE
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            B.SHOT_SOURCE = "cdp"
+            B._screenshot_loop(Page(), Path(d), Polls(), pending=pending)
+        finally:
+            B.SHOT_SOURCE = saved
+        rows = [json.loads(x) for x in (Path(d) / "index.jsonl").read_text().splitlines()]
+    assert [r["reason"] for r in rows] == ["stall_onset", "error_page"], rows
+    assert rows[1]["capture"] == "cdp" and rows[1]["tick"] == "7"
+    assert len(calls) == 3                             # poll 1: the request won, pending not asked; polls 2-4 asked
+
+
 def test_meta_and_refusal():
     src = (HERE / "exp.py").read_text()
     assert "shot_crop=browser.shot_crop," in src and "shot_triggers_py=browser.shot_triggers_py," in src
@@ -79,6 +127,7 @@ def test_meta_and_refusal():
 def main() -> int:
     test_cadence_and_crop()
     test_error_onset_shot()
+    test_pending_trigger_shoots()
     test_meta_and_refusal()
     print("test_shots_v3: ok")
     return 0

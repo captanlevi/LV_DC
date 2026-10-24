@@ -79,9 +79,21 @@ def test_malformed_master_is_counted():
         raise AssertionError("a non-int BANDWIDTH must raise in the parser")
     except ValueError:
         pass
-    src = (HERE / "browser.py").read_text()
-    i = src.index("self.ladder(body, url, time.time())")
-    assert "try:" in src[i - 120:i] and "self.ladder_errors += 1" in src[i:i + 200]
+    ml = B.MasterListener("ws://unused")                # driven through handle(): the CDP messages of two master reads
+    sent = []
+
+    def send(method, params, sid):
+        sent.append(method)
+        return len(sent)
+    url = "https://usher.ttvnw.net/api/channel/hls/x.m3u8?token=t"
+    for i, body in ((1, bad), (2, MASTER)):
+        ml.handle({"method": "Network.responseReceived", "params": {"requestId": f"r{i}", "response": {"url": url}}}, send)
+        ml.handle({"method": "Network.loadingFinished", "params": {"requestId": f"r{i}"}}, send)
+        ml.handle({"id": len(sent), "result": {"body": body}}, send)
+    assert sent == ["Network.getResponseBody"] * 2
+    assert ml.ladder_errors == 1 and ml.ladder_last_error.startswith("ValueError")
+    assert ml.tw_ladder()["n_reads"] == 2 and len(ml.tw_ladder()["reads"]) == 1       # the next read still records
+    assert ml.latest and ml.latest["from_worker"] is False                           # the rung read is not lost
     off = O.offer_record("twitch", {"tw_ladder": {"n_reads": 2, "reads": [], "errors": 2, "last_error": "ValueError('x')"}})
     assert off["missing"] is True and off["read_errors"] == 2 and off["last_error"] == "ValueError('x')"
 
