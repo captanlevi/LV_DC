@@ -2408,6 +2408,7 @@ class PlayerErrorWatch:
                  frozen_s: float = AD_FROZEN_MAX_S):
         self.confirm_s, self.no_player_s, self.frozen_s = confirm_s, no_player_s, frozen_s
         self.err_since = self.np_since = self.ad_since = None
+        self.on_onset = None                       # v3: called once at each error-page onset (BrowserSession: a shot)
         self.fz_since, self.fz_ct, self.fz_cd = None, None, None   # the frozen-ad run: since, playhead, countdown
         self.ad_runs: list[list[float]] = []
         self.held_fn = None          # yt / twitch (levi 10:27): now -> True while the shaper's low-state hold runs
@@ -2422,6 +2423,11 @@ class PlayerErrorWatch:
         else:
             self.ad_since = None
         if err:
+            if self.err_since is None and self.on_onset is not None:   # v3 (levi 16:57): the error page shot, at onset
+                try:
+                    self.on_onset(now)
+                except Exception:
+                    pass
             self.err_since = self.err_since or now
             if now - self.err_since >= self.confirm_s:
                 return {"reason": "error_page", "since": self.err_since, "t_trigger": now, "error": err, "ad": ad}
@@ -2795,7 +2801,13 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 froze = on_frozen(frozen_s) is not False      # False: held (yt / twitch low states), asked again next tick
 
 
-SHOT_INTERVAL_S = 10.0
+SHOT_INTERVAL_S = 60.0   # levi 16:57 (v3 gate list): 60 s cadence + event triggers (start, A1 dims change, STALL onset,
+                         # error page); the instrumentation A/B measures the shot cost against a pseudo-shot null
+# levi 17:45 (A7's C5 needs an uncropped shot): "player" (default, as before) crops to the player rect; "viewport" keeps
+# the whole page area (composite: the window's viewport; x11 / cdp: the viewport), so the content box is found in the image
+SHOT_CROPS = ("player", "viewport")
+SHOT_CROP_RAW = os.environ.get("LVQOE_SHOT_CROP", "player")
+SHOT_CROP = SHOT_CROP_RAW if SHOT_CROP_RAW in SHOT_CROPS else "player"   # an unknown value keeps the default, recorded
 SHOT_WIDTH_PX = 640
 SHOT_JPEG_QUALITY = 40
 # shots are grabbed from the X display, outside Chrome's renderer (supervisor 2026-10-17: a CDP capture costs dropped
@@ -2957,7 +2969,7 @@ def _composite_shot(origin: dict, player: dict | None, page: "CDPPage", prev: di
     vx, vy = origin["viewport_in_frame"]
     vw, vh = origin["viewport_px"]
     region, crop = (vx, vy, vw, vh), "viewport"
-    pr = _player_on_screen(region, player) if player else None
+    pr = _player_on_screen(region, player) if player and SHOT_CROP == "player" else None
     if pr:
         region, crop = pr, "player"
     x, y, w, h = region
@@ -3215,9 +3227,11 @@ def _start_fullscreen_keeper(page: "CDPPage") -> dict:
         return {"started": False, "why": repr(exc)[:200]}
 
 
-def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, origin: dict | None = None) -> None:
-    """A small JPEG of the tab every SHOT_INTERVAL_S ('cadence'), plus one at every tier change and every ad start
-    (t37: content.js raises <html data-lvqoe-shot-req="<n>|<reason>|<event_id>">, polled each second). Each shot is
+def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, origin: dict | None = None,
+                     pending=None) -> None:
+    """A small JPEG of the tab every SHOT_INTERVAL_S ('cadence'), plus one at every tier change, ad start, STALL onset and
+    playback start (t37 / v3: content.js raises <html data-lvqoe-shot-req="<n>|<reason>|<event_id>">, polled each second)
+    and at each error-page onset (`pending`: BrowserSession's Python-side triggers). Each shot is
     stamped with the extension's latest tick (<html data-lvqoe-tick>) and its reason, for the human label-vs-screen
     check. Nothing here feeds labels. The loop starts after navigation: a pre-roll that ends during navigation has no
     event shot (laptop run8, yt), and two events within one poll second give one shot (the later reason)."""
@@ -3237,6 +3251,11 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
             if req and req != last_req:
                 reason = req.split("|")[1] if "|" in req else "event"
                 last_req = req
+            if reason is None and pending is not None:   # v3 (levi 16:57): Python-side triggers (the error page onset)
+                try:
+                    reason = pending()
+                except Exception:
+                    reason = None
             if reason is None and time.time() - last_cadence >= SHOT_INTERVAL_S:
                 reason = "cadence"
             if reason is None:
@@ -3290,7 +3309,8 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
                     region = (region[0] + off[0], region[1] + off[1], region[2], region[3])
                 t_js = time.time()
                 # the player rectangle only (supervisor 2026-10-17: the smallest XGetImage), else the viewport
-                pr = _player_on_screen(region, player) if region else None   # the player within it (hot-fix 2)
+                pr = (_player_on_screen(region, player) if region and SHOT_CROP == "player"
+                      else None)                     # the player within it (hot-fix 2); LVQOE_SHOT_CROP=viewport: none
                 if fs:                                 # the screen is the player: crop "player", as readers expect
                     crop = "player"
                 elif pr:
@@ -3407,6 +3427,9 @@ class BrowserSession:
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
         self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
         self.error_watch.held_fn = self._lowstate_held
+        self._shot_reasons: list[str] = []          # v3 (levi 16:57): Python-side shot triggers, consumed by the shooter
+        self.error_watch.on_onset = lambda t: self._shot_reasons.append("error_page")
+        self.shot_crop = {"crop": SHOT_CROP, "env": SHOT_CROP_RAW}   # meta.json shot_crop (levi 17:45)
         self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
         self.frozen_hold_bypassed: list = []         # yt / twitch: a frozen clock's low-state hold skipped, no starvation
         # v3 (t67; levi 18:33): content.js's whole v3 instrument set (A1 / A2 / A3 / A7), on unless LVQOE_INSTRUMENTS=0
@@ -3729,7 +3752,7 @@ class BrowserSession:
         if self._session_dir:
             self._shooter = threading.Thread(
                 target=_screenshot_loop,
-                args=(self._page, self._session_dir / "shots", self._stop, self.shot_origin),
+                args=(self._page, self._session_dir / "shots", self._stop, self.shot_origin, self._pop_shot_reason),
                 daemon=True,
                 name="screenshots",
             )
@@ -4120,6 +4143,9 @@ class BrowserSession:
         """The shaper's low-state hold runs at t."""
         he = self._low_hold_end(t)
         return he is not None and t <= he
+
+    def _pop_shot_reason(self) -> str | None:
+        return self._shot_reasons.pop(0) if self._shot_reasons else None
 
     def _player_error(self, trig: dict) -> None:
         """PlayerErrorWatch's trigger: the session's one recovery as a re-entry (player_dead_reentries), else abort
