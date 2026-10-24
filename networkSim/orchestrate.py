@@ -828,6 +828,10 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         cmd += ["--tw-low-latency", ll["drawn"]]
     if hold:
         cmd += ["--hold-state", pin["state"]]
+    lever_args = lever_cmd(p, hold)
+    if lever_args is None:
+        raise RuntimeError(f"lever window but no lever params for {p}; refused")   # load_params guarantees all three
+    cmd += lever_args
     # shots: CDP in the "cdp" layout (three windows on one screen), X11 crops in the "fb" layout (design §4), each
     # window's own XComposite pixmap in the "composite" layout (pilot-1, probe v3)
     env = {**os.environ, "LVDC_TRIO_RUN": run_id, "LVDC_PREFLIGHT_JSON": str(pf_path),
@@ -1219,6 +1223,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "Required with --trio-record.")
     parser.add_argument("--stratum-force", choices=("steered", "unsteered", "lever"), default=None,
                         help="a dry / gate run's stratum, stated (never with --trio-record); recorded like a drawn one.")
+    parser.add_argument("--lever-params", default=None,
+                        help="collector v3 B4 x B5: the lever window's values per platform, JSON {youtube|twitch|tiktok: "
+                             "{lambda_per_s, d_lo_s, d_hi_s}} (the frozen line's; lever_params.load_params). Needed when the "
+                             "window's stratum is lever (drawn or forced); only with --expect-stratum / --stratum-force.")
     parser.add_argument("--n-draw", action="store_true",
                         help="--concurrent (restart prereg §1): draw this round's N from {3, 4, 5} (weights 0.2 / 0.3 / "
                              "0.5, seeded by the era, the record flag and the round's index in the slots log; n_draw.py) "
@@ -1283,10 +1291,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def stratum_apply(sd: dict | None, expect: str | None, force: str | None, trio_steer: bool) -> tuple[dict | None, bool, str | None]:
+def lever_cmd(platform: str, hold) -> list[str] | None:
+    """collector v3 B4 x B5: the session's --lever argument in a lever window ([] outside one, or for a held decode_stress
+    session, which never levers); None when the window is a lever window without values for this platform."""
+    ws = json.loads(os.environ["LVDC_WINDOW_STRATUM"]) if os.environ.get("LVDC_WINDOW_STRATUM") else None
+    if not ws or ws.get("stratum") != "lever" or hold:
+        return []
+    params = (ws.get("lever_params") or {}).get(platform)
+    return ["--lever", json.dumps(params, sort_keys=True)] if params else None
+
+
+def stratum_apply(sd: dict | None, expect: str | None, force: str | None, trio_steer: bool,
+                  lever_params: tuple[dict, str] | None = None) -> tuple[dict | None, bool, str | None]:
     """collector v3 B5 (levi / peter 18:02-18:03): (the stratum record, steering on?, a refusal or None). sd is stratum_draw's
     draw for this window (None when neither flag is given). steered needs --trio-steer; unsteered turns steering off for the
-    run (logged); lever needs B4's lever flag, which does not exist yet: refused (stop-and-read)."""
+    run (logged); lever (B4 x B5, peter) needs --lever-params (lever_params.load_params: the frozen line's values per platform):
+    steering off (a lever window runs the base schedule plus its episodes), the params and their sha recorded in the
+    stratum record, and every session gets --lever <its platform's params>; without them the window is refused."""
     if not (expect or force):
         return None, trio_steer, None
     if force:                                           # levi 19:00: stated, not drawn: {s, forced: true, k: null}
@@ -1299,7 +1320,11 @@ def stratum_apply(sd: dict | None, expect: str | None, force: str | None, trio_s
         return (sd, True, None) if trio_steer else (sd, False, "stratum steered needs --trio-steer; refused")
     if s == "unsteered":
         return {**sd, "steering_off_by_stratum": bool(trio_steer)}, False, None
-    return sd, trio_steer, "stratum lever: B4's lever arm is not in this collector; refused (stop-and-read, levi 18:02)"
+    if lever_params is None:
+        return sd, trio_steer, "stratum lever needs --lever-params (the frozen line's lever values); refused before trio_up"
+    params, sha = lever_params
+    return {**sd, "lever_params": params, "lever_params_sha256": sha,
+            "steering_off_by_stratum": bool(trio_steer)}, False, None
 
 
 def arg_refusal(args, environ) -> str | None:
@@ -1380,6 +1405,14 @@ def arg_refusal(args, environ) -> str | None:
         return "--expect-stratum needs --concurrent and --n-draw (the stratum is drawn per n_draw window)"
     if args.stratum_force and not args.concurrent:     # levi 19:00: fixed-composition gate arms may force one without --n-draw
         return "--stratum-force needs --concurrent"
+    if args.lever_params and not (args.expect_stratum or args.stratum_force):
+        return "--lever-params only with --expect-stratum / --stratum-force (a lever window's values)"
+    if args.lever_params:
+        try:
+            import lever_params as _lp_mod
+            _lp_mod.load_params(args.lever_params)
+        except (OSError, ValueError) as e:
+            return f"--lever-params: {e}"
     # t67 C8 (levi 18:45 / 18:56), last: the run's kind and its data root agree, fail closed both ways, every mode
     import data_root as _dr
     r = _dr.kind_refusal(bool(args.trio_record), Path(environ.get("LVDC_DATA_ROOT") or _dr.REPO_DATA))
@@ -1439,7 +1472,12 @@ if __name__ == "__main__":
                     _sd = stratum_draw.draw(_RUNS_DIR / _ts.TRIO_DIR / _ts.SLOTS_LOG, record.ERA, TRIO_RECORD)
                 except (RuntimeError, ValueError) as e:
                     sys.exit(str(e))
-            WINDOW_STRATUM, _steer, _ref = stratum_apply(_sd, args.expect_stratum, args.stratum_force, bool(args.trio_steer))
+            _lp = None
+            if args.lever_params:                           # arg_refusal validated it; read once more for the record
+                import lever_params as _lp_mod
+                _lp = _lp_mod.load_params(args.lever_params)
+            WINDOW_STRATUM, _steer, _ref = stratum_apply(_sd, args.expect_stratum, args.stratum_force, bool(args.trio_steer),
+                                                         _lp)
             if _ref:
                 sys.exit(_ref)
             if args.trio_steer and not _steer:
