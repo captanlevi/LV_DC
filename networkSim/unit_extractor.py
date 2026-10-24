@@ -70,8 +70,8 @@ if __name__ == "__main__":
                 _merge_into(parse_pdml_http_from_pcap(args.pcap, args.ssl_keys, http_version=2, tshark_bin=TSHARK), master_dict)
                 _merge_into(parse_pdml_http_from_pcap(args.pcap, args.ssl_keys, http_version=3, tshark_bin=TSHARK), master_dict)
         else:
-            # File mode: read pre-generated PDML files; a .pdml.zst (ops/compress_raw_pdml.py compresses them in place
-            # after the derived outputs exist, supervisor 2026-10-19) is read through `zstd -dc`, the same bytes
+            # File mode: read pre-generated PDML files; a .pdml.zst (compressed in place after the derived outputs exist,
+            # supervisor 2026-10-19; the compressor is on the gate2-* line, not v3) is read through `zstd -dc`, the same bytes
             for ver, fname in [(2, "h2_raw.pdml"), (3, "h3_raw.pdml")]:
                 p = os.path.join(args.path, fname)
                 if os.path.exists(p):

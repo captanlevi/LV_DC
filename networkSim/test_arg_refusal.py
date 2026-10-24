@@ -103,12 +103,10 @@ def main() -> int:
     test_record_line_accepted()
     test_each_refusal()
     test_main_refuses_first()
+    test_c8_data_root_matches_the_run()      # audit B3: never run as a script
     print("test_arg_refusal: ok")
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())
 
 
 def test_c8_data_root_matches_the_run():
@@ -150,3 +148,7 @@ def test_c8_data_root_matches_the_run():
     i = src.index("_c8 = _dr_c8.path_kind_refusal(_target, _of_record)")
     assert i < src.index("session_dir = args.save_dir", i) and i < src.index('session_dir = Path(__file__).parent.parent / "current_data"', i)
     assert '_of_record = bool(args.auto and SLOT is not None and os.environ.get("LVDC_TRIO_RECORD") == "1")' in src
+
+
+if __name__ == "__main__":
+    sys.exit(main())

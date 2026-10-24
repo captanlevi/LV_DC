@@ -327,6 +327,7 @@ def main() -> int:
     test_fast_episode_length()
     test_abr_only_classes()
     test_the_committed_simulation()
+    test_a_void_run_is_not_a_draw_outside_the_t58_era()   # audit B3: never run as a script
     print("test_restart_n: ok")
     return 0
 

@@ -98,6 +98,6 @@ def test_cli_writes_the_schema_and_prints_the_table(tmp_path, capsys):
     assert "B3 youtube" in capsys.readouterr().out
 
 
-if __name__ == "__main__":                            # run_suite.sh runs each networkSim test_*.py as a script too
+if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

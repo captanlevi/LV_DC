@@ -206,5 +206,12 @@ def test_frozen_constants():
     assert main() == 0
 
 
+def test_low_state_max_matches_netstat():
+    """check_session's low-state run (QA) and the shaper's low-state cap (utils/netStat) name the same low states: two
+    copies of one number (code-health audit A4), the golden pins each but not that they agree."""
+    assert CS.LOW_STATE_MAX == NS._LOW_STATE_THRESHOLD
+
+
 if __name__ == "__main__":
+    test_low_state_max_matches_netstat()
     sys.exit(main())

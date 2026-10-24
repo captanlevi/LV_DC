@@ -2136,7 +2136,7 @@ def resume_press(page, platform: str, resumer: "SelfPauseResumer", press: dict, 
     return rec
 
 
-# addendum N (fixed 2026-10-18): content.js's frozen-playhead run, in seconds (= check_session.frozen_runs); the
+# addendum N (stall-only run, levi 2026-10-19): content.js's frozen-playhead run, in seconds (= check_session.frozen_runs); the
 # backstop watchdog and the stuck-player rule (stuck.py) read the same value
 _FROZEN_JS = "Number(document.documentElement.dataset.lvqoeFrozenS || 0)"
 TICK_STARTUP_TIMEOUT_S = 15
