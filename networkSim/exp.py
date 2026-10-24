@@ -839,9 +839,11 @@ if __name__ == "__main__":
         except ValueError as _e:             # levi 19:17: never uncapped
             print(f"B1 REFUSED: {_e}")
             sys.exit(2)
+        import record as _record          # levi 19:35: the era start (a table of another era falls back)
         transition, steer_start, STEERING = steering.steer(platform, transition,
                                                            os.environ.get("LVDC_STEER_TABLE") or None, session_dir.name,
-                                                           tier_cap=_cap)
+                                                           tier_cap=_cap, era=_record.ERA,
+                                                           allow_table_era=os.environ.get("LVDC_STEER_ALLOW_TABLE_ERA") or None)
         STEERING["tier_cap_dpr"] = _dpr
         STEERING["base_matrix"] = base_transition
         # t65 (shagun 12:46, tw_100110): steering's start_state is its draw only; a --initial-state wins, named here

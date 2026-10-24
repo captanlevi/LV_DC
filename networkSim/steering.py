@@ -142,12 +142,33 @@ def start_state(transition: dict[str, dict[str, float]], seed: str) -> str:
 
 
 def steer(platform: str, transition: dict[str, dict[str, float]], table_path: str | os.PathLike | None,
-          seed: str, tier_cap: str | None = None) -> tuple[dict[str, dict[str, float]], str | None, dict]:
+          seed: str, tier_cap: str | None = None, era: str | None = None,
+          allow_table_era: str | None = None) -> tuple[dict[str, dict[str, float]], str | None, dict]:
     """(steered matrix, start state, meta record) from the table at table_path and the base matrix only. A missing or
-    unreadable table, or a platform without targets: (the base matrix, None = the base start rule, the record)."""
+    unreadable table, or a platform without targets: (the base matrix, None = the base start rule, the record).
+    levi 19:35 (era start): a table of another era than `era` (the collector's record.ERA, passed in: steering imports
+    nothing of the session) falls back ("era-start: table era <x>") unless `allow_table_era` names it (orchestrate's
+    dry-only --steer-allow-table-era, recorded allowed_by_flag); a table with no seconds for this platform (tiers and
+    stall_s all 0: the era's first windows) falls back too ("era-start: no <platform> seconds of this era")."""
     table, trec = load_table(table_path)
     rec = {"rule": RULE, "floor": FLOOR, "targets_s": TARGETS_S.get(platform), "table": trec, "seed": seed,
            "applied": False, "tier_cap": tier_cap}
+    if table is not None and era is not None:
+        t_era = table.get("era")
+        rec["table_era"], rec["allowed_by_flag"] = t_era, False
+        if t_era != era:
+            if allow_table_era is not None and t_era == allow_table_era:
+                rec["allowed_by_flag"] = True
+            else:
+                rec["fallback"] = f"era-start: table era {t_era!r}"
+                return transition, None, rec
+    if table is not None and platform in TARGETS_S:
+        pp = (table.get("per_platform") or {}).get(platform) or {}
+        tot = (sum(float(v or 0) for v in (pp.get("tiers") or {}).values()) + float(pp.get("stall_s") or 0)
+               + sum(float(c or 0) for row in (pp.get("by_state") or {}).values() for c in (row or {}).values()))
+        if tot <= 0:
+            rec["fallback"] = f"era-start: no {platform} seconds of this era"
+            return transition, None, rec
     if table is None or platform not in TARGETS_S:
         rec["fallback"] = "base schedule" + ("" if table is not None else f" (no table: {trec.get('error')})")
         return transition, None, rec

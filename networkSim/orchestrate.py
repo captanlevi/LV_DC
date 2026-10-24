@@ -1252,6 +1252,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "Required with --trio-record.")
     parser.add_argument("--stratum-force", choices=("steered", "unsteered", "lever"), default=None,
                         help="a dry / gate run's stratum, stated (never with --trio-record); recorded like a drawn one.")
+    parser.add_argument("--steer-allow-table-era", default=None, metavar="ERA",
+                        help="levi 19:35, DRY ONLY: steering may read a table of this era (W-B's S round on the t58 "
+                             "table copy, to exercise the mechanism); refused with --trio-record and on a record root; "
+                             "recorded in meta.steering {table_era, allowed_by_flag}.")
     parser.add_argument("--replay-schedule", default=None,
                         help="v3 W-A (levi 17:1x): every session replays one fixed schedule seeded by this seed (exp.py "
                              "--replay-schedule: states 10->1->10); dry only (never with --trio-record), steering off.")
@@ -1444,6 +1448,12 @@ def arg_refusal(args, environ) -> str | None:
         return "--stratum-force needs --concurrent"
     if args.lever_params and not (args.expect_stratum or args.stratum_force):
         return "--lever-params only with --expect-stratum / --stratum-force (a lever window's values)"
+    if args.steer_allow_table_era:                    # levi 19:35: dry only, never on the record root (C8)
+        if args.trio_record:
+            return "--steer-allow-table-era is dry only: never with --trio-record"
+        import data_root as _drs
+        if _drs.record_root_check(Path(environ.get("LVDC_DATA_ROOT") or _drs.REPO_DATA))["marker"]:
+            return "--steer-allow-table-era is dry only: refused on a record root (its marker is present)"
     if args.replay_schedule and args.trio_record:     # v3 W-A: a replayed schedule is a dry instrument test, never record
         return "--replay-schedule is dry only: never with --trio-record"
     if args.replay_schedule and args.trio_steer:
@@ -1515,6 +1525,10 @@ if __name__ == "__main__":
             TRIO_PINS[plat] = pin
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
         REPLAY = ({"seed": args.replay_schedule, "step_s": args.replay_step_s} if args.replay_schedule else None)
+        if args.steer_allow_table_era:                  # every session reads it (exp.py -> steering.steer allow_table_era)
+            os.environ["LVDC_STEER_ALLOW_TABLE_ERA"] = args.steer_allow_table_era
+        else:
+            os.environ.pop("LVDC_STEER_ALLOW_TABLE_ERA", None)
         WINDOW_STRATUM = None
         if args.expect_stratum or args.stratum_force:      # collector v3 B5: before steering is set up and before trio_up
             import n_draw

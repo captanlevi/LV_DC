@@ -98,7 +98,9 @@ def test_no_within_session_input():
     table_path, seed); steering.py imports nothing that touches the player, the page, the labels or the browser; and
     exp.py draws before the browser exists, never reassigning the matrix afterwards."""
     # t67 B1: tier_cap (geometry.tier_cap of the session's drawn geometry, drawn before the session) is not session input
-    assert list(inspect.signature(S.steer).parameters) == ["platform", "transition", "table_path", "seed", "tier_cap"]
+    # levi 19:35: era / allow_table_era are the collector's constant and a dry-only flag, never session input
+    assert list(inspect.signature(S.steer).parameters) == ["platform", "transition", "table_path", "seed", "tier_cap",
+                                                           "era", "allow_table_era"]
     tree = ast.parse((HERE / "steering.py").read_text())
     mods = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names} | \
            {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
