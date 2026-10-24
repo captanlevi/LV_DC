@@ -82,8 +82,9 @@ def test_seeded_and_rotating():
 
 def test_round_index_from_the_slots_log():
     """The round's index and the N = 4 rotation come from the earlier trio_up draws of this era and record flag; a run
-    that ends before its trio_up re-draws the same N; a pilot's or another era's draws never count."""
-    era = record.ERA
+    that ends before its trio_up re-draws the same N; a pilot's or another era's draws never count. T*'s rule (every
+    trio_up with an n_draw counts, VOID_COUNTS_ERAS), named explicitly since record.ERA is v3's (levi 16:49)."""
+    era = record.T58_ERA
     seq = N.simulate(12, era)
     with tempfile.TemporaryDirectory() as t:
         log = Path(t) / "trio_slots.jsonl"
@@ -152,7 +153,9 @@ def test_support_and_exclusions_frozen_per_era():
         log.write_text("")
         first = N.draw(log, era, True)
         assert first["support"] == [3, 4, 5] and first["excluded"] == [] and "change_sign" not in first
-        log.write_text(json.dumps({"event": "trio_up", "n_draw": first}) + "\n")
+        started = lambda run, d: (json.dumps({"event": "trio_up", "run": run, "n_draw": d}) + "\n"
+                                  + json.dumps({"event": "start", "run": run, "slot": "yt1"}) + "\n")   # v3: a started run
+        log.write_text(started("r1", first))
         assert N.draw(log, era, True)["round"] == 1                                   # unchanged: fine
         for sup, exc in (((3, 5), ()), ((3, 4, 5), ((5, "tiktok"),))):              # unsigned changes: refused
             try:
@@ -162,7 +165,7 @@ def test_support_and_exclusions_frozen_per_era():
                 pass
         d = N.draw(log, era, True, (3, 4, 5), exclude=((5, "tiktok"),), change_sign="levi 00140")
         assert d["excluded"] == ["5:tiktok"] and d["change_sign"] == "levi 00140"
-        log.write_text(log.read_text() + json.dumps({"event": "trio_up", "n_draw": d}) + "\n")
+        log.write_text(log.read_text() + started("r2", d))
         try:                                                                          # widening back: refused
             N.draw(log, era, True, (3, 4, 5), exclude=(), change_sign="levi 00141")
             raise AssertionError("widening must be refused")
@@ -222,7 +225,7 @@ def test_wiring():
         d = N.simulate(1, record.ERA)[0]
         os.environ["LVDC_N_DRAW"] = json.dumps(d)
         rec = T.concurrency_record(T.SLOTS["yt1"])
-        assert rec["n_draw"] == d and rec["era"] == "t58-restart-2026-10-21"
+        assert rec["n_draw"] == d and rec["era"] == record.ERA == "v3-collector-2026-10-24"     # levi 16:49
         os.environ.pop("LVDC_N_DRAW")
         assert "n_draw" not in T.concurrency_record(T.SLOTS["yt1"])
     finally:
@@ -304,7 +307,9 @@ def test_the_committed_simulation():
     assert R.STAGGER_S == O.TRIO_STAGGER_S and R.WINDOW_MIN == O.RECORD_WINDOW_MIN == 120.0
     assert R.ALLOWANCE_S == O.WINDOW_ALLOWANCE_S == 180.0
     raw = R.FIXTURE.read_bytes()
-    assert R.dumps(R.simulate()).encode() == raw, "the simulation no longer reproduces fixtures/restart_simulation.json"
+    # the fixture is the t58 restart's committed design check: reproduced under its own era (record.ERA is v3's, levi 16:49)
+    assert R.dumps(R.simulate(era=record.T58_ERA)).encode() == raw, \
+        "the simulation no longer reproduces fixtures/restart_simulation.json"
     s = json.loads(raw)["summary"]
     assert s["windows"] == sum(s["n_counts"].values()) and s["rotations"]["4"][:3] == ["youtube", "twitch", "tiktok"]
     assert len(hashlib.sha256(raw).hexdigest()) == 64

@@ -472,6 +472,11 @@ def test_run_trio_records_the_n_draw_and_session_lengths():
             assert float(cmd[cmd.index("--session-minutes") + 1]) == sl["minutes"]
             assert int(cmd[cmd.index("--episodes") + 1]) == round(sl["minutes"])        # matrix "A": 60 s episodes
         assert n_draw.draw(tmp / T.TRIO_DIR / T.SLOTS_LOG, record.ERA, False)["round"] == 0   # a record draw: not the pilot's
+        # v3 (levi 18:58 / 16:49): outside T* a run that started no session is a void, not a draw; the harness's fake
+        # sessions never log "start", so the round stays 0 until one does
+        assert record.ERA not in n_draw.VOID_COUNTS_ERAS
+        assert n_draw.draw(tmp / T.TRIO_DIR / T.SLOTS_LOG, record.ERA, True)["round"] == 0
+        T.slots_log_append(tmp / T.TRIO_DIR / T.SLOTS_LOG, {"event": "start", "slot": "yt1", "run": run})
         assert n_draw.draw(tmp / T.TRIO_DIR / T.SLOTS_LOG, record.ERA, True)["round"] == 1
     with tempfile.TemporaryDirectory() as t:                     # no draw: no record, no env
         spawned = []

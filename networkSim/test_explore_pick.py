@@ -186,13 +186,18 @@ def test_the_restart_record_definition():
     and its descendants in this checkout (git ancestry), nothing while the boundary is unset (fail closed); t55 / t57
     are stated references; identity (counted_any_era) spans every era."""
     import record
-    assert record.ERA == "t58-restart-2026-10-21"
+    # collector v3 (levi 16:49): the era is v3's; its counted line starts fail-closed (no boundary: nothing of record)
+    assert record.ERA == "v3-collector-2026-10-24" and record.RECORD_BOUNDARY is None
     assert record.RECORD_ERAS == (record.ERA,) and record.STATED_ERAS == ("t56-nslot-2026-10-19",)
-    # T2 (levi): the boundary is the gated day-1 tip T, set once; T and its descendants count, nothing before it
-    assert record.RECORD_BOUNDARY == "975a493f7959ce39ce4977f2b91b8b7c9e7e231e" and record.RECORD_LINES == {record.ERA: record.RECORD_BOUNDARY}
-    t58 = lambda sha: {"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": sha}}
-    assert record.is_record(t58("975a493f7959ce39ce4977f2b91b8b7c9e7e231e"))                    # T itself (the checkout knows it)
-    assert not record.is_record(t58("7de5518")) and not record.is_record(t58(None))         # an ancestor; no sha
+    assert record.RECORD_LINES == {record.ERA: None}
+    v3 = lambda sha: {"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": sha}}
+    assert not record.is_record(v3("975a493f7959ce39ce4977f2b91b8b7c9e7e231e"))   # no boundary yet: nothing counts
+    # t58 is archived (levi 16:45): its sessions are no longer of record under v3, even on its own counted line
+    assert record.T58_ERA == "t58-restart-2026-10-21"
+    assert record.T58_RECORD_BOUNDARY == "975a493f7959ce39ce4977f2b91b8b7c9e7e231e"
+    t58_old = {"concurrency": {"record": True, "era": record.T58_ERA}, "lvdc_commit": {"sha": record.T58_RECORD_BOUNDARY}}
+    assert not record.is_record(t58_old) and record.counted_any_era(t58_old) and record.of_record_any_era(t58_old)
+    t58 = v3                                                   # the ancestry rule below, on the current era
     stated = {"concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}}
     assert not record.is_record(stated) and not record.of_record_any_era(stated)          # never, not even not_usable
     assert record.counted_any_era(stated)                     # channel identity spans every era (restart §0)

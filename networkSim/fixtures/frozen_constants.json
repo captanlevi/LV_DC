@@ -1539,13 +1539,13 @@
  "qualification": {
   "EXPECTED_SESSION_MINUTES": 25.0
  },
- "record_boundary": "975a493f7959ce39ce4977f2b91b8b7c9e7e231e",
- "record_era": "t58-restart-2026-10-21",
+ "record_boundary": null,
+ "record_era": "v3-collector-2026-10-24",
  "record_eras": [
-  "t58-restart-2026-10-21"
+  "v3-collector-2026-10-24"
  ],
  "record_lines": {
-  "t58-restart-2026-10-21": "975a493f7959ce39ce4977f2b91b8b7c9e7e231e"
+  "v3-collector-2026-10-24": null
  },
  "schedules": {
   "CHANNEL_CAP_MULT": 2,

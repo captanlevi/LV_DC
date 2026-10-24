@@ -19,8 +19,14 @@ from pathlib import Path
 # checkout does not know is not of record). RECORD_BOUNDARY is set in its own commit after the tip's apply gate; while
 # it is None nothing is of record (fail closed). The earlier eras (c1f9181 N = 3 t55, 61a852d N = 5 t56, the t57
 # boundary) are stated references, never pooled.
-ERA = "t58-restart-2026-10-21"   # the era this collector writes (capture regime unchanged: GRO / GSO / TSO off)
-RECORD_BOUNDARY: str | None = "975a493f7959ce39ce4977f2b91b8b7c9e7e231e"   # the day-1 tip T (restart-tip), gated by shagun, levi
+# collector v3 (levi 2026-10-24 16:49, the gate list's string; a label, not a date): the era bumps to v3. t58 is archived
+# as a development set (levi 16:45), never a results source; its era string stays T58_ERA (n_draw's void rule keys on it).
+# The v3 counted line starts fail-closed: RECORD_BOUNDARY None (nothing of v3 is of record) until levi sets the boundary
+# sha in its own commit after the v3 tip's gate, as at the restart.
+T58_ERA = "t58-restart-2026-10-21"
+T58_RECORD_BOUNDARY = "975a493f7959ce39ce4977f2b91b8b7c9e7e231e"   # t58's day-1 tip T (stated reference)
+ERA = "v3-collector-2026-10-24"   # the era this collector writes
+RECORD_BOUNDARY: str | None = None                 # v3: set after the tip's gate (levi); None = nothing of record
 RECORD_LINES = {ERA: RECORD_BOUNDARY}          # era -> its counted line's boundary sha (None: nothing counts yet)
 RECORD_ERAS = tuple(RECORD_LINES)
 REPO = Path(__file__).resolve().parent.parent
