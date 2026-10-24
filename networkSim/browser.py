@@ -2205,6 +2205,10 @@ class MasterListener:
         self.ad_edges: list[dict] = []             # their ad-marker flips (meta.json tw_playlist_ads)
         self._in_ad: dict[str, bool] = {}          # brad 18:45: per playlist (rendition), so two renditions never alternate
         self.ad_edges_overflow = 0                 # levi 18:51: edges past WATCH_LOG_MAX (0 expected)
+        self.ladder_reads: list[dict] = []         # v3 A4: every master read whose video variants changed (tw_ladder)
+        self.ladder_n_reads = 0
+        self.ladder_overflow = 0
+        self._ladder_last = None
 
     def start(self) -> "MasterListener":
         self._t = threading.Thread(target=self._run, daemon=True, name="master-listener")
@@ -2238,8 +2242,28 @@ class MasterListener:
                 kbit = stuck.rung_from_master(body)
                 if kbit:
                     self.latest = {"kbit": kbit, "t": time.time(), "path": urlsplit(url).path, "from_worker": req_sid is not None}
+                self.ladder(body, url, time.time())
             else:
                 self.playlist_ad(body, url, time.time())
+
+    def ladder(self, body: str, url: str, t: float) -> None:
+        """v3 A4: one master read's video variants (offer.tw_variants), recorded when they changed; capped, counted."""
+        import offer
+        from urllib.parse import urlsplit
+        self.ladder_n_reads += 1
+        v = offer.tw_variants(body)
+        key = json.dumps(v, sort_keys=True)
+        if not v or key == self._ladder_last:
+            return
+        self._ladder_last = key
+        if len(self.ladder_reads) < WATCH_LOG_MAX:
+            self.ladder_reads.append({"t": t, "path": urlsplit(url).path, "variants": v})
+        else:
+            self.ladder_overflow += 1
+
+    def tw_ladder(self) -> dict:
+        return {"n_reads": self.ladder_n_reads, "reads": self.ladder_reads, "overflow": self.ladder_overflow,
+                "rule": "collector v3 A4: each HLS master read's STREAM-INF video variants, on change"}
 
     def playlist_ad(self, body: str, url: str, t: float) -> None:
         """v3 A3 source 2: one media playlist body: a flip of 'an ad marker present' is an edge (time.time; the A11 clock
