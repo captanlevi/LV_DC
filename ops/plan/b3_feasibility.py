@@ -37,10 +37,10 @@ from utils.shaping import SCENARIOS  # noqa: E402
 SCHEMA = "b3_feasibility/1"
 RATIO_LO = 0.9            # readers/shaper_math.RATIO_LO: the realised band's lower edge (levi efb5e4cc (1))
 HEADROOM = 1.0            # interface 61a8bf36 (peter): the build default; levi may set it in the gate prereg
-# levi 19:31 / 19:33 (W4 rate on t58: tt / yt PASS, tw FAIL, span 0.758): a platform listed here takes its REALISED rate
-# per state (shaper_realised, per span) as its band rate, never configured x RATIO_LO, until its shaper C5 passes on v3
-# (then levi restores configured, for v3 data only: --configured-ok)
-REALISED_REQUIRED = ("twitch",)
+# levi 16:25 (2026-10-24, rushi's decision): shaper truth is out of the v3 gate and tw's realised-rate rule (19:31) is
+# withdrawn; B3 plans on the configured band rates (x RATIO_LO) for every platform. --realised stays an optional,
+# disclosed sensitivity (rate_source "realised (sensitivity)"); no platform requires it.
+REALISED_REQUIRED: tuple = ()
 TIER_SHORT = {"Q_144p": 144, "Q_240p": 240, "Q_360p": 360, "Q_480p": 480, "Q_720p": 720, "Q_1080p": 1080}
 PLATFORMS = ("youtube", "twitch", "tiktok")
 
@@ -113,13 +113,13 @@ def build(metas: list[dict], boxes: dict, dprs: list[float], joint: dict | None,
     for pf in PLATFORMS:
         if not geometry.get(pf):                    # not drawn in this build: nothing to rate
             rate_src[pf] = "not built"
-        elif pf in REALISED_REQUIRED and pf not in configured_ok:
-            if not (realised or {}).get(pf):
-                raise ValueError(f"{pf}: its realised rate per state is required (levi 19:31; W4 tw FAIL): pass --realised")
-            rate_src[pf] = "realised"
+        elif pf in REALISED_REQUIRED and pf not in configured_ok and not (realised or {}).get(pf):
+            raise ValueError(f"{pf}: its realised rate per state is required: pass --realised")
+        elif (realised or {}).get(pf) and pf not in configured_ok:
+            rate_src[pf] = "realised (sensitivity)"
         else:
             rate_src[pf] = "configured x RATIO_LO"
-        rz = realised if rate_src[pf] == "realised" else None
+        rz = realised if rate_src[pf].startswith("realised") else None
         share, need, bsrc = offers(metas, pf)
         tiers = sorted({*share, *RUNGS.get(pf, {})}, key=lambda t: TIER_SHORT[t])
         geoms = geometry.get(pf, [])
@@ -182,7 +182,7 @@ def main(argv=None) -> int:
     ap.add_argument("--planned-hours", type=float, default=0.0, help="planned counted hours per platform")
     ap.add_argument("--dprs", default="1", help="the window's DPR draw support (B2), e.g. 1 or 1,2")
     ap.add_argument("--realised", type=Path, default=None,
-                    help="{platform: {state: realised ratio}} from shaper_realised (required for twitch, levi 19:31)")
+                    help="{platform: {state: realised ratio}} from shaper_realised: an optional sensitivity (levi 16:25)")
     ap.add_argument("--configured-ok", default="", help="platforms whose shaper C5 passed on v3 (levi restores configured)")
     ap.add_argument("--code-sha", default=None)
     a = ap.parse_args(argv)
