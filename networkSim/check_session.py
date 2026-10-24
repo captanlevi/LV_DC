@@ -196,7 +196,14 @@ def frozen_runs(rows: list[dict]) -> list[tuple[float, float]]:
             t0, ct0 = t, ct
         last = t
     close()
-    return _union_runs(runs + frozen_picture_runs(rows))
+    return runs
+
+
+def frozen_runs_all(rows: list[dict]) -> list[tuple[float, float]]:
+    """The collector's frozen measure (WA2 r1; levi 00:28 / 00:38): the UNION of addendum N's stall-only runs
+    (frozen_runs, kept byte-identical: the T* freeze table pins its source, test_frozen_addendum_n) and the frozen-picture
+    runs. player_frozen, the recovery exclusion and held_frozen_s read this; content.js publishes the same union."""
+    return _union_runs(frozen_runs(rows) + frozen_picture_runs(rows))
 
 
 def _union_runs(runs: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -281,7 +288,7 @@ def stall_loop_s(rows: list[dict]) -> dict:
 
 def frozen_playhead_run(rows: list[dict]) -> float:
     """Longest frozen-playhead run, in seconds (frozen_runs)."""
-    return max((b - a for a, b in frozen_runs(rows)), default=0.0)
+    return max((b - a for a, b in frozen_runs_all(rows)), default=0.0)
 
 
 def recovered_frozen(rows: list[dict], frozen_reentries: list[dict] | None, n_dead_recovered: int = 0) -> dict:
@@ -289,7 +296,7 @@ def recovered_frozen(rows: list[dict], frozen_reentries: list[dict] | None, n_de
     first tick to 5 s after its last: the page load) is not the player_frozen measure; it is reported with its window
     and the part after the shaper went back above the lowest rung (the T2 window, a sensitivity). One recovery of either
     kind per session: with a player_dead recovery too, nothing is excluded."""
-    runs = frozen_runs(rows)
+    runs = frozen_runs_all(rows)
     cont = [r for r in frozen_reentries or [] if r.get("outcome") == "continue" and r.get("t_nav")]
     rec = [(run, r) for run in runs for r in cont if run[0] - 2.0 <= r["t_nav"] <= run[1] + 5.0]
     ok = len(rec) == 1 and n_dead_recovered == 0
@@ -1131,7 +1138,7 @@ def shared_deadline_reentries(meta: dict, rows: list[dict], net_labels: list) ->
     clocks = ((meta.get("player_dead_watch") or {}).get("dead_clocks")) or []
     spans = stuck.low_spans(net_labels or [])
     rung = stuck.t2_rung(meta.get("lowest_rung"))
-    runs = frozen_runs(rows)
+    runs = frozen_runs_all(rows)
     out = []
     for kind, recs in (("player_frozen", meta.get("frozen_reentries") or []),
                        ("player_dead", meta.get("player_dead_reentries") or [])):
@@ -1225,7 +1232,7 @@ def frozen_clock_of_record(lab: dict, label_rows: list[dict], platform: str, net
             sha in FROZEN_HOLD_COLLECTORS or (meta or {}).get("frozen_clock_hold") is True):
         return
     rec = (lab.get("recovered_frozen") or {}).get("window")
-    runs = [r for r in frozen_runs(label_rows) if not rec or list(r) != list(rec)]
+    runs = [r for r in frozen_runs_all(label_rows) if not rec or list(r) != list(rec)]
     held, raw, T = E.held_frozen_s(runs, net_labels), lab["frozen_playhead_max_s"], lab.get("frozen_playhead_T_s")
     disagree = E.frozen_over_t(raw, T) and not E.frozen_over_t(held, T)
     lab["frozen_playhead_class_s"] = round(held, 3)

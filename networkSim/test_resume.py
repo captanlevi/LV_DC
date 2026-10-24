@@ -154,7 +154,7 @@ def test_decision():
 
 def test_js():
     st = js(B._PLAYER_STATE_JS, stall=True, ad=True, paused=True, rs=3)
-    assert json.loads(st["r"]) == {"paused": True, "rs": 3, "ended": False, "ad": True, "stall": True, "buf": 2.0, "ct": 100}, st
+    assert json.loads(st["r"]) == {"paused": True, "rs": 3, "ended": False, "ad": True, "tf": None, "stall": True, "buf": 2.0, "ct": 100}, st
     assert json.loads(js(B._PLAYER_STATE_JS, buf_end=100.4)["r"])["buf"] == 0.4      # the playhead's own range
     assert js(B._PLAY_JS) == {"r": "pressed", "played": 1}                         # the largest visible video
     assert js(B._PLAY_JS, paused=False) == {"r": None, "played": 0}
@@ -170,7 +170,7 @@ def test_real_twitch_self_pause_fixture():
     stall = str((fx.get("lvqoe") or {}).get("lvqoeStall", "0")) == "1"
     st = json.loads(js(B._PLAYER_STATE_JS, stall=stall, ad=bool(fx["ad"]), paused=bool(fx["paused"]), rs=int(fx["rs"]),
                        ended=bool(fx.get("ended")))["r"])
-    assert st == {"paused": True, "rs": 4, "ended": False, "ad": False, "stall": False, "buf": 2.0, "ct": 100}, st
+    assert st == {"paused": True, "rs": 4, "ended": False, "ad": False, "tf": None, "stall": False, "buf": 2.0, "ct": 100}, st
     r, made = B.SelfPauseResumer(), []
     for t in range(60):                               # the element plays once pressed
         if (p := r.step(st, 1000.0 + t)):

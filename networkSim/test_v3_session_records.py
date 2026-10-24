@@ -4,7 +4,7 @@
     meta.concurrency.client_addr (what the W4 loss reader takes before any inference);
   - A17: the default class's TCP headers are captured on both mirrors (lvi_def / lvo_def), snaplen 128, with the
     session captures' tcpdump options, and the files join <session>/trio/ with their sizes in meta;
-  - A8: browser._SCREEN_JS (under node) reports the screen and the rAF-measured refresh: 60 Hz pacing reads 60, 30 Hz 30.
+  - A8: browser._A8_SCREEN_JS (under node) reports the screen and the rAF-measured refresh: 60 Hz pacing reads 60, 30 Hz 30.
 
     python3 test_v3_session_records.py        (needs node for A8; exit 0 = pass)
 """
@@ -88,7 +88,7 @@ def test_screen_js():
     node = shutil.which("node")
     assert node, "node not found: the A8 screen read cannot be tested (install node)"
     for step, hz in ((1000 / 60, 60.0), (1000 / 30, 30.0)):
-        out = subprocess.run([node, "-e", HARNESS, B._SCREEN_JS, str(step)], capture_output=True, text=True, check=True)
+        out = subprocess.run([node, "-e", HARNESS, B._A8_SCREEN_JS, str(step)], capture_output=True, text=True, check=True)
         r = json.loads(out.stdout)
         assert r["refresh_hz"] == hz and r["raf_frames"] == B.SCREEN_RAF_FRAMES + 1, r
         assert (r["w"], r["h"], r["avail_w"], r["avail_h"], r["dpr"]) == (1920, 1080, 1850, 1053, 1)

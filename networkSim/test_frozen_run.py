@@ -132,11 +132,11 @@ def main() -> int:
     js_max = max(d["frozen_s"])
     types = [e["type"] for e in d["events"]]
     after_swap = types[types.index("video_start", 1):] if types.count("video_start") > 1 else []
-    runs = check_session.frozen_runs(rows[d["tw27Ev"]:d["tw27EvEnd"]])         # the tw_27-like window's events only
+    runs = check_session.frozen_runs_all(rows[d["tw27Ev"]:d["tw27EvEnd"]])         # the tw_27-like window's events only
     tw27_py = max((b - a for a, b in runs), default=0.0)
-    pic = check_session.frozen_runs(rows[d["picEv"]:d["picEvEnd"]])           # the frozen-picture window's events
+    pic = check_session.frozen_runs_all(rows[d["picEv"]:d["picEvEnd"]])           # the frozen-picture window's events
     pic_py = max((b - a for a, b in pic), default=0.0)
-    ov = check_session.frozen_runs(rows[d["ovEv"]:d["ovEvEnd"]])             # stall + picture over the same seconds
+    ov = check_session.frozen_runs_all(rows[d["ovEv"]:d["ovEvEnd"]])             # stall + picture over the same seconds
     ov_py = max((b - a for a, b in ov), default=0.0)
     # addendum N: the resume press ends the run (< 80 s; the reverted 2026-10-18 measure read >= 80 s), JS = Python;
     # the frozen picture (121 s of clock with <= 1 frame per tick, a reset bridged) is one run on both sides, ended by frames
@@ -170,7 +170,7 @@ def test_union_and_reset_bridge_in_python():
         ct += 1.0
         rows.append(_row(t, ct=ct, tf=10))
     rows.append(_row(101, ct=ct + 1, tf=60))     # frames: the run ends
-    runs = check_session.frozen_runs(rows)
+    runs = check_session.frozen_runs_all(rows)
     assert len(runs) == 1 and runs[0][0] == 0.0 and runs[0][1] == 100.0, runs
     r = check_session.recovered_frozen(rows, [{"outcome": "continue", "t_nav": 50.0}])
     assert r["recovered"] is not None and r["max_s"] == 0.0           # excluded once, nothing left over
