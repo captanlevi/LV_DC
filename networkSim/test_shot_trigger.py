@@ -59,6 +59,9 @@ if (scen === "switch") {
   ctx.__attach(u, "test");
   frame(u, h2 * 16 / 9, h2, 5);                           // the new element's first frame
   tick(); frame(u, h2 * 16 / 9, h2, 6); tick();
+} else if (scen === "events") {
+  vm.runInContext("emit('stall'); emit('stall'); emit('start'); emit('video_start')", ctx);   // a repeat stall is deduped
+  tick();
 } else if (scen === "silent") {
   tick(); tick(); tick();                                 // rVFC registered but silent for 3 s
   v.videoHeight = 480; tick();                            // the tier tick must fire
@@ -109,10 +112,20 @@ def test_swap_and_silent_rvfc():
     assert o["counters"]["shot_triggers"]["frame"] == 1 and o["counters"]["shot_triggers"]["tick"] == 0
 
 
+def test_stall_onset_and_start():
+    """levi 16:57: event shots at the STALL onset (once per stall: emit's dedupe) and at playback start (video_start)."""
+    o = _run(True, "events")
+    reasons = [q.split("|")[1] for q in o["reqs"]]
+    # the first start is the initial attach's video_start; emit('start') (a resume) is not a start trigger
+    assert reasons == ["start", "stall_onset", "start"], reasons
+    assert o["counters"]["shot_triggers"]["stall_onset"] == 1 and o["counters"]["shot_triggers"]["start"] == 2
+
+
 def main() -> int:
     test_frame_fires_with_rvfc()
     test_res_meta_fires_without_rvfc()
     test_swap_and_silent_rvfc()
+    test_stall_onset_and_start()
     print("test_shot_trigger: ok")
     return 0
 

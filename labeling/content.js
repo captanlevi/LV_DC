@@ -84,7 +84,7 @@ function loginWallText(v) {
 // (v3 A14: the presented frame's height changes, rvfcStart; without A1, consecutive non-zero res_meta video_h differ)
 // and every ad start (is_ad false -> true)
 let shotReqN = 0;
-const shotTrig = { frame: 0, tick: 0, ad_start: 0 };   // levi 21:19: tier-change shots by trigger (pf = frame), ad starts
+const shotTrig = { frame: 0, tick: 0, ad_start: 0, stall_onset: 0, start: 0 };   // levi 21:19: tier-change shots by trigger (pf = frame), ad starts
 let shotLastH = null;
 let shotLastAd = false;
 function requestShot(reason, eventId, pf = null) {
@@ -489,6 +489,11 @@ function emit(type) {
   eventBuffer.push(evt);
   if (type === "stall") labelStall = true;
   else if (type === "start" || type === "video_start") labelStall = false;
+  // v3 (levi 16:57): event shots at the STALL onset and at playback start (the 60 s cadence and the A1 dims trigger do
+  // the rest); top frame only, as every shot request
+  if (window === window.top && (type === "stall" || type === "video_start")) {
+    requestShot(type === "stall" ? "stall_onset" : "start", evt.event_id);
+  }
   if (type === "res_meta") {
     lastTick = { id: evt.event_id, ts: evt.ts };
     const ct = evt.current_time;

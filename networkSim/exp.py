@@ -1118,6 +1118,7 @@ if __name__ == "__main__":
                               instruments=browser.instruments,                         # v3 (t67; levi 18:33)
                               screen=browser.screen,                                   # v3 A8 (t67)
                               clock_offsets=browser.clock_offsets,                     # v3 A11 (t67)
+                              shot_crop=browser.shot_crop,                             # v3 (levi 17:45; A7's C5)
                               lever=(LEVER.record(browser.abort_at, browser.abort_reason)      # v3 B4
                                      if LEVER is not None else None),
                               tw_playlist_ads=({"fetches": browser._master.playlist_fetches,          # v3 A3 src 2
