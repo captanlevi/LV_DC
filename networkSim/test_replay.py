@@ -34,15 +34,16 @@ def test_deterministic_and_fixed():
     assert a == b and len(a) > 19
     assert _run("wa-2") != a                                # another seed, another schedule
     firsts = [s for s, *_ , ws in a if ws == 0]
-    assert tuple(firsts) == NS.REPLAY_STATES and NS.REPLAY_STATES[0] == "1" and NS.REPLAY_STATES[9] == "10"
-    assert NS.REPLAY_STATES[-1] == "1" and len(NS.REPLAY_STATES) == 19
+    assert tuple(firsts) == NS.REPLAY_STATES and NS.REPLAY_STATES[0] == "10" and NS.REPLAY_STATES[9] == "1"
+    assert NS.REPLAY_STATES[-1] == "10" and len(NS.REPLAY_STATES) == 19            # levi 17:21: startup in the top state
+    assert NS.REPLAY_STATES == tuple(map(str, [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
     assert abs(sum(r[4] for r in a) - 19 * NS.REPLAY_STEP_S) < 1e-6
     assert abs(sum(r[4] for r in _run("wa-1", 40.0)) - 19 * 40.0) < 1e-6
     for s, rate, d, l, *_ in a:
         sc = NS.SCENARIOS[s]
         assert sc.rate_min <= rate <= sc.rate_max and sc.delay_min <= d <= sc.delay_max
     rec = NS.replay_record("wa-1")
-    assert rec["session_s"] == round(19 * NS.REPLAY_STEP_S, 3) and rec["seed"] == "wa-1" and rec["states"][9] == "10"
+    assert rec["session_s"] == round(19 * NS.REPLAY_STEP_S, 3) and rec["seed"] == "wa-1" and rec["states"][9] == "1"
 
 
 def test_exp_wiring():
@@ -73,12 +74,48 @@ def test_orchestrate():
     assert got and "dry only" in got, got
     src = (HERE / "orchestrate.py").read_text()
     assert 'cmd += ["--replay-schedule", REPLAY["seed"]]' in src and "if REPLAY and not hold:" in src
+    # the window fit uses the replay's own length, not the drawn law's (else a long draw idles the slot under max-per-slot 1)
+    assert 'slen = {**slen, "minutes": round(len(_ns.REPLAY_STATES) * (REPLAY.get("step_s") or _ns.REPLAY_STEP_S) / 60.0, 4),' in src
+    assert src.index("if slen and REPLAY:") < src.index('if window and slen and not window_fits(time.time(), slen["minutes"]')
+    assert abs(len(NS.REPLAY_STATES) * NS.REPLAY_STEP_S / 60.0 - 25.0167) < 1e-3
+
+
+def test_yt_tt_pins():
+    """levi 17:18 (W-A pins every platform; t59: drawn yt / tt channels left the A/B unresolvable): --trio-pin
+    youtube:channel=@handle (a yt-list entry, no category) and tiktok:room=@user (opened directly, never rotated); the
+    same dry-only rule as every pin (never --trio-record)."""
+    k, pin = O.parse_pin("youtube:channel=@AlJazeeraEnglish", "W-A_fixed_channel")
+    assert k == "youtube" and pin["channel"] == "@AlJazeeraEnglish"
+    k, pin = O.parse_pin("tiktok:room=@stef_gamingg", "W-A_fixed_channel")
+    assert k == "tiktok" and pin["room"] == "@stef_gamingg"
+    assert O.parse_pin("twitch:category=Chess,channel=gothamchess", "r")[1]["channel"] == "gothamchess"
+    for bad, why in (("youtube:channel=@NotOnTheList", "not on the yt list"), ("youtube:category=News", "twitch only"),
+                     ("tiktok:channel=@x", "channel pins are twitch / youtube"), ("twitch:room=@x", "room pins are tiktok"),
+                     ("tiktok:room=@bad/room", "not a tiktok @user"), ("twitch:channel=x", "names its category")):
+        try:
+            O.parse_pin(bad, "r")
+            raise AssertionError(bad)
+        except ValueError as e:
+            assert why in str(e), (bad, str(e))
+    saved = O.TT_ROOM_ROTATION_S
+    try:
+        O.TT_ROOM_ROTATION_S = 600
+        cmd = O._collection_cmd("tiktok", None, 5, auto=True, tt_room=O.tiktok_room_url("@stef_gamingg"))
+        assert cmd[cmd.index("--channel-url") + 1] == "https://www.tiktok.com/@stef_gamingg/live"
+        assert "--tt-room-rotation" not in cmd                       # a pinned room is never rotated away
+        assert "--tt-room-rotation" in O._collection_cmd("tiktok", None, 5, auto=True)
+    finally:
+        O.TT_ROOM_ROTATION_S = saved
+    src = (HERE / "orchestrate.py").read_text()
+    assert 'channel = yt_channels.by_handle(pin["channel"])' in src and 'tt_room = tiktok_room_url(pin["room"])' in src
+    assert "tw_category=category, matrix=mid, tt_room=tt_room)" in src
 
 
 def main() -> int:
     test_deterministic_and_fixed()
     test_exp_wiring()
     test_orchestrate()
+    test_yt_tt_pins()
     print("test_replay: ok")
     return 0
 

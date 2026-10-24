@@ -637,7 +637,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--replay-schedule",
         default=None,
-        help="v3 W-A (levi 17:1x): replay one fixed schedule (states 1->10->1, --replay-step-s each, every draw seeded by "
+        help="v3 W-A (levi 17:1x): replay one fixed schedule (states 10->1->10, --replay-step-s each, every draw seeded by "
              "this seed only) so every round shares it; dry only; never with --hold-state, --lever or steering.",
     )
     parser.add_argument(
