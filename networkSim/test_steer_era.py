@@ -69,6 +69,10 @@ def test_exp_wiring():
     src = (HERE / "exp.py").read_text()
     assert "tier_cap=_cap, era=_record.ERA," in src
     assert 'allow_table_era=os.environ.get("LVDC_STEER_ALLOW_TABLE_ERA") or None)' in src
+    # levi / brad 19:51: exp.py refuses the env on a record run itself, before any session dir
+    i = src.index('if os.environ.get("LVDC_STEER_ALLOW_TABLE_ERA"):')
+    assert 'os.environ.get("LVDC_TRIO_RECORD") == "1" or _drx.record_root_check(_drx.DATA_ROOT)["marker"]' in src[i:i + 400]
+    assert i < src.index("session_dir = (make_session_dir(platform)")
     o = (HERE / "orchestrate.py").read_text()
     assert 'os.environ["LVDC_STEER_ALLOW_TABLE_ERA"] = args.steer_allow_table_era' in o
 

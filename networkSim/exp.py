@@ -749,6 +749,13 @@ if __name__ == "__main__":
     # levi 17:56: a typo'd LVQOE_SHOT_CROP would give player-cropped shots and void A7's C5 silently: refuse it here
     if os.environ.get("LVQOE_SHOT_CROP") not in (None, "player", "viewport"):
         sys.exit(f"LVQOE_SHOT_CROP={os.environ['LVQOE_SHOT_CROP']!r}: must be player or viewport; refused")
+    # levi / brad 19:51: the dry-only allow flag reaches exp.py as env; refuse it on a record run here too (a stale export
+    # or a launch outside orchestrate must never let a record session steer on another era's table)
+    if os.environ.get("LVDC_STEER_ALLOW_TABLE_ERA"):
+        import data_root as _drx
+        if os.environ.get("LVDC_TRIO_RECORD") == "1" or _drx.record_root_check(_drx.DATA_ROOT)["marker"]:
+            sys.exit(f"LVDC_STEER_ALLOW_TABLE_ERA={os.environ['LVDC_STEER_ALLOW_TABLE_ERA']!r} on a record run "
+                     "(LVDC_TRIO_RECORD=1 or a record-marker root): dry only; refused")
     if args.lever and args.hold_state is not None:   # B4 x B5: a held decode_stress session never levers
         sys.exit("--lever and --hold-state exclude each other (a held state is decode_stress, never a lever window)")
     if args.hold_state is not None:      # t56 decode_stress: one state held, never in a dataset root
