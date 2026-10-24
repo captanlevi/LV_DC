@@ -66,16 +66,18 @@ def test_band_share_and_expected_hours():
     assert r["draw_mass_reachable"] == 1.0 and abs(r["expected_hours_next_window"] - 10 * 0.3 * B.band_share("10", 7066)) < 1e-3
 
 
-def test_twitch_needs_its_realised_rate():
-    """levi 19:31 (W4 tw FAIL): twitch's bands are its realised rates; without them the build refuses."""
-    import pytest
-    with pytest.raises(ValueError, match="realised rate"):
-        B.build([_meta("twitch", [(1920, 1080, 7066)])], {}, [1.0], None, None, 0.0, geometry={"twitch": ["player:1274x717"]})
+def test_twitch_plans_on_configured_rates_and_realised_is_a_sensitivity():
+    """levi 16:25: the 19:31 realised rule is withdrawn; twitch plans on configured x RATIO_LO like the others, and a
+    passed --realised is a disclosed sensitivity."""
+    assert B.REALISED_REQUIRED == ()
+    res0 = B.build([_meta("twitch", [(1920, 1080, 7066)])], {}, [1.0], None, None, 0.0,
+                   geometry={"twitch": ["player:1274x717"]})
+    assert res0["rate_source"]["twitch"] == "configured x RATIO_LO"
     # state 10 realised at 0.75: 9000 x 0.75 = 6750 < 7066, so only state 11 reaches 1080 (12000 x 0.75 = 9000)
     res = B.build([_meta("twitch", [(1920, 1080, 7066)])], {}, [1.0], None, None, 0.0,
                   geometry={"twitch": ["player:1274x717"]}, realised={"twitch": {s: 0.75 for s in B.SCENARIOS}})
     c = _cell(res, "twitch", "Q_1080p", "player:1274x717", 1.0)
-    assert c["bands_reaching"] == ["11"] and res["rate_source"]["twitch"] == "realised"
+    assert c["bands_reaching"] == ["11"] and res["rate_source"]["twitch"] == "realised (sensitivity)"
     assert res["rate_source"]["youtube"] == "not built"                      # no youtube geometry in this build
 
 
