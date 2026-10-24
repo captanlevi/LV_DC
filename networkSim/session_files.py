@@ -31,7 +31,8 @@ COLLECTOR_FILES: frozenset[str] = frozenset({
     # top-level merged*.csv are LVQoE's (ingest.ensure_csvs; brad 23:21)
     "merged.pcap", "early.pcap", "dns_default.pcap", "dns_default.err", "default_tcp_*.pcap", "tcpdump_*.err",
     "ssl_keys.log", "http_v2.json", "http.json", "h1_raw.json", "h2_raw.pdml", "h3_raw.pdml", "ping_*.log",
-    # LV_DC ops/compress_raw_pdml.py (brad 23:29; on the gate2-* line, after ingest): in place, the collector repo's
+    # the compressed PDMLs (brad 23:29; ops/compress_raw_pdml.py is on the gate2-* line only, not v3): unit_extractor
+    # reads a .pdml.zst; the names stay reserved collector-side
     "h2_raw.pdml.zst", "h3_raw.pdml.zst", "compress_record.json",
     # an unmapped side stream's fallback file (flagged in meta side_streams_unmapped; never expected)
     "side_*.jsonl",

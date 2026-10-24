@@ -307,6 +307,12 @@ def main() -> int:
     test_low_state_hold()
     test_lowstate_error_page_does_not_use_the_recovery()
     test_free_reentries_bounded_and_hold_availability()
+    test_on_frozen_holds_in_low_states()            # audit B3 (2026-10-24): defined after main(), never run as a script
+    test_watcher_loop_asks_on_frozen_again_while_held()
+    test_first_abort_stands()
+    test_not_live_mark_matches_the_start_failure()
+    print("  pytest-only (fixtures): test_on_frozen_hold_lifts_after_30s_of_data, test_stuck_tick_hold_lifts_after_30s_of_data, "
+          "test_frozen_clock_of_record, test_hold_edges_every_state, test_player_error_accounting")
     print("test_stuck: ok")
     return 0
 

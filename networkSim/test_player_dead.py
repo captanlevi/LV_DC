@@ -949,6 +949,9 @@ def main() -> int:
     test_ti100058_shared_deadline()
     test_reentry_load_is_not_a_dead_run()
     test_tag_rule_per_collector()
+    test_open_clock_closed_on_rebuild_and_end()     # audit B3 (2026-10-24): never run as a script
+    test_check_defers_to_the_fired_clock()
+    test_open_run_is_measured_on_its_own()
     print("test_player_dead: ok")
     return 0
 
