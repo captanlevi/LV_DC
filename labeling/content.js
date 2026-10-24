@@ -32,6 +32,14 @@ let stillSinceTs = null;
 let stillCt = null;
 let frozenT0 = null;
 let frozenCt0 = null;
+// WA2 r1 ti_100001 (levi 00:28 / 00:30, sensor_v3.4's frozen class): the frozen PICTURE run, beside the stall-only run.
+// A tick pair is frozen when both ticks are not paused, not an ad, with a media clock and a decoded-frames counter, the
+// clock advanced (> 0) and totalVideoFrames advanced by <= FROZEN_FRAMES_MAX (a reset, the counter or the clock going
+// back, counts from the reset: bridged, as v3.4 does). The run starts at the first frozen pair's first tick and ends at
+// the first pair that is not frozen; lvqoeFrozenS is the longer of the two runs (check_session.frozen_runs: the same)
+const FROZEN_FRAMES_MAX = 1;
+let picT0 = null;
+let picPrev = null;
 // An ad's <video> has a short finite duration; live streams report Infinity. A DVR window can report a long finite
 // duration, so only a finite duration below this bound counts as an ad signal (raw duration is recorded too).
 const AD_MAX_DURATION_S = 600;
@@ -508,8 +516,22 @@ function emit(type) {
       frozenT0 = evt.ts;
       frozenCt0 = ct;
     }
+    const tf = evt.total_frames;
+    const picOk = !evt.paused && !evt.is_ad && ct !== null && ct !== undefined && isFinite(ct)
+                  && tf !== null && tf !== undefined && isFinite(tf);
+    let picFrozen = false;
+    if (picOk && picPrev !== null) {
+      const dct = ct >= picPrev.ct ? ct - picPrev.ct : ct;
+      const dtf = tf >= picPrev.tf ? tf - picPrev.tf : tf;
+      picFrozen = dct > 0 && dtf <= FROZEN_FRAMES_MAX;
+    }
+    if (!picFrozen) picT0 = null;
+    else if (picT0 === null) picT0 = picPrev.ts;
+    picPrev = picOk ? { ts: evt.ts, ct, tf } : null;
     if (window === window.top) {
-      document.documentElement.dataset.lvqoeFrozenS = String(frozenT0 === null ? 0 : (evt.ts - frozenT0) / 1000);
+      const stallRun = frozenT0 === null ? 0 : (evt.ts - frozenT0) / 1000;
+      const picRun = picT0 === null ? 0 : (evt.ts - picT0) / 1000;
+      document.documentElement.dataset.lvqoeFrozenS = String(Math.max(stallRun, picRun));
       // the stall label, for browser.py's tt dead-room watcher (a stall is never a dead room; player_frozen owns it)
       // and its self-pause resumer (after_stall)
       document.documentElement.dataset.lvqoeStall = labelStall ? "1" : "0";

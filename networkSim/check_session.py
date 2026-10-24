@@ -50,7 +50,8 @@ CHECKS = {
     "window_background_flag": 0.25,     # per 60 s wall-clock window: background > 0.25 x its downstream (reported; addendum G)
     "flag_window_s": 60.0,
     "shots_share_min": 0.5,
-    "shot_interval_s": 10.0,
+    "shot_interval_s": 60.0,   # v3 (levi 16:57): the collector's cadence; browser.SHOT_INTERVAL_S reads THIS (WA2 r1 00:27:
+                               # 10.0 here sent every v3 session to _failed as "screenshots 24 of ~151 expected")
 }
 # addendum N (supervisor 2026-10-17, tw_3 / tw_4): the player froze and never recovered. T per platform = 1.2 x the
 # longest stall-only frozen-playhead run in the old data (earth / fire / shadow / water), rounded up to the minute:
@@ -195,6 +196,38 @@ def frozen_runs(rows: list[dict]) -> list[tuple[float, float]]:
             t0, ct0 = t, ct
         last = t
     close()
+    return sorted(runs + frozen_picture_runs(rows))
+
+
+FROZEN_FRAMES_MAX = 1   # WA2 r1 (levi 00:30, sensor_v3.4): <= 1 decoded frame over a 1 s tick pair = nothing visibly plays
+
+
+def frozen_picture_runs(rows: list[dict]) -> list[tuple[float, float]]:
+    """WA2 r1 ti_100001 (levi 00:28 / 00:30): runs of frozen PICTURE with the media clock advancing (949 s labelled
+    playing with totalVideoFrames flat at 2). A res_meta tick pair is frozen when both ticks are not paused, not an ad,
+    with a parseable current_time and total_frames, the clock advanced (> 0) and total_frames by <= FROZEN_FRAMES_MAX
+    (a reset of either counts from the reset: bridged). A run is (the first frozen pair's first tick, the last frozen
+    pair's last tick). content.js's lvqoeFrozenS takes the longer of this run and the stall-only run (test_frozen_run)."""
+    runs, t0, last, prev = [], None, None, None
+    for r in rows:
+        if r.get("type") != "res_meta":
+            continue
+        t, ct, tf = _f(r.get("ts")), _f(r.get("current_time")), _f(r.get("total_frames"))
+        ok = not _true(r.get("paused")) and not _true(r.get("is_ad")) and None not in (t, ct, tf)
+        frozen = False
+        if ok and prev is not None:
+            dct = ct - prev[1] if ct >= prev[1] else ct
+            dtf = tf - prev[2] if tf >= prev[2] else tf
+            frozen = dct > 0 and dtf <= FROZEN_FRAMES_MAX
+        if frozen:
+            t0 = prev[0] if t0 is None else t0
+            last = t
+        elif t0 is not None:
+            runs.append((t0 / 1000.0, last / 1000.0))
+            t0 = None
+        prev = (t, ct, tf) if ok else None
+    if t0 is not None:
+        runs.append((t0 / 1000.0, last / 1000.0))
     return runs
 
 

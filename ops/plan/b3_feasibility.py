@@ -1,6 +1,6 @@
 """B3 (collector v3 spec; t68; interface 61a8bf36 signed by peter 18:02): the pre-window feasibility table. Per platform x
 tier x geometry x DPR, whether any shaper band can carry the tier into the drawn player box, from the offered ladder
-(A4 meta.offered_ladder), the matrix config's band rates (utils.shaping.SCENARIOS rate_min / rate_max) and the boxes.
+(A4 meta.offer), the matrix config's band rates (utils.shaping.SCENARIOS rate_min / rate_max) and the boxes.
 A tier no cell can reach is a structural zero, never inferred from absence in labels. A planning record: orchestrate
 never imports it; the launch script (rounds_ref_n, t69) runs it before orchestrate, writes b3_feasibility.json beside
 the window's launch file and prints the per-tier table into the launch log.
@@ -51,14 +51,16 @@ def _sha(path) -> str | None:
 def offers(metas: list[dict], platform: str) -> tuple[dict, dict, str]:
     """(offered_share {tier: share of sessions offering it}, need_kbit {tier: median offered bitrate}, bitrate source).
     A tier's need falls back to the declared rung (coverage_report.RUNGS) when no offer carries a bitrate."""
-    sess = [m for m in metas if m.get("platform") == platform and m.get("offered_ladder")]
+    # the collector's meta.offer (LV_DC offer.offer_record: renditions [{width, height, bitrate_kbit, ...}], missing
+    # stated); the WA2 sweep (peter 00:27) found this reading meta.offered_ladder / w / h, which no collector writes
+    sess = [m for m in metas if m.get("platform") == platform and (m.get("offer") or {}).get("renditions")]
     seen, rates = {}, {}
     for m in sess:
-        ol = m["offered_ladder"]
+        ol = m["offer"]
         tiers = set()
-        for rec in [ol] + list(ol.get("changes") or []):
+        for rec in [ol]:
             for r in rec.get("renditions") or []:
-                t = quality_class(r.get("w") or 0, r.get("h") or 0)
+                t = quality_class(r.get("width") or 0, r.get("height") or 0)
                 if t is None:
                     continue
                 tiers.add(t)

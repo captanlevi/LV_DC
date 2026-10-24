@@ -87,8 +87,21 @@ const tw27EvEnd = sent.length;
 // so the new element's own "stall" must be emitted (stall state is per element, re-evaluated on attach)
 const w = mkVideo(); w.readyState = 2; videos = [w, v]; v.isConnected = false;
 ctx.__attach(w); tick(); tick();
+// WA2 r1 ti_100001 (levi 00:28 / 00:30): the clock runs, readyState 4, not paused, no stall label, and no frame is decoded
+// (totalVideoFrames flat): the frozen PICTURE run; a counter reset decoding 1 frame is bridged; frames again end it
+const pv = mkVideo(); let ptf = 100; pv.getVideoPlaybackQuality = () => ({ droppedVideoFrames: 0, totalVideoFrames: ptf });
+videos = [pv]; ctx.__attach(pv);
+for (let i = 0; i < 4; i++) { pv.currentTime += 1; ptf += 30; tick(); }
+const picEv = sent.length;                           // the window opens at the last playing tick (the run's first tick)
+pv.currentTime += 1; ptf += 30; tick();
+const picFrom = out.length;
+for (let i = 0; i < 100; i++) { pv.currentTime += 1; tick(); }
+ptf = 1; pv.currentTime += 1; tick();
+for (let i = 0; i < 20; i++) { pv.currentTime += 1; tick(); }
+for (let i = 0; i < 5; i++) { pv.currentTime += 1; ptf += 30; tick(); }
+const picMax = Math.max(...out.slice(picFrom)), picEvEnd = sent.length, picLast = out[out.length - 1];
 fs.writeFileSync(process.argv[3], JSON.stringify({ frozen_s: out, events: sent, startWhilePaused, startAfterPlay, tw27Max,
-                                                   tw27Ev, tw27EvEnd }));
+                                                   tw27Ev, tw27EvEnd, picMax, picEv, picEvEnd, picLast }));
 """
 
 
@@ -110,12 +123,17 @@ def main() -> int:
     after_swap = types[types.index("video_start", 1):] if types.count("video_start") > 1 else []
     runs = check_session.frozen_runs(rows[d["tw27Ev"]:d["tw27EvEnd"]])         # the tw_27-like window's events only
     tw27_py = max((b - a for a, b in runs), default=0.0)
-    # addendum N: the resume press ends the run (< 80 s; the reverted 2026-10-18 measure read >= 80 s), JS = Python
+    pic = check_session.frozen_runs(rows[d["picEv"]:d["picEvEnd"]])           # the frozen-picture window's events
+    pic_py = max((b - a for a, b in pic), default=0.0)
+    # addendum N: the resume press ends the run (< 80 s; the reverted 2026-10-18 measure read >= 80 s), JS = Python;
+    # the frozen picture (121 s of clock with <= 1 frame per tick, a reset bridged) is one run on both sides, ended by frames
     ok = (abs(py - js_max) < 1e-6 and py > 0 and "stall" in after_swap and d["startWhilePaused"] == 0
-          and d["startAfterPlay"] >= 1 and 0 < d["tw27Max"] < 80 and abs(tw27_py - d["tw27Max"]) < 1e-6)
+          and d["startAfterPlay"] >= 1 and 0 < d["tw27Max"] < 80 and abs(tw27_py - d["tw27Max"]) < 1e-6
+          and d["picMax"] >= 120 and abs(pic_py - d["picMax"]) < 1e-6 and d["picLast"] == 0)
     print(json.dumps({"python_frozen_s": py, "content_js_max_frozen_s": js_max, "events": len(rows),
                       "stall_after_swap": "stall" in after_swap, "start_while_paused": d["startWhilePaused"],
-                      "start_after_play": d["startAfterPlay"], "tw27_like_run_js_py": [d["tw27Max"], tw27_py], "pass": ok}))
+                      "start_after_play": d["startAfterPlay"], "tw27_like_run_js_py": [d["tw27Max"], tw27_py],
+                      "frozen_picture_js_py": [d["picMax"], pic_py], "pass": ok}))
     return 0 if ok else 1
 
 

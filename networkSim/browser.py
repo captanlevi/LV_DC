@@ -29,7 +29,7 @@ from pathlib import Path
 import websocket  # websocket-client
 
 from yt_channels import YT_CHANNELS, url_of
-from check_session import FROZEN_PLAYHEAD_MAX_S, PLAYER_DEAD_MAX_S
+from check_session import FROZEN_PLAYHEAD_MAX_S, PLAYER_DEAD_MAX_S, CHECKS as _CS_CHECKS
 import stuck
 
 # ---------------------------------------------------------------------------
@@ -403,6 +403,7 @@ _TT_PLAYER_STATE_JS = """
     return JSON.stringify({has_video: !!v, src: !!(v && (v.currentSrc || v.src || v.srcObject)), rs: v ? v.readyState : null,
                            ct: v ? v.currentTime : null, paused: v ? v.paused : null, buf_end: buf,
                            decoded: v ? (v.webkitVideoDecodedByteCount || null) : null,
+                           tf: v && v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : null,
                            ended_text: hit('live has ended'),
                            // a visible loading indicator (heuristic, diagnostics only: tt's two-dot loader on a blank
                            // room after a re-entry, ti_33); never part of a decision
@@ -811,7 +812,7 @@ def _tt_state(page: "CDPPage") -> dict:
 def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = None) -> tuple[bool, dict]:
     """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal). With `trace`, one
     (t, rs, has_video, loading) per sample is appended (re-entry diagnostics)."""
-    w, first_ct, s = TTRoomWatch(), None, {}
+    w, first_ct, s, fg = TTRoomWatch(), None, {}, _FramesGate()
     page.eval(_CLICK_PLAY_JS)                         # autoplay may not have started: click, then give it the grace
     time.sleep(TT_AUTOPLAY_GRACE_S)
     deadline = time.time() + seconds
@@ -825,10 +826,11 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = No
             return False, {"dead": dead, **s}
         if s.get("has_video") and (s.get("rs") or 0) >= 3 and s.get("ct") is not None:
             first_ct = s["ct"] if first_ct is None else first_ct
-            if s["ct"] - first_ct >= 2.0:
-                return True, s
+            fg.feed(s.get("tf"))                      # WA2 r1: the clock alone confirmed a re-entry that showed no frame
+            if s["ct"] - first_ct >= 2.0 and fg.ok():
+                return True, {**s, **fg.record()}
         time.sleep(1)
-    return False, {"dead": "not_playing", **s}
+    return False, {"dead": "not_playing", **s, **fg.record()}
 
 
 def _tt_preroll(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
@@ -1832,6 +1834,7 @@ _PLAYER_STATE_JS = """
         if (v.buffered.start(i) <= v.currentTime + 0.05 && v.currentTime <= v.buffered.end(i)) buf = v.buffered.end(i) - v.currentTime;
     }
     return JSON.stringify({paused: v.paused, rs: v.readyState, ended: v.ended, ad: d.lvqoeAd === '1',
+                           tf: v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : null,
                            stall: d.lvqoeStall === '1', buf: Math.round(buf * 1000) / 1000,
                            ct: Math.round(v.currentTime * 1000) / 1000});
 })()
@@ -1841,7 +1844,7 @@ _PLAYER_STATE_JS = """
 # display off the pacing is what the session ran under, which A8's C5 reads against xrandr). Read-only; no request.
 SCREEN_RAF_FRAMES = 120
 CLOCK_SAMPLE_S = 60          # v3 A11: the watcher samples the time.time <-> page clock offset this often
-_SCREEN_JS = """
+_A8_SCREEN_JS = """
 new Promise((res) => {
   const t = [];
   let done = false;
@@ -2500,10 +2503,38 @@ class CaptureDrain:
         except Exception:
             pass
 
+# WA2 r1 ti_100001 (levi 00:28 (5a)): a re-entry was confirmed "playing" on the clock alone (ct 2.13 at readyState 4) and
+# then presented no frame for 949 s. A confirm now also needs decoded frames to advance (>= CONFIRM_MIN_FRAMES since the
+# confirm's first sample; a counter reset restarts the count); an unreadable counter falls back to the clock, recorded
+CONFIRM_MIN_FRAMES = 2
+
+
+class _FramesGate:
+    """Decoded frames since the first sample (totalVideoFrames), reset-aware; ok() when >= CONFIRM_MIN_FRAMES or the
+    counter was never readable (then `unreadable`)."""
+    def __init__(self):
+        self.first = self.last = None
+        self.seen = False
+
+    def feed(self, tf) -> None:
+        if not isinstance(tf, (int, float)):
+            return
+        self.seen = True
+        if self.first is None or (self.last is not None and tf < self.last):
+            self.first = tf                       # the first sample, or a new element / reset: count from here
+        self.last = tf
+
+    def ok(self) -> bool:
+        return not self.seen or (self.last - self.first) >= CONFIRM_MIN_FRAMES
+
+    def record(self) -> dict:
+        return {"frames": None if not self.seen else self.last - self.first, "frames_unreadable": not self.seen}
+
+
 def _confirm_advancing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
-    """After a re-entry (yt / twitch): play pressed while paused; the playhead advancing >= 2 s at readyState >= 3 within
-    `seconds`."""
-    first, st = None, {}
+    """After a re-entry (yt / twitch): play pressed while paused; the playhead advancing >= 2 s at readyState >= 3 and
+    decoded frames advancing (_FramesGate) within `seconds`."""
+    first, st, fg = None, {}, _FramesGate()
     deadline = time.time() + seconds
     while time.time() < deadline:
         try:
@@ -2515,10 +2546,12 @@ def _confirm_advancing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
             ct = None
         if ct is not None and ct >= 0 and (st.get("readyState") or st.get("rs") or 0) >= 3:
             first = ct if first is None else first
-            if ct - first >= 2.0:
-                return True, {"ct": ct}
+            fg.feed(st.get("tf"))
+            if ct - first >= 2.0 and fg.ok():
+                return True, {"ct": ct, **fg.record()}
         time.sleep(1)
-    return False, {"not_playing": True, **{k: st.get(k) for k in ("paused", "readyState", "rs") if k in st}}
+    return False, {"not_playing": True, **fg.record(),
+                   **{k: st.get(k) for k in ("paused", "readyState", "rs") if k in st}}
 
 
 # t56 tw_100016 (levi's ruling, for the N_collect boundary): Twitch's Error #2000 page keeps the "Ad" badge, so every tick
@@ -2993,7 +3026,7 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 froze = on_frozen(frozen_s) is not False      # False: held (yt / twitch low states), asked again next tick
 
 
-SHOT_INTERVAL_S = 60.0   # levi 16:57 (v3 gate list): 60 s cadence + event triggers (start, A1 dims change, STALL onset,
+SHOT_INTERVAL_S = _CS_CHECKS["shot_interval_s"]   # one source: check_session (WA2 r1). levi 16:57 (v3 gate list): 60 s cadence + event triggers (start, A1 dims change, STALL onset,
                          # error page); the instrumentation A/B measures the shot cost against a pseudo-shot null
 # levi 17:45 (A7's C5 needs an uncropped shot): "player" (default, as before) crops to the player rect; "viewport" keeps
 # the whole page area (composite: the window's viewport; x11 / cdp: the viewport), so the content box is found in the image
@@ -3720,7 +3753,7 @@ class BrowserSession:
         self._page.call("Page.bringToFront")
         self._page.call("Emulation.setFocusEmulationEnabled", {"enabled": True})
         try:                                     # v3 A8 (t67): what the page sees of the screen, once at start
-            self.screen = json.loads(self._page.eval(_SCREEN_JS, await_promise=True) or "null")
+            self.screen = json.loads(self._page.eval(_A8_SCREEN_JS, await_promise=True) or "null")
         except Exception as exc:
             self.screen = {"error": repr(exc)[:200]}
         self._clock_sample("start")                # v3 A11

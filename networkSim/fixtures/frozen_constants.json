@@ -272,12 +272,14 @@
  "frozen_measure": {
   "content_js": {
    "AD_MAX_DURATION_S": 600,
+   "FROZEN_FRAMES_MAX": 1,
    "FROZEN_TOL_S": 1.0,
    "RESOLUTION_POLL_INTERVAL_MS": 1000
   },
   "python": {
+   "FROZEN_FRAMES_MAX": 1,
    "STALL_LOOP_PLAY_MAX_S": 10.0,
-   "definition": "addendum N stall-only run"
+   "definition": "addendum N stall-only run + frozen-picture run (WA2 r1)"
   }
  },
  "geometry": {
@@ -1522,7 +1524,7 @@
    "max_background_share": 0.05,
    "shaper_episode_share_min": 0.9,
    "shaper_ratio_max": 1.1,
-   "shot_interval_s": 10.0,
+   "shot_interval_s": 60.0,
    "shots_share_min": 0.5,
    "tick_gap_s": 1.5,
    "tick_presence_min": 0.95,
@@ -1673,6 +1675,7 @@
   "STREAM_VOD_WITHIN": 60
  },
  "stuck": {
+  "CONFIRM_MIN_FRAMES": 2,
   "FALLBACK_RUNG_KBIT": {
    "tiktok": 1800.0,
    "twitch": 230.0,

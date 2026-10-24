@@ -10,8 +10,9 @@ import b3_feasibility as B  # noqa: E402
 
 
 def _meta(pf, rends):
-    return {"platform": pf, "offered_ladder": {"t": 0.0, "source": "test",
-                                               "renditions": [{"w": w, "h": h, "bitrate_kbit": k} for w, h, k in rends]}}
+    import offer as O                                 # the collector's own writer: the fixture is its output schema
+    return {"platform": pf, "offer": {"platform": pf, "missing": False, "t_first": 0.0, "source": "test",
+                                      "renditions": [O._rend(f"{h}p", w, h, k, None, None) for w, h, k in rends]}}
 
 
 YT = [(256, 144, 255), (640, 360, 380), (1280, 720, 880), (1920, 1080, 3040)]
