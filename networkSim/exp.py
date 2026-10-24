@@ -746,6 +746,9 @@ if __name__ == "__main__":
         transition, low_cap, init_rule = chosen[0][matrix_id]
     SHAPER_OPTS.update(max_consecutive_low=low_cap,
                        initial_state_fn=initial_state_stationary if init_rule == "stationary" else None)
+    # levi 17:56: a typo'd LVQOE_SHOT_CROP would give player-cropped shots and void A7's C5 silently: refuse it here
+    if os.environ.get("LVQOE_SHOT_CROP") not in (None, "player", "viewport"):
+        sys.exit(f"LVQOE_SHOT_CROP={os.environ['LVQOE_SHOT_CROP']!r}: must be player or viewport; refused")
     if args.lever and args.hold_state is not None:   # B4 x B5: a held decode_stress session never levers
         sys.exit("--lever and --hold-state exclude each other (a held state is decode_stress, never a lever window)")
     if args.hold_state is not None:      # t56 decode_stress: one state held, never in a dataset root
@@ -1119,6 +1122,7 @@ if __name__ == "__main__":
                               screen=browser.screen,                                   # v3 A8 (t67)
                               clock_offsets=browser.clock_offsets,                     # v3 A11 (t67)
                               shot_crop=browser.shot_crop,                             # v3 (levi 17:45; A7's C5)
+                              shot_triggers_py=browser.shot_triggers_py,               # v3: Python-side shot triggers
                               lever=(LEVER.record(browser.abort_at, browser.abort_reason)      # v3 B4
                                      if LEVER is not None else None),
                               tw_playlist_ads=({"fetches": browser._master.playlist_fetches,          # v3 A3 src 2
