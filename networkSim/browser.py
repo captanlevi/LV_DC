@@ -2383,6 +2383,9 @@ class CaptureDrain:
             else:
                 self.frames += 1
             self._send("Fetch.enable", self.PATTERNS, prm.get("sessionId"))
+            if kind == "frame":                    # levi 16:48: nested OOPIFs and their workers attach (and block) too
+                self._send("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True},
+                           prm.get("sessionId"))
             self._send("Runtime.runIfWaitingForDebugger", {}, prm.get("sessionId"))
         elif m == "Fetch.requestPaused":
             self.failed[self.kind.get(sid, "worker") if sid else "page"] += 1
