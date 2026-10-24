@@ -1125,6 +1125,8 @@ if __name__ == "__main__":
                               shot_triggers_py=browser.shot_triggers_py,               # v3: Python-side shot triggers
                               lever=(LEVER.record(browser.abort_at, browser.abort_reason)      # v3 B4
                                      if LEVER is not None else None),
+                              tw_ladder=(browser._master.tw_ladder()                  # v3 A4 (twitch's offer)
+                                         if getattr(browser, "_master", None) is not None else None),
                               tw_playlist_ads=({"fetches": browser._master.playlist_fetches,          # v3 A3 src 2
                                                 "edges": browser._master.ad_edges,
                                                 "overflow": browser._master.ad_edges_overflow}
@@ -1143,6 +1145,12 @@ if __name__ == "__main__":
                               # t58 L-1: the bytes tt's room-end rule (b) reads (a slot's own IFB, or every interface)
                               **({"room_rx_source": _room_rx_source()} if platform == "tiktok" else {}),
                               entry_quality=browser.entry_quality)
+            try:                                        # v3 A4: one offer schema for every platform (meta.json offer)
+                import offer as _offer
+                meta_extra["offer"] = _offer.offer_record(platform, {k: meta_extra.get(k)
+                                                                     for k in ("yt_ladder", "tw_ladder", "tt_codec")})
+            except Exception as e:
+                meta_extra["offer"] = {"platform": platform, "missing": True, "error": repr(e)[:200]}
             if os.environ.get("LVDC_GEOMETRY_DRAW"):    # restart §7: the draw (written at start) with the device px taken
                 try:
                     g = browser.geometry or {}
