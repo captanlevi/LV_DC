@@ -91,6 +91,35 @@ def substep_changes(state: str, rate: int, dur: float, delay_ms: int, loss_pct: 
     return out
 
 
+# v3 W-A (levi 17:1x, the instrumentation A/B: "the arms differ ONLY in the instrument flag"): one recorded schedule replayed
+# identically in every round. States 1 -> 10 -> 1, each held REPLAY_STEP_S; rate / delay / loss and the walk come from
+# generators seeded by the replay seed alone (never the session name, never the module's random), so every session given
+# the same seed and step gets the same tc changes at the same session times. Dry only (orchestrate refuses it with
+# --trio-record).
+REPLAY_STATES = tuple(str(i) for i in range(1, 11)) + tuple(str(i) for i in range(9, 0, -1))
+REPLAY_STEP_S = 79.0          # 19 steps x 79 s = 1501 s, the W-A session's 25 min
+REPLAY_RULE = "v3 W-A: states 1->10->1, REPLAY_STEP_S each, rate / delay / loss / walk seeded by the replay seed only"
+
+
+def replay_record(seed: str, step_s: float = REPLAY_STEP_S) -> dict:
+    return {"rule": REPLAY_RULE, "seed": seed, "step_s": float(step_s), "states": list(REPLAY_STATES),
+            "session_s": round(len(REPLAY_STATES) * float(step_s), 3)}
+
+
+def replay_generator(episode_length=None, transition_dict=None, forced_initial_state=None, max_episodes=None, *,
+                     replay_seed: str, step_s: float = REPLAY_STEP_S, **_ignored):
+    """The replayed schedule's tc changes (substep_changes per state: its draw, then its walk steps); the shaper's other
+    options (the session's walk generator, delay / loss factor, low cap, start rule) are ignored: the schedule is fixed."""
+    rng = random.Random(f"replay:{replay_seed}")
+    walk = random.Random(f"walk:replay:{replay_seed}")
+    for state in REPLAY_STATES:
+        sc = SCENARIOS[state]
+        rate = rng.randint(sc.rate_min, sc.rate_max)
+        delay = rng.randint(sc.delay_min, sc.delay_max)
+        loss = round(rng.uniform(sc.loss_pct_min, sc.loss_pct_max), 1)
+        yield from substep_changes(state, rate, float(step_s), delay, loss, walk, 1.0)
+
+
 def net_episode_generator(
     episode_length: int,
     transition_dict: dict[str, dict[str, float]],
