@@ -52,6 +52,7 @@ def test_tw_variants():
 def test_master_listener_ladder():
     ml = B.MasterListener.__new__(B.MasterListener)
     ml.ladder_reads, ml.ladder_n_reads, ml.ladder_overflow, ml._ladder_last = [], 0, 0, None
+    ml.ladder_errors, ml.ladder_last_error = 0, None
     url = "https://usher.ttvnw.net/api/channel/hls/x.m3u8?token=t"
     ml.ladder(MASTER, url, 1.0)
     ml.ladder(MASTER, url, 2.0)                                                       # unchanged: not recorded again
@@ -69,6 +70,22 @@ def test_master_listener_ladder():
         B.WATCH_LOG_MAX = saved
 
 
+def test_malformed_master_is_counted():
+    """levi 18:22: a malformed STREAM-INF raises in the parse; the listener counts it (errors + last_error) and goes on,
+    and the offer reads missing with the error count."""
+    bad = MASTER.replace("BANDWIDTH=8534030", "BANDWIDTH=lots")
+    try:
+        O.tw_variants(bad)
+        raise AssertionError("a non-int BANDWIDTH must raise in the parser")
+    except ValueError:
+        pass
+    src = (HERE / "browser.py").read_text()
+    i = src.index("self.ladder(body, url, time.time())")
+    assert "try:" in src[i - 120:i] and "self.ladder_errors += 1" in src[i:i + 200]
+    off = O.offer_record("twitch", {"tw_ladder": {"n_reads": 2, "reads": [], "errors": 2, "last_error": "ValueError('x')"}})
+    assert off["missing"] is True and off["read_errors"] == 2 and off["last_error"] == "ValueError('x')"
+
+
 def test_offer_record():
     tw = O.offer_record("twitch", {"tw_ladder": {"n_reads": 3, "reads": [{"t": 10.0, "variants": O.tw_variants(MASTER)}]}})
     assert not tw["missing"] and tw["source"] == "hls master" and tw["t_first"] == 10.0 and tw["n_changes"] == 0
@@ -82,6 +99,10 @@ def test_offer_record():
          "qualityLabel": "1080p", "fps": 30}], "levels": ["hd1080", "hd720", "auto"], "ad": False}
     yt = O.offer_record("youtube", {"yt_ladder": {"n_reads": 9, "reads": [{"t": 1.0, "formats": []}, yt_read, yt_read]}})
     assert [r["name"] for r in yt["renditions"]] == ["1080p", "720p"] and yt["renditions"][1]["codecs"] == "avc1.4d401f"
+    vp9 = {**yt_read, "formats": yt_read["formats"] + [{"itag": 247, "mimeType": 'video/webm; codecs="vp9"', "bitrate": 2500000,
+                                                        "width": 1280, "height": 720, "qualityLabel": "720p", "fps": 30}]}
+    two = O.offer_record("youtube", {"yt_ladder": {"reads": [vp9]}})["renditions"]
+    assert sorted(r["codecs"] for r in two if r["name"] == "720p") == ["avc1.4d401f", "vp9"]   # brad 18:23: not collapsed
     assert yt["t_first"] == 5.0 and yt["n_changes"] == 1                              # the empty first read is skipped
     tt = O.offer_record("tiktok", {"tt_codec": {"reads": [{"t": 2.0, "h265": True, "renditions": [
         {"codec": "h264", "resolution": "720x1280", "vbitrate": "1800000", "suffix": "hd"},
@@ -102,6 +123,7 @@ def test_wiring():
 def main() -> int:
     test_tw_variants()
     test_master_listener_ladder()
+    test_malformed_master_is_counted()
     test_offer_record()
     test_wiring()
     print("test_offer: ok")
