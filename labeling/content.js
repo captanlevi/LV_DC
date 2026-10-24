@@ -97,9 +97,21 @@ function loginWallText(v) {
 // and every ad start (is_ad false -> true)
 let shotReqN = 0;
 const shotTrig = { frame: 0, tick: 0, ad_start: 0, stall_onset: 0, start: 0 };   // levi 21:19: tier-change shots by trigger (pf = frame), ad starts
+// WA2 r1 (levi 00:52 / 00:53): 69 stall_onset shots in one tt churn period (a new player, so a new stall, every ~1 s).
+// Event shots of the same reason are >= SHOT_EVENT_MIN_GAP_S apart; a suppressed request is counted (side_counters
+// shot_triggers_suppressed), never silent; the 60 s cadence (browser.py) is untouched
+const SHOT_EVENT_MIN_GAP_S = 10;
+const shotLastAt = {};
+const shotSuppressed = {};
 let shotLastH = null;
 let shotLastAd = false;
 function requestShot(reason, eventId, pf = null) {
+  const nowMs = performance.now();
+  if (shotLastAt[reason] !== undefined && nowMs - shotLastAt[reason] < SHOT_EVENT_MIN_GAP_S * 1000) {
+    shotSuppressed[reason] = (shotSuppressed[reason] || 0) + 1;
+    return;
+  }
+  shotLastAt[reason] = nowMs;
   shotReqN += 1;
   if (reason === "tier_change") shotTrig[pf === null ? "tick" : "frame"] += 1;
   else if (reason in shotTrig) shotTrig[reason] += 1;
@@ -361,7 +373,8 @@ function rvfcTick() {
   if (window === window.top) {
     try {
       chrome.storage.local.set({ side_counters: { side_dropped: sideDropped, side_failed: sideFailed, off_arm_cb: offArmCb,
-                                                  shot_triggers: shotTrig, at: performance.timeOrigin + performance.now() } });
+                                                  shot_triggers: shotTrig, shot_triggers_suppressed: shotSuppressed,
+                                                  at: performance.timeOrigin + performance.now() } });
     } catch (e) { /* counted in the tick rows */ }
   }
 }

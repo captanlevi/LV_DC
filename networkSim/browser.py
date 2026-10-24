@@ -3054,6 +3054,7 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
 
 SHOT_INTERVAL_S = _CS_CHECKS["shot_interval_s"]   # one source: check_session (WA2 r1). levi 16:57 (v3 gate list): 60 s cadence + event triggers (start, A1 dims change, STALL onset,
                          # error page); the instrumentation A/B measures the shot cost against a pseudo-shot null
+SHOT_EVENT_MIN_GAP_S = 10.0   # levi 00:53: event shots of one reason >= this apart (content.js SHOT_EVENT_MIN_GAP_S, parity)
 # levi 17:45 (A7's C5 needs an uncropped shot): "player" (default, as before) crops to the player rect; "viewport" keeps
 # the whole page area (composite: the window's viewport; x11 / cdp: the viewport), so the content box is found in the image
 SHOT_CROPS = ("player", "viewport")
@@ -3682,6 +3683,9 @@ class BrowserSession:
         self.error_watch.held_fn = self._lowstate_held
         self._shot_reasons: list[str] = []          # v3 (levi 16:57): Python-side shot triggers, consumed by the shooter
         self.shot_triggers_py: dict[str, int] = {"error_page": 0}   # meta.json shot_triggers_py (brad / levi 18:00)
+        # levi 00:53: the same event-shot gap on the Python side; suppressed onsets counted (meta shot_triggers_py_suppressed)
+        self.shot_triggers_py_suppressed: dict[str, int] = {"error_page": 0}
+        self._shot_last_py: dict[str, float] = {}
         self.error_watch.on_onset = self._on_error_onset
         self.shot_crop = {"crop": SHOT_CROP, "env": SHOT_CROP_RAW}   # meta.json shot_crop (levi 17:45)
         self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
@@ -4461,6 +4465,16 @@ class BrowserSession:
         return he is not None and t <= he
 
     def _on_error_onset(self, t: float) -> None:
+        last = getattr(self, "_shot_last_py", {}).get("error_page")
+        if last is not None and t - last < SHOT_EVENT_MIN_GAP_S:      # levi 00:53: never a shot storm; counted
+            sup = getattr(self, "shot_triggers_py_suppressed", None)
+            if sup is None:
+                sup = self.shot_triggers_py_suppressed = {"error_page": 0}
+            sup["error_page"] += 1
+            return
+        if not hasattr(self, "_shot_last_py"):
+            self._shot_last_py = {}
+        self._shot_last_py["error_page"] = t
         self._shot_reasons.append("error_page")
         self.shot_triggers_py["error_page"] += 1
 

@@ -1659,6 +1659,13 @@
   "SHOT_CALIB_MIN_GAP": 4.0,
   "SHOT_CALIB_SCALE": 4
  },
+ "shots_v3": {
+  "SHOT_EVENT_MIN_GAP_S": 10.0,
+  "SHOT_INTERVAL_S": 60.0,
+  "content_js": {
+   "SHOT_EVENT_MIN_GAP_S": 10
+  }
+ },
  "stated_eras": [
   "t56-nslot-2026-10-19"
  ],

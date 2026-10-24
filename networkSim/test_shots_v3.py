@@ -9,6 +9,7 @@ back to player and recorded (meta.json shot_crop {crop, env}).
 import importlib
 import inspect
 import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -68,6 +69,55 @@ def test_error_onset_shot():
     assert b._pop_shot_reason() == "error_page" and b._pop_shot_reason() is None
 
 
+_RATE_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[2], "utf8");
+let now = 1000;
+const ds = {};
+const ctx = { console: { log() {} }, performance: { timeOrigin: 0, now: () => now }, setInterval: () => 0,
+  setTimeout: () => 0, clearInterval() {}, MutationObserver: class { observe() {} disconnect() {} },
+  XPathResult: { ORDERED_NODE_SNAPSHOT_TYPE: 7 }, location: { href: "https://www.tiktok.com/@x/live", hostname: "www.tiktok.com" },
+  chrome: { runtime: { lastError: null, sendMessage: (m, cb) => cb && cb({ ok: true }) }, storage: { local: { set() {} } } },
+  addEventListener() {}, getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }) };
+ctx.window = ctx; ctx.window.top = ctx;
+ctx.document = { documentElement: { dataset: ds }, body: {}, visibilityState: "visible", querySelectorAll: () => [],
+  querySelector: () => null, evaluate: () => ({ snapshotLength: 0 }) };
+vm.createContext(ctx);
+vm.runInContext(src + "\n;globalThis.__shots = () => ({ suppressed: shotSuppressed, trig: shotTrig, n: shotReqN });", ctx);
+const reqs = [];
+for (let i = 0; i < 30; i++) {           // a churn loop: a stall onset every second for 30 s
+  ctx.requestShot("stall_onset", i); reqs.push(ds.lvqoeShotReq); now += 1000;
+}
+ctx.requestShot("ad_start", 99);          // another reason is not held back by stall_onset's gap
+fs.writeFileSync(process.argv[3], JSON.stringify({ ...ctx.__shots(), changes: new Set(reqs).size, last: ds.lvqoeShotReq }));
+"""
+
+
+def test_event_shots_are_rate_limited():
+    """levi 00:52 / 00:53 (WA2 r1: 69 stall_onset shots in one tt churn period): event shots of one reason >= 10 s
+    apart, the suppressed ones counted; Python's error_page trigger the same; the two gaps equal."""
+    import json
+    import shutil
+    import subprocess
+    import tempfile
+    js = (HERE.parent / "labeling" / "content.js").read_text()
+    assert float(re.search(r"const SHOT_EVENT_MIN_GAP_S = ([0-9.]+);", js).group(1)) == B.SHOT_EVENT_MIN_GAP_S == 10.0
+    assert shutil.which("node"), "node not found"
+    with tempfile.TemporaryDirectory() as td:
+        h, out = Path(td) / "h.js", Path(td) / "o.json"
+        h.write_text(_RATE_HARNESS)
+        subprocess.run(["node", str(h), str(HERE.parent / "labeling" / "content.js"), str(out)], check=True)
+        d = json.loads(out.read_text())
+    assert d["trig"]["stall_onset"] == 3 and d["suppressed"] == {"stall_onset": 27} and d["changes"] == 3, d
+    assert d["trig"]["ad_start"] == 1 and d["last"].split("|")[1] == "ad_start"
+    b = B.BrowserSession.__new__(B.BrowserSession)
+    b._shot_reasons, b.shot_triggers_py = [], {"error_page": 0}
+    for t in (100.0, 101.0, 109.0, 110.0, 125.0):
+        b._on_error_onset(t)
+    assert b.shot_triggers_py == {"error_page": 3} and b.shot_triggers_py_suppressed == {"error_page": 2}
+    assert b._shot_reasons == ["error_page"] * 3
+
+
 def test_meta_and_refusal():
     src = (HERE / "exp.py").read_text()
     assert "shot_crop=browser.shot_crop," in src and "shot_triggers_py=browser.shot_triggers_py," in src
@@ -79,6 +129,7 @@ def test_meta_and_refusal():
 def main() -> int:
     test_cadence_and_crop()
     test_error_onset_shot()
+    test_event_shots_are_rate_limited()
     test_meta_and_refusal()
     print("test_shots_v3: ok")
     return 0

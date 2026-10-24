@@ -1133,6 +1133,7 @@ if __name__ == "__main__":
                               clock_offsets=browser.clock_offsets,                     # v3 A11 (t67)
                               shot_crop=browser.shot_crop,                             # v3 (levi 17:45; A7's C5)
                               shot_triggers_py=browser.shot_triggers_py,               # v3: Python-side shot triggers
+                              shot_triggers_py_suppressed=browser.shot_triggers_py_suppressed,   # levi 00:53
                               lever=(LEVER.record(browser.abort_at, browser.abort_reason)      # v3 B4
                                      if LEVER is not None else None),
                               tw_ladder=(browser._master.tw_ladder()                  # v3 A4 (twitch's offer)

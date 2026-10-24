@@ -172,6 +172,9 @@ def current() -> dict:
         "capture_offloads": {"OFF": OFF.OFF}, "record_era": REC.ERA, "record_eras": list(REC.RECORD_ERAS), "record_lines": dict(REC.RECORD_LINES), "record_boundary": REC.RECORD_BOUNDARY, "stated_eras": list(REC.STATED_ERAS),
         "shot_origin": {"SHOT_CALIB_MARGIN_PX": B.SHOT_CALIB_MARGIN_PX, "SHOT_CALIB_SCALE": B.SHOT_CALIB_SCALE,
                         "SHOT_CALIB_MAX_RESIDUAL": B.SHOT_CALIB_MAX_RESIDUAL, "SHOT_CALIB_MIN_GAP": B.SHOT_CALIB_MIN_GAP},
+        # v3 shots (levi 16:57; WA2 r1 levi 00:53): the cadence and the event-shot gap (Python and content.js)
+        "shots_v3": {"SHOT_INTERVAL_S": B.SHOT_INTERVAL_S, "SHOT_EVENT_MIN_GAP_S": B.SHOT_EVENT_MIN_GAP_S,
+                     "content_js": _js_consts(["SHOT_EVENT_MIN_GAP_S"])},
         "entry_quality": {"ENTRY_QUALITY_PLATFORMS": EQ.ENTRY_QUALITY_PLATFORMS, "ENTRY_RULE": EQ.ENTRY_RULE,
                           "AD_WAIT_S": EQ.AD_WAIT_S, "PICK_HOLD_MAX_S": EQ.PICK_HOLD_MAX_S,
                           "SETTLE_RECORD_S": EQ.SETTLE_RECORD_S, "MIN_OPTIONS": EQ.MIN_OPTIONS,
