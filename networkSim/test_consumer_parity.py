@@ -93,9 +93,10 @@ def test_confirms_need_decoded_frames():
         assert ok and d["frames"] >= B.CONFIRM_MIN_FRAMES
     finally:
         B.TT_AUTOPLAY_GRACE_S = saved
+    assert d["confirm_basis"] == "frames"
     g = B._FramesGate()                                         # never readable: the clock decides, recorded
     g.feed(None)
-    assert g.ok() and g.record()["frames_unreadable"]
+    assert g.ok() and g.record()["frames_unreadable"] and g.record()["confirm_basis"] == "clock_fallback"
     g = B._FramesGate()                                         # a reset restarts the count
     for tf in (500, 501, 0, 1):
         g.feed(tf)
@@ -104,11 +105,22 @@ def test_confirms_need_decoded_frames():
     assert g.ok()
 
 
+def test_room_mismatch_is_recorded_with_the_next_room():
+    """levi 00:35 (1): an unpinned tt room_mismatch is never silent: intended, landed URL and the next room opened."""
+    rec = {"tries": [{"room": "a"}, {"room": "b"}, {"room": "c"}],
+           "room_mismatches": [{"intended": "a", "landed_url": "x", "try": 0}, {"intended": "c", "landed_url": "y", "try": 2}]}
+    B.BrowserSession._room_mismatch_next(rec)
+    assert [m["next_opened"] for m in rec["room_mismatches"]] == ["b", None]
+    src = (HERE / "browser.py").read_text()
+    assert 'rec.setdefault("room_mismatches", []).append(' in src and '"frames_unreadable", "confirm_basis")' in src
+
+
 def main() -> int:
     test_one_shot_cadence()
     test_low_states_and_frozen_constants_agree()
     test_screen_probes_are_distinct()
     test_confirms_need_decoded_frames()
+    test_room_mismatch_is_recorded_with_the_next_room()
     print("test_consumer_parity: ok")
     return 0
 

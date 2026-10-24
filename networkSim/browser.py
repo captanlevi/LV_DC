@@ -2528,7 +2528,9 @@ class _FramesGate:
         return not self.seen or (self.last - self.first) >= CONFIRM_MIN_FRAMES
 
     def record(self) -> dict:
-        return {"frames": None if not self.seen else self.last - self.first, "frames_unreadable": not self.seen}
+        # levi 00:35 (2): which basis confirmed it, counted per window; a clock_fallback re-entry is listed in the read
+        return {"frames": None if not self.seen else self.last - self.first, "frames_unreadable": not self.seen,
+                "confirm_basis": "frames" if self.seen else "clock_fallback"}
 
 
 def _confirm_advancing(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
@@ -4069,6 +4071,9 @@ class BrowserSession:
                     t["identity"] = idc = identity_check("tiktok", c["href"], page)
                     if idc["ok"] is False:
                         ok, detail = False, {"dead": "room_mismatch", "landed": idc["landed"]}
+                        # levi 00:35 (1): never silent: it changes which channel a counted session holds (caps, folds)
+                        rec.setdefault("room_mismatches", []).append(
+                            {"intended": c["href"], "landed_url": idc.get("landed_url"), "try": len(rec["tries"])})
                 if ok:
                     t["t_playing"] = time.time()
                     ok, detail = _tt_preroll(page, TT_PREROLL_S)
@@ -4079,8 +4084,17 @@ class BrowserSession:
             print(f"[browser] tt room {c['href']} ({c['viewers']} viewers): {'OK' if ok else detail.get('dead')}", flush=True)
             if ok:
                 rec["choice"] = c["href"]
+                self._room_mismatch_next(rec)
                 return ROOM_ROTATION_LIVE_URL
+        self._room_mismatch_next(rec)
         return None
+
+    @staticmethod
+    def _room_mismatch_next(rec: dict) -> None:
+        """Each room_mismatch names the next candidate opened after it (None when it was the last try)."""
+        for m in rec.get("room_mismatches") or []:
+            nxt = m["try"] + 1
+            m["next_opened"] = rec["tries"][nxt]["room"] if nxt < len(rec["tries"]) else None
 
     def _room_watch_loop(self) -> None:
         """tt: abort the session with reason room_ended when the room dies mid-session, or player_dead when the player
@@ -4190,7 +4204,8 @@ class BrowserSession:
             ok, detail = _tt_confirm_playing(self._page, TT_REENTRY_CONFIRM_S, trace=trace)
             rs3 = next((t for t, rs, _, _ in trace if (rs or 0) >= 3), None)
             rec.update(ok=bool(ok), t_playing=time.time() if ok else None, room=self._page.eval("location.href"),
-                       confirm={k: detail.get(k) for k in ("dead", "rs", "ct", "ended_text") if k in detail},
+                       confirm={k: detail.get(k) for k in ("dead", "rs", "ct", "ended_text", "frames",
+                                                           "frames_unreadable", "confirm_basis") if k in detail},
                        confirm_s=TT_REENTRY_CONFIRM_S, samples=len(trace),
                        samples_loading=sum(1 for *_, ld in trace if ld),
                        samples_no_video=sum(1 for _, _, hv, _ in trace if not hv),
