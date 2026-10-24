@@ -96,12 +96,23 @@ const picEv = sent.length;                           // the window opens at the 
 pv.currentTime += 1; ptf += 30; tick();
 const picFrom = out.length;
 for (let i = 0; i < 100; i++) { pv.currentTime += 1; tick(); }
-ptf = 1; pv.currentTime += 1; tick();
+ptf = 5; pv.currentTime += 1; tick();                // a reset with the new counter >= 2 BRIDGES (brad 00:45 M2)
 for (let i = 0; i < 20; i++) { pv.currentTime += 1; tick(); }
 for (let i = 0; i < 5; i++) { pv.currentTime += 1; ptf += 30; tick(); }
 const picMax = Math.max(...out.slice(picFrom)), picEvEnd = sent.length, picLast = out[out.length - 1];
+// brad 00:45 M1: the stall label on with the clock creeping (< the 1 s tolerance per stall run) and no frame decoded: a
+// stall-only run and a picture run over the same seconds, then the picture alone: ONE union run on both sides
+for (let i = 0; i < 5; i++) { pv.currentTime += 1; ptf += 30; tick(); }
+const ovEv = sent.length, ovFrom = out.length;
+pv.currentTime += 1; ptf += 30; tick();
+for (let i = 0; i < 30; i++) { pv.readyState = 2; pv.currentTime += 0.2; tick(); }
+pv.readyState = 4;
+for (let i = 0; i < 30; i++) { pv.currentTime += 1; tick(); }
+for (let i = 0; i < 5; i++) { pv.currentTime += 1; ptf += 30; tick(); }
+const ovMax = Math.max(...out.slice(ovFrom)), ovEvEnd = sent.length;
 fs.writeFileSync(process.argv[3], JSON.stringify({ frozen_s: out, events: sent, startWhilePaused, startAfterPlay, tw27Max,
-                                                   tw27Ev, tw27EvEnd, picMax, picEv, picEvEnd, picLast }));
+                                                   tw27Ev, tw27EvEnd, picMax, picEv, picEvEnd, picLast, ovMax, ovEv,
+                                                   ovEvEnd }));
 """
 
 
@@ -125,16 +136,49 @@ def main() -> int:
     tw27_py = max((b - a for a, b in runs), default=0.0)
     pic = check_session.frozen_runs(rows[d["picEv"]:d["picEvEnd"]])           # the frozen-picture window's events
     pic_py = max((b - a for a, b in pic), default=0.0)
+    ov = check_session.frozen_runs(rows[d["ovEv"]:d["ovEvEnd"]])             # stall + picture over the same seconds
+    ov_py = max((b - a for a, b in ov), default=0.0)
     # addendum N: the resume press ends the run (< 80 s; the reverted 2026-10-18 measure read >= 80 s), JS = Python;
     # the frozen picture (121 s of clock with <= 1 frame per tick, a reset bridged) is one run on both sides, ended by frames
     ok = (abs(py - js_max) < 1e-6 and py > 0 and "stall" in after_swap and d["startWhilePaused"] == 0
           and d["startAfterPlay"] >= 1 and 0 < d["tw27Max"] < 80 and abs(tw27_py - d["tw27Max"]) < 1e-6
-          and d["picMax"] >= 120 and abs(pic_py - d["picMax"]) < 1e-6 and d["picLast"] == 0)
+          and d["picMax"] >= 120 and abs(pic_py - d["picMax"]) < 1e-6 and d["picLast"] == 0
+          and d["ovMax"] >= 59 and abs(ov_py - d["ovMax"]) < 1e-6 and len([r for r in ov if r[1] - r[0] >= 59]) == 1)
     print(json.dumps({"python_frozen_s": py, "content_js_max_frozen_s": js_max, "events": len(rows),
                       "stall_after_swap": "stall" in after_swap, "start_while_paused": d["startWhilePaused"],
                       "start_after_play": d["startAfterPlay"], "tw27_like_run_js_py": [d["tw27Max"], tw27_py],
-                      "frozen_picture_js_py": [d["picMax"], pic_py], "pass": ok}))
+                      "frozen_picture_js_py": [d["picMax"], pic_py], "overlap_union_js_py": [d["ovMax"], ov_py],
+                      "pass": ok}))
     return 0 if ok else 1
+
+
+def _row(t, ty="res_meta", ct=None, tf=None, paused=False):
+    return {"ts": str(t * 1000), "type": ty, "current_time": "" if ct is None else str(ct),
+            "total_frames": "" if tf is None else str(tf), "paused": str(paused), "is_ad": "False"}
+
+
+def test_union_and_reset_bridge_in_python():
+    """brad 00:45: a re-entry inside an overlapping stall + picture run is excluded exactly once (M1); a reset with the
+    new counter >= 2 bridges the picture run (M2)."""
+    rows = [_row(0, "res_meta", 0.0, 10), _row(0.5, "stall")]
+    ct = 0.0
+    for t in range(1, 61):                       # stall label on, the clock creeping, no frame: both runs
+        ct += 0.01
+        rows.append(_row(t, ct=ct, tf=10))
+    rows.append(_row(60.5, "start"))
+    for t in range(61, 101):                     # the picture alone
+        ct += 1.0
+        rows.append(_row(t, ct=ct, tf=10))
+    rows.append(_row(101, ct=ct + 1, tf=60))     # frames: the run ends
+    runs = check_session.frozen_runs(rows)
+    assert len(runs) == 1 and runs[0][0] == 0.0 and runs[0][1] == 100.0, runs
+    r = check_session.recovered_frozen(rows, [{"outcome": "continue", "t_nav": 50.0}])
+    assert r["recovered"] is not None and r["max_s"] == 0.0           # excluded once, nothing left over
+    rows2 = [_row(0, ct=0.0, tf=100)] + [_row(t, ct=float(t), tf=100) for t in range(1, 40)]
+    rows2 += [_row(40, ct=0.5, tf=7)] + [_row(t, ct=0.5 + t - 40, tf=7) for t in range(41, 80)]
+    rows2 += [_row(80, ct=41.0, tf=60)]
+    pr = check_session.frozen_picture_runs(rows2)
+    assert pr == [(0.0, 79.0)], pr                                       # one run across the reset (new counter 7)
 
 
 def test_content_js_frozen_run_equals_check_session():
@@ -144,4 +188,5 @@ def test_content_js_frozen_run_equals_check_session():
 
 
 if __name__ == "__main__":
+    test_union_and_reset_bridge_in_python()
     sys.exit(main())

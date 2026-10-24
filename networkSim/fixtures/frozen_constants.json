@@ -1675,7 +1675,7 @@
   "STREAM_VOD_WITHIN": 60
  },
  "stuck": {
-  "CONFIRM_MIN_FRAMES": 2,
+  "CONFIRM_MIN_STEP": 2,
   "FALLBACK_RUNG_KBIT": {
    "tiktok": 1800.0,
    "twitch": 230.0,

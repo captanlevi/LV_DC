@@ -83,24 +83,29 @@ def test_confirms_need_decoded_frames():
     ok, d = _quick(B._confirm_advancing, _Page(0), 0.3)        # ti_100001: clock runs, no frame: never "playing"
     assert not ok and d["frames"] == 0
     ok, d = _quick(B._confirm_advancing, _Page(30), 0.3)
-    assert ok and d["frames"] >= B.CONFIRM_MIN_FRAMES
+    assert ok and d["last_step"] >= B.CONFIRM_MIN_STEP
+    ok, d = _quick(B._confirm_advancing, _Page(1), 0.3)        # 1 frame / s: frozen by the v3.4 rule, never a confirm
+    assert not ok
+    assert B.CONFIRM_MIN_STEP == CS.FROZEN_FRAMES_MAX + 1
     saved = B.TT_AUTOPLAY_GRACE_S
     try:
         B.TT_AUTOPLAY_GRACE_S = 0
         ok, d = _quick(B._tt_confirm_playing, _Page(0), 0.3)
         assert not ok and d["frames"] == 0
         ok, d = _quick(B._tt_confirm_playing, _Page(30), 0.3)
-        assert ok and d["frames"] >= B.CONFIRM_MIN_FRAMES
+        assert ok and d["last_step"] >= B.CONFIRM_MIN_STEP
     finally:
         B.TT_AUTOPLAY_GRACE_S = saved
     assert d["confirm_basis"] == "frames"
     g = B._FramesGate()                                         # never readable: the clock decides, recorded
     g.feed(None)
     assert g.ok() and g.record()["frames_unreadable"] and g.record()["confirm_basis"] == "clock_fallback"
-    g = B._FramesGate()                                         # a reset restarts the count
-    for tf in (500, 501, 0, 1):
+    g = B._FramesGate()                                         # a reset pair is no step
+    for tf in (500, 530, 0):
         g.feed(tf)
     assert not g.ok()
+    g.feed(1)
+    assert not g.ok()                                           # one frame: frozen by the rule
     g.feed(3)
     assert g.ok()
 

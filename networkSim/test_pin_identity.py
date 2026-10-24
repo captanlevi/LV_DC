@@ -92,18 +92,70 @@ def test_identity_check_names_a_mismatch_and_never_aborts_unverifiable():
     assert B.identity_check("twitch", "https://www.twitch.tv/directory/category/x", Page("https://www.twitch.tv/a"))["ok"] is None
 
 
-def test_a_landed_mismatch_is_a_named_startup_failure():
+def _session(platform, page, first_url=None, channel_url=None):
     s = B.BrowserSession.__new__(B.BrowserSession)
-    s.platform, s._page, s.pin_check = "tiktok", Page("https://www.tiktok.com/@coolgaming200/live"), None
+    s.platform, s._page, s.pin_check, s.abort_reason, s.abort_at = platform, page, None, None, None
+    s.first_url, s.channel_url = first_url, channel_url
+    return s
+
+
+def _raises(fn, *a):
     try:
-        s._check_landed(ROOM)
-        raise AssertionError("a landed mismatch must raise")
+        fn(*a)
     except RuntimeError as e:
-        assert str(e).startswith("pin_mismatch: wanted @stef_gamingg, landed @coolgaming200")
-    assert s.pin_check["ok"] is False                    # recorded for meta.json pin_check
-    s._page = Page(ROOM)
-    s._check_landed(ROOM)
-    assert s.pin_check["ok"] is True
+        return str(e)
+    raise AssertionError("must raise")
+
+
+def test_a_landed_mismatch_is_a_named_startup_failure():
+    import os
+    saved = os.environ.pop("LVDC_PICK_PINNED", None)
+    try:
+        s = _session("tiktok", Page("https://www.tiktok.com/@coolgaming200/live"))
+        assert _raises(s._check_landed, ROOM).startswith("room_mismatch: wanted @stef_gamingg, landed @coolgaming200")
+        assert s.pin_check["ok"] is False                # recorded for meta.json pin_check
+        os.environ["LVDC_PICK_PINNED"] = '{"room": "@stef_gamingg"}'
+        assert _raises(s._check_landed, ROOM).startswith("pin_mismatch: wanted @stef_gamingg")
+        # levi 00:38 S2: a PINNED session whose identity cannot be read is refused, never passed
+        yt = _session("youtube", Page("https://www.youtube.com/watch?v=x", owner=None))
+        assert _raises(yt._check_landed, "https://www.youtube.com/@AlJazeeraEnglish/live").startswith("pin_mismatch: unverifiable")
+        s._page = Page(ROOM)
+        s._check_landed(ROOM)
+        assert s.pin_check["ok"] is True
+        os.environ.pop("LVDC_PICK_PINNED")
+        yt._check_landed("https://www.youtube.com/@AlJazeeraEnglish/live")      # unpinned + unverifiable: recorded only
+        assert yt.pin_check["ok"] is None
+    finally:
+        os.environ.pop("LVDC_PICK_PINNED", None)
+        if saved is not None:
+            os.environ["LVDC_PICK_PINNED"] = saved
+
+
+def test_every_reentry_checks_the_sessions_own_room():
+    """levi 00:38 M3: after a re-entry confirm the page must still be the session's room / channel, else a named abort."""
+    import os
+    saved = os.environ.pop("LVDC_PICK_PINNED", None)
+    try:
+        s = _session("tiktok", Page("https://www.tiktok.com/@other/live"), channel_url=ROOM)       # unpinned tt
+        r = {"ok": True}
+        s._check_reentry_identity(r)
+        assert r["ok"] is False and r["identity"]["landed"] == "@other"
+        assert s.abort_reason.startswith("room_mismatch (reentry): wanted @stef_gamingg, landed @other")
+        os.environ["LVDC_PICK_PINNED"] = "{}"
+        tw = _session("twitch", Page("https://www.twitch.tv/raided_to"), first_url="https://www.twitch.tv/eslcs")
+        r = {"ok": True}
+        tw._check_reentry_identity(r)
+        assert r["ok"] is False and tw.abort_reason.startswith("pin_mismatch (reentry): wanted eslcs, landed raided_to")
+        ok = _session("twitch", Page("https://www.twitch.tv/eslcs"), first_url="https://www.twitch.tv/eslcs")
+        r = {"ok": True}
+        ok._check_reentry_identity(r)
+        assert r["ok"] is True and ok.abort_reason is None
+        src = (HERE / "browser.py").read_text()
+        assert src.count("self._check_reentry_identity(") == 3      # tt room, player error, frozen (yt / tw) re-entries
+    finally:
+        os.environ.pop("LVDC_PICK_PINNED", None)
+        if saved is not None:
+            os.environ["LVDC_PICK_PINNED"] = saved
 
 
 def test_wiring():
@@ -117,6 +169,7 @@ def main() -> int:
     test_page_identity()
     test_identity_check_names_a_mismatch_and_never_aborts_unverifiable()
     test_a_landed_mismatch_is_a_named_startup_failure()
+    test_every_reentry_checks_the_sessions_own_room()
     test_wiring()
     print("test_pin_identity: ok")
     return 0

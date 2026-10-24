@@ -196,7 +196,19 @@ def frozen_runs(rows: list[dict]) -> list[tuple[float, float]]:
             t0, ct0 = t, ct
         last = t
     close()
-    return sorted(runs + frozen_picture_runs(rows))
+    return _union_runs(runs + frozen_picture_runs(rows))
+
+
+def _union_runs(runs: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """brad 00:45 M1: the stall-only and picture runs over the same seconds are ONE run (overlapping or abutting merged),
+    so a recovery is excluded once and held_frozen_s never double-counts; content.js publishes the same union."""
+    out: list = []
+    for a, b in sorted(runs):
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
 
 
 FROZEN_FRAMES_MAX = 1   # WA2 r1 (levi 00:30, sensor_v3.4): <= 1 decoded frame over a 1 s tick pair = nothing visibly plays
@@ -205,23 +217,26 @@ FROZEN_FRAMES_MAX = 1   # WA2 r1 (levi 00:30, sensor_v3.4): <= 1 decoded frame o
 def frozen_picture_runs(rows: list[dict]) -> list[tuple[float, float]]:
     """WA2 r1 ti_100001 (levi 00:28 / 00:30): runs of frozen PICTURE with the media clock advancing (949 s labelled
     playing with totalVideoFrames flat at 2). A res_meta tick pair is frozen when both ticks are not paused, not an ad,
-    with a parseable current_time and total_frames, the clock advanced (> 0) and total_frames by <= FROZEN_FRAMES_MAX
-    (a reset of either counts from the reset: bridged). A run is (the first frozen pair's first tick, the last frozen
-    pair's last tick). content.js's lvqoeFrozenS takes the longer of this run and the stall-only run (test_frozen_run)."""
+    with a parseable current_time and total_frames, the clock advanced (> 0) and total_frames by <= FROZEN_FRAMES_MAX.
+    A RESET pair (total_frames or current_time falling: a new player) BRIDGES, as sensor_v3.4 (brad 00:45 M2, levi
+    00:38): neither frozen nor breaking, whatever the new counter. A run is (the first frozen pair's first tick, the last
+    frozen pair's last tick). No tick-gap rule (v3.4 needs 0 < dt <= 3 s): an abort detector counts a long gap as frozen
+    time (stated, levi 00:38). content.js publishes the union with the stall-only run (test_frozen_run)."""
     runs, t0, last, prev = [], None, None, None
     for r in rows:
         if r.get("type") != "res_meta":
             continue
         t, ct, tf = _f(r.get("ts")), _f(r.get("current_time")), _f(r.get("total_frames"))
         ok = not _true(r.get("paused")) and not _true(r.get("is_ad")) and None not in (t, ct, tf)
-        frozen = False
+        frozen = reset = False
         if ok and prev is not None:
-            dct = ct - prev[1] if ct >= prev[1] else ct
-            dtf = tf - prev[2] if tf >= prev[2] else tf
-            frozen = dct > 0 and dtf <= FROZEN_FRAMES_MAX
+            reset = ct < prev[1] or tf < prev[2]
+            frozen = not reset and ct - prev[1] > 0 and tf - prev[2] <= FROZEN_FRAMES_MAX
         if frozen:
             t0 = prev[0] if t0 is None else t0
             last = t
+        elif reset:
+            pass                                        # bridged: the open run (if any) neither grows nor ends
         elif t0 is not None:
             runs.append((t0 / 1000.0, last / 1000.0))
             t0 = None

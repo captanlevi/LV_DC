@@ -1638,9 +1638,12 @@ _TW_CHANNEL_RE = re.compile(r"twitch\.tv/([A-Za-z0-9_]{2,})/?(?:[?#]|$)", re.I)
 _TW_NOT_CHANNEL = {"directory", "videos", "search", "settings", "p", "downloads", "turbo", "jobs"}
 _YT_HANDLE_RE = re.compile(r"youtube\.com/(@[^/?#]+)", re.I)
 # the yt player's own owner (the watch page a /@handle/live lands on carries no handle in its URL)
-_YT_OWNER_JS = ("(function(){try{const p=document.querySelector('#movie_player');const r=p&&p.getPlayerResponse&&"
-                "p.getPlayerResponse();const m=r&&r.microformat&&r.microformat.playerMicroformatRenderer;"
-                "return (m&&m.ownerProfileUrl)||null}catch(e){return null}})()")
+_YT_OWNER_JS = ("(function(){try{const p=document.querySelector('#movie_player');"
+                "const rs=[p&&p.getPlayerResponse&&p.getPlayerResponse(),window.ytInitialPlayerResponse];"
+                "for(const r of rs){const m=r&&r.microformat&&r.microformat.playerMicroformatRenderer;"
+                "if(m&&m.ownerProfileUrl&&/\\/@/.test(m.ownerProfileUrl))return m.ownerProfileUrl}"
+                "const a=document.querySelector('ytd-video-owner-renderer a[href*=\"/@\"]');return a?a.href:null"
+                "}catch(e){return null}})()")
 
 
 def page_identity(platform: str, url: str | None) -> str | None:
@@ -2504,32 +2507,37 @@ class CaptureDrain:
             pass
 
 # WA2 r1 ti_100001 (levi 00:28 (5a)): a re-entry was confirmed "playing" on the clock alone (ct 2.13 at readyState 4) and
-# then presented no frame for 949 s. A confirm now also needs decoded frames to advance (>= CONFIRM_MIN_FRAMES since the
-# confirm's first sample; a counter reset restarts the count); an unreadable counter falls back to the clock, recorded
-CONFIRM_MIN_FRAMES = 2
+# then presented no frame for 949 s. A confirm now also needs decoded frames to advance, by the frozen rule's own
+# threshold (brad 00:45 S3 / levi 00:38: one definition of "frames advance"): the last sample pair's step (samples ~1 s
+# apart) > check_session.FROZEN_FRAMES_MAX; a reset pair is no step; an unreadable counter falls back to the clock, recorded
+from check_session import FROZEN_FRAMES_MAX as _FROZEN_FRAMES_MAX
+CONFIRM_MIN_STEP = _FROZEN_FRAMES_MAX + 1
 
 
 class _FramesGate:
-    """Decoded frames since the first sample (totalVideoFrames), reset-aware; ok() when >= CONFIRM_MIN_FRAMES or the
-    counter was never readable (then `unreadable`)."""
+    """Decoded frames (totalVideoFrames) over the confirm's samples; ok() when the last pair advanced by >=
+    CONFIRM_MIN_STEP, or the counter was never readable (then confirm_basis clock_fallback)."""
     def __init__(self):
-        self.first = self.last = None
+        self.first = self.last = self.step = None
         self.seen = False
 
     def feed(self, tf) -> None:
         if not isinstance(tf, (int, float)):
             return
         self.seen = True
-        if self.first is None or (self.last is not None and tf < self.last):
+        reset = self.last is not None and tf < self.last
+        self.step = None if self.last is None or reset else tf - self.last
+        if self.first is None or reset:
             self.first = tf                       # the first sample, or a new element / reset: count from here
         self.last = tf
 
     def ok(self) -> bool:
-        return not self.seen or (self.last - self.first) >= CONFIRM_MIN_FRAMES
+        return not self.seen or (self.step is not None and self.step >= CONFIRM_MIN_STEP)
 
     def record(self) -> dict:
         # levi 00:35 (2): which basis confirmed it, counted per window; a clock_fallback re-entry is listed in the read
-        return {"frames": None if not self.seen else self.last - self.first, "frames_unreadable": not self.seen,
+        return {"frames": None if not self.seen else self.last - self.first, "last_step": self.step,
+                "frames_unreadable": not self.seen,
                 "confirm_basis": "frames" if self.seen else "clock_fallback"}
 
 
@@ -3995,13 +4003,42 @@ class BrowserSession:
             self._shooter.start()
             print(f"[browser] Screenshots every {SHOT_INTERVAL_S:.0f} s → {self._session_dir / 'shots'}", flush=True)
 
+    @staticmethod
+    def _pinned() -> bool:
+        """A W-A / gate pin (orchestrate --trio-pin; exp.py records it from LVDC_PICK_PINNED)."""
+        return bool(os.environ.get("LVDC_PICK_PINNED"))
+
+    def _identity_failure(self, idc: dict) -> str | None:
+        """The named failure of an identity read, else None: a mismatch is pin_mismatch (pinned) / room_mismatch; on a
+        PINNED session an unverifiable identity is a refusal too (levi 00:38 S2: "not verifiable" is never a pass)."""
+        kind = "pin_mismatch" if self._pinned() else "room_mismatch"
+        if idc["ok"] is False:
+            return f"{kind}: wanted {idc['intended']}, landed {idc['landed']} ({idc.get('landed_url')})"
+        if idc["ok"] is None and self._pinned():
+            return f"{kind}: unverifiable (intended {idc['intended']}, landed {idc['landed']}, {idc.get('landed_url')})"
+        return None
+
     def _check_landed(self, nav: str) -> None:
-        """The landed room / channel vs the URL navigated (WA2 r1): a mismatch is a named startup failure (pin_mismatch),
-        recorded in meta pin_check; an unverifiable identity is recorded, never an abort."""
+        """The landed room / channel vs the URL navigated (WA2 r1): a failure (_identity_failure) is a named startup
+        failure, recorded in meta pin_check; unverifiable on an unpinned session is recorded, never an abort."""
         self.pin_check = identity_check(self.platform, nav, self._page)
-        if self.pin_check["ok"] is False:
-            raise RuntimeError(f"pin_mismatch: wanted {self.pin_check['intended']}, landed {self.pin_check['landed']} "
-                               f"({self.pin_check.get('landed_url')})")
+        why = self._identity_failure(self.pin_check)
+        if why:
+            raise RuntimeError(why)
+
+    def _check_reentry_identity(self, r: dict) -> None:
+        """levi 00:38 M3: after EVERY re-entry confirm, the page is still the session's own room / channel; a failure is a
+        named abort "<pin|room>_mismatch (reentry): ..." (the session never silently changes room), recorded in the
+        re-entry record (identity)."""
+        nav = self.first_url if self.first_url and page_identity(self.platform, self.first_url) else self.channel_url
+        idc = identity_check(self.platform, nav, self._page)
+        r["identity"] = idc
+        why = self._identity_failure(idc)
+        if why:
+            r["ok"] = False
+            kind, rest = why.split(":", 1)
+            if self.abort_reason is None:
+                self.abort_reason, self.abort_at = f"{kind} (reentry):{rest}", time.time()
 
     def _tt_choose_room(self) -> str | None:
         """tt: pick a live, playing room that no recent session used (see TT_* above); returns the list URL or None."""
@@ -4210,6 +4247,8 @@ class BrowserSession:
                        samples_loading=sum(1 for *_, ld in trace if ld),
                        samples_no_video=sum(1 for _, _, hv, _ in trace if not hv),
                        s_to_data=None if rs3 is None else round(rs3 - rec["t_enter"], 1))
+            if ok:
+                self._check_reentry_identity(rec)
         except Exception as exc:
             rec.update(ok=False, error=repr(exc))
         rec["outcome"] = reentry_outcome(rec.get("ok", False), detail)
@@ -4470,7 +4509,9 @@ class BrowserSession:
             ok, detail = _confirm_advancing(self._page, stuck.REENTRY_CONFIRM_S)
             r.update(ok=bool(ok), t_playing=time.time() if ok else None, confirm=detail,
                      confirm_s=stuck.REENTRY_CONFIRM_S, url_after=self._page.eval("location.href"))
-            if ok and r["method"] == "navigate":
+            if ok:
+                self._check_reentry_identity(r)
+            if r.get("ok") and r["method"] == "navigate":
                 r["setup"] = self._after_reentry_setup()
         except Exception as exc:
             r.update(ok=False, error_reentry=repr(exc))
@@ -4497,6 +4538,8 @@ class BrowserSession:
             r.update(ok=bool(ok), t_playing=time.time() if ok else None, confirm=detail,
                      confirm_s=stuck.REENTRY_CONFIRM_S, url_after=self._page.eval("location.href"))
             if ok:
+                self._check_reentry_identity(r)
+            if r.get("ok"):
                 r["setup"] = self._after_reentry_setup()
         except Exception as exc:
             r.update(ok=False, error=repr(exc))

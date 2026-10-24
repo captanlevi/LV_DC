@@ -34,12 +34,16 @@ let frozenT0 = null;
 let frozenCt0 = null;
 // WA2 r1 ti_100001 (levi 00:28 / 00:30, sensor_v3.4's frozen class): the frozen PICTURE run, beside the stall-only run.
 // A tick pair is frozen when both ticks are not paused, not an ad, with a media clock and a decoded-frames counter, the
-// clock advanced (> 0) and totalVideoFrames advanced by <= FROZEN_FRAMES_MAX (a reset, the counter or the clock going
-// back, counts from the reset: bridged, as v3.4 does). The run starts at the first frozen pair's first tick and ends at
-// the first pair that is not frozen; lvqoeFrozenS is the longer of the two runs (check_session.frozen_runs: the same)
+// clock advanced (> 0) and totalVideoFrames advanced by <= FROZEN_FRAMES_MAX; a RESET pair (the counter or the clock
+// going back: a new player) BRIDGES, as sensor_v3.4 (brad / levi 00:38): neither frozen nor breaking. The run is the first
+// frozen pair's first tick to the last frozen pair's last tick. lvqoeFrozenS is the UNION run of this and the stall-only
+// run (overlapping or abutting merged: check_session.frozen_runs / _union_runs, the same)
 const FROZEN_FRAMES_MAX = 1;
 let picT0 = null;
+let picLast = null;
 let picPrev = null;
+let unionT0 = null;
+let unionEnd = null;
 // An ad's <video> has a short finite duration; live streams report Infinity. A DVR window can report a long finite
 // duration, so only a finite duration below this bound counts as an ad signal (raw duration is recorded too).
 const AD_MAX_DURATION_S = 600;
@@ -519,19 +523,39 @@ function emit(type) {
     const tf = evt.total_frames;
     const picOk = !evt.paused && !evt.is_ad && ct !== null && ct !== undefined && isFinite(ct)
                   && tf !== null && tf !== undefined && isFinite(tf);
-    let picFrozen = false;
+    let picFrozen = false, picReset = false;
     if (picOk && picPrev !== null) {
-      const dct = ct >= picPrev.ct ? ct - picPrev.ct : ct;
-      const dtf = tf >= picPrev.tf ? tf - picPrev.tf : tf;
-      picFrozen = dct > 0 && dtf <= FROZEN_FRAMES_MAX;
+      picReset = ct < picPrev.ct || tf < picPrev.tf;
+      picFrozen = !picReset && ct - picPrev.ct > 0 && tf - picPrev.tf <= FROZEN_FRAMES_MAX;
     }
-    if (!picFrozen) picT0 = null;
-    else if (picT0 === null) picT0 = picPrev.ts;
+    if (picFrozen) {
+      if (picT0 === null) picT0 = picPrev.ts;
+      picLast = evt.ts;
+    } else if (!picReset) {
+      picT0 = null;
+      picLast = null;
+    }                                             // a reset pair: bridged, the open run neither grows nor ends
     picPrev = picOk ? { ts: evt.ts, ct, tf } : null;
+    // the union of the open runs (stall: frozenT0 .. this tick; picture: picT0 .. picLast), a chain kept while a run
+    // that starts at or before the chain's end is open (the same merge as check_session._union_runs)
+    const segs = [];
+    if (frozenT0 !== null) segs.push([frozenT0, evt.ts]);
+    if (picT0 !== null) segs.push([picT0, picLast]);
+    if (segs.length === 0) {
+      unionT0 = null;
+      unionEnd = null;
+    } else {
+      const s0 = Math.min(...segs.map(s => s[0])), e0 = Math.max(...segs.map(s => s[1]));
+      if (unionT0 === null || s0 > unionEnd) {     // a new chain
+        unionT0 = s0;
+        unionEnd = e0;
+      } else {
+        unionT0 = Math.min(unionT0, s0);
+        unionEnd = Math.max(unionEnd, e0);
+      }
+    }
     if (window === window.top) {
-      const stallRun = frozenT0 === null ? 0 : (evt.ts - frozenT0) / 1000;
-      const picRun = picT0 === null ? 0 : (evt.ts - picT0) / 1000;
-      document.documentElement.dataset.lvqoeFrozenS = String(Math.max(stallRun, picRun));
+      document.documentElement.dataset.lvqoeFrozenS = String(unionT0 === null ? 0 : (unionEnd - unionT0) / 1000);
       // the stall label, for browser.py's tt dead-room watcher (a stall is never a dead room; player_frozen owns it)
       // and its self-pause resumer (after_stall)
       document.documentElement.dataset.lvqoeStall = labelStall ? "1" : "0";
