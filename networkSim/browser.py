@@ -3415,7 +3415,8 @@ class BrowserSession:
         self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
         self.error_watch.held_fn = self._lowstate_held
         self._shot_reasons: list[str] = []          # v3 (levi 16:57): Python-side shot triggers, consumed by the shooter
-        self.error_watch.on_onset = lambda t: self._shot_reasons.append("error_page")
+        self.shot_triggers_py: dict[str, int] = {"error_page": 0}   # meta.json shot_triggers_py (brad / levi 18:00)
+        self.error_watch.on_onset = self._on_error_onset
         self.shot_crop = {"crop": SHOT_CROP, "env": SHOT_CROP_RAW}   # meta.json shot_crop (levi 17:45)
         self.resumer = SelfPauseResumer()           # the self-pause press (levi 00130; meta.json self_pause_resume)
         self.frozen_hold_bypassed: list = []         # yt / twitch: a frozen clock's low-state hold skipped, no starvation
@@ -4130,6 +4131,10 @@ class BrowserSession:
         """The shaper's low-state hold runs at t."""
         he = self._low_hold_end(t)
         return he is not None and t <= he
+
+    def _on_error_onset(self, t: float) -> None:
+        self._shot_reasons.append("error_page")
+        self.shot_triggers_py["error_page"] += 1
 
     def _pop_shot_reason(self) -> str | None:
         return self._shot_reasons.pop(0) if self._shot_reasons else None

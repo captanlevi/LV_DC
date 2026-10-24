@@ -59,21 +59,27 @@ def test_error_onset_shot():
     w.step(err, {"rs": 0}, 103.0)                     # a new onset
     assert hits == [100.0, 103.0], hits
     src = inspect.getsource(B.BrowserSession)
-    assert 'self.error_watch.on_onset = lambda t: self._shot_reasons.append("error_page")' in src
+    assert "self.error_watch.on_onset = self._on_error_onset" in src
     assert "self.shot_origin, self._pop_shot_reason)" in src
     b = B.BrowserSession.__new__(B.BrowserSession)
-    b._shot_reasons = ["error_page"]
+    b._shot_reasons, b.shot_triggers_py = [], {"error_page": 0}
+    b._on_error_onset(1.0)
+    assert b.shot_triggers_py == {"error_page": 1}                     # brad / levi 18:00: counted in meta
     assert b._pop_shot_reason() == "error_page" and b._pop_shot_reason() is None
 
 
-def test_meta():
-    assert "shot_crop=browser.shot_crop," in (HERE / "exp.py").read_text()
+def test_meta_and_refusal():
+    src = (HERE / "exp.py").read_text()
+    assert "shot_crop=browser.shot_crop," in src and "shot_triggers_py=browser.shot_triggers_py," in src
+    # levi 17:56: an unknown value refuses at exp start (named), before anything is collected
+    assert 'if os.environ.get("LVQOE_SHOT_CROP") not in (None, "player", "viewport"):' in src
+    assert src.index('LVQOE_SHOT_CROP={os.environ') < src.index("session_dir = (make_session_dir(platform)")
 
 
 def main() -> int:
     test_cadence_and_crop()
     test_error_onset_shot()
-    test_meta()
+    test_meta_and_refusal()
     print("test_shots_v3: ok")
     return 0
 
