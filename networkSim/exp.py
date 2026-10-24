@@ -734,6 +734,8 @@ if __name__ == "__main__":
         transition, low_cap, init_rule = chosen[0][matrix_id]
     SHAPER_OPTS.update(max_consecutive_low=low_cap,
                        initial_state_fn=initial_state_stationary if init_rule == "stationary" else None)
+    if args.lever and args.hold_state is not None:   # B4 x B5: a held decode_stress session never levers
+        sys.exit("--lever and --hold-state exclude each other (a held state is decode_stress, never a lever window)")
     if args.hold_state is not None:      # t56 decode_stress: one state held, never in a dataset root
         import trio_slots as _ts
         if not args.slot or _ts.TRIO_DIR != _ts.STRESS_DIR:
