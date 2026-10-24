@@ -2208,6 +2208,8 @@ class MasterListener:
         self.ladder_reads: list[dict] = []         # v3 A4: every master read whose video variants changed (tw_ladder)
         self.ladder_n_reads = 0
         self.ladder_overflow = 0
+        self.ladder_errors = 0                     # levi 18:22: master reads whose parse raised (the offer reads missing)
+        self.ladder_last_error: str | None = None
         self._ladder_last = None
 
     def start(self) -> "MasterListener":
@@ -2242,7 +2244,11 @@ class MasterListener:
                 kbit = stuck.rung_from_master(body)
                 if kbit:
                     self.latest = {"kbit": kbit, "t": time.time(), "path": urlsplit(url).path, "from_worker": req_sid is not None}
-                self.ladder(body, url, time.time())
+                try:                                   # levi 18:22: a malformed master never breaks the listener
+                    self.ladder(body, url, time.time())
+                except Exception as exc:
+                    self.ladder_errors += 1
+                    self.ladder_last_error = repr(exc)[:200]
             else:
                 self.playlist_ad(body, url, time.time())
 
@@ -2263,6 +2269,7 @@ class MasterListener:
 
     def tw_ladder(self) -> dict:
         return {"n_reads": self.ladder_n_reads, "reads": self.ladder_reads, "overflow": self.ladder_overflow,
+                "errors": self.ladder_errors, "last_error": self.ladder_last_error,
                 "rule": "collector v3 A4: each HLS master read's STREAM-INF video variants, on change"}
 
     def playlist_ad(self, body: str, url: str, t: float) -> None:

@@ -90,12 +90,13 @@ def offer_record(platform: str, recs: dict) -> dict:
     rec = recs.get(key) or {}
     reads = [r for r in rec.get("reads") or [] if conv(r)]
     base = {"platform": platform, "source": source, "from": key, "n_reads": rec.get("n_reads"),
+            "read_errors": rec.get("errors", 0), "last_error": rec.get("last_error"),
             "rule": "collector v3 A4: the first non-empty read's video renditions; n_changes = reads that changed after it"}
     if not reads:
         return {**base, "missing": True, "renditions": [], "n_changes": 0}
     seen, rends = set(), []
     for r in conv(reads[0]):
-        k = (r["name"], r["height"], r["bitrate_kbit"])
+        k = (r["name"], r["height"], r["bitrate_kbit"], r["codecs"])   # brad 18:23: avc1 vs vp9 never collapse
         if k not in seen:
             seen.add(k)
             rends.append(r)
