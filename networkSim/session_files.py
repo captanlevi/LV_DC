@@ -53,6 +53,8 @@ READER_FILES: frozenset[str] = frozenset({
     "a5tt*", "a6tt*",                              # reserved for the tt readers (levi 23:08 / 23:10)
 })
 
+LVQOE_PIN = "18d19654"   # levi 17:31: LVQoE's watcher/lv/session_files.py at the land of brad's list (eee07d36); re-pin
+                         # when either list changes
 # levi 23:21: one writer per name; LVQoE declares the same (empty) set and the two must be equal
 SHARED_BY_DESIGN: frozenset[str] = frozenset()
 
@@ -72,4 +74,10 @@ def side_file(stream: str) -> tuple[str, bool]:
     if stream in SIDE_STREAM_FILES:
         return SIDE_STREAM_FILES[stream], True
     safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in str(stream))[:64] or "unnamed"
-    return f"side_{safe}.jsonl", False
+    name = f"side_{safe}.jsonl"
+    if any(collides(name, r) for r in READER_FILES):      # brad / levi 17:36: never a reader-owned name (e.g. a stream
+        import hashlib                                    # "buffer_est" would match *_buffer_est*): a hashed name
+        name = f"side_unmapped_{hashlib.sha256(str(stream).encode()).hexdigest()[:12]}.jsonl"
+        if any(collides(name, r) for r in READER_FILES):
+            raise RuntimeError(f"side stream {stream!r}: no non-reader file name")   # unreachable with today's lists
+    return name, False
