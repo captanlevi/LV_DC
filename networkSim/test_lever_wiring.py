@@ -3,7 +3,8 @@
 per platform (lever_params.load_params: all three platforms, exactly lambda_per_s / d_lo_s / d_hi_s, finite, lambda > 0,
 0 < d_lo <= d_hi); its stratum record carries the params and their sha and turns steering off; every session gets
 --lever <its platform's params>, a held decode_stress session never; --lever-params alone (no stratum flag) or an invalid
-file is refused before trio_up; exp.py refuses --lever with --hold-state.
+file is refused before trio_up, and so is a file whose sha256 differs from --lever-params-sha256 (required with it:
+the dated prereg line's sha, levi 16:30 / 16:32); exp.py refuses --lever with --hold-state.
 
     python3 test_lever_wiring.py        (exit 0 = pass)
 """
@@ -94,11 +95,19 @@ def test_arg_refusal():
     r = lambda argv: O.arg_refusal(O.build_parser().parse_args(argv), denv)
     with tempfile.TemporaryDirectory() as d:
         good, bad = _file(d, GOOD), _file(d, {"youtube": GOOD["youtube"]})
-        assert "only with --expect-stratum / --stratum-force" in r(base + ["--lever-params", str(good)])
-        got = r(base + ["--stratum-force", "lever", "--lever-params", str(bad)])
+        sha = L.load_params(good)[1]
+        lp = lambda f, h=sha: ["--lever-params", str(f), "--lever-params-sha256", h]
+        assert "only with --expect-stratum / --stratum-force" in r(base + lp(good))
+        got = r(base + ["--stratum-force", "lever"] + lp(bad))
         assert got and got.startswith("--lever-params:"), got
-        assert r(base + ["--stratum-force", "lever", "--lever-params", str(good)]) is None
-        assert "--lever-params" in r(base + ["--stratum-force", "lever", "--lever-params", str(Path(d) / "missing.json")])
+        assert r(base + ["--stratum-force", "lever"] + lp(good)) is None
+        assert "--lever-params" in r(base + ["--stratum-force", "lever"] + lp(Path(d) / "missing.json"))
+        # levi 16:32: the pinned sha is required with the file and must match the loaded bytes
+        assert "needs --lever-params-sha256" in r(base + ["--stratum-force", "lever", "--lever-params", str(good)])
+        got = r(base + ["--stratum-force", "lever"] + lp(good, "0" * 64))
+        assert got and "is not the pinned" in got, got
+        assert r(base + ["--stratum-force", "lever"] + lp(good, sha.upper())) is None          # case-insensitive
+        assert "only with --lever-params" in r(base + ["--stratum-force", "lever", "--lever-params-sha256", sha])
     assert DR is not None
 
 

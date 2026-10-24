@@ -1227,6 +1227,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="collector v3 B4 x B5: the lever window's values per platform, JSON {youtube|twitch|tiktok: "
                              "{lambda_per_s, d_lo_s, d_hi_s}} (the frozen line's; lever_params.load_params). Needed when the "
                              "window's stratum is lever (drawn or forced); only with --expect-stratum / --stratum-force.")
+    parser.add_argument("--lever-params-sha256", default=None,
+                        help="levi 16:30 / 16:32: the sha256 of the --lever-params file as named in the dated prereg line "
+                             "(rounds_ref_n's pinned constant); required with --lever-params, refused on a mismatch.")
     parser.add_argument("--n-draw", action="store_true",
                         help="--concurrent (restart prereg §1): draw this round's N from {3, 4, 5} (weights 0.2 / 0.3 / "
                              "0.5, seeded by the era, the record flag and the round's index in the slots log; n_draw.py) "
@@ -1407,12 +1410,19 @@ def arg_refusal(args, environ) -> str | None:
         return "--stratum-force needs --concurrent"
     if args.lever_params and not (args.expect_stratum or args.stratum_force):
         return "--lever-params only with --expect-stratum / --stratum-force (a lever window's values)"
+    if args.lever_params_sha256 and not args.lever_params:
+        return "--lever-params-sha256 only with --lever-params"
     if args.lever_params:
+        if not args.lever_params_sha256:              # levi 16:32: no ad-hoc lambda ever runs, the direct path included
+            return "--lever-params needs --lever-params-sha256 (the sha named in the dated prereg line)"
         try:
             import lever_params as _lp_mod
-            _lp_mod.load_params(args.lever_params)
+            _, sha = _lp_mod.load_params(args.lever_params)
         except (OSError, ValueError) as e:
             return f"--lever-params: {e}"
+        if sha != args.lever_params_sha256.strip().lower():
+            return (f"--lever-params: the file's sha256 {sha[:12]} is not the pinned {args.lever_params_sha256[:12]} "
+                    "(the dated prereg line's); refused")
     # t67 C8 (levi 18:45 / 18:56), last: the run's kind and its data root agree, fail closed both ways, every mode
     import data_root as _dr
     r = _dr.kind_refusal(bool(args.trio_record), Path(environ.get("LVDC_DATA_ROOT") or _dr.REPO_DATA))
@@ -1476,6 +1486,8 @@ if __name__ == "__main__":
             if args.lever_params:                           # arg_refusal validated it; read once more for the record
                 import lever_params as _lp_mod
                 _lp = _lp_mod.load_params(args.lever_params)
+                if _lp[1] != args.lever_params_sha256.strip().lower():   # the file changed since arg_refusal read it
+                    sys.exit("--lever-params: the file changed after its check (sha mismatch); refused before trio_up")
             WINDOW_STRATUM, _steer, _ref = stratum_apply(_sd, args.expect_stratum, args.stratum_force, bool(args.trio_steer),
                                                          _lp)
             if _ref:
