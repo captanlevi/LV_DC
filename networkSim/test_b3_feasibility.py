@@ -41,14 +41,14 @@ def test_yt_size_rule_is_b1s_tier_cap():
 
 def test_an_offered_tier_above_every_band_is_a_structural_zero():
     res = B.build([_meta("twitch", [(284, 160, 230), (1920, 1080, 50000)])], {}, [1.0], None, None, 0.0,
-                  geometry={"twitch": ["player:1274x717"]}, configured_ok=("twitch",))
+                  geometry={"twitch": ["player:1274x717"]})
     c = _cell(res, "twitch", "Q_1080p", "player:1274x717", 1.0)
     assert c["reasons"] == ["no_band_reaches_need"] and _tier(res, "twitch", "Q_1080p")["structural_zero"]
 
 
 def test_tw_has_no_size_cap_and_unoffered_tiers_are_never_reachable():
     res = B.build([_meta("twitch", [(284, 160, 230), (1920, 1080, 7066)])], {}, [1.0], None, None, 0.0,
-                  geometry={"twitch": ["player:1274x717"]}, configured_ok=("twitch",))
+                  geometry={"twitch": ["player:1274x717"]})
     assert _cell(res, "twitch", "Q_1080p", "player:1274x717", 1.0)["reachable"]      # 717 < 1080: no cap on twitch
     c = _cell(res, "twitch", "Q_480p", "player:1274x717", 1.0)
     assert "not_offered" in c["reasons"] and not c["reachable"]                         # levi's C5
@@ -61,15 +61,14 @@ def test_band_share_and_expected_hours():
     assert abs(s - 600 / 1350) < 1e-9
     joint = {"per_platform": {"twitch": {"by_state": {"10": {"Q_1080p": 30.0, "Q_720p": 70.0}}}}}
     res = B.build([_meta("twitch", [(1920, 1080, 7066)])], {}, [1.0], joint, {"twitch": {"10": 1.0}}, 10.0,
-                  geometry={"twitch": ["player:1274x717"]}, configured_ok=("twitch",))
+                  geometry={"twitch": ["player:1274x717"]})
     r = _tier(res, "twitch", "Q_1080p")
     assert r["draw_mass_reachable"] == 1.0 and abs(r["expected_hours_next_window"] - 10 * 0.3 * B.band_share("10", 7066)) < 1e-3
 
 
 def test_twitch_plans_on_configured_rates_and_realised_is_a_sensitivity():
-    """levi 16:25: the 19:31 realised rule is withdrawn; twitch plans on configured x RATIO_LO like the others, and a
-    passed --realised is a disclosed sensitivity."""
-    assert B.REALISED_REQUIRED == ()
+    """levi 16:25 / 16:30: the 19:31 realised rule is withdrawn; the primary cells are always configured x RATIO_LO, and
+    a passed --realised adds *_realised columns beside them, never replacing them."""
     res0 = B.build([_meta("twitch", [(1920, 1080, 7066)])], {}, [1.0], None, None, 0.0,
                    geometry={"twitch": ["player:1274x717"]})
     assert res0["rate_source"]["twitch"] == "configured x RATIO_LO"
@@ -77,7 +76,13 @@ def test_twitch_plans_on_configured_rates_and_realised_is_a_sensitivity():
     res = B.build([_meta("twitch", [(1920, 1080, 7066)])], {}, [1.0], None, None, 0.0,
                   geometry={"twitch": ["player:1274x717"]}, realised={"twitch": {s: 0.75 for s in B.SCENARIOS}})
     c = _cell(res, "twitch", "Q_1080p", "player:1274x717", 1.0)
-    assert c["bands_reaching"] == ["11"] and res["rate_source"]["twitch"] == "realised (sensitivity)"
+    # primary (configured x 0.9): state 10 reaches 1080 (9000 x 0.9 = 8100 >= 7066), unchanged by --realised
+    assert c["bands_reaching"] == _cell(res0, "twitch", "Q_1080p", "player:1274x717", 1.0)["bands_reaching"]
+    assert "10" in c["bands_reaching"] and c["reachable"]
+    assert c["bands_reaching_realised"] == ["11"] and c["reachable_realised"]               # the sensitivity
+    assert res["rate_source"]["twitch"] == "configured x RATIO_LO (+ realised sensitivity columns)"
+    t = next(x for x in res["per_tier"] if (x["platform"], x["tier"]) == ("twitch", "Q_1080p"))
+    assert t["reachable_cells"] and t["reachable_cells_realised"] and "band_share_reaching_realised" in t
     assert res["rate_source"]["youtube"] == "not built"                      # no youtube geometry in this build
 
 
@@ -86,8 +91,7 @@ def test_cli_writes_the_schema_and_prints_the_table(tmp_path, capsys):
     d.mkdir(parents=True)
     (d / "meta.json").write_text(json.dumps(_meta("youtube", YT)))
     out = tmp_path / "b3.json"
-    assert B.main(["--offers-metas", str(d / "meta.json"), "--window", "w1", "--out", str(out), "--planned-hours", "2",
-                   "--configured-ok", "twitch"]) == 0
+    assert B.main(["--offers-metas", str(d / "meta.json"), "--window", "w1", "--out", str(out), "--planned-hours", "2"]) == 0
     j = json.loads(out.read_text())
     assert j["schema"] == "b3_feasibility/1" and j["rules"]["ratio_lo"] == 0.9 and j["inputs"]["offers"]["sessions"] == 1
     assert "B3 youtube" in capsys.readouterr().out

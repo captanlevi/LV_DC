@@ -37,10 +37,9 @@ from utils.shaping import SCENARIOS  # noqa: E402
 SCHEMA = "b3_feasibility/1"
 RATIO_LO = 0.9            # readers/shaper_math.RATIO_LO: the realised band's lower edge (levi efb5e4cc (1))
 HEADROOM = 1.0            # interface 61a8bf36 (peter): the build default; levi may set it in the gate prereg
-# levi 16:25 (2026-10-24, rushi's decision): shaper truth is out of the v3 gate and tw's realised-rate rule (19:31) is
-# withdrawn; B3 plans on the configured band rates (x RATIO_LO) for every platform. --realised stays an optional,
-# disclosed sensitivity (rate_source "realised (sensitivity)"); no platform requires it.
-REALISED_REQUIRED: tuple = ()
+# levi 16:25 / 16:30 (2026-10-24, rushi's decision): shaper truth is out of the v3 gate and tw's realised-rate rule (19:31)
+# is withdrawn. The primary cells ALWAYS plan on the configured band rates (x RATIO_LO); --realised adds a second set
+# of columns beside them (*_realised), never a replacement.
 TIER_SHORT = {"Q_144p": 144, "Q_240p": 240, "Q_360p": 360, "Q_480p": 480, "Q_720p": 720, "Q_1080p": 1080}
 PLATFORMS = ("youtube", "twitch", "tiktok")
 
@@ -107,19 +106,13 @@ def box(platform: str, geom: str, dpr: float, boxes: dict) -> tuple[list[int], s
 
 
 def build(metas: list[dict], boxes: dict, dprs: list[float], joint: dict | None, stationary: dict | None,
-          planned_hours: float, geometry: dict = GEOMETRY_CHOICES, realised: dict | None = None,
-          configured_ok: tuple = ()) -> dict:
+          planned_hours: float, geometry: dict = GEOMETRY_CHOICES, realised: dict | None = None) -> dict:
     cells, per_tier, rate_src = [], [], {}
     for pf in PLATFORMS:
-        if not geometry.get(pf):                    # not drawn in this build: nothing to rate
-            rate_src[pf] = "not built"
-        elif pf in REALISED_REQUIRED and pf not in configured_ok and not (realised or {}).get(pf):
-            raise ValueError(f"{pf}: its realised rate per state is required: pass --realised")
-        elif (realised or {}).get(pf) and pf not in configured_ok:
-            rate_src[pf] = "realised (sensitivity)"
-        else:
-            rate_src[pf] = "configured x RATIO_LO"
-        rz = realised if rate_src[pf].startswith("realised") else None
+        rate_src[pf] = "configured x RATIO_LO" if geometry.get(pf) else "not built"
+        rz = realised if (realised or {}).get(pf) and geometry.get(pf) else None   # the sensitivity columns, if asked
+        if rz is not None:
+            rate_src[pf] += " (+ realised sensitivity columns)"
         share, need, bsrc = offers(metas, pf)
         tiers = sorted({*share, *RUNGS.get(pf, {})}, key=lambda t: TIER_SHORT[t])
         geoms = geometry.get(pf, [])
@@ -129,8 +122,10 @@ def build(metas: list[dict], boxes: dict, dprs: list[float], joint: dict | None,
         by_state = ((joint or {}).get("per_platform", {}).get(pf) or {}).get("by_state") or {}
         for t in tiers:
             nk = need.get(t)
-            reach_states = [s for s in SCENARIOS if nk is not None and band_edges(s, pf, rz)[1] >= nk * HEADROOM]
-            reach_cells = []
+            reach_states = [s for s in SCENARIOS if nk is not None and band_edges(s, pf)[1] >= nk * HEADROOM]
+            reach_states_rz = ([s for s in SCENARIOS if nk is not None and band_edges(s, pf, rz)[1] >= nk * HEADROOM]
+                               if rz is not None else None)
+            reach_cells, reach_cells_rz = [], []
             for g in geoms:
                 for d in dprs:
                     bx, bsrc_box = box(pf, g, d, boxes)
@@ -146,26 +141,38 @@ def build(metas: list[dict], boxes: dict, dprs: list[float], joint: dict | None,
                             reasons.append("above_tier_cap")
                     if not reach_states:
                         reasons.append("no_band_reaches_need")
-                    cells.append({"platform": pf, "tier": t, "geometry": g, "dpr": d, "box_device_px": bx,
-                                  "box_source": bsrc_box, "offered_share": round(share.get(t, 0.0), 4),
-                                  "need_kbit": nk, "size_ok": not {"above_tier_cap", "no_tier_cap"} & set(reasons),
-                                  "rate_ok": bool(reach_states), "bands_reaching": reach_states,
-                                  "reachable": not reasons, "reasons": reasons})
+                    cell = {"platform": pf, "tier": t, "geometry": g, "dpr": d, "box_device_px": bx,
+                            "box_source": bsrc_box, "offered_share": round(share.get(t, 0.0), 4),
+                            "need_kbit": nk, "size_ok": not {"above_tier_cap", "no_tier_cap"} & set(reasons),
+                            "rate_ok": bool(reach_states), "bands_reaching": reach_states,
+                            "reachable": not reasons, "reasons": reasons}
                     if not reasons:
                         reach_cells.append(f"{g}@{d:g}")
+                    if reach_states_rz is not None:     # the sensitivity: the same cell under the realised rates
+                        other = [r for r in reasons if r != "no_band_reaches_need"]
+                        cell.update(rate_ok_realised=bool(reach_states_rz), bands_reaching_realised=reach_states_rz,
+                                    reachable_realised=not other and bool(reach_states_rz))
+                        if cell["reachable_realised"]:
+                            reach_cells_rz.append(f"{g}@{d:g}")
+                    cells.append(cell)
             m_reach = mass * len(reach_cells)
             exp = 0.0
             for s, p in pi.items():
                 row = by_state.get(s) or {}
                 tot = sum(row.values())
                 if tot and nk is not None:
-                    exp += p * row.get(t, 0.0) / tot * band_share(s, nk, pf, rz)
-            per_tier.append({"platform": pf, "tier": t, "structural_zero": not reach_cells,
-                             "reachable_cells": reach_cells, "draw_mass_reachable": round(m_reach, 4),
-                             "band_share_reaching": {s: round(band_share(s, nk, pf, rz), 3) for s in SCENARIOS} if nk else {},
-                             "rate_source": rate_src[pf],
-                             "expected_hours_next_window": round(planned_hours * m_reach * exp, 3),
-                             "bitrate_source": bsrc})
+                    exp += p * row.get(t, 0.0) / tot * band_share(s, nk, pf)
+            rec = {"platform": pf, "tier": t, "structural_zero": not reach_cells,
+                   "reachable_cells": reach_cells, "draw_mass_reachable": round(m_reach, 4),
+                   "band_share_reaching": {s: round(band_share(s, nk, pf), 3) for s in SCENARIOS} if nk else {},
+                   "rate_source": rate_src[pf],
+                   "expected_hours_next_window": round(planned_hours * m_reach * exp, 3),
+                   "bitrate_source": bsrc}
+            if rz is not None:
+                rec.update(structural_zero_realised=not reach_cells_rz, reachable_cells_realised=reach_cells_rz,
+                           band_share_reaching_realised=({s: round(band_share(s, nk, pf, rz), 3) for s in SCENARIOS}
+                                                         if nk else {}))
+            per_tier.append(rec)
     for c in cells:                                  # levi's C5: no tier marked feasible with zero offered
         assert not (c["reachable"] and c["offered_share"] == 0.0), c
     return {"cells": cells, "per_tier": per_tier, "rate_source": rate_src}
@@ -182,8 +189,8 @@ def main(argv=None) -> int:
     ap.add_argument("--planned-hours", type=float, default=0.0, help="planned counted hours per platform")
     ap.add_argument("--dprs", default="1", help="the window's DPR draw support (B2), e.g. 1 or 1,2")
     ap.add_argument("--realised", type=Path, default=None,
-                    help="{platform: {state: realised ratio}} from shaper_realised: an optional sensitivity (levi 16:25)")
-    ap.add_argument("--configured-ok", default="", help="platforms whose shaper C5 passed on v3 (levi restores configured)")
+                    help="{platform: {state: realised ratio}} from shaper_realised: adds *_realised sensitivity columns beside the "
+                         "configured cells, never replacing them (levi 16:25 / 16:30)")
     ap.add_argument("--code-sha", default=None)
     a = ap.parse_args(argv)
     metas = []
@@ -196,8 +203,7 @@ def main(argv=None) -> int:
     stat = json.loads(a.stationary.read_text()) if a.stationary else None
     dprs = [float(x) for x in a.dprs.split(",")]
     realised = json.loads(a.realised.read_text()) if a.realised else None
-    res = build(metas, boxes, dprs, joint, stat, a.planned_hours, realised=realised,
-                configured_ok=tuple(x for x in a.configured_ok.split(",") if x))
+    res = build(metas, boxes, dprs, joint, stat, a.planned_hours, realised=realised)
     offers_sha = hashlib.sha256("".join(sorted(_sha(p) or "" for p in a.offers_metas)).encode()).hexdigest()
     out = {"schema": SCHEMA, "window": a.window, "built_at": time.time(), "code_sha": a.code_sha,
            "inputs": {"offers": {"sessions": len(metas), "sha256": offers_sha},
