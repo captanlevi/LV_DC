@@ -20,6 +20,12 @@ mountpoint -q "$LVDC_MOUNT" || { llog "ABORT: data volume not at $LVDC_MOUNT"; e
 for _ in $(seq 30); do sudo -n sysctl -q -p "$LVDC_NOIPV6_SYSCTL"; G6=$(ip -6 addr show scope global | grep -c inet6); [ "$G6" = 0 ] && break; sleep 10; done
 llog "ipv6 all=$(sysctl -n net.ipv6.conf.all.disable_ipv6) iface=$(sysctl -n "net.ipv6.conf.$LVDC_IFACE.disable_ipv6") global_v6=$G6"
 [ "$G6" = 0 ] || { llog "ABORT: global IPv6 present"; exit 1; }
+# t69 C3 (collector v3, spec C3): the offloads come back on after every reboot. Set them off here through networkSim's one
+# definition (offloads.ensure_off: set, read back), so the box between boot and the first session matches the clean-box
+# preflight and post_boot_check. It stamps nothing; not all off withholds the launch (the guards still start).
+OFFL=$(PYTHONPATH="$OPS/../networkSim" python3 -c 'import json, sys, offloads
+r = offloads.ensure_off(sys.argv[1]); print("ok" if r["ok"] else "NOT-OFF", json.dumps(r["after"], sort_keys=True)); sys.exit(0 if r["ok"] else 1)' "$LVDC_IFACE" 2>&1 | tail -1)
+llog "offloads on $LVDC_IFACE: ${OFFL:-no output}"
 # shellcheck disable=SC2086
 sudo -n systemctl stop $OS_TIMERS; llog "timers: $(systemctl is-active $OS_TIMERS | tr "\n" " ")"
 XDG_RUNTIME_DIR=/run/user/$LVDC_UID pactl set-sink-mute @DEFAULT_SINK@ 1 2>/dev/null; XDG_RUNTIME_DIR=/run/user/$LVDC_UID pactl set-sink-volume @DEFAULT_SINK@ 0% 2>/dev/null
@@ -37,6 +43,8 @@ fi
 start_guards; llog "guards started (display keeper only with SCREEN_OFF)"
 if [ -f "$LVDC_STATE/RESUME_HOLD" ]; then
   llog "no resume (RESUME_HOLD: $(head -c 200 "$LVDC_STATE/RESUME_HOLD"))"
+elif [ "${OFFL%% *}" != ok ]; then
+  llog "no resume (offloads not all off on $LVDC_IFACE: ${OFFL:-no output}); stop-and-read"
 elif [ -e "$LVDC_STATE/BATCH_GO" ] && ! pgrep -f "[r]un_batch.sh" >/dev/null; then
   launch_wrapper
   llog "RESUME: batch wrapper relaunched (orchestrate --batch resumes from disk)"; log "batch resumed after reboot/login (resume_after_login.sh)"

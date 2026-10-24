@@ -19,7 +19,12 @@ STUBS = {
                    '[ "$n" -ge "${NTP_YES_AT:-1}" ] && [ "${NTP_YES_AT:-1}" != never ] && echo yes || echo no',
     "findmnt": 'echo "$LVDC_MOUNT"',
     "mountpoint": "exit 0",
-    "sudo": 'echo "sudo $*" >> "$STUB/calls"',
+    "sudo": 'echo "sudo $*" >> "$STUB/calls"; [ "$2" = ethtool ] && { shift; "$@"; }; true',
+    # t69 C3: the interface's offloads, on after a boot; -K turns them off unless OFFLOAD_STUCK (a flag that did not take)
+    "ethtool": 'f="$STUB/offl"; [ -f "$f" ] || printf on > "$f"\n'
+               'if [ "$1" = -k ]; then s=$(cat "$f"); for n in tcp-segmentation generic-segmentation generic-receive; do\n'
+               '  echo "$n-offload: $s"; done\n'
+               'elif [ "$1" = -K ] && [ -z "${OFFLOAD_STUCK:-}" ]; then printf off > "$f"; fi',
     "sysctl": "echo 1",
     "ip": "exit 0",
     "systemctl": 'echo "systemctl $*" >> "$STUB/calls"; echo inactive',
@@ -30,7 +35,7 @@ STUBS = {
 }
 
 
-def run(tmp: Path, ntp_yes_at="1", hold=False, batch_go=True, wait_s="2"):
+def run(tmp: Path, ntp_yes_at="1", hold=False, batch_go=True, wait_s="2", offload_stuck=False):
     stub, state, mount = tmp / "stub", tmp / "state", tmp / "mount"
     for d in (stub, state, mount / "LV_DC_v2_data"):
         d.mkdir(parents=True, exist_ok=True)
@@ -45,7 +50,7 @@ def run(tmp: Path, ntp_yes_at="1", hold=False, batch_go=True, wait_s="2"):
     env = {"PATH": f"{stub}:/usr/bin:/bin", "HOME": str(tmp), "STUB": str(stub), "NTP_YES_AT": ntp_yes_at,
            "LVDC_STATE": str(state), "LVDC_MOUNT": str(mount), "LVDC_DATA": str(mount / "LV_DC_v2_data"),
            "LVDC_DEVICE": "/dev/null", "LVDC_DATA_ROOT_UUID": "TEST-UUID", "LVDC_UID": str(os.getuid()), "LVDC_NTP_WAIT_S": wait_s, "LVDC_NTP_POLL_S": "0.2",
-           "OPS": str(HOOK.parent)}
+           "OPS": str(HOOK.parent), "LVDC_IFACE": "wlan-test", **({"OFFLOAD_STUCK": "1"} if offload_stuck else {})}
     before = {p for p in (mount).rglob("*")}
     r = subprocess.run(["bash", str(HOOK)], env=env, capture_output=True, text=True, timeout=60)
     log = "\n".join(p.read_text() for p in sorted(state.glob("resume_*.log")))
@@ -91,11 +96,31 @@ def test_resume_hold_blocks_the_launch():
         assert rc == 0 and "run_batch.sh" not in calls and "BATCH_GO=no" in log
 
 
+def test_offloads_set_off_at_boot():
+    """t69 C3: on after the boot -> set off through offloads.ensure_off and read back; the launch proceeds."""
+    with tempfile.TemporaryDirectory() as d:
+        rc, log, calls, _ = run(Path(d))
+        assert "sudo -n ethtool -K wlan-test gro off" in calls and "sudo -n ethtool -K wlan-test tso off" in calls, calls
+        assert "offloads on wlan-test: ok" in log and "run_batch.sh" in calls, log
+        assert (Path(d) / "stub" / "offl").read_text() == "off"
+
+
+def test_offloads_stuck_withhold_the_launch():
+    """t69 C3: a flag that does not take -> the guards still start, the launch is withheld and the state is named."""
+    with tempfile.TemporaryDirectory() as d:
+        rc, log, calls, _ = run(Path(d), offload_stuck=True)
+        assert rc == 0 and _guards(calls) and "run_batch.sh" not in calls, (rc, log, calls)
+        assert "offloads on wlan-test: NOT-OFF" in log and "no resume (offloads not all off on wlan-test" in log, log
+        assert '"generic-receive-offload": {"fixed": false, "on": true}' in log, log
+
+
 def main() -> int:
     test_synced_starts_guards_and_launch()
     test_never_synced_fails_closed()
     test_synced_after_polls()
     test_resume_hold_blocks_the_launch()
+    test_offloads_set_off_at_boot()
+    test_offloads_stuck_withhold_the_launch()
     print("test_resume_after_login: ok")
     return 0
 
