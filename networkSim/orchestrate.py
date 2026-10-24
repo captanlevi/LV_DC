@@ -150,7 +150,7 @@ TT_ROOM_ROTATION_S: float | None = None
 def _collection_cmd(platform: str, initial_state: str | None, episodes: int, auto: bool = False,
                     yt_matrix: str | None = None, channel: dict | None = None, geom: str | None = None,
                     tw_category: dict | None = None, matrix: str | None = None,
-                    initial_state_source: str | None = None) -> list[str]:
+                    initial_state_source: str | None = None, tt_room: str | None = None) -> list[str]:
     cmd = [
         sys.executable, "exp.py",
         "--platform", platform,
@@ -166,7 +166,9 @@ def _collection_cmd(platform: str, initial_state: str | None, episodes: int, aut
         cmd += ["--yt-matrix", matrix or yt_matrix]
     if platform == "tiktok":
         cmd += ["--tt-matrix", matrix or MATRIX_IDS["tiktok"]]
-        if TT_ROOM_ROTATION_S:
+        if tt_room:                     # v3 W-A: a pinned room is opened directly and never rotated away
+            cmd += ["--channel-url", tt_room]
+        elif TT_ROOM_ROTATION_S:
             cmd += ["--tt-room-rotation", str(TT_ROOM_ROTATION_S)]
     if platform == "twitch":
         cmd += ["--tw-matrix", matrix or MATRIX_IDS["twitch"]]
@@ -354,6 +356,12 @@ def steer_balancer(platforms: set[str] | None) -> None:
         COVERAGE_ALLOWED["twitch"] = sorted(_PM["twitch"])
 
 
+def tiktok_room_url(room: str) -> str:
+    """A pinned tiktok room (v3 W-A): its live page, opened directly (exp.py --channel-url sets the browser's first_url, so
+    the room picker is skipped)."""
+    return f"https://www.tiktok.com/@{room.lstrip('@')}/live"
+
+
 def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
     """'twitch:channel=gothamchess,category=Chess,state=10,geometry=window:1920x1080' -> (platform, pin); the key may
     also be a slot tag (t56: 'yt2:state=10'), which pins that slot alone -> (tag, pin)."""
@@ -364,18 +372,27 @@ def parse_pin(spec: str, reason: str) -> tuple[str, dict]:
     pin: dict = {"reason": reason}
     for kv in filter(None, rest.split(",")):
         k, _, v = kv.partition("=")
-        if k not in ("category", "channel", "state", "geometry") or not v:
-            raise ValueError(f"--trio-pin {spec!r}: {kv!r} (keys: category, channel, state, geometry)")
+        if k not in ("category", "channel", "room", "state", "geometry") or not v:
+            raise ValueError(f"--trio-pin {spec!r}: {kv!r} (keys: category, channel, room, state, geometry)")
         pin[k] = v
     if platform not in coverage_report.CLASSES or len(pin) < 2:
         raise ValueError(f"--trio-pin {spec!r}: a platform and at least one field")
     from utils.shaping import SCENARIOS
     if pin.get("state") is not None and pin["state"] not in SCENARIOS:
         raise ValueError(f"--trio-pin {spec!r}: no shaper state {pin['state']!r}")
-    if (pin.get("channel") or pin.get("category")) and platform != "twitch":
-        raise ValueError(f"--trio-pin {spec!r}: category / channel pins are twitch only")
-    if pin.get("channel") and not pin.get("category"):
+    # v3 W-A (levi 17:18): yt channel and tt room pins too, dry only like every pin (arg_refusal: never --trio-record)
+    if pin.get("category") and platform != "twitch":
+        raise ValueError(f"--trio-pin {spec!r}: category pins are twitch only")
+    if pin.get("channel") and platform not in ("twitch", "youtube"):
+        raise ValueError(f"--trio-pin {spec!r}: channel pins are twitch / youtube (tiktok pins a room=@user)")
+    if pin.get("room") and platform != "tiktok":
+        raise ValueError(f"--trio-pin {spec!r}: room pins are tiktok only")
+    if platform == "twitch" and pin.get("channel") and not pin.get("category"):
         raise ValueError(f"--trio-pin {spec!r}: a channel pin names its category (exp.py's --tw-channel needs --tw-category)")
+    if platform == "youtube" and pin.get("channel") and yt_channels.by_handle(pin["channel"]) is None:
+        raise ValueError(f"--trio-pin {spec!r}: {pin['channel']!r} is not on the yt list (yt_channels.YT_CHANNELS)")
+    if pin.get("room") and not re.fullmatch(r"@?[A-Za-z0-9._]{2,64}", pin["room"]):
+        raise ValueError(f"--trio-pin {spec!r}: room {pin['room']!r} is not a tiktok @user")
     return key, pin
 
 
@@ -748,6 +765,10 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
         lo, hi = SESSION_RANGE
         slen = {**slen, "session_range": [lo, hi],
                 "minutes": round(lo + (hi - lo) * (slen["minutes"] - 10.0) / 30.0, 4)}
+    if slen and REPLAY:                  # v3 W-A: the replayed schedule fixes the length (exp.py ends with it)
+        import utils.netStat as _ns
+        slen = {**slen, "minutes": round(len(_ns.REPLAY_STATES) * (REPLAY.get("step_s") or _ns.REPLAY_STEP_S) / 60.0, 4),
+                "replay": True}
     if window and slen and not window_fits(time.time(), slen["minutes"], window["deadline"]):
         T.slots_log_append(troot / T.SLOTS_LOG, {"event": "window_idle", "slot": tag, "run": run_id, "t": time.time(),
                                                  "reason": "does not fit", "minutes": slen["minutes"],
@@ -796,10 +817,15 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     # pick and the coverage rule do; at c1f9181 it read the single root (disclosed in the FROZEN log)
     init = fi["state"] if fi else most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record)
     init_source = "coverage" if fi else "balance"
+    tt_room = None
     pin = TRIO_PINS.get(tag) or TRIO_PINS.get(p)        # a tag's own pin, else its platform's
     if pin:                             # a recorded round pin (levi 00261), never silent
         if pin.get("category"):
             category = {"name": pin["category"], "type": "pinned", "channel": pin.get("channel")}
+        if p == "youtube" and pin.get("channel"):        # v3 W-A: the list entry itself (handle + type), not a draw
+            channel = yt_channels.by_handle(pin["channel"])
+        if p == "tiktok" and pin.get("room"):
+            tt_room = tiktok_room_url(pin["room"])
         if pin.get("state"):
             init, init_source = pin["state"], "pin"
         geom, pin = pin_geometry(pin, geom, running, tag)
@@ -819,7 +845,7 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     if hold and TRIO_STRESS_EPISODES:                    # decode_stress --short / --minutes (never a counted run)
         eps = TRIO_STRESS_EPISODES
     cmd = _collection_cmd(p, initial_state=init, initial_state_source=init_source, episodes=eps, auto=True, yt_matrix=yt_matrix,
-                          channel=channel, geom=geom, tw_category=category, matrix=mid)
+                          channel=channel, geom=geom, tw_category=category, matrix=mid, tt_room=tt_room)
     cmd += ["--slot", s.tag] + (["--link-capacity-kbit", str(capacity_kbit)] if capacity_kbit else [])
     if slen:
         cmd += ["--session-minutes", str(slen["minutes"])]
@@ -1228,7 +1254,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="a dry / gate run's stratum, stated (never with --trio-record); recorded like a drawn one.")
     parser.add_argument("--replay-schedule", default=None,
                         help="v3 W-A (levi 17:1x): every session replays one fixed schedule seeded by this seed (exp.py "
-                             "--replay-schedule: states 1->10->1); dry only (never with --trio-record), steering off.")
+                             "--replay-schedule: states 10->1->10); dry only (never with --trio-record), steering off.")
     parser.add_argument("--replay-step-s", type=float, default=None,
                         help="v3 W-A: the replayed schedule's step (exp.py default 79 s, a 25 min session).")
     parser.add_argument("--lever-params", default=None,

@@ -92,13 +92,14 @@ def substep_changes(state: str, rate: int, dur: float, delay_ms: int, loss_pct: 
 
 
 # v3 W-A (levi 17:1x, the instrumentation A/B: "the arms differ ONLY in the instrument flag"): one recorded schedule replayed
-# identically in every round. States 1 -> 10 -> 1, each held REPLAY_STEP_S; rate / delay / loss and the walk come from
+# identically in every round. States 10 -> 1 -> 10 (brad / levi 17:20-17:21: startup in the top state, so the C5s read
+# ordinary playback, not startup seconds; every switch still runs both directions), each held REPLAY_STEP_S; rate / delay / loss and the walk come from
 # generators seeded by the replay seed alone (never the session name, never the module's random), so every session given
 # the same seed and step gets the same tc changes at the same session times. Dry only (orchestrate refuses it with
 # --trio-record).
-REPLAY_STATES = tuple(str(i) for i in range(1, 11)) + tuple(str(i) for i in range(9, 0, -1))
+REPLAY_STATES = tuple(str(i) for i in range(10, 0, -1)) + tuple(str(i) for i in range(2, 11))
 REPLAY_STEP_S = 79.0          # 19 steps x 79 s = 1501 s, the W-A session's 25 min
-REPLAY_RULE = "v3 W-A: states 1->10->1, REPLAY_STEP_S each, rate / delay / loss / walk seeded by the replay seed only"
+REPLAY_RULE = "v3 W-A: states 10->1->10, REPLAY_STEP_S each, rate / delay / loss / walk seeded by the replay seed only"
 
 
 def replay_record(seed: str, step_s: float = REPLAY_STEP_S) -> dict:
