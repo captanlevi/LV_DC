@@ -4050,7 +4050,8 @@ class BrowserSession:
         """levi 00:38 M3: after EVERY re-entry confirm, the page is still the session's own room / channel; a failure is a
         named abort "<pin|room>_mismatch (reentry): ..." (the session never silently changes room), recorded in the
         re-entry record (identity)."""
-        nav = self.first_url if self.first_url and page_identity(self.platform, self.first_url) else self.channel_url
+        first, chan = getattr(self, "first_url", None), getattr(self, "channel_url", None)
+        nav = first if first and page_identity(self.platform, first) else chan
         idc = identity_check_settled(self.platform, nav, self._page)
         r["identity"] = idc
         why = self._identity_failure(idc)

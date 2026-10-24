@@ -60,7 +60,10 @@ if (scen === "switch") {
   frame(u, h2 * 16 / 9, h2, 5);                           // the new element's first frame
   tick(); frame(u, h2 * 16 / 9, h2, 6); tick();
 } else if (scen === "events") {
-  vm.runInContext("emit('stall'); emit('stall'); emit('start'); emit('video_start')", ctx);   // a repeat stall is deduped
+  // levi 00:53: event shots of one reason >= 10 s apart, so the second video_start comes 11 s after the attach's
+  vm.runInContext("emit('stall'); emit('stall'); emit('start')", ctx);   // a repeat stall is deduped
+  now += 11000;
+  vm.runInContext("emit('video_start')", ctx);
   tick();
 } else if (scen === "silent") {
   tick(); tick(); tick();                                 // rVFC registered but silent for 3 s
