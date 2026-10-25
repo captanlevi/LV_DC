@@ -277,6 +277,29 @@ def _session_passed(troot: Path, p: str, name: str | None, select=None) -> bool:
         return False
 
 
+def _qa_fail_cause(root: Path, p: str, name: str | None = None, since: float | None = None) -> str | None:
+    """check.json qa_fail_cause (levi 87562afd #12) of the finished session: by name under root/<p> or, moved by
+    --move-failed, root/_failed/<p>; without a name (run_batch), the newest check.json written since `since`. None when
+    absent or unreadable (the session then counts as today)."""
+    if name:
+        cands = [Path(root) / p / name / "check.json", Path(root) / "_failed" / p / name / "check.json"]
+    elif since is not None:
+        try:
+            cands = sorted((c for c in list((Path(root) / p).glob("*/check.json")) +
+                            list((Path(root) / "_failed" / p).glob("*/check.json")) if c.stat().st_mtime >= since),
+                           key=lambda c: c.stat().st_mtime, reverse=True)[:1]
+        except OSError:
+            return None
+    else:
+        return None
+    for c in cands:
+        try:
+            return json.loads(c.read_text()).get("qa_fail_cause")
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 TRIO_RUN_ID: str | None = None      # run_trio's run id (decode_stress: its targets count this run's sessions only)
 
 
@@ -567,11 +590,13 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
 
 def _account(p: str, rc: int, before: int, channel: dict | None, category: dict | None, now: float,
              paused: dict, fails: dict, frozen: dict, not_live: dict, runs_dir: Path | None = None,
-             key: str | None = None, passed: bool | None = None) -> None:
+             key: str | None = None, passed: bool | None = None, qa_cause: str | None = None) -> None:
     """A finished session's exit code into the batch state: login-wall pause, not-a-failure aborts, the not-live skip,
     the consecutive-failure pause (run_batch and, per slot, run_trio). The trio (t58 N-4) counts a slot's own streaks
     (fails / frozen keyed by `key`, the slot tag) and passes `passed`, its own session's result: a sibling's PASS on the
-    platform no longer resets them; the pause stays per platform."""
+    platform no longer resets them; the pause stays per platform. levi 87562afd (#12): a session whose check.json carries
+    qa_fail_cause = ad_dominated (`qa_cause`) leaves the failure streak as it was: it never pauses the platform, so it
+    never stops the round or the window, and it is no failure of the channel (no not-live mark: it exits 0)."""
     k = key or p
     who = p if k == p else f"{p} (slot {k})"
     if rc == EXIT_LOGIN_WALL:
@@ -590,7 +615,10 @@ def _account(p: str, rc: int, before: int, channel: dict | None, category: dict 
         frozen[k] = 0
         ok = passed if passed is not None else (
             (accepted_sessions(p, runs_dir, trio_select()) if runs_dir else accepted_sessions(p)) > before)
-        fails[k] = 0 if ok else fails[k] + 1
+        if not ok and qa_cause == "ad_dominated":
+            print(f"  qa_fail_cause ad_dominated on {who}: not counted as a failure (streak {fails[k]} kept)")
+        else:
+            fails[k] = 0 if ok else fails[k] + 1
     if fails[k] >= MAX_CONSECUTIVE_FAIL and p not in paused:
         paused[p] = f"{fails[k]} consecutive sessions without a PASS on {who}"
     if p in paused:
@@ -677,7 +705,8 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
             print("  Session stopped by the operator (SIGINT / SIGTERM): stopping the batch.")
             _summary()
             sys.exit(EXIT_STOPPED)
-        _account(p, rc, before, channel, category, now, paused, fails, frozen, not_live)
+        _account(p, rc, before, channel, category, now, paused, fails, frozen, not_live,
+                 qa_cause=_qa_fail_cause(_RUNS_DIR, p, since=t_session))
         _summary()
     print("\nBatch finished." + (f" Paused: {paused}" if paused else ""))
     for p in targets:
@@ -1080,7 +1109,8 @@ def run_trio(targets: dict[str, int], yt_matrix: str, rotate_geometry: bool = Tr
                     end_rc = end_rc or EXIT_STOPPED
                 else:
                     _account(p, rc, r["before"], r["channel"], r["category"], r["now"], paused, fails, frozen, not_live,
-                             troot, key=tag, passed=_session_passed(troot, p, name, trio_select()))
+                             troot, key=tag, passed=_session_passed(troot, p, name, trio_select()),
+                             qa_cause=_qa_fail_cause(troot, p, name))
             if window:      # §10 (levi 00138): a paused slot idles to the window's end, its reason recorded; a second
                 for tag, s in T.SLOTS.items():                # one is a stop-and-read
                     if s.platform in paused and tag not in idle and tag not in running:

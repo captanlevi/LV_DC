@@ -10,6 +10,9 @@ Acceptance is CAPTURE INTEGRITY ONLY (prereg §2, brad R1): nothing that co-vari
              playing ticks is a documented deviation from the prereg's 0.95: it couples to stall detection, and a strict
              value would select on impairment (levi R3c).
   usable     non-ad labelled time, play OR stall, >= 0.6 of the session length (ads by the sensor_v2 span rule)
+             (v3.5, levi 87562afd #12: a second inside a meta ad_wait.ad_stuck_run, an ad break stuck over a paused
+             player, counts as content; a qa_fail whose one reason is this check and that would pass with its ad
+             seconds counted carries qa_fail_cause = ad_dominated, read by ops, never the class)
   shaper     measured downstream <= 1.1 x the set rate in >= 0.9 of episodes
   background downstream bytes on flows whose host (TLS / QUIC SNI, else DNS answers) is not the platform's media host
              <= 0.05 of all downstream bytes; independent of the keylog (a keylog-based share would select clean
@@ -520,18 +523,48 @@ def fullscreen_player_lt_screen(meta: dict) -> dict | None:
             "player_fullscreen": fs.get("on"), "chat_hidden": (fs.get("chat_hidden") or {}).get("collapsed")}
 
 
-def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
-                 frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
-                 entry_win: tuple[float, float] | None = None, net_labels: list | None = None,
-                 navs: list[float] | None = None, shared_navs: list[float] | None = None,
-                 loads: list[tuple[float, float]] | None = None, picture_runs: bool = True) -> dict:
+QA_FAIL_CAUSE_AD = "ad_dominated"   # levi 87562afd (#12): check.json qa_fail_cause, absent otherwise
+USABLE_REASON = "usable (non-ad play or stall)"
+
+
+def ad_stuck_runs_of(meta: dict | None) -> list | None:
+    """meta.json ad_wait.ad_stuck_runs (v3.5: an ad break stuck over a paused, buffered player, [{start, end, s, ...}]
+    in epoch s); None on a session without the record (then nothing is reclassified)."""
+    aw = (meta or {}).get("ad_wait")
+    runs = aw.get("ad_stuck_runs") if isinstance(aw, dict) else None
+    return runs if isinstance(runs, list) else None
+
+
+def ad_stuck_mask(ts: list[float], runs: list | None) -> list[bool] | None:
+    """Per tick: inside an ad_stuck run (start <= t <= end, the ad span rule's closed interval); None when no run has a
+    readable start < end (the share is then computed exactly as before the record existed)."""
+    spans = []
+    for r in runs or []:
+        try:
+            lo, hi = float(r["start"]), float(r["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if hi > lo:
+            spans.append((lo, hi))
+    return [any(lo <= t <= hi for lo, hi in spans) for t in ts] if spans else None
+
+
+def usable_counts(h: list[int], stalled: list[bool], in_ad: list[bool], stuck: list[bool] | None = None
+                  ) -> tuple[int, int]:
+    """(usable ticks, ad ticks) for the usable share: usable = a non-ad tick playing (video_h > 0) or stalled; ad = an
+    ad-span tick. levi 87562afd (#12, v3.5): a tick inside an ad_stuck run is content, counted usable like a stall and
+    never as ad. Without stuck ticks this is the pre-v3.5 count exactly."""
+    st = stuck or [False] * len(h)
+    usable = sum(1 for hh, s, ad, k in zip(h, stalled, in_ad, st) if k or (not ad and (s or hh > 0)))
+    ad = sum(1 for _, _, ad, k in zip(h, stalled, in_ad, st) if ad and not k)
+    return usable, ad
+
+
+def _tick_states(rows: list[dict]) -> tuple[list[dict], list[float], bool, list, int, list[bool], list[bool], list[int]]:
+    """label_checks' per-tick states over res_meta (>= 2 ticks): (res_meta rows, ts s, has_v2, ad spans, swap-only
+    spans, in_ad, stalled, video_h). One derivation for the labels block and usable_tally."""
     meta = [r for r in rows if r.get("type") == "res_meta"]
-    if len(meta) < 2:
-        return {"n_res_meta": len(meta)}
     ts = [_f(r["ts"]) / 1000.0 for r in meta]
-    t0, t1 = min(ts), max(ts)
-    dur = t1 - t0
-    seconds = max(1, int(dur) + 1)
     has_v2 = "ad_signals" in meta[0]
     spans, swap_only = ad_spans(meta) if has_v2 else ([], 0)
     in_ad = [any(lo <= t <= hi for lo, hi in spans) for t in ts]
@@ -545,10 +578,46 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
         elif r.get("type") == "res_meta":
             stalled.append(state)
     h = [int(_f(r.get("video_h")) or 0) for r in meta]
+    return meta, ts, has_v2, spans, swap_only, in_ad, stalled, h
+
+
+def usable_tally(rows: list[dict], ad_stuck_runs: list | None = None) -> dict | None:
+    """The usable share's parts as label_checks counts them: {seconds, usable, ad}; None under 2 res_meta ticks."""
+    if sum(1 for r in rows if r.get("type") == "res_meta") < 2:
+        return None
+    _, ts, _, _, _, in_ad, stalled, h = _tick_states(rows)
+    usable, ad = usable_counts(h, stalled, in_ad, ad_stuck_mask(ts, ad_stuck_runs))
+    return {"seconds": max(1, int(max(ts) - min(ts)) + 1), "usable": usable, "ad": ad}
+
+
+def qa_fail_cause(s_class: str, reasons: list[str], tally: dict | None) -> str | None:
+    """levi 87562afd (#12): "ad_dominated" when the session is qa_fail, its ONLY failing reason is the usable-share
+    check, and the share would pass with its ad seconds (ad-span ticks outside ad_stuck runs) counted as usable:
+    (usable + ad) / seconds >= usable_share_min. None otherwise (another reason, or the share short of the bar even
+    with the ads counted). Ops reads it: such a session never stops the round or window and never triggers a re-pick;
+    the class stays qa_fail."""
+    if s_class != "qa_fail" or not tally or len(reasons) != 1 or not reasons[0].startswith(USABLE_REASON):
+        return None
+    return QA_FAIL_CAUSE_AD if (tally["usable"] + tally["ad"]) / tally["seconds"] >= CHECKS["usable_share_min"] else None
+
+
+def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None = None,
+                 frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
+                 entry_win: tuple[float, float] | None = None, net_labels: list | None = None,
+                 navs: list[float] | None = None, shared_navs: list[float] | None = None,
+                 loads: list[tuple[float, float]] | None = None, picture_runs: bool = True,
+                 ad_stuck_runs: list | None = None) -> dict:
+    n_meta = sum(1 for r in rows if r.get("type") == "res_meta")
+    if n_meta < 2:
+        return {"n_res_meta": n_meta}
+    meta, ts, has_v2, spans, swap_only, in_ad, stalled, h = _tick_states(rows)
+    t0, t1 = min(ts), max(ts)
+    dur = t1 - t0
+    seconds = max(1, int(dur) + 1)
     ct = [_f(r.get("current_time")) for r in meta]
     adv = [b is not None and a is not None and b > a for a, b in zip(ct, ct[1:])]
     adv_play = [a for a, s, ad in zip(adv, stalled[1:], in_ad[1:]) if not s and not ad]
-    usable = sum(1 for hh, s, ad in zip(h, stalled, in_ad) if not ad and (s or hh > 0))
+    usable, _ = usable_counts(h, stalled, in_ad, ad_stuck_mask(ts, ad_stuck_runs))   # levi 87562afd (#12)
     tiers = [hh for hh, s, ad in zip(h, stalled, in_ad) if not ad and not s and hh > 0]
     mix = collections.Counter(tiers)
     nq = max(1, len(tiers))
@@ -1279,7 +1348,8 @@ def labels_block(sd: Path, meta: dict, platform: str | None = None) -> tuple[lis
     tie = shared_deadline_reentries({**meta, "platform": platform}, label_rows, nl)
     shared = [x["t_nav"] for x in tie if x["shared_deadline_reentry"]]
     lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
-                       entry_window(ents, win), nl, navs, shared, E.nav_loads(meta), picture_runs=picture_runs_era(meta))
+                       entry_window(ents, win), nl, navs, shared, E.nav_loads(meta), picture_runs=picture_runs_era(meta),
+                       ad_stuck_runs=ad_stuck_runs_of(meta))
     lab["shot_effects"] = shot_effects(label_rows, sd)
     dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), nl, navs, shared)
     lab["shared_deadline_reentries"] = tie
@@ -1346,6 +1416,7 @@ def main() -> int:
                               lab.get("frozen_playhead_T_s"),
                               recovered_dead=bool(lab.get("recovered_dead")),
                               recovered_frozen=bool(lab.get("recovered_frozen")))
+    cause = qa_fail_cause(s_class, why, usable_tally(label_rows, ad_stuck_runs_of(meta)))   # levi 87562afd (#12)
     slow_start = E.slow_start_shaped(ents)
     sreg = SR.session_regime(sd, platform, meta)   # reported, never part of the verdict or the class
     for fns in (fullscreen_not_screen(meta), fullscreen_player_lt_screen(meta), chrome_version_missing(meta)):
@@ -1364,8 +1435,10 @@ def main() -> int:
            "stream_regime": sreg["regime"], "suspicious": sreg["suspicious"],
            "censored": meta.get("censored"), "lowest_rung": meta.get("lowest_rung"), "decode_path": meta.get("decode_path"),
            "decode_hevc": dp_hevc, "template_note": meta.get("template_note"), "entry_quality": eq}
+    if cause:     # absent unless set: an unflagged session's check.json is byte-identical to before #12
+        out["qa_fail_cause"] = cause
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
-    md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class})", ""] + [f"- {r}" for r in why] + \
+    md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class}{', qa_fail_cause ' + cause if cause else ''})", ""] + [f"- {r}" for r in why] + \
         [f"- SUSPICIOUS (reported; verdict unchanged): {x}" for x in sreg["suspicious"]] + ["",
           "| item | value |", "|---|---|",
           f"| session class (levi's precedence; only normal counts) | {s_class} |",

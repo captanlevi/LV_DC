@@ -30,6 +30,8 @@ TOP = {"session": str, "platform": str, "verdict": str, "session_class": str, "e
        "stream_regime": (dict, NONE), "suspicious": list, "censored": (dict, NONE),
        "lowest_rung": (dict, NONE), "decode_path": (dict, NONE), "decode_hevc": (dict, NONE),
        "template_note": (str, NONE), "entry_quality": (dict, NONE)}
+# keys present only when set (absent otherwise, so an unflagged session's check.json is unchanged): levi 87562afd (#12)
+OPTIONAL = {"qa_fail_cause": str}
 LABELS = ["ad_span_seconds", "ad_spans_per_signal", "ad_spans_span_type_set", "ad_ticks_per_signal",
           "advancing_share_while_playing", "dead_clock_of_record", "dead_player_T_s", "dead_player_class_s",
           "dead_player_max_all_s", "dead_player_max_s",
@@ -71,11 +73,13 @@ def test_check_json_schema() -> None:
         _, _, lab = CS.labels_block(sd, json.loads((sd / "meta.json").read_text()))
         assert json.dumps(json.loads(json.dumps(lab, default=str)), sort_keys=True) == \
             json.dumps(c["labels"], sort_keys=True), "labels_block differs from check.json's labels"
-    assert sorted(c) == sorted(TOP), f"check.json keys changed: +{sorted(set(c) - set(TOP))} -{sorted(set(TOP) - set(c))}"
+    assert set(TOP) <= set(c) <= set(TOP) | set(OPTIONAL), \
+        f"check.json keys changed: +{sorted(set(c) - set(TOP) - set(OPTIONAL))} -{sorted(set(TOP) - set(c))}"
+    assert "qa_fail_cause" not in c            # the fixture fails other checks: never ad-dominated
     def ok(v, t) -> bool:   # bool is an int: accepted only where bool is the type
         ts = t if isinstance(t, tuple) else (t,)
         return isinstance(v, ts) and (not isinstance(v, bool) or bool in ts)
-    bad = {k: type(c[k]).__name__ for k, t in TOP.items() if not ok(c[k], t)}
+    bad = {k: type(c[k]).__name__ for k, t in {**TOP, **OPTIONAL}.items() if k in c and not ok(c[k], t)}
     assert not bad, f"check.json types changed: {bad}"
     assert c["verdict"] in ("PASS", "FAIL") and c["session_class"] in E.CLASS_PRECEDENCE
     assert sorted(c["labels"]) == LABELS, f"labels keys changed: +{sorted(set(c['labels']) - set(LABELS))} -{sorted(set(LABELS) - set(c['labels']))}"
