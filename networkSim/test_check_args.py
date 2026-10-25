@@ -95,6 +95,19 @@ def test_cli_refusals_match_a_real_launch():
         assert _tree(cwd) == [] and _tree(data) == [], (_tree(cwd), _tree(data))
 
 
+def test_cli_flag_anywhere():
+    """levi 14:57: --check-args first, last or in the middle gives the same JSON line and exit code, nothing written."""
+    with tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as data:
+        cwd, data = Path(cwd), Path(data)
+        for argv in [DRY] + [a for a, _ in REFUSED]:
+            first = _run(["--check-args", *argv], cwd, data)
+            for placed in (argv + ["--check-args"], argv[:3] + ["--check-args"] + argv[3:]):
+                r = _run(placed, cwd, data)
+                assert (r.returncode, r.stdout, r.stderr) == (first.returncode, first.stdout, first.stderr), (placed, r)
+            assert first.returncode in (0, 2) and len(first.stdout.splitlines()) == 1, (argv, first)
+        assert _tree(cwd) == [] and _tree(data) == [], (_tree(cwd), _tree(data))
+
+
 def test_main_block_refusals_are_mirrored():
     """Drift guard: every sys.exit in the main block is either check_args' own, a refusal _static_refusal mirrors, one
     in CHECK_ARGS_NOT_COVERED, or a run's end. A new one fails here until it is placed."""
@@ -102,7 +115,7 @@ def test_main_block_refusals_are_mirrored():
     main = src[src.index('if __name__ == "__main__":'):]
     exits = [ln.strip() for ln in main.splitlines() if "sys.exit(" in ln]
     assert exits == [
-        "sys.exit(check_args_main(sys.argv[2:], os.environ))",
+        'sys.exit(check_args_main([a for a in sys.argv[1:] if a != "--check-args"], os.environ))   # static refusal below',
         "sys.exit(_refused)",                       # arg_refusal
         "sys.exit(_bad)",                           # coverage_allowed_parse
         "sys.exit(_pin_ref)",                       # pin_geometry_refusal
@@ -124,6 +137,7 @@ def main() -> int:
     test_in_process()
     test_cli_ok_no_side_effects()
     test_cli_refusals_match_a_real_launch()
+    test_cli_flag_anywhere()
     test_main_block_refusals_are_mirrored()
     print("test_check_args: ok")
     return 0

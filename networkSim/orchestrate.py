@@ -26,7 +26,7 @@ Usage:
     python orchestrate.py --all-platforms --report-only
 
     # Parse only (ops dry_window.sh): would this command line be refused? One JSON line, exit 0 / 2; see check_args
-    python orchestrate.py --check-args --batch youtube=1 --concurrent ...
+    python orchestrate.py --check-args --batch youtube=1 --concurrent ...     (--check-args anywhere in the line)
 """
 import os
 import subprocess
@@ -1596,8 +1596,8 @@ def check_args_main(argv: list[str], environ) -> int:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["--check-args"]:          # parse-only; check_args mirrors every static refusal below
-        sys.exit(check_args_main(sys.argv[2:], os.environ))
+    if "--check-args" in sys.argv[1:]:             # parse-only, wherever it sits (levi 14:57); check_args mirrors every
+        sys.exit(check_args_main([a for a in sys.argv[1:] if a != "--check-args"], os.environ))   # static refusal below
     parser = build_parser()
     args = parser.parse_args()
     _refused = arg_refusal(args, os.environ)
