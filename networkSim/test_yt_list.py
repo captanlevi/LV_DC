@@ -191,9 +191,9 @@ def test_the_restart_pair_is_broken_by_the_seeded_tie():
             ["@AlJazeeraEnglish", "@MonsterJam", "@BeanBoltTV"]), Y.LAST_PICK
         assert Y.LAST_PICK["n_record"] == 24 and Y.LAST_PICK["distinct_record"] == 6
         b = Y.next_channel(tr, exclude={a["handle"]}, select=record.counted_any_era)
-        # 2026-10-26: with @MonsterJam out, sport has no eligible primary left (@FUELTVMoto removed), so its spare substitutes
-    # (the spare rule, docstring above next_channel); before the removal this pick was @AlJazeeraEnglish
-    assert (a["handle"], b["handle"]) == ("@MonsterJam", "@FuboSports"), (a, b)
+        # 2026-10-26: with @MonsterJam out, sport has no eligible primary left (@FUELTVMoto removed), so its spare
+        # substitutes (the spare rule, docstring above next_channel); before the removal this pick was @AlJazeeraEnglish
+        assert (a["handle"], b["handle"]) == ("@MonsterJam", "@FuboSports"), (a, b)
 
 
 @of_record
