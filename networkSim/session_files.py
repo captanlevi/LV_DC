@@ -31,7 +31,7 @@ COLLECTOR_FILES: frozenset[str] = frozenset({
     # top-level merged*.csv are LVQoE's (ingest.ensure_csvs; brad 23:21)
     "discovery_empty.png", "chrome_stderr.log",      # levi 07:48: the empty list page; the slot's Chrome stderr
     "merged.pcap", "early.pcap", "dns_default.pcap", "dns_default.err", "default_tcp_*.pcap", "tcpdump_*.err",
-    "ssl_keys.log", "http_v2.json", "http.json", "h1_raw.json", "h2_raw.pdml", "h3_raw.pdml", "ping_*.log",
+    "ssl_keys.log", "http_v2.json", "http_v2_error.json", "http.json", "h1_raw.json", "h2_raw.pdml", "h3_raw.pdml", "ping_*.log",
     # the compressed PDMLs (brad 23:29; ops/compress_raw_pdml.py is on the gate2-* line only, not v3): unit_extractor
     # reads a .pdml.zst; the names stay reserved collector-side
     "h2_raw.pdml.zst", "h3_raw.pdml.zst", "compress_record.json",

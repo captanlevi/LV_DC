@@ -908,6 +908,32 @@ def join_order(sd: Path, meta: dict, net: list[dict]) -> dict | None:
             "discovery_flows": len(disc_flows),
             # the shaped join's media on a connection opened during the unshaped discovery (reuse; a time count misses it)
             "room_media_on_discovery_flow": sum(1 for k, t, m in rows if m and t >= t_apply and k in disc_flows)}
+HTTP_V2_ERROR = "http_v2_error.json"      # unit_extractor.ERROR_MARKER (levi 06:29)
+
+
+def http_v2_missing(sd: Path, lab: dict) -> str | None:
+    """levi 06:29 (WC2 tw_100001's "{}"): a named QA flag, never the verdict (http_v2 is re-derivable from the kept pcap
+    + keylog): the extractor's error marker, or on a session that played (n_res_meta > 0) an http_v2.json that is absent,
+    unreadable or holds no media request (MEDIA_URL_PATTERNS). None when http_v2 is in order."""
+    m = sd / HTTP_V2_ERROR
+    if m.exists():
+        try:
+            err = json.loads(m.read_text()).get("error")
+        except Exception:
+            err = "unreadable marker"
+        return f"http_v2_missing: unit_extractor failed ({str(err)[:160]})"
+    if not lab.get("n_res_meta"):
+        return None
+    p = sd / "http_v2.json"
+    if not p.exists():
+        return "http_v2_missing: no http_v2.json on a session that played"
+    try:
+        d = json.loads(p.read_text())
+    except Exception as e:
+        return f"http_v2_missing: http_v2.json unreadable ({type(e).__name__})"
+    n = sum(1 for recs in (d.values() if isinstance(d, dict) else []) for r in (recs if isinstance(recs, list) else [])
+            if any(x in (r.get("request_url") or "").split("?")[0] for x in MEDIA_URL_PATTERNS))
+    return None if n else f"http_v2_missing: {len(d) if isinstance(d, dict) else 0} flows, 0 media requests on a session that played"
 
 
 def dns_answers_names(sd: Path) -> dict[str, set]:
@@ -1562,6 +1588,9 @@ def main() -> int:
     for fns in (fullscreen_not_screen(meta), fullscreen_player_lt_screen(meta), chrome_version_missing(meta)):
         if fns:
             sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
+    h2m = http_v2_missing(sd, lab)                  # levi 06:29: reported, never the verdict
+    if h2m:
+        sreg["suspicious"] = list(sreg.get("suspicious") or []) + [h2m]
     import decode_path as DP
     _dp = meta.get("decode_path") or {}
     dp_hevc = DP.hevc_decision(_dp.get("gpu"), _dp.get("page"), (sreg.get("regime") or {}).get("played_codec")) if _dp else {}
@@ -1579,6 +1608,8 @@ def main() -> int:
         out["qa_fail_cause"] = cause
     if jo is not None:   # absent before levi 07:48's discovery (no meta.join.discovery)
         out["join_order"] = jo
+    if h2m:       # absent unless flagged, as qa_fail_cause (levi 06:29)
+        out["http_v2_missing"] = h2m
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class}{', qa_fail_cause ' + cause if cause else ''})", ""] + [f"- {r}" for r in why] + \
         [f"- SUSPICIOUS (reported; verdict unchanged): {x}" for x in sreg["suspicious"]] + ["",

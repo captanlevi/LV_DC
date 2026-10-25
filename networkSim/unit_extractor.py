@@ -7,6 +7,7 @@ from network_core.http.httpIO import save_ft_to_http_units
 from network_core.dataModels import HttpUnit, FiveTuple
 
 TSHARK = shutil.which("tshark") or "tshark"
+ERROR_MARKER = "http_v2_error.json"     # levi 06:29: written instead of http_v2.json when the extraction fails
 
 
 def _merge_into(ft_to_stream_to_units, master_dict):
@@ -81,8 +82,19 @@ if __name__ == "__main__":
                     _merge_into(parse_pdml_zst(p + ".zst", ver), master_dict)
 
     except Exception as e:
+        # levi 06:29 (WC2 tw_100001: an exception here wrote "{}" with rc 0 and nothing flagged it): fail closed. No
+        # http_v2.json is written; the error marker (ERROR_MARKER beside it) holds the traceback; rc 3 fails the make
+        # target, so exp.py logs it and the session goes on (http_v2 is re-derivable from the kept pcap + keylog)
+        import json
+        import time
         import traceback
-        print("Error parsing tshark logs")
-        traceback.print_exc()
+        tb = traceback.format_exc()
+        print("Error parsing tshark logs: no http_v2.json written")
+        print(tb)
+        marker = os.path.join(os.path.dirname(os.path.abspath(args.save_path)), ERROR_MARKER)
+        with open(marker, "w") as fh:
+            json.dump({"error": repr(e)[:500], "traceback": tb[-4000:], "ts": time.time(),
+                       "save_path": args.save_path, "pcap": args.pcap}, fh, indent=1)
+        raise SystemExit(3)
 
     save_ft_to_http_units(path=args.save_path, data=master_dict)
