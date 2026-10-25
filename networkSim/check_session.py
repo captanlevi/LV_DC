@@ -1096,10 +1096,41 @@ def probe_times(meta: dict) -> list[float]:
 SHOTS_STATIC_MIN = 5      # levi 22:56 (WC2 yt_100001, a source-side still): consecutive byte-identical cadence shots
 
 
+STATIC_PF_RATE_MIN = 1.0  # levi 23:06: presented frames / s over a static run at or above it -> source_still, else frozen
+
+
+def presented_rate(sd: Path, t0: float, t1: float) -> float | None:
+    """rvfc_frames.jsonl's presented frames per second over [t0, t1] (host s; rvfc ts is the page clock in ms, whose
+    offset to the host is seconds at most, against a run of minutes): per element, the pf advance between its first and
+    last row in the span, summed, over the span; None without two rows of one element in it."""
+    p = sd / "rvfc_frames.jsonl"
+    if not p.exists() or t1 <= t0:
+        return None
+    first, last = {}, {}
+    for line in p.read_text().splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        t, pf = r.get("ts"), r.get("pf")
+        if t is None or pf is None:
+            continue
+        t = float(t) / 1000.0
+        if t0 <= t <= t1:
+            first.setdefault(r.get("el"), (t, pf))
+            last[r.get("el")] = (t, pf)
+    adv = [max(0, last[e][1] - first[e][1]) for e in first if last[e][0] > first[e][0]]
+    return round(sum(adv) / (t1 - t0), 3) if adv else None
+
+
 def shots_static_run(sd: Path) -> dict | None:
     """A QA hint, never a verdict (levi 22:56): the longest run of consecutive cadence shots with one image sha256 (the
     shot row's own hash, lvdc next stack on), its span, and the shots in runs of >= SHOTS_STATIC_MIN; hint True at such a
-    run. None for sessions whose shot rows carry no hash (older builds: check.json unchanged)."""
+    run. It means the IMAGE was static (brad / levi 23:06); the longest run's kind splits it by the player's presented
+    frames over the run (presented_rate): >= STATIC_PF_RATE_MIN / s -> source_still (the player kept presenting a still
+    source), below -> player_frozen, no rvfc rows -> unknown. The reader's decoded-mad content_static is the flag of
+    record. None for sessions whose shot rows carry no hash (older builds: check.json
+    unchanged). Times: t_decide, else the row's ts."""
     idx = sd / "shots" / "index.jsonl"
     if not idx.exists():
         return None
@@ -1124,9 +1155,15 @@ def shots_static_run(sd: Path) -> dict | None:
     if cur:
         runs.append(cur)
     best = max(runs, key=len)
-    t = lambda r: r.get("t_decide") or r.get("ts")          # noqa: E731
-    return {"rule": f"levi 22:56: >= {SHOTS_STATIC_MIN} consecutive cadence shots, one image sha256 (QA hint only)",
-            "longest": len(best), "from_ts": t(best[0]), "to_ts": t(best[-1]),
+    t = lambda r: r.get("t_decide") if r.get("t_decide") is not None else r.get("ts")      # noqa: E731
+    rate = presented_rate(sd, float(t(best[0])), float(t(best[-1]))) if len(best) > 1 else None
+    kind = None if len(best) < SHOTS_STATIC_MIN else ("unknown" if rate is None else
+                                                      "source_still" if rate >= STATIC_PF_RATE_MIN else "player_frozen")
+    return {"rule": f"levi 22:56 / 23:06: >= {SHOTS_STATIC_MIN} consecutive cadence shots, one image sha256 = the image "
+                    f"static (QA hint only); kind by the presented frames over the run (>= {STATIC_PF_RATE_MIN} / s: "
+                    "source_still, else player_frozen)",
+            "longest": len(best), "from_ts": t(best[0]), "to_ts": t(best[-1]), "kind": kind,
+            "presented_fps_over_run": rate,
             "runs_ge_min": sum(1 for x in runs if len(x) >= SHOTS_STATIC_MIN),
             "shots_in_runs_ge_min": sum(len(x) for x in runs if len(x) >= SHOTS_STATIC_MIN),
             "cadence_shots": len(rows), "hint": len(best) >= SHOTS_STATIC_MIN}

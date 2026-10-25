@@ -39,6 +39,31 @@ def test_moving_content_is_no_hint_and_old_rows_are_untouched():
         _index(d, [{"reason": "cadence", "t_decide": float(k)} for k in range(10)])     # an older build: no hash
         assert C.shots_static_run(Path(d)) is None
     assert C.shots_static_run(Path("/nonexistent")) is None
+    with tempfile.TemporaryDirectory() as d:                                              # rows with ts only
+        _index(d, [{"reason": "cadence", "ts": 10.0 * k, "sha256": "s"} for k in range(6)])
+        r = C.shots_static_run(Path(d))
+    assert r["hint"] and r["from_ts"] == 0.0 and r["to_ts"] == 50.0 and r["kind"] == "unknown"      # no rvfc rows
+    assert "the image static" in r["rule"]
+
+
+def _rvfc(d, rows):
+    (Path(d) / "rvfc_frames.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+
+def test_the_kind_splits_a_source_still_from_a_frozen_player():
+    """levi 23:06: presented frames advancing over the run -> source_still; flat -> player_frozen (rvfc ts: page ms)."""
+    shots = [{"reason": "cadence", "ts": 1000.0 + 60 * k, "sha256": "s"} for k in range(6)]
+    for pf_step, want in ((30 * 60, "source_still"), (0, "player_frozen")):
+        with tempfile.TemporaryDirectory() as d:
+            _index(d, shots)
+            _rvfc(d, [{"ts": (1000.0 + 60 * k) * 1000.0, "pf": 100 + pf_step * k, "el": 1} for k in range(6)])
+            r = C.shots_static_run(Path(d))
+        assert r["kind"] == want, (want, r)
+    with tempfile.TemporaryDirectory() as d:                          # an element change: per element, summed
+        _index(d, shots)
+        _rvfc(d, [{"ts": 1000e3, "pf": 5, "el": 1}, {"ts": 1100e3, "pf": 3005, "el": 1},
+                  {"ts": 1200e3, "pf": 2, "el": 2}, {"ts": 1300e3, "pf": 3002, "el": 2}])
+        assert C.presented_rate(Path(d), 1000.0, 1300.0) == 20.0
 
 
 def test_wiring():
@@ -53,6 +78,7 @@ def test_wiring():
 def main() -> int:
     test_a_static_run_is_a_hint()
     test_moving_content_is_no_hint_and_old_rows_are_untouched()
+    test_the_kind_splits_a_source_still_from_a_frozen_player()
     test_wiring()
     print("test_shot_static: ok")
     return 0
