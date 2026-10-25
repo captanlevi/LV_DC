@@ -122,7 +122,7 @@ echo "Installing Python packages..."
     pytest          # the apply gate's second runner (levi t58 T-1: ops/apply_at_boundary.sh runs pytest too)
 
 # Optional: network_core (may not be needed on all machines).
-if ! "$VENV/bin/pip" install --quiet "network_core>=0.5.3" 2>/dev/null; then
+if ! "$VENV/bin/pip" install --quiet "network_core==0.8.1" 2>/dev/null; then
     warn "network_core install failed — unit_extractor features will be unavailable"
     ISSUES+=("network_core not installed — HTTP log processing unavailable")
 fi
