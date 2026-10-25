@@ -14,8 +14,13 @@ SUSTAIN_RUN_S = 5.0
 # (a covariate); the entry still counts as failed in startup_rates (levi)
 SLOW_START_MAX_STATE = 2
 NOT_LIVE_MARK = "Failed to navigate to a live"     # browser.py's start failure (yt / twitch: no live stream to enter)
-CLASS_PRECEDENCE = ("not_live", "login_wall", "interrupted", "startup_failure", "room_ended", "stream_ended", "player_dead",
-                    "player_dead_recovered", "player_frozen", "player_frozen_recovered", "qa_fail", "normal")
+# B9 (levi 23:22): browser.JOIN_TIMEOUT_PREFIX (one string, tested equal): a join on the session's first shaped state that
+# attached media but showed no first frame by the scaled cap. Its own class, after interrupted: never not_live, never
+# startup_failure (so never set aside by not_usable, never offline in ops' dry_offline), never counted
+JOIN_TIMEOUT_MARK = "join_timeout at state "
+CLASS_PRECEDENCE = ("not_live", "login_wall", "interrupted", "join_timeout", "startup_failure", "room_ended",
+                    "stream_ended", "player_dead", "player_dead_recovered", "player_frozen", "player_frozen_recovered",
+                    "qa_fail", "normal")
 # levi 2026-10-18 ruling (a) on the tt player_dead re-entry (peter's ti_37-39 read): the dead run that contains an
 # outcome-continue re-entry's t_nav is not the player_dead verdict / class; it is reported as recovered_dead_s with its
 # window (a covariate, labels unchanged). With no other FAIL the session reads this class: "normal" = (a), counts toward
@@ -382,7 +387,7 @@ def frozen_over_t(run_s: float | None, t: float | None) -> bool:
 def session_class(platform: str, verdict: str, abort_reason: str | None, entries: list[dict],
                   dead_run_s: float | None, dead_t: float | None, frozen_s: float | None, frozen_t: float | None,
                   recovered_dead: bool = False, recovered_frozen: bool = False) -> str:
-    """levi's precedence (Q am. 12): not_live > login_wall > interrupted > startup_failure > room_ended > stream_ended
+    """levi's precedence (Q am. 12): not_live > login_wall > interrupted > join_timeout (B9) > startup_failure > room_ended > stream_ended
     (boundary bundle item 3) > player_dead >
     (player_dead_recovered) > player_frozen > (player_frozen_recovered) > qa_fail > normal; the recovered classes only
     when their RECOVERED_*_CLASS switch is not "normal". Boundaries: dead at >= T, frozen at > T (Q am. 12). A start failure is not_live on yt / twitch (no live stream to enter) and a
@@ -395,6 +400,8 @@ def session_class(platform: str, verdict: str, abort_reason: str | None, entries
         return "login_wall"
     if ab.startswith(("signal", "interrupted")):
         return "interrupted"
+    if ab.startswith(JOIN_TIMEOUT_MARK):  # B9: a slow shaped join is data (its first state), never a channel problem
+        return "join_timeout"
     stream = next((e for e in entries if e.get("kind") == "stream"), None)
     if start_failed or (stream is not None and not stream.get("sustained_60s") and not slow_start_shaped(entries)):
         return "startup_failure"

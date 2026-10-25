@@ -26,6 +26,7 @@
    "not_live",
    "login_wall",
    "interrupted",
+   "join_timeout",
    "startup_failure",
    "room_ended",
    "stream_ended",
@@ -356,6 +357,17 @@
    "theater@1.0": "Q_720p",
    "window@1.0": "Q_720p"
   }
+ },
+ "join": {
+  "JOIN_BASE_S": 45.0,
+  "JOIN_BYTES": {
+   "tiktok": 6500000.0,
+   "twitch": 8500000.0,
+   "youtube": 5000000.0
+  },
+  "JOIN_CAP_S": 600.0,
+  "JOIN_TIMEOUT_MARK": "join_timeout at state ",
+  "JOIN_TIMEOUT_PREFIX": "join_timeout at state "
  },
  "low_state": {
   "_LOW_STATE_THRESHOLD": 3,

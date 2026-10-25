@@ -158,9 +158,13 @@ def _ossilate_ns(**stubs):
     src = (HERE / "exp.py").read_text()
     fns = [n for n in ast.parse(src).body if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
            and n.name in ("_ossilate", "_schedule")]                # W: _ossilate plays _schedule's changes
+    import threading
+    playing = threading.Event()
+    playing.set()                                                   # B9: the lever overlay runs once playing
     ns = {"asyncio": asyncio, "time": time, "dc_replace": dc_replace, "NetLabel": NetLabel, "SYSTEM_TICK": 0.0,
           "SHAPER_OPTS": {}, "WRAP_SEED": None, "SCHEDULE_WRAP": {}, "net_episode_generator": None,
-          "family_episode_generator": None, **stubs}
+          "family_episode_generator": None, "JOIN_FIRST": threading.Event(), "JOIN_PLAYING": playing, "JOIN": {},
+          **stubs}
     exec(compile(ast.Module(fns, []), "exp._ossilate", "exec"), ns)
     return ns
 

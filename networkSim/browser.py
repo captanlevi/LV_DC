@@ -1729,8 +1729,44 @@ def identity_check(platform: str, intended_url: str | None, page) -> dict:
     return rec
 
 
+# B9 (levi 23:21-23:22, peter's cost a57ef9b8): the join runs on the session's first shaped state, so its waits scale with
+# that state's rate: per URL max(45, 1.5 x B / rate), B the most bytes WC1's unshaped joins fetched before the first frame
+# (rounded up), capped at JOIN_CAP_S. A media-attached page with no first frame by then is a join_timeout (its own abort
+# reason, never "Failed to navigate to a live": not a channel problem, never offline, never set aside).
+JOIN_BASE_S = 45.0
+JOIN_CAP_S = 600.0
+JOIN_BYTES = {"youtube": 5.0e6, "twitch": 8.5e6, "tiktok": 6.5e6}
+JOIN_TIMEOUT_PREFIX = "join_timeout at state "
+
+
+def join_timeout_s(platform: str, rate_kbit: float | None) -> float:
+    """The per-URL join wait at a first state of `rate_kbit` (None: unshaped, the base)."""
+    if not rate_kbit or rate_kbit <= 0:
+        return JOIN_BASE_S
+    return round(min(JOIN_CAP_S, max(JOIN_BASE_S, 1.5 * JOIN_BYTES.get(platform, 8.5e6) / (rate_kbit * 125.0))), 1)
+
+
+class JoinTimeout(RuntimeError):
+    """B9: the page loaded and media was attached, but no first frame by the scaled cap."""
+
+    def __init__(self, state, seconds: float, detail: dict | None = None):
+        super().__init__(f"{JOIN_TIMEOUT_PREFIX}{state} ({int(round(seconds))} s)")
+        self.detail = detail or {}
+
+
+_MEDIA_ATTACHED_JS = """
+(function() {
+    const v = document.querySelector('#movie_player video') || document.querySelector('video');
+    if (!v) return false;
+    return !!((v.currentSrc || v.srcObject) && (v.readyState >= 1 || v.networkState === 2 ||
+              (v.buffered && v.buffered.length > 0)));
+})()
+"""
+
+
 def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first_url: str | None = None,
-                      exclude: list[str] | None = None, record: dict | None = None, claim=None) -> str | None:
+                      exclude: list[str] | None = None, record: dict | None = None, claim=None,
+                      scale: float = 1.0, join_state=None) -> str | None:
     """Returns the list URL that delivered a playing live video (None if none did). claim(url), when given, is called with
     the channel as soon as it is picked (a given channel page before navigating; twitch's directory pick on the click),
     before the playback check (t58 N-2: the sibling claim)."""
@@ -1738,6 +1774,8 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
     Try each URL in LIVE_URLS[platform].  For directory/discovery pages,
     execute platform-specific JS to click into a live room.  Then kick play
     via JS and verify the video timestamp is actually advancing.
+    B9: every wait scales by `scale` (the first shaped state's join_timeout_s / JOIN_BASE_S); a URL whose page attached
+    media but showed no advancing video by its scaled deadline raises JoinTimeout (the walk stops: never re-picked).
     """
     urls = list(LIVE_URLS[platform])
     if first_url:
@@ -1750,13 +1788,13 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
         page.navigate(url)
         # Wait until location.href actually changes — _wait_for_load alone is not
         # enough because the old page may already be in readyState=complete.
-        nav_deadline = time.time() + 25
+        nav_deadline = time.time() + 25 * scale
         while time.time() < nav_deadline:
             current = page.eval("location.href") or ""
             if current.startswith(url[:30]):
                 break
             time.sleep(0.5)
-        _wait_for_load(page, timeout=15)
+        _wait_for_load(page, timeout=15 * scale)
 
         # For directory/discovery pages, click into the first live stream.
         # Twitch is a heavy SPA — wait for stream cards to render after load.
@@ -1769,7 +1807,7 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
             card_js = _CARD_READY_JS.get(platform)
             if card_js:
                 # Poll until at least one card link is visible (max 15s); the pick otherwise runs before the list renders
-                card_deadline = time.time() + 15
+                card_deadline = time.time() + 15 * scale
                 while time.time() < card_deadline:
                     if page.eval(card_js):
                         break
@@ -1789,7 +1827,7 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
                 clicked = page.eval(pick_js)
             if clicked:
                 print(f"[browser] Clicked into stream: {clicked}", flush=True)
-                _wait_for_load(page, timeout=15)
+                _wait_for_load(page, timeout=15 * scale)
 
         # Kick playback (handles Chrome autoplay block)
         page.eval(_CLICK_PLAY_JS)
@@ -1798,7 +1836,7 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
 
         # Verify the video is actually advancing (not just paused at t=0). Pre-roll ads are handled here too: the
         # ad watcher only starts after navigation, and a pre-roll would otherwise keep the content from advancing.
-        deadline = time.time() + timeout
+        deadline = time.time() + timeout * scale
         skip_js = _SKIP_AD_JS.get(platform, "null")
         while time.time() < deadline:
             if skip_js.strip() != "null":
@@ -1839,6 +1877,15 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
                 print(f"[browser] Video is playing on {platform}", flush=True)
                 return url
             time.sleep(2)
+        if time.time() >= deadline and join_state is not None:   # B9: media attached, no first frame by the cap
+            try:
+                attached = bool(page.eval(_MEDIA_ATTACHED_JS))
+            except Exception:
+                attached = False
+            if attached:
+                print(f"[browser] join timeout on {url}: media attached, no advancing video in {timeout * scale:.0f} s",
+                      flush=True)
+                raise JoinTimeout(join_state, timeout * scale, {"url": url})
 
     print(f"[browser] Could not find a playing live stream for {platform}", flush=True)
     return None
@@ -4101,6 +4148,10 @@ class BrowserSession:
                  first_url: str | None = None, geometry: str | None = None, room_rotation_s: float | None = None,
                  entry_quality: dict | None = None, tw_low_latency: str | None = None):
         self.platform = platform
+        # B9 (levi 23:21): set by exp.py's join before start(): the first shaped state and the waits' scale (1 = unshaped,
+        # the pre-B9 waits; join_state None never raises JoinTimeout)
+        self.join_scale: float = 1.0
+        self.join_state = None
         # levi 16:27: yt's ladder, record-only, one recorder for the session (re-entries included)
         self.yt_ladder: "YtLadderRecorder | None" = YtLadderRecorder() if platform == "youtube" else None
         # levi 18:36 (A): tt's codec / renditions, record-only, one recorder for the session
@@ -4324,10 +4375,12 @@ class BrowserSession:
                                               exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)
                                                              | set((cap or {}).get("capped") or [])),
                                               record=self.tw_pick,
-                                              claim=lambda u: publish_stream(self._session_dir, "twitch", u, "intent"))
+                                              claim=lambda u: publish_stream(self._session_dir, "twitch", u, "intent"),
+                                              scale=self.join_scale, join_state=self.join_state)
         else:
             nav_first = self.first_url
-            self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url)
+            self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
+                                              scale=self.join_scale, join_state=self.join_state)
         if not self.list_url:
             raise RuntimeError(f"Failed to navigate to a live {self.platform} stream")
         if self.platform != "tiktok" or self.first_url:          # tt unpinned: checked per try in _tt_choose_room
@@ -4553,9 +4606,10 @@ class BrowserSession:
                      "candidates": [], "tries": [], "choice": None, "sibling_excluded": sib,
                      **({"not_usable_excluded": na} if na else {})}
         self.tt_room_choice = rec
+        sc = self.join_scale                      # B9: the waits scale with the first shaped state
         page.navigate(ROOM_ROTATION_LIVE_URL)
-        _wait_for_load(page, timeout=15)
-        deadline = time.time() + 15
+        _wait_for_load(page, timeout=15 * sc)
+        deadline = time.time() + 15 * sc
         while time.time() < deadline and not page.eval(_CARD_READY_JS["tiktok"]):
             time.sleep(1)
         time.sleep(2)                                   # let the viewer counts render
@@ -4587,7 +4641,7 @@ class BrowserSession:
             # /live rendered as the LIVE feed (no room links; seen logged out): the old first-card / feed path, recorded,
             # then the same playing check and pre-roll
             rec["fallback"] = page.eval(_PICK_STREAM_JS["tiktok"])
-            _wait_for_load(page, timeout=15)
+            _wait_for_load(page, timeout=15 * sc)
             href = page.eval("location.href")
             if href and "/@" in href and _norm_room(href) not in set(recent):
                 order = [{"href": href, "viewers": None, "live_badge": None, "fallback": True}]
@@ -4599,8 +4653,8 @@ class BrowserSession:
             try:
                 if not c.get("fallback"):
                     page.navigate(c["href"])
-                    _wait_for_load(page, timeout=15)
-                ok, detail = _tt_confirm_playing(page, TT_QUICK_CONFIRM_S)
+                    _wait_for_load(page, timeout=15 * sc)
+                ok, detail = _tt_confirm_playing(page, TT_QUICK_CONFIRM_S * sc)
                 if ok and not c.get("fallback"):        # levi 00:09: the landed room is the picked one, else next
                     t["identity"] = idc = identity_check("tiktok", c["href"], page)
                     if idc["ok"] is False:
@@ -4615,6 +4669,11 @@ class BrowserSession:
                 ok, detail = False, {"dead": "error", "error": repr(exc)}
             t.update(ok=ok, detail=detail, t_done=time.time())
             rec["tries"].append(t)
+            if (not ok and self.join_state is not None and detail.get("dead") == "not_playing"
+                    and detail.get("has_video")):        # B9: media attached, no first frame by the scaled cap
+                rec["join_timeout"] = c["href"]
+                self._room_mismatch_next(rec)
+                raise JoinTimeout(self.join_state, TT_QUICK_CONFIRM_S * sc, {"room": c["href"]})
             print(f"[browser] tt room {c['href']} ({c['viewers']} viewers): {'OK' if ok else detail.get('dead')}", flush=True)
             if ok:
                 rec["choice"] = c["href"]

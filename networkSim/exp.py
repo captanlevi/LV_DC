@@ -53,6 +53,29 @@ PLATFORM_ABBREV = {
 
 CURRENT_NET_STAT : None | NetStat = None
 LEVER = None    # v3 B4 (lever.Lever): set in __main__ with --lever; _ossilate overlays its episodes on the drawn schedule
+# B9 (levi 23:21-23:22, shape before join): the shaper starts first and runs through the join. _ossilate's first apply
+# sets JOIN_FIRST (before navigation); the join thread (_join, __main__) then navigates on that shaped link, its waits
+# scaled to the first state (browser.join_timeout_s), and sets JOIN_PLAYING once playing. The lever overlay waits for
+# JOIN_PLAYING, so the lever's t0 is the first apply after playback starts (levi 23:21). The session ends at the
+# schedule's end: navigation + its length (the join counts inside it, levi 23:22). meta.json join records it.
+JOIN_FIRST = threading.Event()
+JOIN_PLAYING = threading.Event()
+JOIN: dict = {}
+JOIN_FIRST_WAIT_S = 120.0
+
+
+def join_record(t_first_apply: float | None, t_nav: float | None, t_playing: float | None,
+                scheduled_s: float | None) -> dict:
+    """levi 23:22: the join inside the session: join_s (navigation -> playing), the schedule seconds played while
+    playing (the schedule clock runs from the first apply, just before navigation), and the planned end."""
+    out: dict = {}
+    if t_nav is not None and t_playing is not None:
+        out["join_s"] = round(t_playing - t_nav, 3)
+    if t_first_apply is not None and scheduled_s is not None:
+        out["session_end_planned"] = round(t_first_apply + scheduled_s, 3)
+        if t_playing is not None:
+            out["schedule_played_s"] = round(max(0.0, scheduled_s - (t_playing - t_first_apply)), 3)
+    return out
 SYSTEM_TICK : float = 0.1
 
 # t53 --concurrent (orchestrate.py run_trio): the session's trio slot (trio_slots.Slot) and the make variables that put
@@ -367,7 +390,8 @@ async def _ossilate(
         seam = 1 if SCHEDULE_WRAP.get("seam_index") is not None and i_change == SCHEDULE_WRAP["seam_index"] else None
         if seam:
             SCHEDULE_WRAP["wrap_t"] = round(t_apply, 3)
-        ep = LEVER.active(t_apply) if LEVER is not None else None   # v3 B4: inside a lever episode only the rate changes
+        ep = (LEVER.active(t_apply) if LEVER is not None and JOIN_PLAYING.is_set()   # v3 B4; B9: t0 after playing
+              else None)                                                            # inside an episode only the rate changes
         if ep is not None:
             net_stat = dc_replace(net_stat, rate=LEVER.rate_for(ep, t_apply))
         _apply_net_stat(net_stat= net_stat)
@@ -379,6 +403,9 @@ async def _ossilate(
                      walk_step=net_stat.walk_step, apply_start=t_apply, apply="rate" if net_stat.walk_step else "slow",
                      lever=ep["id"] if ep is not None else None, seam=seam)
         )
+        if not JOIN_FIRST.is_set():         # B9: the session's first state is on the link before the join starts
+            JOIN.update(t_first_apply=round(t_apply, 3), first_state=net_stat.state, first_rate_kbit=net_stat.rate)
+            JOIN_FIRST.set()
         # restart §2: a change every 2 s, so the changes keep the schedule's own clock (deadline + duration); an apply's
         # time (make slow) and the tick's overshoot no longer add to the session per change
         deadline = (ts if deadline is None else deadline) + net_stat.duration
@@ -1022,8 +1049,86 @@ if __name__ == "__main__":
     # trio: every Chrome process stays in the slot's cgroup (Chrome moves its browser process into a systemd scope)
     sweeper = trio_slots.CgroupSweeper(SLOT, lambda: trio_slots.chrome_pid_of(SLOT)).start() if SLOT is not None else None
 
+    def _join(browser) -> None:
+        """B9 (levi 23:21-23:22): after the shaper's first apply, navigate on that shaped link (waits scaled to the first
+        state, browser.join_timeout_s), then the post-start records and the lever's rung read that ran after
+        browser.start() before B9. Any failure ends the session through abort_check: a JoinTimeout with its own reason
+        ("join_timeout at state <s> (<n> s)"), anything else as the pre-B9 "error: <type>: <msg>"."""
+        try:
+            if not JOIN_FIRST.wait(timeout=JOIN_FIRST_WAIT_S):
+                raise RuntimeError("B9: the shaper made no first apply before the join")
+            from browser import JOIN_BASE_S, join_timeout_s
+            per_url = join_timeout_s(browser.platform, JOIN.get("first_rate_kbit"))
+            browser.join_scale, browser.join_state = per_url / JOIN_BASE_S, JOIN.get("first_state")
+            JOIN.update(t_nav=round(time.time(), 3), per_url_timeout_s=per_url, scale=round(browser.join_scale, 3))
+            browser.start()
+            JOIN["t_playing"] = round(time.time(), 3)
+            JOIN_PLAYING.set()
+            if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
+                TRIO["socket_owner_start"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
+                # t58 (levi): the staged capture is writing, once playing; an empty capture never passes as a session
+                TRIO["capture_growth"] = {**trio_slots.capture_growing(staging), "at": time.time()}
+                session_meta.write(session_dir, concurrency=TRIO)
+                if not TRIO["capture_growth"]["ok"]:
+                    raise RuntimeError(f"capture not growing in {staging}: {TRIO['capture_growth']['sizes']}")
+            # Chrome's version while it surely answers (tw_43: refused at finish); finish falls back to it
+            session_meta.write(session_dir, chrome_start=session_meta.chrome_version(tries=3))
+            if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
+                try:
+                    dpms = subprocess.run(["xset", "dpms", "force", "off"], capture_output=True, text=True, timeout=10)
+                    rec = {"rc": dpms.returncode, "stderr": dpms.stderr.strip()[:200]}
+                except Exception as e:
+                    rec = {"rc": None, "error": repr(e)}
+                session_meta.write(session_dir, dpms_forced_off={**rec, "at": time.time()})
+            # the launched browser's argv once it is up (levi 13:44, the Cast fix's S3 reads the flag): the end read alone
+            # misses a browser already gone at finish (w10 yt_100096 / ti_100090: "no browser process"); record only
+            session_meta.write(session_dir, chrome_cmdline_start=session_meta.chrome_cmdline())
+            if LEVER is not None and browser is not None and LEVER.episodes:
+                # v3 B4 (levi 19:49 / 19:57 / 19:58): the lowest offered rung, read after playback started (browser.start
+                # returns then) and fixed ONCE for every episode: the first read here on the join thread; while only the
+                # fallback is known, retries every 5 s on a daemon thread until 2 s before the first onset (t0, the
+                # shaper's first apply after playing (B9, levi 23:21), comes after this). The shaper path never reads the
+                # player.
+                _lever_deadline = time.time() + LEVER.first_onset_s - 2      # <= t0 + first onset - 2
+
+                def _lever_read():
+                    try:
+                        r = browser._current_rung(0.0)
+                    except Exception as e:
+                        print(f"[lever] rung read failed: {e!r}"[:200], flush=True)
+                        return False
+                    if r and r.get("source") not in (None, "fallback"):     # the fix's time is taken after the read
+                        print(f"[lever] rate fix: {LEVER.fix_rate(r, time.time(), deadline=_lever_deadline)}", flush=True)
+                        return True
+                    return False
+                if not _lever_read():
+                    def _lever_retry():
+                        while time.time() < _lever_deadline and LEVER.rate is None:
+                            time.sleep(5)
+                            if _lever_read():
+                                return
+                    threading.Thread(target=_lever_retry, name="lever-rung", daemon=True).start()
+            JOIN["outcome"] = "playing"
+        except Exception as e:
+            from browser import JoinTimeout
+            jt = isinstance(e, JoinTimeout)
+            JOIN.update(outcome="join_timeout" if jt else "error", detail=getattr(e, "detail", None))
+            JOIN["abort"] = str(e) if jt else f"error: {type(e).__name__}: {e}"
+            print(f"[join] {JOIN['abort']}", flush=True)
+        finally:
+            try:
+                JOIN.update(join_record(JOIN.get("t_first_apply"), JOIN.get("t_nav"), JOIN.get("t_playing"),
+                                        (args.episodes * SCHEDULE["episode_s"]) if args.episodes else None))
+                session_meta.write(session_dir, join={"rule": "B9 (levi 23:21-23:22): the first schedule state before "
+                                                      "navigation; the join inside the session",
+                                                      **{k: v for k, v in JOIN.items() if k != "abort"},
+                                                      "abort": JOIN.get("abort")})
+            except Exception as e:
+                print(f"[join] meta write failed: {e!r}", flush=True)
+
     browser = None
     abort_reason = None
+    _join_t = None                       # B9: the join thread (auto mode)
     _display_start = None                 # set just before browser.start(); display_change reads it at the end
     try:
         # inside the try: a failed start (e.g. the channel is not live) still runs the finalise path below, which stops
@@ -1061,26 +1166,8 @@ if __name__ == "__main__":
             # --dpms-off this is the state before the forced off (dpms_forced_off holds the force-off's own record).
             _display_start = {**session_meta.display_state(), "dpms_off_requested": bool(args.dpms_off)}
             session_meta.write(session_dir, display_start=_display_start)
-            browser.start()
-            if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
-                TRIO["socket_owner_start"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
-                # t58 (levi): the staged capture is writing, once playing; an empty capture never passes as a session
-                TRIO["capture_growth"] = {**trio_slots.capture_growing(staging), "at": time.time()}
-                session_meta.write(session_dir, concurrency=TRIO)
-                if not TRIO["capture_growth"]["ok"]:
-                    raise RuntimeError(f"capture not growing in {staging}: {TRIO['capture_growth']['sizes']}")
-            # Chrome's version while it surely answers (tw_43: refused at finish); finish falls back to it
-            session_meta.write(session_dir, chrome_start=session_meta.chrome_version(tries=3))
-            if args.dpms_off:   # best effort: a failure is recorded, never fatal to the session
-                try:
-                    dpms = subprocess.run(["xset", "dpms", "force", "off"], capture_output=True, text=True, timeout=10)
-                    rec = {"rc": dpms.returncode, "stderr": dpms.stderr.strip()[:200]}
-                except Exception as e:
-                    rec = {"rc": None, "error": repr(e)}
-                session_meta.write(session_dir, dpms_forced_off={**rec, "at": time.time()})
-            # the launched browser's argv once it is up (levi 13:44, the Cast fix's S3 reads the flag): the end read alone
-            # misses a browser already gone at finish (w10 yt_100096 / ti_100090: "no browser process"); record only
-            session_meta.write(session_dir, chrome_cmdline_start=session_meta.chrome_cmdline())
+            _join_t = threading.Thread(target=_join, args=(browser,), name="join", daemon=True)
+            _join_t.start()                  # B9: it waits for the shaper's first apply, then navigates
         else:
             # Manual mode (default): wait for Chrome to be reachable, then hand off.
             from browser import _wait_for_cdp
@@ -1093,39 +1180,18 @@ if __name__ == "__main__":
             print("Press ENTER when the video is playing to start collection.")
             print("="*60 + "\n")
             input()
-
-        if LEVER is not None and browser is not None and LEVER.episodes:
-            # v3 B4 (levi 19:49 / 19:57 / 19:58): the lowest offered rung, read after playback started (browser.start
-            # returns then) and fixed ONCE for every episode: the first read here on the main thread; while only the
-            # fallback is known, retries every 5 s on a daemon thread until 2 s before the first onset (t0, the
-            # shaper's first apply, comes after this). The shaper path never reads the player.
-            _lever_deadline = time.time() + LEVER.first_onset_s - 2      # <= t0 + first onset - 2
-
-            def _lever_read():
-                try:
-                    r = browser._current_rung(0.0)
-                except Exception as e:
-                    print(f"[lever] rung read failed: {e!r}"[:200], flush=True)
-                    return False
-                if r and r.get("source") not in (None, "fallback"):     # the fix's time is taken after the read
-                    print(f"[lever] rate fix: {LEVER.fix_rate(r, time.time(), deadline=_lever_deadline)}", flush=True)
-                    return True
-                return False
-            if not _lever_read():
-                def _lever_retry():
-                    while time.time() < _lever_deadline and LEVER.rate is None:
-                        time.sleep(5)
-                        if _lever_read():
-                            return
-                threading.Thread(target=_lever_retry, name="lever-rung", daemon=True).start()
+            JOIN_PLAYING.set()                   # manual: the user joined before the shaper starts (as before B9)
         abort_reason = asyncio.run(experiment(
             episode_time_in_seconds=SCHEDULE["episode_s"],
             net_labels=net_labels,
             transition_dct=transition,
             forced_initial_state=args.initial_state,
             max_episodes=args.episodes,
-            abort_check=(lambda: browser.abort_reason) if browser is not None else None,
+            abort_check=(lambda: browser.abort_reason or JOIN.get("abort")) if browser is not None else None,
         ))
+        if _join_t is not None:              # B9: a failed or timed-out join ends the session with its own reason
+            _join_t.join(timeout=10)
+            abort_reason = abort_reason or JOIN.get("abort")
 
     except KeyboardInterrupt:
         print("\nInterrupted before collection started — finalising")

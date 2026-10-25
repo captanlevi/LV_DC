@@ -284,12 +284,16 @@ def merge(session_dir: Path, key: str, **fields) -> dict:
     return meta
 
 
+_WRITE_LOCK = __import__("threading").Lock()    # B9: exp.py's join thread writes beside the main thread
+
+
 def write(session_dir: Path, **fields) -> dict:
-    """Merge `fields` into session_dir/meta.json (creating it)."""
+    """Merge `fields` into session_dir/meta.json (creating it); one writer at a time (read-merge-write under a lock)."""
     p = session_dir / "meta.json"
-    meta = json.loads(p.read_text()) if p.exists() else {}
-    meta.update(fields)
-    p.write_text(json.dumps(meta, indent=1, default=str))
+    with _WRITE_LOCK:
+        meta = json.loads(p.read_text()) if p.exists() else {}
+        meta.update(fields)
+        p.write_text(json.dumps(meta, indent=1, default=str))
     return meta
 
 
