@@ -86,7 +86,8 @@ LIST_CHANGES: list[dict] = [
                  "(shots byte-identical across ~25 min, shagun 22:56)"},
     {"date": "2026-10-26", "change": "removed", "handle": "@everybodychillradio", "type": "music", "role": "primary",
      "rule": "static source (levi 22:56: a channel with static share > 0.5 in >= 2 sessions goes to rushi before the next "
-             "window; rushi: <PENDING, supervisor 03:16: prepared, not landed until rushi answers>); the music type's spare "
+             "window; rushi 2026-10-26: \"Agreed\" to the supervisor's \"drop it (static image over 3 sessions)\"); the "
+             "music type's spare "
              "is promoted only after its Addendum P live check",
      "evidence": "a source-side still on 3 of 3 v3 dry sessions (brad 90b35524, motion_dist_v3dry.json 7feb5fe8, "
                  "consecutive-frame MAD): W-B yt_100004 static share 1.00, WC0 yt_100004 0.99, WC1 yt_100004 1.00"},
