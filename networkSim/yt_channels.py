@@ -282,8 +282,13 @@ def static_reads(handle: str) -> list[dict]:
     return [c for c in LIST_CHANGES if c["change"] == "static_read" and c["handle"] == handle]
 
 
+STATIC_READ_PROVENANCE = ("reader", "sha", "file", "metric")   # brad 03:42: a committed read is citable
+
+
 def provisional(handle: str) -> bool:
-    """levi 03:29: a spare, or a spare promoted with "provisional": True, until a passing static read is committed."""
+    """levi 03:29: a spare, or a spare promoted with "provisional": True, until a passing static read is committed. Any
+    pass ends it for good (brad 03:42): a later static drift of a confirmed channel is the reader's >= 2-session
+    static-channel rule (to rushi), not this hold."""
     c = by_handle(handle)
     if c is None or not (c["role"] == "spare" or c.get("provisional")):
         return False
@@ -292,7 +297,9 @@ def provisional(handle: str) -> bool:
 
 def static_holds(data_dir: Path) -> dict[str, str]:
     """{handle: why} for the provisional channels the picker holds: a recorded static fail (paused, to rushi), or an
-    accepted session under data_dir with no static read committed yet (one session until its read)."""
+    accepted session under data_dir with no static read committed yet (one session until its read). data_dir is the
+    picker's own root: the trio's is <data>/_trio itself (orchestrate._pick: out = root), so its youtube/<session>
+    dirs count; any accepted session counts, dry or of record (levi 03:29: "its first collected session")."""
     started = accepted_starts(data_dir)
     out = {}
     for c in YT_CHANNELS:

@@ -121,6 +121,7 @@ def test_provisional_channels():
         assert Y.provisional(c["handle"]) == (c["role"] == "spare" or bool(c.get("provisional"))), c
     for r in (c for c in Y.LIST_CHANGES if c["change"] == "static_read"):     # every committed read is consistent
         assert r["result"] == ("pass" if r["static_share"] <= Y.STATIC_SHARE_MAX else "fail") and r["session"], r
+        assert all(r.get("provenance", {}).get(k) for k in Y.STATIC_READ_PROVENANCE), r      # brad 03:42: citable
     for r in map(json.loads, (HERE / "channel_checks" / "yt_live_checks.jsonl").read_text().splitlines()):
         assert {"ts", "handle", "state"} <= set(r) and r["state"] in ("live", "not_live", "unknown"), r
     sky, lofi = "@SkyofFairyTales", "@LofiGirl"
@@ -141,7 +142,9 @@ def test_provisional_channels():
             Y.next_channel(d)                                                    # the hold is in the pick record
             assert sky in Y.LAST_PICK["static_holds"]
             read = {"date": "2026-10-26", "change": "static_read", "handle": sky, "session": "WCx/youtube/yt_1",
-                    "static_share": 0.12, "result": "pass", "rule": "levi 03:29", "evidence": "test"}
+                    "static_share": 0.12, "result": "pass", "rule": "levi 03:29", "evidence": "test",
+                    "provenance": {"reader": "brad motion_dist", "sha": "5e336eee", "file": "motion_dist.json (7feb5fe8)",
+                                   "metric": "consecutive-frame MAD static share"}}
             Y.LIST_CHANGES.append(read)                                          # a pass ends provisional
             assert not Y.provisional(sky) and Y.static_holds(d) == {}
             assert Y.next_channel(d, exclude=only_spare)["handle"] == sky
@@ -160,6 +163,26 @@ def test_provisional_channels():
     finally:
         Y.LIST_CHANGES[:] = saved[0]
         Y.YT_CHANNELS[:] = saved[1]
+
+
+def test_provisional_hold_on_the_trio_layout():
+    """brad 03:42: the hold on the trio's layout, called as orchestrate._pick calls it (data_dir = <data>/_trio, the
+    trio's root): one accepted session under _trio/youtube holds the spare, of record or dry; _failed never counts."""
+    import record
+    sky = "@SkyofFairyTales"
+    only_spare = ({c["handle"] for c in Y.YT_CHANNELS if c["type"] != "music"}
+                  | {c["handle"] for c in Y.YT_CHANNELS if c["type"] == "music" and c["role"] == "primary"})
+    for conc in ({"mode": "trio", "record": True, "era": record.ERA}, {"mode": "trio", "record": False, "era": record.ERA}):
+        with tempfile.TemporaryDirectory() as d:
+            tr = Path(d) / "_trio"
+            meta(tr, "_failed/youtube/yt_100001", channel_handle=sky, started_at=1.0, concurrency=conc)
+            assert Y.static_holds(tr) == {}                                  # a failed session is not collected
+            assert Y.next_channel(tr, exclude=only_spare, select=record.is_record)["handle"] == sky
+            meta(tr, "youtube/yt_100002", channel_handle=sky, started_at=2.0, concurrency=conc)
+            assert sky in Y.static_holds(tr), conc
+            assert Y.static_holds(Path(d)) == {}      # the parent data root never sees trio sessions (as collected_counts)
+            Y.next_channel(tr, select=record.is_record)
+            assert sky in Y.LAST_PICK["static_holds"]
 
 @of_record
 def test_no_immediate_repeat_and_trio_excluded():
