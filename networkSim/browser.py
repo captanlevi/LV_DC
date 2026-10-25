@@ -4059,8 +4059,10 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
             tag = "" if reason == "cadence" else f"_{reason}"
             name = f"{int(ts * 1000)}_tick{tick_id if tick_id is not None else 'na'}{tag}.jpg"
             (shots_dir / name).write_bytes(data)
+            import hashlib                             # levi 22:56: the image's own hash (a static source: QA only)
             with open(index, "a") as fh:
                 fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
+                                     "sha256": hashlib.sha256(data).hexdigest(),
                                      "request": req if reason != "cadence" else None, "player": player,
                                      "viewport": viewport, "occlusion": occ, "video_cell_share": occ_share,
                                      "video_cell_rule": SHOT_VIDEO_CELL_RULE,

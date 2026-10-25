@@ -1093,6 +1093,45 @@ def probe_times(meta: dict) -> list[float]:
     return sorted(float(t) for t in ts if t is not None)
 
 
+SHOTS_STATIC_MIN = 5      # levi 22:56 (WC2 yt_100001, a source-side still): consecutive byte-identical cadence shots
+
+
+def shots_static_run(sd: Path) -> dict | None:
+    """A QA hint, never a verdict (levi 22:56): the longest run of consecutive cadence shots with one image sha256 (the
+    shot row's own hash, lvdc next stack on), its span, and the shots in runs of >= SHOTS_STATIC_MIN; hint True at such a
+    run. None for sessions whose shot rows carry no hash (older builds: check.json unchanged)."""
+    idx = sd / "shots" / "index.jsonl"
+    if not idx.exists():
+        return None
+    rows = []
+    for line in idx.read_text().splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if (r.get("reason") or "cadence") == "cadence":
+            rows.append(r)
+    if not any(r.get("sha256") for r in rows):
+        return None
+    runs, cur = [], []
+    for r in rows:
+        if cur and r.get("sha256") and r.get("sha256") == cur[-1].get("sha256"):
+            cur.append(r)
+        else:
+            if cur:
+                runs.append(cur)
+            cur = [r]
+    if cur:
+        runs.append(cur)
+    best = max(runs, key=len)
+    t = lambda r: r.get("t_decide") or r.get("ts")          # noqa: E731
+    return {"rule": f"levi 22:56: >= {SHOTS_STATIC_MIN} consecutive cadence shots, one image sha256 (QA hint only)",
+            "longest": len(best), "from_ts": t(best[0]), "to_ts": t(best[-1]),
+            "runs_ge_min": sum(1 for x in runs if len(x) >= SHOTS_STATIC_MIN),
+            "shots_in_runs_ge_min": sum(len(x) for x in runs if len(x) >= SHOTS_STATIC_MIN),
+            "cadence_shots": len(rows), "hint": len(best) >= SHOTS_STATIC_MIN}
+
+
 def menu_overlay_shots(sd: Path, meta: dict) -> list[str]:
     """The cadence shots within MENU_OVERLAY_S of a ladder probe (their file names): readers skip them."""
     probes = probe_times(meta or {})
@@ -1387,6 +1426,9 @@ def main() -> int:
     n_cad = shot_reasons.get("cadence", len(shot_files)) if shot_reasons else len(shot_files)
     shots = {"n": n_cad, "expected": exp_n, "share": (n_cad / exp_n) if exp_n else None, "by_reason": dict(shot_reasons),
              "menu_overlay": menu_overlay_shots(sd, meta)}
+    _static = shots_static_run(sd)                 # levi 22:56: QA hint only (absent on older builds' shot rows)
+    if _static is not None:
+        shots["static_run"] = _static
     # G3 ground truth (never features): player_stats.jsonl records; twitch records carrying the Video Stats overlay
     ps_n, ps_tw = 0, 0
     if (sd / "player_stats.jsonl").exists():
