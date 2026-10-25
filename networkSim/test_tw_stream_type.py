@@ -103,6 +103,28 @@ def test_absent_with_reason():
     assert m5.stream_type_overflow == 1
 
 
+def test_pending_ops_dropped_and_capped():
+    """brad (#11): a GQL request that never finishes (loadingFailed) leaves no pending op; the pending map is capped at
+    WATCH_LOG_MAX, oldest dropped first, counted in the record."""
+    m = B.MasterListener("ws://x")
+    send = lambda *a: 1
+    post = json.dumps({"operationName": "StreamMetadata", "variables": {"channelLogin": "c"}})
+    m.handle({"method": "Network.requestWillBeSent", "sessionId": "W",
+              "params": {"requestId": "9", "request": {"url": GQL, "postData": post}}}, send)
+    m.handle({"method": "Network.responseReceived", "sessionId": "W", "params": {"requestId": "9", "response": {"url": GQL}}}, send)
+    assert ("W", "9") in m._gql_ops and ("W", "9") in m._wanted
+    m.handle({"method": "Network.loadingFailed", "sessionId": None, "params": {"requestId": "9"}}, send)
+    assert ("W", "9") in m._gql_ops                                     # another session's request id: untouched
+    m.handle({"method": "Network.loadingFailed", "sessionId": "W", "params": {"requestId": "9", "canceled": True}}, send)
+    assert m._gql_ops == {} and m._wanted == {}
+    for k in range(B.WATCH_LOG_MAX + 5):
+        m.handle({"method": "Network.requestWillBeSent", "sessionId": None,
+                  "params": {"requestId": f"r{k}", "request": {"url": GQL, "postData": post}}}, send)
+    assert len(m._gql_ops) == B.WATCH_LOG_MAX and m.gql_ops_overflow == 5
+    assert (None, "r0") not in m._gql_ops and (None, "r4") not in m._gql_ops and (None, "r5") in m._gql_ops
+    assert m.tw_stream_type()["ops_overflow"] == 5
+
+
 def test_wired_into_meta():
     src = (HERE / "exp.py").read_text()
     assert "tw_stream_type=(browser._master.tw_stream_type()" in src
@@ -113,6 +135,7 @@ def test_wired_into_meta():
 def main() -> int:
     test_recorded_from_the_pages_own_gql()
     test_absent_with_reason()
+    test_pending_ops_dropped_and_capped()
     test_wired_into_meta()
     print("test_tw_stream_type: ok")
     return 0

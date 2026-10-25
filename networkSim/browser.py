@@ -2327,6 +2327,7 @@ class MasterListener:
         self.gql_errors = 0                        # ... whose parse raised
         self.gql_last_error: str | None = None
         self._gql_ops: dict = {}                   # (session, requestId) -> [(operationName, login)] from the request
+        self.gql_ops_overflow = 0                  # pending ops dropped at the WATCH_LOG_MAX cap (oldest first)
         self.stream_type_edges: list[dict] = []    # each operation's (login, stream id, type) read, on change
         self.stream_type_reads: dict[str, int] = {}   # operation -> reads that carried user.stream
         self.stream_type_overflow = 0
@@ -2350,6 +2351,12 @@ class MasterListener:
             send("Network.enable", {"maxTotalBufferSize": 4_000_000, "maxResourceBufferSize": 500_000}, prm.get("sessionId"))
         elif m == "Network.requestWillBeSent" and _TW_GQL_RE.search((prm.get("request") or {}).get("url", "")):
             self._gql_ops[(sid, prm.get("requestId"))] = self.gql_request_ops((prm.get("request") or {}).get("postData"))
+            while len(self._gql_ops) > WATCH_LOG_MAX:      # brad (#11): bounded; the oldest pending op goes first
+                self._gql_ops.pop(next(iter(self._gql_ops)))
+                self.gql_ops_overflow += 1
+        elif m == "Network.loadingFailed":                 # brad (#11): a cancelled / navigated-away request never finishes
+            self._gql_ops.pop((sid, prm.get("requestId")), None)
+            self._wanted.pop((sid, prm.get("requestId")), None)
         elif m == "Network.responseReceived" and _TW_GQL_RE.search((prm.get("response") or {}).get("url", "")):
             self._wanted[(sid, prm.get("requestId"))] = prm["response"]["url"]   # tw_stream_type: the page's own GQL
         elif m == "Network.responseReceived" and _USHER_RE.search((prm.get("response") or {}).get("url", "")):
@@ -2477,7 +2484,8 @@ class MasterListener:
                 "stream_id": pick["stream_id"] if pick else None, "reason": reason,
                 "changed": len({(e["login"], e["stream_id"], e["value"]) for e in same_op}) > 1,
                 "edges": edges, "reads_by_op": dict(self.stream_type_reads), "gql_bodies": self.gql_bodies,
-                "overflow": self.stream_type_overflow, "errors": self.gql_errors, "last_error": self.gql_last_error,
+                "overflow": self.stream_type_overflow, "ops_overflow": self.gql_ops_overflow,
+                "errors": self.gql_errors, "last_error": self.gql_last_error,
                 "rule": "record only: the page's own GQL responses (user.stream.type), bodies read via "
                         "Network.getResponseBody, no request of ours; value from the first typed StreamMetadata read"}
 
