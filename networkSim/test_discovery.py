@@ -89,10 +89,17 @@ def test_tt_discovers_in_its_own_tab_then_opens_the_room_by_url(monkeypatch):
     b, log = _session("tiktok", monkeypatch)
     pools = []
     monkeypatch.setattr(b, "_tt_pool", lambda page, sc: (pools.append(page.name), (list(cands), 0))[1])
+    monkeypatch.setattr(b, "_reset_for_session", B.BrowserSession._reset_for_session.__get__(b))   # the real reset
+    monkeypatch.setattr(B, "_ext_page", lambda: (None, None))
+    monkeypatch.setattr(B, "MediaListener", lambda *a, **k: type("L", (), {"start": lambda self: self})())
+    monkeypatch.setattr(B, "TtRoomListener", lambda *a, **k: type("L", (), {"start": lambda self: self})())
+    b._ws_url = "ws://x/devtools/page/S"
     rec = b.discover()
+    assert rec["refocused"] is True and ("session", "call", "Page.bringToFront") in log      # brad 08:37 (a)
+    log.append(("reset",))
     assert pools == ["disc"] and rec["kind"] == "tt /live" and rec["pool_size"] == 2 and rec["t_end"] >= rec["t_start"]
     assert _idx(log, lambda x: x == ("disc", "close")) < _idx(log, lambda x: x == ("reset",))     # (i), then the clear
-    assert not [x for x in log if x[0] == "session"]                  # the session page never loaded the list
+    assert not [x for x in log if x[:2] == ("session", "nav")]        # the session page never loaded the list
     room, order = b._tt_discovered
     assert room["discovery"].startswith("unshaped") and order[0]["href"].endswith("/@a/live")
     monkeypatch.setattr(B, "_tt_confirm_playing", lambda page, s, scale=1.0: (True, {}))

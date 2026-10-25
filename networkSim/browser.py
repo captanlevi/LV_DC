@@ -4509,6 +4509,12 @@ class BrowserSession:
         started. Then only the session page navigates."""
         if self.discovery.get("kind", "").startswith(("tt", "twitch")):
             time.sleep(DISCOVERY_SETTLE_S)        # the content script's last batch from the closed tab lands first
+            try:                                  # brad 08:37 (a): the discovery context had its own window; the
+                self._page.call("Page.bringToFront")            # session page is visible and focused again (a
+                self._page.call("Emulation.setFocusEmulationEnabled", {"enabled": True})   # hidden page stalls yt /
+                self.discovery["refocused"] = True             # throttles the extension's timer, as at _prepare)
+            except Exception as exc:
+                self.discovery["refocused"] = f"error: {exc!r}"[:200]
         # Clear any stale events from a previous killed/crashed session
         try:
             sw, tmp_tab = _ext_page()
