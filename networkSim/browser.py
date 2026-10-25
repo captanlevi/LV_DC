@@ -391,6 +391,31 @@ TT_PREROLL_S = 60
 TT_ENDED_FLAT_S = 5         # the ended banner counts only with no media appended and no playhead advance this long
 TT_AUTOPLAY_GRACE_S = 5     # a room is judged only after play was clicked and this long has passed
 TT_POOL_MIN, TT_POOL_SCROLLS = 30, 8   # scroll /live for more cards until this many candidates (supervisor: ti_10 had 7)
+DISCOVERY_SETTLE_S = 2.0    # levi 07:48: after the discovery tab closed, before the extension storage is cleared
+DISCOVERY_EMPTY_SHOT = "discovery_empty.png"   # the list page when it offered nothing (after one re-navigate)
+# levi 07:48: the list page's resources as the page saw them (resource timing; a failed fetch reads responseStatus 0)
+_PAGE_RESOURCES_JS = """
+JSON.stringify((() => { const e = performance.getEntriesByType('resource');
+  return {resources: e.length, status_0: e.filter(x => x.responseStatus === 0).length,
+          status_ge_400: e.filter(x => x.responseStatus >= 400).length}; })())
+"""
+
+
+def _discovery_tab() -> tuple[str | None, "CDPPage"]:
+    """A separate tab for the unshaped discovery (levi 07:48 (i): closed before the shaper's first apply): (target id,
+    page). The session page and its listeners never load the list page."""
+    req = urllib.request.Request(f"{CDP_BASE}/json/new?about:blank", method="PUT")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        t = json.loads(r.read())
+    return t.get("id"), CDPPage(t["webSocketDebuggerUrl"])
+
+
+def _close_discovery_tab(tid: str | None, page) -> None:
+    try:
+        page.close()
+    except Exception:
+        pass
+    _close_target(tid)
 
 _TT_CANDIDATES_JS = """
 (function() {
@@ -501,19 +526,20 @@ def recent_tw_channels(session_dir: Path | None, n: int = TW_RECENT_CHANNELS_N) 
     return sorted({_norm_channel(u) for _, u in recent if u and "twitch.tv/" in u and "/directory" not in u})
 
 
-def _pick_twitch_js(exclude: list[str]) -> str:
-    """Click the directory's first live card whose channel is not in `exclude`; returns {pick, candidates} as JSON."""
+def _pick_twitch_js(exclude: list[str], click: bool = True) -> str:
+    """Click the directory's first live card whose channel is not in `exclude`; returns {pick, candidates} as JSON.
+    click=False (levi 07:48, the unshaped discovery): read only; the channel is opened later by its URL."""
     return """
-(function(exclude) {
+(function(exclude, click) {
     const norm = (h) => (h || '').split('?')[0].replace(/\\/$/, '').toLowerCase();
     const links = [...document.querySelectorAll('a[data-a-target="preview-card-image-link"], a[data-a-target="preview-card-title-link"]')]
         .filter(a => a.offsetParent !== null && !/\\/(directory|videos|clip)\\//.test(a.href || ''));
     const cands = [...new Set(links.map(a => norm(a.href)))].filter(Boolean);
     const pick = cands.find(h => !exclude.includes(h)) || null;
-    if (pick) links.find(a => norm(a.href) === pick).click();
+    if (pick && click) links.find(a => norm(a.href) === pick).click();
     return JSON.stringify({pick: pick, candidates: cands.slice(0, 20)});
-})(%s)
-""" % json.dumps(exclude)
+})(%s, %s)
+""" % (json.dumps(exclude), json.dumps(bool(click)))
 
 
 # t56 (levi on peter's t37 facts): siblings never play the same yt channel, twitch channel or tt room at once. Each slot's
@@ -4230,6 +4256,10 @@ class BrowserSession:
         self.join_state = None
         self.join_rx = None                             # B9 D3: the slot's ingress byte counter (callable), when known
         self.join_cancel = threading.Event()            # B9 D2: set when the schedule ended with the join still running
+        self._prepared = False                          # levi 07:48: discover() ran the setup (unshaped) before the join
+        self.discovery: dict = {}                       # meta.join.discovery: its kind, times, pool / pick
+        self._tt_discovered = None                      # (tt_room_choice, try order) from the unshaped discovery
+        self._tw_discovered = None                      # the twitch directory pick from the unshaped discovery
         # levi 16:27: yt's ladder, record-only, one recorder for the session (re-entries included)
         self.yt_ladder: "YtLadderRecorder | None" = YtLadderRecorder() if platform == "youtube" else None
         # levi 18:36 (A): tt's codec / renditions, record-only, one recorder for the session
@@ -4321,6 +4351,44 @@ class BrowserSession:
         self._room_watcher: threading.Thread | None = None
 
     def start(self, cdp_ready_timeout: float = 30.0) -> None:
+        """The stream join (B9: on the shaped link). The setup runs here only when discover() did not run it first
+        (callers without the unshaped discovery: manual / tests); exp.py's auto mode calls discover() before the shaper."""
+        if not self._prepared:
+            self._prepare(cdp_ready_timeout)
+            self._reset_for_session()
+        self._join_nav()
+
+    def discover(self, cdp_ready_timeout: float = 30.0) -> dict:
+        """levi 07:48 (supervisor 07:48; WC3b r1 ti_100001: the /live list loaded on the shaped link at 1.3-1.6 Mbit, 0
+        candidates): room / channel DISCOVERY runs UNSHAPED, before the shaper's first apply, so which streams are offered
+        never depends on the state. The setup, then the platform's list page in a separate tab (tt /live; a twitch
+        directory first_url), CLOSED before this returns (i); the stream is opened afterwards by its direct URL on the
+        session page, never by a tile (ii). yt / a twitch channel / a tt room pin: a direct URL, nothing to discover.
+        The extension storage is cleared after the tab closed (its previews may tick). Raises when nothing is found: a
+        startup failure before any shaping. Recorded in self.discovery (meta.join.discovery), outside join_s."""
+        t0 = time.time()
+        if not self._prepared:
+            self._prepare(cdp_ready_timeout)
+        rec: dict = {"t_start": round(t0, 3)}
+        self.discovery = rec
+        try:
+            if self.platform == "tiktok" and not self.first_url:
+                rec["kind"] = "tt /live"
+                self._tt_discovered = self._tt_discover_rooms()
+                rec["pool_size"] = len(self._tt_discovered[1])
+            elif self.platform == "twitch" and self.first_url and "/directory/" in self.first_url:
+                rec["kind"] = "twitch directory"
+                self._tw_discovered = self._tw_discover_channel(self.first_url)
+                rec["pick"] = self._tw_discovered.get("pick")
+            else:
+                rec["kind"] = "none (a direct stream URL)"
+        finally:
+            rec.update(t_end=round(time.time(), 3), s=round(time.time() - t0, 3))
+        self._reset_for_session()
+        return rec
+
+    def _prepare(self, cdp_ready_timeout: float = 30.0) -> None:
+        self._prepared = True
         print("[browser] Waiting for Chrome CDP endpoint...", flush=True)
         if not _wait_for_cdp(cdp_ready_timeout):
             raise RuntimeError("Chrome CDP not available after %ds" % cdp_ready_timeout)
@@ -4398,10 +4466,14 @@ class BrowserSession:
         _set_download_dir(self._page, str(download_dir))
         print(f"[browser] Downloads → {download_dir}", flush=True)
 
+    def _reset_for_session(self) -> None:
+        """After the setup and any discovery (its tab closed): the extension storage cleared (a crashed session's
+        leftovers, and the discovery tab's preview ticks), this session's extension config set, the page's listeners
+        started. Then only the session page navigates."""
+        if self.discovery.get("kind", "").startswith(("tt", "twitch")):
+            time.sleep(DISCOVERY_SETTLE_S)        # the content script's last batch from the closed tab lands first
         # Clear any stale events from a previous killed/crashed session
         try:
-            with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
-                targets = json.loads(r.read())
             sw, tmp_tab = _ext_page()
             if sw is not None:
                 sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'], r))",
@@ -4423,8 +4495,13 @@ class BrowserSession:
                                     if self._session_dir else None).start()
         if self.platform == "tiktok":            # item #9: before any room navigation, so the first room/enter is read
             self._tt_room = TtRoomListener(self._ws_url).start()
+
+    def _join_nav(self) -> None:
+        """The stream join on the session page: a discovered tt room list tried by direct URL (else the old shaped
+        /live pick), a twitch channel (the discovered one by direct URL), a yt channel; then the post-entry records."""
         if self.platform == "tiktok" and not self.first_url:
-            self.list_url = self._tt_choose_room()
+            self.list_url = (self._tt_try_rooms(*self._tt_discovered) if self._tt_discovered is not None
+                             else self._tt_choose_room())
         elif self.platform == "twitch":
             if self.tw_low_latency:              # restart §8: before any twitch document, so the player starts in it
                 try:                             # never an abort: a failed set is recorded and the session goes on
@@ -4445,6 +4522,9 @@ class BrowserSession:
             self.tw_pick = {**({"sibling_excluded": sib} if sib else {}), **({"not_usable_excluded": na} if na else {}),
                             **({"cap_excluded": cap["capped"]} if cap and cap["capped"] else {})}
             first = self.first_url
+            if self._tw_discovered is not None:  # levi 07:48: the channel discovered unshaped, opened by its URL (ii)
+                self.tw_pick.update(self._tw_discovered)
+                first = self._tw_discovered["pick"]
             if first and "/directory/" not in first and _norm_room(first) in set(sib):
                 self.tw_pick["first_url_held_by_sibling"] = first     # t58 L-7: never the channel a sibling plays
                 first = None
@@ -4670,23 +4750,59 @@ class BrowserSession:
             if self.abort_reason is None:
                 self.abort_reason, self.abort_at = f"{kind} (reentry):{rest}", time.time()
 
-    def _tt_choose_room(self) -> str | None:
-        """tt: pick a live, playing room that no recent session used (see TT_* above); returns the list URL or None."""
-        page = self._page
-        sib = sibling_streams(self._session_dir, "tiktok")      # t56: a running sibling's room is never taken
-        import not_usable                        # trio rotation hygiene: 2 trio startup_failures set a room aside
+    def _tw_discover_channel(self, url: str) -> dict:
+        """levi 07:48: the twitch directory read in its own tab, unshaped and closed before the shaper's first apply: its
+        first live card whose channel is not recent / held by a sibling / set aside / capped (the exclusions the join
+        uses), NOT clicked; one re-navigate when it offers none, then the shot and the resources; none raises (a startup
+        failure before any shaping). The pick is claimed (t58 N-2) at once."""
+        import channel_cap, not_usable, record
+        sib = sibling_streams(self._session_dir, "twitch")
         troot = not_usable.trio_root_of(self._session_dir)
-        na = not_usable.set_aside(troot, "tiktok") if troot is not None else {}
-        import channel_cap, record               # the next boundary's cap (levi): a host at the cap is passed over
-        cap = channel_cap.cap_state(troot, "tiktok", record.counted_any_era)
-        self.channel_pick = cap
-        recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(sib) | set(na)
-                        | {_norm_room(k) for k in ((cap or {}).get("capped") or [])})
-        rec: dict = {"n_recent_sessions": TT_RECENT_ROOMS_N, "recent_excluded": recent, "min_viewers": TT_MIN_VIEWERS,
-                     "candidates": [], "tries": [], "choice": None, "sibling_excluded": sib,
-                     **({"not_usable_excluded": na} if na else {})}
-        self.tt_room_choice = rec
-        sc = self.join_scale                      # B9: the waits scale with the first shaped state
+        na = not_usable.set_aside(troot, "twitch") if troot is not None else {}
+        cap = channel_cap.cap_state(troot, "twitch", record.counted_any_era)
+        exclude = sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)
+                         | set((cap or {}).get("capped") or []))
+        rec: dict = {"directory": url, "excluded_recent": exclude, "discovery": "unshaped, own tab (levi 07:48)"}
+        tid, tp = _discovery_tab()
+        try:
+            res: dict = {}
+            for attempt in range(2):
+                tp.navigate(url)
+                _wait_for_load(tp, timeout=15)
+                deadline = time.time() + 15
+                while time.time() < deadline and not tp.eval(_CARD_READY_JS["twitch"]):
+                    time.sleep(1)
+                try:
+                    res = json.loads(tp.eval(_pick_twitch_js(exclude, click=False)) or "{}")
+                except Exception as exc:
+                    res = {"error": repr(exc)}
+                if res.get("candidates"):
+                    break
+                rec["renavigated"] = attempt == 0 or rec.get("renavigated", False)
+            if not res.get("candidates"):
+                try:
+                    rec["page_resources"] = json.loads(tp.eval(_PAGE_RESOURCES_JS) or "null")
+                except Exception as exc:
+                    rec["page_resources"] = {"error": repr(exc)[:200]}
+                rec["empty_shot"] = self._discovery_shot(tp)
+        finally:
+            _close_discovery_tab(tid, tp)
+        rec.update(candidates=res.get("candidates"), pick=res.get("pick"), error=res.get("error"))
+        self.tw_pick = {**(self.tw_pick or {}), **rec}
+        if not res.get("pick"):
+            raise RuntimeError(f"Failed to navigate to a live twitch stream (discovery: no live channel on {url}, "
+                               f"unshaped; {len(res.get('candidates') or [])} cards, all excluded or none)")
+        publish_stream(self._session_dir, "twitch", res["pick"], "intent")
+        return rec
+
+    def _tt_choose_room(self) -> str | None:
+        """tt: pick a live, playing room that no recent session used (see TT_* above); returns the list URL or None. The
+        discovery on the session page itself (the path before levi 07:48; exp.py's auto mode discovers unshaped first)."""
+        rec, order = self._tt_discover_rooms(self._page, self.join_scale)
+        return self._tt_try_rooms(rec, order)
+
+    def _tt_pool(self, page, sc: float) -> tuple[list[dict], int]:
+        """/live's room cards: navigate, wait for cards, scroll until TT_POOL_MIN / 2 stale reads / TT_POOL_SCROLLS."""
         page.navigate(ROOM_ROTATION_LIVE_URL)
         _wait_for_load(page, timeout=15 * sc)
         deadline = time.time() + 15 * sc
@@ -4709,6 +4825,63 @@ class BrowserSession:
             page.eval("window.scrollBy(0, Math.max(window.innerHeight, 800))")   # load more cards
             scrolls += 1
             time.sleep(1.5)
+        return cands, scrolls
+
+    def _discovery_shot(self, page) -> str | None:
+        """The list page when it offered nothing (levi 07:48): a PNG in the session dir; None if it failed."""
+        import base64
+        try:
+            shot = page.call("Page.captureScreenshot", {"format": "png", "fromSurface": True})
+            if self._session_dir and shot.get("data"):
+                (Path(self._session_dir) / DISCOVERY_EMPTY_SHOT).write_bytes(base64.b64decode(shot["data"]))
+                return DISCOVERY_EMPTY_SHOT
+        except Exception as exc:
+            print(f"[browser] discovery shot failed: {exc!r}", flush=True)
+        return None
+
+    def _tt_discover_rooms(self, page=None, sc: float = 1.0) -> tuple[dict, list[dict]]:
+        """tt's room list and its try order. page None (levi 07:48): the unshaped discovery in its own tab, closed here
+        before returning; an empty /live is re-navigated once, then shot and its resources recorded; no room raises (a
+        startup failure before any shaping). Returns (tt_room_choice record, ordered candidates)."""
+        own, tid = page is None, None
+        if own:
+            tid, page = _discovery_tab()
+        try:
+            return self._tt_discover_in(page, sc, own)
+        finally:
+            if own:
+                _close_discovery_tab(tid, page)
+
+    def _tt_discover_in(self, page, sc: float, own: bool) -> tuple[dict, list[dict]]:
+        sib = sibling_streams(self._session_dir, "tiktok")      # t56: a running sibling's room is never taken
+        import not_usable                        # trio rotation hygiene: 2 trio startup_failures set a room aside
+        troot = not_usable.trio_root_of(self._session_dir)
+        na = not_usable.set_aside(troot, "tiktok") if troot is not None else {}
+        import channel_cap, record               # the next boundary's cap (levi): a host at the cap is passed over
+        cap = channel_cap.cap_state(troot, "tiktok", record.counted_any_era)
+        self.channel_pick = cap
+        recent = sorted(set(recent_tt_rooms(self._session_dir)) | set(sib) | set(na)
+                        | {_norm_room(k) for k in ((cap or {}).get("capped") or [])})
+        rec: dict = {"n_recent_sessions": TT_RECENT_ROOMS_N, "recent_excluded": recent, "min_viewers": TT_MIN_VIEWERS,
+                     "candidates": [], "tries": [], "choice": None, "sibling_excluded": sib,
+                     **({"not_usable_excluded": na} if na else {})}
+        self.tt_room_choice = rec
+        if own:
+            rec["discovery"] = "unshaped, own tab (levi 07:48)"
+        cands, scrolls = self._tt_pool(page, sc)
+        if not cands and own:                     # levi 07:48 (2): one re-navigate, then the shot and the resources
+            rec["renavigated"] = True
+            try:
+                rec["page_resources_first"] = json.loads(page.eval(_PAGE_RESOURCES_JS) or "null")
+            except Exception as exc:
+                rec["page_resources_first"] = {"error": repr(exc)[:200]}
+            cands, scrolls = self._tt_pool(page, sc)
+            if not cands:
+                try:
+                    rec["page_resources"] = json.loads(page.eval(_PAGE_RESOURCES_JS) or "null")
+                except Exception as exc:
+                    rec["page_resources"] = {"error": repr(exc)[:200]}
+                rec["empty_shot"] = self._discovery_shot(page)
         rec["pool_size"], rec["pool_scrolls"] = len(cands), scrolls
         for c in cands:
             c["viewers"] = _parse_viewers(c.get("text", ""))
@@ -4724,9 +4897,21 @@ class BrowserSession:
             _wait_for_load(page, timeout=15 * sc)
             href = page.eval("location.href")
             if href and "/@" in href and _norm_room(href) not in set(recent):
-                order = [{"href": href, "viewers": None, "live_badge": None, "fallback": True}]
+                # own tab: the room is opened later by its URL (levi 07:48 (ii)), so it is a normal try then
+                order = [{"href": _norm_room(href) if own else href, "viewers": None, "live_badge": None,
+                          "fallback": not own, **({"feed_fallback": True} if own else {})}]
         print(f"[browser] tt rooms: {len(cands)} candidates, {sum(1 for c in cands if c['recent'])} used in the last "
               f"{TT_RECENT_ROOMS_N} sessions", flush=True)
+        if own and not order:
+            raise RuntimeError("Failed to navigate to a live tiktok stream (discovery: no room on /live, unshaped, "
+                               "after a re-navigate)")
+        return rec, order
+
+    def _tt_try_rooms(self, rec: dict, order: list[dict]) -> str | None:
+        """The tries, on the session page: each room opened by its URL (B9: on the shaped link), confirmed playing, its
+        identity checked and its pre-roll passed; returns the list URL, None when none played."""
+        page, sc = self._page, self.join_scale
+        self.tt_room_choice = rec
         t_walk = time.time()
         for c in order[:TT_MAX_TRIES]:
             if self.join_state is not None and (time.time() - t_walk >= JOIN_CAP_S or self.join_cancel.is_set()):

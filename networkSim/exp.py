@@ -20,6 +20,7 @@ import subprocess
 import time
 from dataclasses import asdict, replace as dc_replace
 import json
+import shutil
 import signal
 import threading
 import argparse
@@ -70,7 +71,8 @@ JOIN_STOP_WAIT_S = 30.0
 def join_meta(join: dict) -> dict:
     """meta.json join: the rule beside the join's record (JOIN)."""
     return {"rule": "B9 (levi 23:21-23:22, 23:49): the first schedule state before navigation; the join inside the "
-                    "session", **{k: v for k, v in join.items() if k != "abort"}, "abort": join.get("abort")}
+                    "session; levi 07:48: discovery (the list page) unshaped before the first apply, in its own tab, "
+                    "outside join_s", **{k: v for k, v in join.items() if k != "abort"}, "abort": join.get("abort")}
 
 
 def join_final_write(write) -> bool:
@@ -271,6 +273,21 @@ def finalize_pcap(session_dir: Path) -> bool:
     except Exception as e:
         print(e)
         return False
+
+
+CHROME_LOG_COPY = "chrome_stderr.log"   # levi 07:48 (3): the slot's Chrome stderr, kept per session
+
+
+def copy_chrome_log(session_dir: Path, slot=None) -> dict:
+    """levi 07:48 (3) (WC3b r1 ti_100001: the per-slot chrome log was overwritten by the next round's Chrome): the
+    slot's Chrome stderr (Makefile CHROME_LOG: current_data/chrome<_tag>.log) copied into the session after Chrome
+    stopped. Never raises; the record goes to meta.json chrome_log."""
+    src = Path(__file__).resolve().parent.parent / "current_data" / f"chrome{'_' + slot.tag if slot is not None else ''}.log"
+    try:
+        shutil.copyfile(src, Path(session_dir) / CHROME_LOG_COPY)
+        return {"copied_from": str(src), "bytes": src.stat().st_size}
+    except OSError as e:
+        return {"copied_from": str(src), "error": repr(e)[:200]}
 
 
 def kill_chrome(chrome_profile: Path | None = None) -> None:
@@ -1209,6 +1226,13 @@ if __name__ == "__main__":
             # --dpms-off this is the state before the forced off (dpms_forced_off holds the force-off's own record).
             _display_start = {**session_meta.display_state(), "dpms_off_requested": bool(args.dpms_off)}
             session_meta.write(session_dir, display_start=_display_start)
+            # levi 07:48: discovery UNSHAPED, before the shaper starts (experiment() below makes the first apply): the
+            # list page in its own tab, closed again; a failure here ends the session before any shaping
+            try:
+                browser.discover()
+            finally:                         # written now too: a failed discovery has no join thread to write it
+                JOIN["discovery"] = dict(browser.discovery)
+                session_meta.write(session_dir, join=join_meta(JOIN))
             _join_t = threading.Thread(target=_join, args=(browser,), name="join", daemon=True)
             _join_t.start()                  # B9: it waits for the shaper's first apply, then navigates
         else:
@@ -1363,6 +1387,10 @@ if __name__ == "__main__":
             meta_extra["concurrency"] = TRIO
         session_meta.finish(session_dir, channel_url, **meta_extra)   # while Chrome is still up (records its version)
         kill_chrome(chrome_profile)
+        try:
+            session_meta.write(session_dir, chrome_log=copy_chrome_log(session_dir, SLOT))   # levi 07:48 (3)
+        except Exception as e:
+            print(f"chrome log copy failed: {e!r}")
         if SLOT is not None:   # trio: in-flight packets land, then the slot's filters go, then its capture stops
             time.sleep(1.0)
             TRIO["slot_detach"] = trio_slots.apply(trio_slots.slot_detach_cmds(SLOT), check=False)

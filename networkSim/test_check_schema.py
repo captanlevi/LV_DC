@@ -31,7 +31,7 @@ TOP = {"session": str, "platform": str, "verdict": str, "session_class": str, "e
        "lowest_rung": (dict, NONE), "decode_path": (dict, NONE), "decode_hevc": (dict, NONE),
        "template_note": (str, NONE), "entry_quality": (dict, NONE)}
 # keys present only when set (absent otherwise, so an unflagged session's check.json is unchanged): levi 87562afd (#12)
-OPTIONAL = {"qa_fail_cause": str}
+OPTIONAL = {"qa_fail_cause": str, "join_order": dict}     # each absent unless set (levi 07:48: join_order)
 LABELS = ["ad_span_seconds", "ad_spans_per_signal", "ad_spans_span_type_set", "ad_ticks_per_signal",
           "advancing_share_while_playing", "dead_clock_of_record", "dead_player_T_s", "dead_player_class_s",
           "dead_player_max_all_s", "dead_player_max_s",

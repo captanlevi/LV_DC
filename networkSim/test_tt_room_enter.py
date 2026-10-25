@@ -194,7 +194,10 @@ def test_malformed_body_counted():
 def test_wiring():
     src = (HERE / "browser.py").read_text()
     i_tt = src.index("self._tt_room = TtRoomListener(self._ws_url).start()")
-    assert i_tt < src.index("self.list_url = self._tt_choose_room()")            # before the room navigation
+    # before the room navigation: levi 07:48, the listener starts in _reset_for_session, after the unshaped discovery
+    # (its own tab) and before _join_nav opens the room on the session page
+    assert i_tt < src.index("    def _join_nav(self)") < src.index("self._tt_try_rooms(*self._tt_discovered)")
+    assert src.index("    def _reset_for_session(self)") < i_tt
     assert src.index("self._media = MediaListener(") < i_tt
     i_stop = src.index("            self._master.stop()\n")
     assert "self._tt_room.stop()" in src[i_stop:i_stop + 120]

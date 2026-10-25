@@ -859,6 +859,36 @@ def http_media_flows(sd: Path) -> set:
     return keys
 
 
+def join_order(sd: Path, meta: dict, net: list[dict]) -> dict | None:
+    """levi 07:48 (iii), reported: the unshaped discovery precedes the shaped join. From http_v2's media requests
+    (MEDIA_URL_PATTERNS or a video/* response_ct, by request_start), meta.join.discovery's end and the shaper's first
+    apply: the discovery tab's media (its previews), any media between the discovery's end and the first apply (0 when
+    the order holds) and whether the room's first media request came after the first apply. None before the rule (no
+    meta.join.discovery) or without the inputs."""
+    disc = (meta.get("join") or {}).get("discovery") or {}
+    t_disc = disc.get("t_end")
+    try:
+        t_apply = min(float(r.get("apply_start") or r["timestamp"]) for r in net if r.get("timestamp") is not None)
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(t_disc, (int, float)):
+        return None
+    p = sd / "http_v2.json"
+    try:
+        d = json.loads(p.read_text())
+    except Exception:
+        return {"discovery_end": t_disc, "first_apply": t_apply, "http_v2": "absent or unreadable"}
+    ts = sorted(float(r["request_start"]) for recs in (d.values() if isinstance(d, dict) else [])
+                for r in (recs if isinstance(recs, list) else []) if r.get("request_start") is not None
+                and (any(x in (r.get("request_url") or "").split("?")[0] for x in MEDIA_URL_PATTERNS)
+                     or str(r.get("response_ct") or "").startswith("video/")))
+    after = [t for t in ts if t >= t_apply]
+    return {"discovery_kind": disc.get("kind"), "discovery_end": t_disc, "first_apply": t_apply,
+            "discovery_media_requests": sum(1 for t in ts if t <= t_disc),
+            "media_between_discovery_and_apply": sum(1 for t in ts if t_disc < t < t_apply),
+            "room_first_media_after_apply_s": round(after[0] - t_apply, 3) if after else None}
+
+
 def dns_answers_names(sd: Path) -> dict[str, set]:
     """The session's dns_answers.json ({address: [names]}, LVQoE's form), lower-cased; {} when absent or unreadable. A
     trio session writes it from its run's default-class DNS (its own pcap holds none: the system resolver's queries are
@@ -1507,6 +1537,7 @@ def main() -> int:
     for fns in (fullscreen_not_screen(meta), fullscreen_player_lt_screen(meta), chrome_version_missing(meta)):
         if fns:
             sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
+    jo = join_order(sd, meta, E.read_net_labels(sd))     # levi 07:48 (iii): reported only
     import decode_path as DP
     _dp = meta.get("decode_path") or {}
     dp_hevc = DP.hevc_decision(_dp.get("gpu"), _dp.get("page"), (sreg.get("regime") or {}).get("played_codec")) if _dp else {}
@@ -1522,6 +1553,8 @@ def main() -> int:
            "decode_hevc": dp_hevc, "template_note": meta.get("template_note"), "entry_quality": eq}
     if cause:     # absent unless set: an unflagged session's check.json is byte-identical to before #12
         out["qa_fail_cause"] = cause
+    if jo is not None:   # absent before levi 07:48's discovery (no meta.join.discovery)
+        out["join_order"] = jo
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class}{', qa_fail_cause ' + cause if cause else ''})", ""] + [f"- {r}" for r in why] + \
         [f"- SUSPICIOUS (reported; verdict unchanged): {x}" for x in sreg["suspicious"]] + ["",
