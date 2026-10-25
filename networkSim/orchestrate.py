@@ -1447,14 +1447,14 @@ def stratum_apply(sd: dict | None, expect: str | None, force: str | None, trio_s
             "steering_off_by_stratum": bool(trio_steer)}, False, None
 
 
-NC_PIN_RX = r'"network_core==([0-9][0-9A-Za-z.]*)"'
+NC_PIN_RX = r'^NC_PIN=([0-9][0-9A-Za-z.]*)$'      # brad 02:51: setup.sh's one version literal (install + FATAL echo)
 
 
 def network_core_pin(setup_sh: Path | None = None) -> str | None:
     """The network_core version setup.sh pins (its one source; None when it pins none)."""
     import re
     try:
-        m = re.search(NC_PIN_RX, (setup_sh or Path(__file__).resolve().parents[1] / "setup.sh").read_text())
+        m = re.search(NC_PIN_RX, (setup_sh or Path(__file__).resolve().parents[1] / "setup.sh").read_text(), re.M)
     except OSError:
         return None
     return m.group(1) if m else None
@@ -1474,7 +1474,7 @@ def network_core_refusal(pin=None, installed=None) -> str | None:
     never re-run per worktree): a record run's network_core must be exactly setup.sh's pin, else refused before trio_up."""
     want, have = (pin or network_core_pin)(), (installed or network_core_installed)()   # looked up at call time
     if want is None:
-        return "--trio-record: setup.sh pins no network_core version (network_core==<v>); refused"
+        return "--trio-record: setup.sh pins no network_core version (NC_PIN=<v>); refused"
     if have != want:
         return (f"--trio-record: network_core {have or 'not installed'} in this venv, setup.sh pins {want} "
                 f"(pip install network_core=={want} from PyPI into the collector venv); refused before trio_up")
