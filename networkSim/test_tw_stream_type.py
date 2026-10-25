@@ -128,8 +128,10 @@ def test_pending_ops_dropped_and_capped():
 def test_wired_into_meta():
     src = (HERE / "exp.py").read_text()
     assert "tw_stream_type=(browser._master.tw_stream_type()" in src
-    bsrc = (HERE / "browser.py").read_text()
-    assert bsrc.count('send("Network.getResponseBody"') == 1             # one body-read site, shared with the master / playlists
+    import inspect
+    msrc = inspect.getsource(B.MasterListener)
+    assert msrc.count('send("Network.getResponseBody"') == 1             # MasterListener's one body-read site, shared with
+    #                                                                       the master / playlists (tt's TtRoomListener has its own)
 
 
 def main() -> int:
