@@ -72,7 +72,10 @@ def test_display_start_before_browser_start():
     src = (Path(__file__).resolve().parent / "exp.py").read_text()
     read = src.index('_display_start = {**session_meta.display_state(), "dpms_off_requested": bool(args.dpms_off)}')
     write = src.index("session_meta.write(session_dir, display_start=_display_start)")
-    start = src.index("\n            browser.start()\n", src.index("browser = BrowserSession("))   # the call, not a comment
+    # B9 (levi 23:21): browser.start() runs in the join thread (_join), started after the write
+    start = src.index("_join_t.start()", src.index("browser = BrowserSession("))
+    join = src[src.index("    def _join(browser) -> None:"):src.index("    browser = None\n")]
+    assert "\n            browser.start()\n" in join                  # the call, not a comment
     assert read < write < start, (read, write, start)
     assert src.count("display_start=") == 1, src.count("display_start=")
     assert src.count("session_meta.display_state()") == 2      # the start read and the end read (display_end)

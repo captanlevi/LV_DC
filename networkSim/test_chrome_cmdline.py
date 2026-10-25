@@ -46,8 +46,10 @@ def main() -> int:
         assert r["pid"] == 200 and r["title_rewritten"] is False, r
     # levi 13:44 (record only): exp reads the browser's argv once it is up as well as at finish (meta chrome_cmdline_start)
     src = (Path(__file__).resolve().parent / "exp.py").read_text()
-    i = src.index("chrome_cmdline_start=session_meta.chrome_cmdline()")
-    assert src.index("session_meta.write(session_dir, display_start=_display_start)") < i < src.index("asyncio.run(experiment("), i
+    # B9 (levi 23:21): read in the join thread (_join) once browser.start() returned
+    join = src[src.index("    def _join(browser) -> None:"):src.index("    browser = None\n")]
+    i = join.index("chrome_cmdline_start=session_meta.chrome_cmdline()")
+    assert join.index("\n            browser.start()\n") < i, i
     # levi 15:42 (record only): the kernel and the VA stack's package versions at session start (meta platform_stack)
     vers = {"intel-media-va-driver-non-free": "24.1.0+dfsg1-1ubuntu0.1", "libva2": "2.20.0-2build1"}
     fake = lambda cmd: types.SimpleNamespace(returncode=0 if cmd[-1] in vers else 1, stdout=vers.get(cmd[-1], ""))
