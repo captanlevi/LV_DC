@@ -24,6 +24,9 @@ Usage:
     # Just print the current balance without collecting anything
     python orchestrate.py --platform youtube --report-only
     python orchestrate.py --all-platforms --report-only
+
+    # Parse only (ops dry_window.sh): would this command line be refused? One JSON line, exit 0 / 2; see check_args
+    python orchestrate.py --check-args --batch youtube=1 --concurrent ...
 """
 import os
 import subprocess
@@ -1485,7 +1488,116 @@ def arg_refusal(args, environ) -> str | None:
     return None
 
 
+def batch_targets(spec: str) -> dict[str, int]:
+    """--batch 'p=n,...' -> {platform: sessions}; a malformed count raises ValueError (a real launch dies on it)."""
+    return {k.strip(): int(v) for k, v in (x.split("=") for x in spec.split(","))}
+
+
+def coverage_allowed_parse(spec: str) -> tuple[dict, str | None]:
+    """--coverage-allowed 'P=ID|ID,...' -> ({platform: [matrix ids]}, the refusal or None)."""
+    allowed = {k.strip(): v.split("|") for k, v in (x.split("=") for x in spec.split(","))}
+    from utils.shaping import PLATFORM_MATRICES
+    bad = {k: v for k, v in allowed.items() if k not in PLATFORM_MATRICES or set(v) - set(PLATFORM_MATRICES[k])}
+    return allowed, (f"unknown platform / matrix in --coverage-allowed: {bad}" if bad else None)
+
+
+def pin_geometry_refusal(spec: str, plat: str, pin: dict, yt_fullscreen: bool) -> str | None:
+    """A --trio-pin's geometry mode excluded in trio v1 (yt fullscreen only with --trio-yt-fullscreen): the refusal or None."""
+    import trio_slots
+    mode = (pin.get("geometry") or "").split(":")[0]
+    yt_key = plat == "youtube" or plat.startswith("yt")
+    if mode in trio_slots.EXCLUDED_GEOMETRIES and not (mode == "fullscreen" and yt_key and yt_fullscreen):
+        return f"--trio-pin {spec!r}: geometry mode excluded in trio v1 (yt fullscreen needs --trio-yt-fullscreen)"
+    return None
+
+
+# The main block's refusals that read live state, left out of --check-args (each is decided at launch):
+CHECK_ARGS_NOT_COVERED = (
+    "--expect-stratum: stratum_draw.draw over the slots log (checked as if the draw gives the expected stratum; a "
+    "mismatch or an unreadable log refuses only at launch)",
+    "--n-draw: n_draw.draw over the slots log (the era's frozen support / exclusions, --n-change-sign); its parse of "
+    "--n-support / --n-exclude is covered",
+    "--lever-params changed between its check and its re-read (a second read at launch)",
+    "everything after the parse stage: steering's coverage read, preflight, disk, offloads, slots, trio_up",
+)
+
+
+def _static_refusal(args, environ) -> str | None:
+    """The refusals of a real launch that need no live state, in the main block's order, through the same functions."""
+    r = arg_refusal(args, environ)
+    if r:
+        return r
+    if args.coverage_allowed:
+        _, r = coverage_allowed_parse(args.coverage_allowed)
+        if r:
+            return r
+    if not args.batch:
+        return None
+    batch_targets(args.batch)
+    for spec in args.trio_pin:
+        plat, pin = parse_pin(spec, args.trio_pin_reason)
+        r = pin_geometry_refusal(spec, plat, pin, bool(args.trio_yt_fullscreen))
+        if r:
+            return r
+    if args.expect_stratum or args.stratum_force:
+        lp = None
+        if args.lever_params:                       # arg_refusal loaded and sha-checked it
+            import lever_params as _lp_mod
+            lp = _lp_mod.load_params(args.lever_params)
+        sd = {"stratum": args.expect_stratum} if args.expect_stratum else None     # the draw, assumed to match
+        _, _, r = stratum_apply(sd, args.expect_stratum, args.stratum_force, bool(args.trio_steer), lp)
+        if r:
+            return r
+    if args.concurrent:
+        try:
+            if args.n_draw:
+                import n_draw
+                n_draw.parse_support(args.n_support)
+                n_draw.parse_exclude(args.n_exclude)
+            else:
+                import trio_slots
+                trio_slots.build_slots(trio_slots.parse_composition(args.slots))
+        except (ValueError, RuntimeError) as e:
+            return str(e)
+    return None
+
+
+def check_args(argv: list[str], environ) -> str | None:
+    """--check-args (ops dry_window.sh, 2026-10-25): a plan line's refusal before launch, else None. Runs the parse
+    (argparse's error line, as a real launch prints it last) and every refusal that needs no live state, through the
+    functions a real launch calls (_static_refusal); an exception a real launch would die on is reported as its
+    traceback's last line. No browser, shaper, tc, sudo, network, session dir, slot claim or write. Reads, as a real
+    launch's arg_refusal does: the --lever-params file, the data root's record marker, findmnt's volume UUID (C8).
+    CHECK_ARGS_NOT_COVERED lists what is left to the launch."""
+    import contextlib
+    import io
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        parser = build_parser()
+        parser.prog = "orchestrate.py"              # a real launch's prog (argv[0]'s basename), whoever imports this
+        try:
+            args = parser.parse_args(argv)
+        except SystemExit as e:
+            if e.code in (0, None):
+                return "-h / --help: prints the help, not a launch"
+            lines = [x for x in err.getvalue().splitlines() if x.strip()]
+            return lines[-1] if lines else f"argparse exit {e.code}"
+        try:
+            return _static_refusal(args, environ)
+        except Exception as e:                      # noqa: BLE001  a real launch's traceback ends with this line
+            return f"{type(e).__name__}: {e}"
+
+
+def check_args_main(argv: list[str], environ) -> int:
+    """orchestrate.py --check-args <a launch's args>: one JSON line, {"ok": true} (exit 0) or {"ok": false, "refusal"} (2)."""
+    r = check_args(argv, environ)
+    print(json.dumps({"ok": True} if r is None else {"ok": False, "refusal": r}), flush=True)
+    return 0 if r is None else 2
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--check-args"]:          # parse-only; check_args mirrors every static refusal below
+        sys.exit(check_args_main(sys.argv[2:], os.environ))
     parser = build_parser()
     args = parser.parse_args()
     _refused = arg_refusal(args, os.environ)
@@ -1498,11 +1610,9 @@ if __name__ == "__main__":
     TT_ROOM_ROTATION_S = args.tt_room_rotation
     MATRIX_RULE = args.matrix_rule
     if args.coverage_allowed:
-        COVERAGE_ALLOWED = {k.strip(): v.split("|") for k, v in (x.split("=") for x in args.coverage_allowed.split(","))}
-        from utils.shaping import PLATFORM_MATRICES
-        bad = {k: v for k, v in COVERAGE_ALLOWED.items() if k not in PLATFORM_MATRICES or set(v) - set(PLATFORM_MATRICES[k])}
-        if bad:
-            sys.exit(f"unknown platform / matrix in --coverage-allowed: {bad}")
+        COVERAGE_ALLOWED, _bad = coverage_allowed_parse(args.coverage_allowed)
+        if _bad:
+            sys.exit(_bad)
     if args.trio_stress:                                   # before any trio_slots import: the stress root, not data/_trio
         os.environ["LVDC_TRIO_DIR"] = "_trio_stress"
         import trio_slots
@@ -1511,17 +1621,15 @@ if __name__ == "__main__":
         TRIO_STRESS_EPISODES = args.episodes
         UPLINK_CAP_KBIT = args.uplink_cap_kbit
     if args.batch:
-        targets = {k.strip(): int(v) for k, v in (x.split("=") for x in args.batch.split(","))}
+        targets = batch_targets(args.batch)
         if args.session_range:                         # arg_refusal checked it
             SESSION_RANGE = tuple(float(x) for x in args.session_range.split(","))
         TRIO_RECORD = bool(args.trio_record)
         for spec in args.trio_pin:
             plat, pin = parse_pin(spec, args.trio_pin_reason)      # arg_refusal checked it
-            import trio_slots
-            mode = (pin.get("geometry") or "").split(":")[0]
-            yt_key = plat == "youtube" or plat.startswith("yt")
-            if mode in trio_slots.EXCLUDED_GEOMETRIES and not (mode == "fullscreen" and yt_key and args.trio_yt_fullscreen):
-                sys.exit(f"--trio-pin {spec!r}: geometry mode excluded in trio v1 (yt fullscreen needs --trio-yt-fullscreen)")
+            _pin_ref = pin_geometry_refusal(spec, plat, pin, bool(args.trio_yt_fullscreen))
+            if _pin_ref:
+                sys.exit(_pin_ref)
             TRIO_PINS[plat] = pin
         TRIO_YT_FULLSCREEN = bool(args.trio_yt_fullscreen)
         REPLAY = ({"seed": args.replay_schedule, "step_s": args.replay_step_s} if args.replay_schedule else None)
