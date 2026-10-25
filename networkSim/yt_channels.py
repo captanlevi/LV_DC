@@ -43,7 +43,6 @@ YT_CHANNELS: list[dict] = [
     {"handle": "@AlJazeeraEnglish", "type": "news", "owner": "Al Jazeera Media Network", "role": "primary"},
     {"handle": "@dwnews", "type": "news", "owner": "Deutsche Welle", "role": "primary"},
     {"handle": "@MonsterJam", "type": "sport", "owner": "Feld Entertainment (Monster Jam)", "role": "primary"},
-    {"handle": "@FUELTVMoto", "type": "sport", "owner": "FUEL TV", "role": "primary"},
     {"handle": "@RetroWorldVideos", "type": "gaming", "owner": "RetroWorld", "role": "primary"},
     {"handle": "@LofiGirl", "type": "music", "owner": "Lofi Girl", "role": "primary"},
     {"handle": "@everybodychillradio", "type": "music", "owner": "Everybody Chill Radio", "role": "primary"},
@@ -60,6 +59,7 @@ YT_CHANNELS: list[dict] = [
 # archive, never delete: channels taken off the list, as they were listed
 REMOVED_CHANNELS: list[dict] = [
     {"handle": "@Sypherpkvods", "type": "gaming", "owner": "SypherPK", "role": "primary"},
+    {"handle": "@FUELTVMoto", "type": "sport", "owner": "FUEL TV", "role": "primary"},
 ]
 # every list change after the 2026-10-16 verification (version = the number of changes)
 LIST_CHANGES: list[dict] = [
@@ -72,6 +72,12 @@ LIST_CHANGES: list[dict] = [
      "evidence": "channel_checks/yt_live_checks.jsonl: live at ts 1792231224.3 (2026-10-17T10:00Z), 1792255231.3 "
                  "(2026-10-17T16:40Z), 1792298394.1 (2026-10-18T04:39Z), 1792320384.0 (2026-10-18T10:46Z); span 24.8 h; "
                  "top 1440p; a different owner from the gaming primary @RetroWorldVideos"},
+    {"date": "2026-10-26", "change": "removed", "handle": "@FUELTVMoto", "type": "sport", "role": "primary",
+     "rule": "static source (rushi 01:1x, levi 22:56: a channel with static share > 0.5 in >= 2 sessions goes to rushi before "
+             "the next window; rushi: drop it); the sport type's spare is promoted only after its Addendum P live check",
+     "evidence": "a source-side still ('WSX Vancouver', a crowd image) on 2 of 2 dry sessions with the player presenting "
+                 "normally: W-B yt_100001 (decoded mad < 0.5 on 0.996 of frames, peter 2fc266a9) and WC2 yt_100001 "
+                 "(shots byte-identical across ~25 min, shagun 22:56)"},
 ]
 LEAVE_WINDOW_S = 48 * 3600
 LEAVE_NOT_LIVE = 3

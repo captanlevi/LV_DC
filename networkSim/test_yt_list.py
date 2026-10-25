@@ -27,8 +27,13 @@ def meta(d: Path, rel: str, **m):
 
 def test_list():
     handles = [c["handle"] for c in Y.YT_CHANNELS]
-    assert "@Sypherpkvods" not in handles and [c["handle"] for c in Y.REMOVED_CHANNELS] == ["@Sypherpkvods"]
+    assert "@Sypherpkvods" not in handles and "@FUELTVMoto" not in handles
+    assert [c["handle"] for c in Y.REMOVED_CHANNELS] == ["@Sypherpkvods", "@FUELTVMoto"]        # archived, in order
     assert any(c["handle"] == "@Sypherpkvods" and c["change"] == "removed" for c in Y.LIST_CHANGES)
+    fuel = [c for c in Y.LIST_CHANGES if c["handle"] == "@FUELTVMoto"]         # 2026-10-26: static source (rushi)
+    assert len(fuel) == 1 and fuel[0]["change"] == "removed" and "static source" in fuel[0]["rule"]
+    assert "W-B yt_100001" in fuel[0]["evidence"] and "WC2 yt_100001" in fuel[0]["evidence"]
+    assert [c["handle"] for c in Y.YT_CHANNELS if c["type"] == "sport" and c["role"] == "primary"] == ["@MonsterJam"]
     gaming = [c for c in Y.YT_CHANNELS if c["type"] == "gaming"]
     assert {(c["handle"], c["role"]) for c in gaming} == {("@RetroWorldVideos", "primary"), ("@BeanBoltTV", "primary")}
     assert any(c["handle"] == "@BeanBoltTV" and c["change"] == "promoted" for c in Y.LIST_CHANGES)    # 2026-10-18
@@ -80,14 +85,16 @@ def test_precheck_observations():
         meta(d, "_failed/youtube/yt_5", channel_handle="@dwnews", started_at=t0 + 13 * H, abort_reason=NL)
         new = Y.apply_leave_rule(d, t0 + 14 * H)
         assert [(r["handle"], r["not_live_at"]) for r in new] == [("@dwnews", [t0, t0 + 7 * H, t0 + 13 * H])], new
-        # a leave that leaves news with one owner puts its spare up for the live check
-        assert Y.spares_needing_promotion(Y.disk_leaves(d)) == ["@channelnewsasia"]
+        # a leave that leaves news with one owner puts its spare up for the live check (sport's is already up: 2026-10-26)
+        assert Y.spares_needing_promotion(Y.disk_leaves(d)) == ["@channelnewsasia", "@FuboSports"]
 
 
 def test_spares_needing_promotion():
-    assert Y.spares_needing_promotion([]) == []                                 # BeanBoltTV promoted 2026-10-18
-    two = [{"handle": "@MonsterJam"}, {"handle": "@FUELTVMoto"}]
-    assert Y.spares_needing_promotion(two) == ["@FuboSports"]
+    # BeanBoltTV promoted 2026-10-18; @FUELTVMoto removed 2026-10-26 (static source): sport has one primary owner left,
+    # so its spare is up for the Addendum P live check
+    assert Y.spares_needing_promotion([]) == ["@FuboSports"]
+    assert Y.spares_needing_promotion([{"handle": "@MonsterJam"}]) == ["@FuboSports"]
+    assert Y.spares_needing_promotion([{"handle": "@dwnews"}]) == ["@channelnewsasia", "@FuboSports"]
 
 
 def test_promotion():
@@ -164,7 +171,9 @@ def test_the_restart_pair_is_broken_by_the_seeded_tie():
     MonsterJam, FUELTVMoto and BeanBoltTV at 0, and list order drew AlJazeera + dwnews, the pair that opened every era.
     Under the full rule the floor keeps the 0-count channels, dwnews (drawn last in the stated run) goes behind the
     never-drawn four, and their seeded tie (seed 24) draws MonsterJam + AlJazeera. Restart §0: the trio's yt pick counts
-    identity over every era (record.counted_any_era), so the stated run's dwnews sessions count too: the same pair."""
+    identity over every era (record.counted_any_era), so the stated run's dwnews sessions count too: the same pair.
+    2026-10-26: @FUELTVMoto left the list (static source, rushi), so the tie is the other three; the second pick, with
+    MonsterJam out, is now the sport spare (no sport primary left eligible)."""
     import record
     with tempfile.TemporaryDirectory() as d:
         tr = Path(d) / "_trio"
@@ -179,44 +188,51 @@ def test_the_restart_pair_is_broken_by_the_seeded_tie():
                      concurrency={"mode": "trio", "record": True, "era": "t56-nslot-2026-10-19"})   # a stated run
         a = Y.next_channel(tr, select=record.counted_any_era)
         assert Y.LAST_PICK["seed"] == 24 and Y.LAST_PICK["stages"] == ["floor"] and Y.LAST_PICK["tied"] == sorted(
-            ["@AlJazeeraEnglish", "@MonsterJam", "@FUELTVMoto", "@BeanBoltTV"]), Y.LAST_PICK
+            ["@AlJazeeraEnglish", "@MonsterJam", "@BeanBoltTV"]), Y.LAST_PICK
         assert Y.LAST_PICK["n_record"] == 24 and Y.LAST_PICK["distinct_record"] == 6
         b = Y.next_channel(tr, exclude={a["handle"]}, select=record.counted_any_era)
-        assert (a["handle"], b["handle"]) == ("@MonsterJam", "@AlJazeeraEnglish"), (a, b)
+        # 2026-10-26: with @MonsterJam out, sport has no eligible primary left (@FUELTVMoto removed), so its spare substitutes
+    # (the spare rule, docstring above next_channel); before the removal this pick was @AlJazeeraEnglish
+    assert (a["handle"], b["handle"]) == ("@MonsterJam", "@FuboSports"), (a, b)
 
 
 @of_record
 def test_the_full_rule_forward():
     """levi 00133, simulated forward on an empty trio root (every draw a session of record): the floor gives the first
-    F = 10 draws to 10 distinct primaries, LRU then round-robins (3 each after 30 draws); a never-live channel cannot
-    hold the floor; the cap passes over a channel at max(2, ceil(2 / F x n_record)) while another is below it."""
+    F draws (F = the listed primaries) to F distinct primaries, LRU then round-robins (3 each after 3F draws); a never-live
+    channel cannot hold the floor; the cap passes over a channel at max(2, ceil(2 / F x n_record)) while another is below
+    it."""
+    import math
     import record
     rec = {"concurrency": {"mode": "trio", "record": True, "era": record.ERA}}
     prim = [c["handle"] for c in Y.YT_CHANNELS if c["role"] == "primary"]
+    F = len(prim)
     with tempfile.TemporaryDirectory() as d:
         tr = Path(d) / "_trio"
         drawn = []
-        for i in range(30):
+        for i in range(3 * F):
             c = Y.next_channel(tr, select=record.is_record)["handle"]
             drawn.append(c)
             meta(tr, f"youtube/yt_{100001 + i}", channel_handle=c, started_at=float(i), **rec)
-        assert sorted(drawn[:10]) == sorted(prim) and all(drawn.count(h) == 3 for h in prim), drawn
-        assert all(drawn[k] != drawn[k + 1] for k in range(29))
-    with tempfile.TemporaryDirectory() as d:                 # FUELTVMoto never live: the floor fills with the other 9
+        assert sorted(drawn[:F]) == sorted(prim) and all(drawn.count(h) == 3 for h in prim), drawn
+        assert all(drawn[k] != drawn[k + 1] for k in range(3 * F - 1))
+    never = prim[1]
+    with tempfile.TemporaryDirectory() as d:                 # one primary never live: the floor fills with the others
         tr = Path(d) / "_trio"
         drawn = []
-        for i in range(12):
-            c = Y.next_channel(tr, exclude={"@FUELTVMoto"}, select=record.is_record)["handle"]
+        for i in range(F + 2):
+            c = Y.next_channel(tr, exclude={never}, select=record.is_record)["handle"]
             drawn.append(c)
             meta(tr, f"youtube/yt_{100001 + i}", channel_handle=c, started_at=float(i), **rec)
-        assert len(set(drawn[:9])) == 9 and "@FUELTVMoto" not in drawn and Y.LAST_PICK["stages"] == ["lru"], drawn
-    with tempfile.TemporaryDirectory() as d:                 # the cap: 20 of record, cap max(2, ceil(4.0)) = 4
+        assert len(set(drawn[:F - 1])) == F - 1 and never not in drawn and Y.LAST_PICK["stages"] == ["lru"], drawn
+    with tempfile.TemporaryDirectory() as d:                 # the cap: 20 of record, cap max(2, ceil(2 / F x 20))
         tr = Path(d) / "_trio"
+        cap = max(2, math.ceil(2 / F * 20))
         for i in range(20):
-            h = prim[0] if i < 5 else prim[1 + (i % 9)]
+            h = prim[0] if i < cap else prim[1 + (i % (F - 1))]
             meta(tr, f"youtube/yt_{100001 + i}", channel_handle=h, started_at=-1000.0 if h == prim[0] else float(i), **rec)
         c = Y.next_channel(tr, select=record.is_record)
-        assert Y.LAST_PICK["cap"] == 4 and "cap" in Y.LAST_PICK["stages"] and c["handle"] != prim[0], Y.LAST_PICK
+        assert Y.LAST_PICK["cap"] == cap and "cap" in Y.LAST_PICK["stages"] and c["handle"] != prim[0], Y.LAST_PICK
         others = {c["handle"] for c in Y.YT_CHANNELS} - {prim[0]}
         assert Y.next_channel(tr, exclude=others, select=record.is_record)["handle"] == prim[0]  # alone: the cap yields
         prim_others = {h for h in prim if h != prim[0]}                # the other primaries out: their types' spares in,
