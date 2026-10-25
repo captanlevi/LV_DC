@@ -94,8 +94,10 @@ def test_tt_discovers_in_its_own_tab_then_opens_the_room_by_url(monkeypatch):
     monkeypatch.setattr(B, "MediaListener", lambda *a, **k: type("L", (), {"start": lambda self: self})())
     monkeypatch.setattr(B, "TtRoomListener", lambda *a, **k: type("L", (), {"start": lambda self: self})())
     b._ws_url = "ws://x/devtools/page/S"
+    b._page.evals = {"document.visibilityState": "visible"}
     rec = b.discover()
     assert rec["refocused"] is True and ("session", "call", "Page.bringToFront") in log      # brad 08:37 (a)
+    assert rec["visibility"] == "visible"                                                     # verified (08:38)
     log.append(("reset",))
     assert pools == ["disc"] and rec["kind"] == "tt /live" and rec["pool_size"] == 2 and rec["t_end"] >= rec["t_start"]
     assert _idx(log, lambda x: x == ("disc", "close")) < _idx(log, lambda x: x == ("reset",))     # (i), then the clear
@@ -143,6 +145,18 @@ def test_twitch_directory_is_read_not_clicked_and_opened_by_url(monkeypatch):
                      disc_evals={"preview-card-image-link": json.dumps({"pick": None, "candidates": []})})
     with pytest.raises(RuntimeError, match=r"Failed to navigate to a live twitch stream \(discovery"):
         b2.discover()
+
+
+def test_a_session_page_left_hidden_raises_before_any_shaping(monkeypatch):
+    """brad / levi 08:38: the refocus is verified by the real visibilityState; not "visible" raises (fail closed)."""
+    b, log = _session("tiktok", monkeypatch)
+    monkeypatch.setattr(b, "_tt_pool", lambda page, sc: ([{"href": "https://www.tiktok.com/@a/live", "text": "LIVE"}], 0))
+    monkeypatch.setattr(b, "_reset_for_session", B.BrowserSession._reset_for_session.__get__(b))
+    monkeypatch.setattr(B, "DISCOVERY_VISIBLE_WAIT_S", 0.0)
+    b._page.evals = {"document.visibilityState": "hidden"}
+    with pytest.raises(RuntimeError, match=r"the session page is 'hidden' after the discovery window closed"):
+        b.discover()
+    assert b.discovery["visibility"] == "hidden"
 
 
 def test_a_tab_that_does_not_close_raises_before_any_shaping(monkeypatch):

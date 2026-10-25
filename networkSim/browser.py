@@ -402,6 +402,7 @@ JSON.stringify((() => { const e = performance.getEntriesByType('resource');
 
 
 DISCOVERY_CLOSE_WAIT_S = 5.0   # brad / levi 08:18 (i): the discovery target must be gone from /json within this
+DISCOVERY_VISIBLE_WAIT_S = 3.0   # brad / levi 08:38: the session page must read visibilityState "visible" within this
 
 
 def _cdp_targets() -> list[dict]:
@@ -4515,6 +4516,19 @@ class BrowserSession:
                 self.discovery["refocused"] = True             # throttles the extension's timer, as at _prepare)
             except Exception as exc:
                 self.discovery["refocused"] = f"error: {exc!r}"[:200]
+            vis, deadline = None, time.time() + DISCOVERY_VISIBLE_WAIT_S   # brad / levi 08:38: VERIFIED, the real
+            while True:                           # visibilityState (emulated focus makes hasFocus() true regardless)
+                try:
+                    vis = self._page.eval("document.visibilityState")
+                except Exception as exc:
+                    vis = f"error: {exc!r}"[:120]
+                if vis == "visible" or time.time() >= deadline:
+                    break
+                time.sleep(0.25)
+            self.discovery["visibility"] = vis
+            if vis != "visible":                  # fail closed before any shaping, as tab_closed
+                raise RuntimeError(f"Failed to navigate to a live {self.platform} stream (discovery: the session page "
+                                   f"is {vis!r} after the discovery window closed, not visible)")
         # Clear any stale events from a previous killed/crashed session
         try:
             sw, tmp_tab = _ext_page()
