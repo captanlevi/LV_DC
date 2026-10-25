@@ -588,10 +588,11 @@ def _sh_out(cmd: str) -> str:
         return ""
 
 
-# #15 (supervisor 14:40; per-hole shaper-drop attribution, W-B tt holes): v3 trio sessions were reported whose
-# tc_stats / tc_fast rows all read "in": null, "out": null. Both samplers now read the slot's own tree as JSON
-# (`tc -s -j`), qdiscs as well as classes, through one reader that finds tc off PATH (/usr/sbin, /sbin) and falls back
-# to `sudo -n` (apply()'s runner) when the unprivileged read fails, and that keeps why a read failed (meta, tc_err).
+# #15 (supervisor 14:40; per-hole shaper-drop attribution, W-B tt holes; levi's ruling after brad's review of f35023d3):
+# TcSampler (1 Hz, never tc_fast) adds slot_tc, the slot's OWN qdisc and class counters per direction, read as JSON
+# (`tc -s -j`) through TcReader, which finds tc off PATH (/usr/sbin, /sbin) and falls back to `sudo -n` (apply()'s
+# runner) when the unprivileged read fails. JSON feeds ONLY slot_tc: the legacy fields (in / out / set_rates_kbit,
+# every tc_fast field) stay on the text path above, byte-identical.
 TC_FIELDS = ("bytes", "packets", "drops", "overlimits", "requeues", "backlog", "qlen")   # slot_tc's counters, in order
 TC_BIN_FALLBACKS = ("/usr/sbin/tc", "/sbin/tc")
 
@@ -692,13 +693,9 @@ def _parent(obj: dict) -> str | None:
 
 def tc_classes(text: str) -> dict:
     """{classid: {kind, parent, leaf, rate_kbit, bytes, packets, drops, overlimits, requeues, backlog, qlen}} from
-    `tc -s -j class show` (JSON prints a rate in bytes / s: x 8 / 1000 = kbit); text output falls back to
-    parse_classes (no requeues there)."""
-    j = _tc_json(text)
-    if j is None:
-        return {cid: {"kind": None, "parent": None, "leaf": None, "requeues": None, **rec}
-                for cid, rec in parse_classes(text).items()}
+    `tc -s -j class show` (JSON prints a rate in bytes / s: x 8 / 1000 = kbit); {} when the text is not JSON."""
     out = {}
+    j = _tc_json(text) or []
     for c in j:
         if not c.get("handle"):
             continue
@@ -709,28 +706,9 @@ def tc_classes(text: str) -> dict:
     return out
 
 
-def parse_qdiscs_text(text: str) -> dict:
-    """{handle: {kind, parent, <TC_FIELDS>}} from `tc -s qdisc show` text (the fallback when the output is not JSON)."""
-    out = {}
-    for blk in re.split(r"\n(?=qdisc )", text or ""):
-        head = re.match(r"qdisc (\S+) (\S+) (root|parent (\S+))", blk)
-        if not head:
-            continue
-        rec = {"kind": head.group(1), "parent": "root" if head.group(3) == "root" else head.group(4),
-               **{k: None for k in TC_FIELDS}}
-        st = re.search(r"Sent (\d+) bytes (\d+) pkt \(dropped (\d+), overlimits (\d+) requeues (\d+)\)\s*\n\s*"
-                       r"backlog (\d+)b (\d+)p", blk)
-        if st:
-            rec.update(zip(TC_FIELDS, map(int, st.groups())))
-        out[head.group(2)] = rec
-    return out
-
-
 def tc_qdiscs(text: str) -> dict:
-    """{handle: {kind, parent, <TC_FIELDS>}} from `tc -s -j qdisc show` (text output: parse_qdiscs_text)."""
-    j = _tc_json(text)
-    if j is None:
-        return parse_qdiscs_text(text)
+    """{handle: {kind, parent, <TC_FIELDS>}} from `tc -s -j qdisc show`; {} when the text is not JSON."""
+    j = _tc_json(text) or []
     return {q["handle"]: {"kind": q.get("kind"), "parent": _parent(q), **_counters(q)} for q in j if q.get("handle")}
 
 
@@ -755,25 +733,15 @@ def slot_tc_record(slot: Slot, iface: str, in_classes: str, out_classes: str, in
 
 
 SLOT_TC_PARTS = (("in", "qdisc"), ("in", "class"), ("in", "netem"), ("out", "class"), ("out", "netem"))
-_LEGACY_KEYS = ("rate_kbit", "bytes", "packets", "drops", "overlimits", "backlog", "qlen")
-
-
-def _legacy(rec: dict | None) -> dict | None:
-    """The pre-#15 "in" / "out" dict (parse_classes' keys) from a tc_classes row: rows keep their old keys."""
-    if not rec:
-        return None
-    if rec.get("bytes") is None:
-        return {"rate_kbit": rec.get("rate_kbit")}
-    return {k: rec.get(k) for k in _LEGACY_KEYS}
 
 
 class TcSampler:
     """L-A2, per second while the session runs: its own classes' bytes / drops / backlog (tc -s class: the
     shaper-bound indicator), every slot's set ingress rate, the interface's bytes; `iw` PHY rates every IW_EVERY
     samples (not goodput). A second whose summed set rates exceed the measured link capacity is flagged; the samples
-    go to <session>/tc_stats.jsonl, the summary to meta.json concurrency.tc. #15: each row also carries slot_tc (the
-    slot's own qdisc and class counters per direction, slot_tc_record) and, when a read failed, tc_err; "in" / "out"
-    keep their keys."""
+    go to <session>/tc_stats.jsonl, the summary to meta.json concurrency.tc. #15: after the legacy keys (unchanged,
+    the text path) each row adds slot_tc (slot_tc_record from four `tc -s -j` reads through `read`, a TcReader) and,
+    when one of those reads failed, tc_err."""
 
     def __init__(self, session_dir: Path, slot: Slot, iface: str = IFACE_DEFAULT, capacity_kbit: float | None = None,
                  sample_s: float = TC_SAMPLE_S, sh=_sh_out, net: Path = Path("/sys/class/net"), read=None):
@@ -791,30 +759,23 @@ class TcSampler:
         except OSError:
             return {}
 
-    def _read(self, kind: str, dev: str, errs: list) -> str:
-        text, _cpu, err = self.read(kind, dev)
-        if err:
-            errs.append(err)
-        return text
-
     def sample(self) -> dict:
-        s, errs = self.slot, []
-        reads = [self._read(k, d, errs) for k, d in (("class", s.ifb_in), ("class", self.iface),
-                                                      ("qdisc", s.ifb_in), ("qdisc", self.iface))]
-        sc = slot_tc_record(s, self.iface, *reads)
-        own_in = _legacy(sc["in"]["class"])
+        s = self.slot
+        own_in = parse_classes(self.sh(f"tc -s class show dev {s.ifb_in}")).get("1:10")
+        egress = parse_classes(self.sh(f"tc -s class show dev {self.iface}"))
         set_rates = {s.tag: (own_in or {}).get("rate_kbit")}
         for o in SLOTS.values():
             if o.tag != s.tag and (self.net / o.ifb_in).exists():
-                set_rates[o.tag] = (tc_classes(self._read("class", o.ifb_in, errs)).get("1:10") or {}).get("rate_kbit")
-        row = {"ts": time.time(), "in": own_in, "out": _legacy(sc["out"]["class"]), "set_rates_kbit": set_rates,
+                set_rates[o.tag] = (parse_classes(self.sh(f"tc class show dev {o.ifb_in}")).get("1:10") or {}).get("rate_kbit")
+        row = {"ts": time.time(), "in": own_in, "out": egress.get(s.egress_class), "set_rates_kbit": set_rates,
                "iface": self._link(self.iface)}
         if len(self.rows) % IW_EVERY == 0:
             row["iw"] = iw_bitrate(self.sh(f"iw dev {self.iface} link"))
         row["flagged"] = bool(self.capacity) and sum(v for v in set_rates.values() if v) > self.capacity
-        row["slot_tc"] = sc
-        if errs:
-            row["tc_err"] = errs
+        try:                                     # #15: never costs the legacy row
+            row.update(self.slot_tc())
+        except Exception as e:
+            row["tc_err"] = [f"slot_tc: {type(e).__name__}: {e}"[:200]]
         self.rows.append(row)
         try:
             with open(self.path, "a") as fh:
@@ -822,6 +783,23 @@ class TcSampler:
         except OSError:
             pass
         return row
+
+    def slot_tc(self) -> dict:
+        """#15: {slot_tc[, tc_err]}: the slot's own tree from `tc -s -j` (class, qdisc) x (its IFB, the interface)."""
+        errs, texts = [], []
+        for kind, dev in (("class", self.slot.ifb_in), ("class", self.iface), ("qdisc", self.slot.ifb_in),
+                          ("qdisc", self.iface)):
+            text, _cpu, err = self.read(kind, dev)
+            if err:
+                errs.append(err)
+            elif text.strip() and _tc_json(text) is None:
+                errs.append(f"{kind} {dev}: not JSON: {text.strip()[:80]}")
+            texts.append(text)
+        return {"slot_tc": slot_tc_record(self.slot, self.iface, *texts), **({"tc_err": errs} if errs else {})}
+
+    def _unread(self) -> dict:
+        return {f"{d}.{p}": sum(1 for x in self.rows if not ((x.get("slot_tc") or {}).get(d) or {}).get(p))
+                for d, p in SLOT_TC_PARTS}
 
     def _run(self):
         while not self._stop.is_set():
@@ -842,13 +820,9 @@ class TcSampler:
             self._t.join(timeout=5)
         return self.summary()
 
-    def _unread(self) -> dict:
-        return {f"{d}.{p}": sum(1 for x in self.rows if not ((x.get("slot_tc") or {}).get(d) or {}).get(p))
-                for d, p in SLOT_TC_PARTS}
-
     def summary(self) -> dict:
-        extra = {"rows": len(self.rows), "slot_tc_unread": self._unread(),
-                 **({"tc_read": self.read.record()} if hasattr(self.read, "record") else {})}
+        extra = {"slot_tc_unread": self._unread(), **({"tc_read": self.read.record()} if hasattr(self.read, "record")
+                                                       else {})}       # #15, additive
         r = [x for x in self.rows if (x.get("in") or {}).get("bytes") is not None]
         if not r:
             return {"samples": 0, "file": self.path.name, **extra}
@@ -866,14 +840,32 @@ FAST_TC_FIELDS = ("bytes", "packets", "drops", "overlimits", "backlog", "qlen")
 
 
 def _tc_classes(dev: str, timeout_s: float = 2.0) -> tuple[str, float]:
-    """`tc -s class show dev <dev>` text (exec, no shell): (stdout, child CPU s); empty on failure. Kept for callers of
-    the A18 reader; the samplers read through TcReader (#15)."""
-    rc, out, _err, cpu = _tc_exec([tc_bin(), "-s", "class", "show", "dev", dev], timeout_s)
-    return (out if rc == 0 else ""), cpu
-
-
-def _fast_list(rec: dict | None, fields=TC_FIELDS) -> list | None:
-    return [rec.get(k) for k in fields] if rec and rec.get("bytes") is not None else None
+    """`tc -s class show dev <dev>` (exec, no shell): (stdout, that child's own CPU seconds from os.wait4; brad / levi
+    21:27-21:28: the exact cost of the reads, never every child of exp.py). The child is reaped here by wait4, not by
+    Popen (whose returncode is then set from the status); a read over timeout_s (2 s) is killed and reads empty."""
+    try:
+        p = subprocess.Popen(["tc", "-s", "class", "show", "dev", dev], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True)
+    except Exception:
+        return "", 0.0
+    killer = threading.Timer(timeout_s, p.kill)
+    killer.start()
+    try:
+        out = p.stdout.read()
+    except Exception:
+        out = ""
+    finally:
+        killer.cancel()
+        try:
+            p.stdout.close()
+        except Exception:
+            pass
+    try:
+        _, status, ru = os.wait4(p.pid, 0)
+        p.returncode = os.waitstatus_to_exitcode(status)
+        return (out if p.returncode == 0 else ""), ru.ru_utime + ru.ru_stime
+    except ChildProcessError:
+        return out or "", 0.0
 
 
 class FastTcSampler:
@@ -887,18 +879,13 @@ class FastTcSampler:
     fixed grid (mono0 + k x FAST_TC_S); a tick that cannot keep the grid is skipped and counted, never bunched. Cost,
     measured: this thread's CPU (time.thread_time) plus each tc child's own CPU (os.wait4), over the wall time.
     Bound (levi 19:41 / 21:27): the SUM over a window's concurrent samplers <= 5 % of one core on chaos, else the
-    netlink fallback before a counted window. Runs in both arms of the instrumentation A/B (base truth).
-    #15: each tick also reads both devices' qdiscs (t_in_q / t_out_q, after the class reads) and the row carries slot_tc
-    {in: {qdisc, class, netem}, out: {class, netem}}, each a TC_FIELDS list or null; the first line's slot_tc names the
-    fields and devices. Four execs per tick (two before #15): the measured cost is in meta as before."""
+    netlink fallback before a counted window. Runs in both arms of the instrumentation A/B (base truth)."""
 
     def __init__(self, session_dir: Path, slot: Slot, iface: str = IFACE_DEFAULT, period_s: float = FAST_TC_S,
-                 read=None):
+                 read=_tc_classes):
         self.path = Path(session_dir) / "tc_fast.jsonl"
-        self.slot, self.iface, self.period = slot, iface, period_s
-        self.read = read if read is not None else TcReader()
+        self.slot, self.iface, self.period, self.read = slot, iface, period_s, read
         self.n = self.skipped = self.unread_in = self.unread_out = 0
-        self.unread = {f"{d}.{p}": 0 for d, p in SLOT_TC_PARTS}
         self.child_cpu = 0.0
         self.gaps: list[float] = []
         self._stop = threading.Event()
@@ -911,33 +898,28 @@ class FastTcSampler:
     def _m() -> float:
         return round(time.monotonic(), 4)
 
-    def _read(self, kind: str, dev: str) -> tuple[str, list]:
+    def _class(self, dev: str, cid: str) -> tuple[list | None, list]:
         t0 = self._m()
-        r = self.read(kind, dev)
+        r = self.read(dev)
+        text, cpu = r if isinstance(r, tuple) else (r, 0.0)
         t1 = self._m()
-        text, cpu = (r[0], r[1]) if isinstance(r, tuple) else (r, 0.0)
         self.child_cpu += cpu
-        return text, [t0, t1]
+        c = parse_classes(text).get(cid)
+        return ([c.get(k) for k in FAST_TC_FIELDS] if c and c.get("bytes") is not None else None), [t0, t1]
 
     def row(self) -> dict:
         s = self.slot
         t = self._m()
-        ci, t_in = self._read("class", s.ifb_in)
-        co, t_out = self._read("class", self.iface)
-        qi, t_in_q = self._read("qdisc", s.ifb_in)
-        qo, t_out_q = self._read("qdisc", self.iface)
-        sc = slot_tc_record(s, self.iface, ci, co, qi, qo)
-        return {"t": t, "in": _fast_list(sc["in"]["class"], FAST_TC_FIELDS), "t_in": t_in,
-                "out": _fast_list(sc["out"]["class"], FAST_TC_FIELDS), "t_out": t_out, "t_in_q": t_in_q,
-                "t_out_q": t_out_q,
-                "slot_tc": {d: {p: _fast_list(v) for p, v in sc[d].items() if p != "dev"} for d in ("in", "out")}}
+        cin, t_in = self._class(s.ifb_in, "1:10")
+        cout, t_out = self._class(self.iface, s.egress_class)
+        return {"t": t, "in": cin, "t_in": t_in, "out": cout, "t_out": t_out}
 
     def _run(self):
         w0, th0 = time.monotonic(), time.thread_time()
         nxt, last = time.monotonic(), None
         try:
             with open(self.path, "a", buffering=1 << 16) as fh:
-                fh.write(json.dumps({"anchor": self.anchor(), "slot_tc": self.layout()}) + "\n")
+                fh.write(json.dumps({"anchor": self.anchor()}) + "\n")
                 while not self._stop.is_set():
                     now = time.monotonic()
                     if now - nxt >= self.period:             # behind the grid: skip to the next slot, counted
@@ -948,12 +930,9 @@ class FastTcSampler:
                     try:
                         r = self.row()
                     except Exception:
-                        r = {"t": self._m(), "in": None, "t_in": None, "out": None, "t_out": None, "t_in_q": None,
-                             "t_out_q": None, "slot_tc": None}
+                        r = {"t": self._m(), "in": None, "t_in": None, "out": None, "t_out": None}
                     self.unread_in += r["in"] is None
                     self.unread_out += r["out"] is None
-                    for d, p in SLOT_TC_PARTS:
-                        self.unread[f"{d}.{p}"] += not ((r.get("slot_tc") or {}).get(d) or {}).get(p)
                     if last is not None:
                         self.gaps.append(m - last)
                     last = m
@@ -971,12 +950,6 @@ class FastTcSampler:
     def anchor(self) -> dict:
         return {"wall0": self.wall0, "mono0": self.mono0}
 
-    def layout(self) -> dict:
-        """What slot_tc's lists are: field order and the devices / class each part was read from."""
-        s = self.slot
-        return {"fields": list(TC_FIELDS), "in": {"dev": s.ifb_in, "qdisc": "root", "class": "1:10", "netem": "1:10"},
-                "out": {"dev": self.iface, "class": s.egress_class, "netem": s.egress_class}}
-
     def start(self) -> "FastTcSampler":
         self._t = threading.Thread(target=self._run, name="tc_fast", daemon=True)
         self._t.start()
@@ -992,9 +965,7 @@ class FastTcSampler:
                 "unread_in": self.unread_in, "unread_out": self.unread_out, "gap_p50_s": q(0.5), "gap_p99_s": q(0.99),
                 "gap_max_s": round(g[-1], 4) if g else None, "anchor": self.anchor(),
                 "clock": "instants monotonic; wall = wall0 + (m - mono0)",
-                **self._cost, "slot_tc": self.layout(), "slot_tc_unread": dict(self.unread),
-                **({"tc_read": self.read.record()} if hasattr(self.read, "record") else {})}
-
+                **self._cost}
 
 def shaper_bound(prev: dict | None, cur: dict | None) -> bool:
     """One interval shaper-bound, between two samples of a class's tc counters (prev, cur: parse_classes rows): its

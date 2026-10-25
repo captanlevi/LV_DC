@@ -29,18 +29,15 @@ def _cls(cid, by, backlog):
 
 def _rows(d):
     lines = [json.loads(l) for l in (Path(d) / "tc_fast.jsonl").read_text().splitlines()]
-    assert set(lines[0]) == {"anchor", "slot_tc"} and set(lines[0]["anchor"]) == {"wall0", "mono0"}   # #15: + slot_tc
+    assert set(lines[0]) == {"anchor"} and set(lines[0]["anchor"]) == {"wall0", "mono0"}
     return lines[0]["anchor"], lines[1:]
 
 
 def test_rows_instants_cost_and_unread():
-    n = {"in": 0, "out": 0, "q": 0}
+    n = {"in": 0, "out": 0}
 
-    def read(kind, dev):                                     # 10 ms per exec, 0.003 s of child CPU each
+    def read(dev):                                           # 10 ms per exec, 0.003 s of child CPU each
         time.sleep(0.01)
-        if kind == "qdisc":                                  # #15: the qdisc reads (none here)
-            n["q"] += 1
-            return ("[]", 0.003)
         if dev == YT.ifb_in:
             n["in"] += 1
             return (_cls("1:10", 1000 * n["in"], 1514), 0.003)
@@ -58,14 +55,13 @@ def test_rows_instants_cost_and_unread():
         assert r["t_in"][1] - r["t_in"][0] >= 0.009 and r["t_out"][1] - r["t_out"][0] >= 0.009
     assert rows[1]["out"] is None and rows[1]["in"] is not None
     assert sm["unread_out"] == 1 and sm["unread_in"] == 0
-    assert abs(sm["tc_child_cpu_s"] - round(0.003 * (n["in"] + n["out"] + n["q"]), 2)) <= 0.011   # the wait4 sum
-    assert all(r["t_out"][1] <= r["t_in_q"][0] <= r["t_in_q"][1] <= r["t_out_q"][0] for r in rows)
+    assert abs(sm["tc_child_cpu_s"] - round(0.003 * (n["in"] + n["out"]), 2)) <= 0.011         # the wait4 sum
     assert sm["anchor"] == anchor and abs(anchor["wall0"] - time.time()) < 60
     assert 0.03 < sm["gap_p50_s"] < 0.1 and "cpu_share_of_core" in sm
 
 
 def test_late_ticks_skip():
-    def slow(kind, dev):
+    def slow(dev):
         time.sleep(0.05)                                     # two reads slower than the period
         return _cls("1:10", 1, 0)
     with tempfile.TemporaryDirectory() as d:
