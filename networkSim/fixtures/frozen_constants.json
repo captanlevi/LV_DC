@@ -1666,6 +1666,8 @@
    9
   ],
   "SHOT_INTERVAL_S": 60.0,
+  "SHOT_VIDEO_CELL_MAX_UP": 3,
+  "SHOT_VIDEO_CELL_RULE": "levi 9048534c: video, or in-player up<=3 and bg false",
   "content_js": {
    "SHOT_EVENT_MIN_GAP_S": 10
   }

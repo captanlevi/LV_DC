@@ -2,7 +2,8 @@
 """#8' (levi 88410f0b, record-only; brad on WA3 tw_100003: twitch's "Stream Chat" panel drawn over the right of the
 <video> element): every shots/index.jsonl row carries a SHOT_GRID (16 x 9) document.elementFromPoint grid over
 player.rect, read in the same eval as player.rect (_SHOT_RECT_JS), as occlusion {grid, cells, legend} plus
-video_cell_share. The calibrations' _PLAYER_RECT_JS is unchanged. JS under node with a stub DOM; the writer driven with
+video_cell_share under levi 9048534c's on-video rule (the <video>, or an in-player element with up <= 3 and bg false),
+named per row as video_cell_rule. The calibrations' _PLAYER_RECT_JS is unchanged. JS under node with a stub DOM; the writer driven with
 a fake CDP page (no browser).
 
     python3 test_shot_occlusion.py        (exit 0 = pass)
@@ -29,7 +30,8 @@ except ImportError:
     sys.modules["websocket"] = m
 import browser as B  # noqa: E402
 
-# boxes: [{rect, id, cls, bg, parent: "player" | "root"}], topmost first; the <video> sits in player > container > video
+# boxes: [{rect, id, cls, bg, parent: "player" | "root"}], topmost first; the <video> sits in body > player > container >
+# video (deep: one more wrapper, container > wrap > video)
 STUB = r"""
 const cfg = JSON.parse(process.argv[2]);
 const root = {tagName: 'BODY', parentElement: null, className: ''};
@@ -37,7 +39,9 @@ const player = {tagName: 'DIV', id: 'player', className: 'video-player', parentE
 const cont = {tagName: 'DIV', className: 'container', parentElement: player};
 const box = (r, extra) => Object.assign({getBoundingClientRect: () => ({x: r[0], y: r[1], width: r[2], height: r[3]}),
                                          offsetParent: {}, clientWidth: r[2], clientHeight: r[3]}, extra);
-const v = cfg.video ? box(cfg.video, {tagName: 'VIDEO', className: '', parentElement: cont, bgc: 'rgba(0, 0, 0, 0)'}) : null;
+const wrap = {tagName: 'DIV', className: 'wrap', parentElement: cont};
+const v = cfg.video ? box(cfg.video, {tagName: 'VIDEO', className: '', parentElement: cfg.deep ? wrap : cont,
+                                      bgc: 'rgba(0, 0, 0, 0)'}) : null;
 const overlays = (cfg.overlays || []).map(o => box(o.rect, {tagName: 'DIV', id: o.id || '', className: o.cls || '',
     parentElement: o.parent === 'player' ? player : root, bgc: o.bg ? 'rgb(24, 24, 27)' : 'rgba(0, 0, 0, 0)'}));
 const inside = (e, x, y) => { const r = e.getBoundingClientRect();
@@ -73,7 +77,7 @@ def test_no_overlay():
 
 def test_chat_overlay():
     """tw_100003's shape: a chat panel over the element's right part (x >= 575 of 50..913) flags those cells with its
-    identifier, opaque and outside the player (up = 3: video -> container -> player -> body); share = the rest."""
+    identifier (up = 3: video -> container -> player -> body; opaque): not video under levi 9048534c (bg true)."""
     r = run(video=[50, 100, 863, 485],
             overlays=[{"rect": [575, 0, 705, 720], "id": "chat-room", "cls": "stream-chat  chat-shell extra", "bg": True}])
     occ = r["occlusion"]
@@ -86,20 +90,37 @@ def test_chat_overlay():
 
 
 def test_transparent_player_overlay_and_viewport_edge():
-    """a transparent click overlay inside the player (up = 2: video -> container -> player; bg False) is a distinct legend entry; cells whose centre
-    falls outside the viewport are "o"; a point with no element is "n"; no <video>: occlusion null."""
+    """a transparent click overlay inside the player (up = 2: video -> container -> player; bg False) keeps its own
+    legend entry and counts as VIDEO (levi 9048534c); cells whose centre falls outside the viewport are "o" and a point
+    with no element is "n" (neither is video); no <video>: occlusion null."""
     r = run(video=[0, 600, 640, 360], overlays=[{"rect": [0, 600, 320, 120], "cls": "click-handler", "parent": "player"}])
     occ = r["occlusion"]
     rows = [occ["cells"][16 * j:16 * (j + 1)] for j in range(9)]
     # the viewport ends at y = 720: rows with centre 600 + (j + 0.5) * 40 < 720 are j = 0..2
     assert rows[:3] == ["a" * 8 + "v" * 8] * 3 and rows[3:] == ["o" * 16] * 6, rows
     assert occ["legend"]["a"] == {"id": "div.click-handler", "up": 2, "bg": False}
-    assert occ["share"] == round(24 / 144, 4)
+    assert occ["share"] == round(48 / 144, 4)                  # 24 "v" + 24 "a" (transparent, in-player)
     assert run()["occlusion"] is None and run()["player"] is None
     # elementFromPoint returning null over the video's box: "n", not on the video, no legend entry
     r = run(video=[0, 0, 640, 360], null_rect=[0, 0, 640, 40])
     assert r["occlusion"]["cells"] == "n" * 16 + "v" * 128 and r["occlusion"]["legend"] == {}
     assert r["occlusion"]["share"] == round(128 / 144, 4)
+
+
+def test_on_video_rule_depth():
+    """levi 9048534c's bound: one more wrapper (video -> wrap -> container -> player -> body). A transparent layer on
+    the player is up 3 -> video; a transparent layer on body is up 4 -> not video; opaque at up 3 -> not video."""
+    assert B.SHOT_VIDEO_CELL_MAX_UP == 3 and B.SHOT_VIDEO_CELL_RULE == "levi 9048534c: video, or in-player up<=3 and bg false"
+    vid = [0, 0, 640, 360]
+    left, right = [0, 0, 320, 360], [320, 0, 320, 360]
+    r = run(deep=True, video=vid, overlays=[{"rect": left, "cls": "click", "parent": "player"},
+                                            {"rect": right, "cls": "veil", "parent": "root"}])
+    occ = r["occlusion"]
+    assert occ["cells"] == ("a" * 8 + "b" * 8) * 9, occ["cells"]
+    assert occ["legend"] == {"a": {"id": "div.click", "up": 3, "bg": False}, "b": {"id": "div.veil", "up": 4, "bg": False}}
+    assert occ["share"] == 0.5, occ
+    r = run(deep=True, video=vid, overlays=[{"rect": left, "cls": "panel", "parent": "player", "bg": True}])
+    assert r["occlusion"]["legend"]["a"] == {"id": "div.panel", "up": 3, "bg": True} and r["occlusion"]["share"] == 0.5
 
 
 def test_plain_rect_js_unchanged():
@@ -133,8 +154,9 @@ class _Page:
 
 
 def test_writer_rows():
-    """both triggers (content.js's request, the Python error_page onset) write occlusion and video_cell_share; share
-    lives on the row, not inside occlusion; a grid that threw leaves player intact and the share null."""
+    """both triggers (content.js's request, the Python error_page onset) write occlusion, video_cell_share and
+    video_cell_rule; share lives on the row, not inside occlusion; a grid that threw leaves player intact and the
+    share null."""
     occ = {"grid": [16, 9], "cells": ("v" * 10 + "a" * 6) * 9,
            "legend": {"a": {"id": "div#chat-room.stream-chat", "up": 3, "bg": True}}, "share": 0.625}
     for o, share in ((occ, 0.625), ({"error": "TypeError: x"}, None)):
@@ -160,6 +182,7 @@ def test_writer_rows():
         assert [x["reason"] for x in rows[:2]] == ["tier_change", "error_page"], rows
         for row in rows[:2]:
             assert row["video_cell_share"] == share, row
+            assert row["video_cell_rule"] == B.SHOT_VIDEO_CELL_RULE, row
             want = {k: v for k, v in o.items() if k != "share"}
             assert row["occlusion"] == want, row["occlusion"]
             assert row["player"]["rect"] == [50, 100, 863, 485] and row["viewport"]["dpr"] == 1.5
@@ -172,6 +195,7 @@ def main() -> int:
     test_no_overlay()
     test_chat_overlay()
     test_transparent_player_overlay_and_viewport_edge()
+    test_on_video_rule_depth()
     test_plain_rect_js_unchanged()
     test_writer_rows()
     print("test_shot_occlusion: ok")

@@ -3466,14 +3466,19 @@ _PLAYER_RECT_JS = _RECT_JS_TEMPLATE.replace("    /*GRID*/\n", "").replace("/*GRI
 #   "*" the legend is full (more distinct top elements than letters)
 # Note elementFromPoint skips pointer-events:none elements; a transparent full-player overlay that takes events (a
 # click handler) is the top element over the whole picture: "up" / "bg" let a reader tell it from a side panel.
-# occlusion = {grid, cells, legend} (null with no player; {"error"} if the grid threw: player.rect is unaffected);
-# video_cell_share = "v" cells / (cols x rows), on the row beside player.
+# occlusion = {grid, cells, legend} (null with no player; {"error"} if the grid threw: player.rect is unaffected).
+# video_cell_share (levi 9048534c's on-video rule, named on the row as video_cell_rule): a cell is VIDEO when its top
+# element is the chosen <video>, or lies in the player subtree with up <= SHOT_VIDEO_CELL_MAX_UP and bg false (a
+# transparent in-player layer: a click overlay); opaque (bg true or unreadable), outside the subtree (up > max or null)
+# and o / n cells are not video. Share = VIDEO cells / (cols x rows); the raw cells / legend are kept as recorded.
 SHOT_GRID = (16, 9)
+SHOT_VIDEO_CELL_MAX_UP = 3
+SHOT_VIDEO_CELL_RULE = "levi 9048534c: video, or in-player up<=3 and bg false"
 _SHOT_GRID_JS = """
     let occlusion = null;
     if (v) {
         try {
-            const r = v.getBoundingClientRect(), C = %d, R = %d, letters = 'abcdefghijklmpqrstuwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            const r = v.getBoundingClientRect(), C = %d, R = %d, MAXUP = %d, letters = 'abcdefghijklmpqrstuwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
             const anc = new Map();
             for (let e = v, k = 0; e; e = e.parentElement, k++) anc.set(e, k);
             const ident = el => {
@@ -3501,17 +3506,19 @@ _SHOT_GRID_JS = """
                 if (!el) { cells += 'n'; continue; }
                 if (el === v) { cells += 'v'; on++; continue; }
                 if (!codes.has(el)) {
-                    const code = codes.size < letters.length ? letters[codes.size] : '*';
-                    codes.set(el, code);
-                    if (code !== '*') legend[code] = {id: ident(el), up: up(el), bg: bg(el)};
+                    const code = codes.size < letters.length ? letters[codes.size] : '*', u = up(el), b = bg(el);
+                    codes.set(el, {code, video: u !== null && u <= MAXUP && b === false});   // levi 9048534c
+                    if (code !== '*') legend[code] = {id: ident(el), up: u, bg: b};
                     else legend['*'] = {id: 'legend full', up: null, bg: null};
                 }
-                cells += codes.get(el);
+                const c = codes.get(el);
+                cells += c.code;
+                if (c.video) on++;
             }
             occlusion = {grid: [C, R], cells, legend, share: Math.round(on / (C * R) * 1e4) / 1e4};
         } catch (e) { occlusion = {error: String(e).slice(0, 160)}; }
     }
-""" % SHOT_GRID
+""" % (*SHOT_GRID, SHOT_VIDEO_CELL_MAX_UP)
 # the shot loop's one eval: _PLAYER_RECT_JS plus the grid (the calibrations keep the plain _PLAYER_RECT_JS)
 _SHOT_RECT_JS = _RECT_JS_TEMPLATE.replace("/*GRID*/", _SHOT_GRID_JS.strip()).replace("/*GRID_OUT*/", ", occlusion")
 
@@ -3710,6 +3717,7 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
                 fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
                                      "request": req if reason != "cadence" else None, "player": player,
                                      "viewport": viewport, "occlusion": occ, "video_cell_share": occ_share,
+                                     "video_cell_rule": SHOT_VIDEO_CELL_RULE,
                                      "capture_px": capture_px, "shot_px": shot_px, "capture": capture,
                                      "screen_region": region, "crop": crop, "fullscreen": bool((pr_ or {}).get("fullscreen")),
                                      "origin_offset": off if capture == "x11" and not (pr_ or {}).get("fullscreen") else None,
