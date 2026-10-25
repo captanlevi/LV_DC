@@ -167,20 +167,21 @@ def test_tc_sampler():
     seq = iter([(0, 0, 0), (1514, 0, 125000), (0, 2, 250000), (0, 2, 375000)])
     state = {}
 
-    def sh(cmd):
-        if cmd == "tc -s class show dev lvi_yt1":
+    def read(kind, dev):                 # #15: TcReader's interface, (kind, dev) -> (text, cpu, err); text output here
+        if (kind, dev) == ("class", "lvi_yt1"):
             state["cur"] = next(seq)
             b, dr, by = state["cur"]
             return (f"class htb 1:10 root leaf 8001: prio 0 rate 5Mbit ceil 5Mbit burst 1600b cburst 1600b \n"
-                    f" Sent {by} bytes 10 pkt (dropped {dr}, overlimits 0 requeues 0) \n backlog {b}b 1p requeues 0\n")
-        if cmd == "tc class show dev lvi_tw1":
-            return "class htb 1:10 root leaf 8002: prio 0 rate 9Mbit ceil 9Mbit burst 1600b cburst 1600b \n"
-        return ""
+                    f" Sent {by} bytes 10 pkt (dropped {dr}, overlimits 0 requeues 0) \n backlog {b}b 1p requeues 0\n",
+                    0.0, None)
+        if (kind, dev) == ("class", "lvi_tw1"):
+            return "class htb 1:10 root leaf 8002: prio 0 rate 9Mbit ceil 9Mbit burst 1600b cburst 1600b \n", 0.0, None
+        return "", 0.0, None
     with tempfile.TemporaryDirectory() as d:
         net = Path(d) / "net"
         for dev in ("lvi_yt1", "lvi_tw1"):
             (net / dev).mkdir(parents=True)
-        s = T.TcSampler(Path(d), yt, capacity_kbit=12000.0, sh=sh, net=net)
+        s = T.TcSampler(Path(d), yt, capacity_kbit=12000.0, sh=lambda c: "", read=read, net=net)
         for _ in range(4):
             row = s.sample()
         assert row["set_rates_kbit"] == {"yt1": 5000.0, "tw1": 9000.0} and row["flagged"]
@@ -188,7 +189,7 @@ def test_tc_sampler():
         assert sm["samples"] == 4 and sm["shaper_bound_share"] == round(2 / 3, 3) and sm["ingress_drops"] == 2
         assert sm["flagged_share"] == 1.0 and sm["qa_flag"]
         assert len((Path(d) / "tc_stats.jsonl").read_text().splitlines()) == 4
-        s2 = T.TcSampler(Path(d), yt, capacity_kbit=None, sh=lambda c: "", net=net)
+        s2 = T.TcSampler(Path(d), yt, capacity_kbit=None, sh=lambda c: "", read=lambda k, dv: ("", 0.0, None), net=net)
         s2.sample()
         assert s2.summary()["samples"] == 0
 
