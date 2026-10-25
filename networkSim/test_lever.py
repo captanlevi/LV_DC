@@ -27,7 +27,7 @@ def test_plan_reproducible_non_overlapping():
         assert 0 < e["onset_s"] < 3600 and P["d_lo_s"] <= e["d_s"] <= P["d_hi_s"]
     for u, v in zip(eps, eps[1:]):
         assert v["onset_s"] >= u["onset_s"] + u["d_s"]
-    for bad in ((0, 20, 40), (0.01, 40, 20), (0.01, 0, 20)):
+    for bad in ((-0.01, 20, 40), (0.01, 40, 20), (0.01, 0, 20), (0, 40, 20)):
         try:
             L.plan("x", 3600, *bad)
             raise AssertionError(f"plan{bad} must raise")
@@ -135,6 +135,20 @@ def test_clock_and_abort_record():
     assert lv.record(None)["aborts_in_episode"] == 0
 
 
+def test_lambda_zero_disables_the_lever():
+    """levi 17:21: lambda 0 on a platform (the counted file's tt) draws no plan, applies nothing and is recorded."""
+    assert L.plan("ti_1", 3600, 0, 14.4, 44.4) == {"episodes": [], "skipped_overlapping": 0}
+    lv = L.Lever("tiktok", "ti_1", 3600, {**P, "lambda_per_s": 0})
+    assert lv.episodes == [] and lv.first_onset_s is None and lv.disabled
+    assert all(lv.active(1000.0 + t) is None for t in range(0, 3600, 7))
+    r = lv.record(None)
+    assert r["lever_disabled"] is True and r["episodes"] == [] and r["rate"] is None and r["first_applied"] == {}
+    assert r["fix_margin_s"] is None and r["episodes_never_applied"] == [] and r["params"]["lambda_per_s"] == 0
+    assert L.Lever("twitch", "tw_1", 3600, P).record(None)["lever_disabled"] is False
+    src = (HERE / "exp.py").read_text()                             # the rung read and its retries need episodes
+    assert "if LEVER is not None and browser is not None and LEVER.episodes:" in src
+
+
 def _ossilate_ns(**stubs):
     """exp._ossilate's own source, exec'd with stubs (exp.py exits at import without the repo's .venv, so no test imports it)."""
     import ast
@@ -204,6 +218,7 @@ def main() -> int:
     test_no_episode_before_the_fix()
     test_shaper_items_are_walk_steps()
     test_clock_and_abort_record()
+    test_lambda_zero_disables_the_lever()
     test_ossilate_overlay()
     test_exp_wiring()
     print("test_lever: ok")

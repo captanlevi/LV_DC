@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """v3 B4 x B5 (orchestrate's lever wiring): a lever window (drawn or forced) needs --lever-params, the frozen line's values
-per platform (lever_params.load_params: all three platforms, exactly lambda_per_s / d_lo_s / d_hi_s, finite, lambda > 0,
+per platform (lever_params.load_params: all three platforms, exactly lambda_per_s / d_lo_s / d_hi_s, finite, lambda >= 0
+(0: disabled),
 0 < d_lo <= d_hi); its stratum record carries the params and their sha and turns steering off; every session gets
 --lever <its platform's params>, a held decode_stress session never; --lever-params alone (no stratum flag) or an invalid
 file is refused before trio_up, and so is a file whose sha256 differs from --lever-params-sha256 (required with it:
@@ -35,11 +36,13 @@ def test_load_params():
     with tempfile.TemporaryDirectory() as d:
         params, sha = L.load_params(_file(d, GOOD))
         assert params["twitch"] == {"lambda_per_s": 0.008, "d_lo_s": 17.9, "d_hi_s": 47.9} and len(sha) == 64
+        off, _ = L.load_params(_file(d, {**GOOD, "tiktok": {**GOOD["tiktok"], "lambda_per_s": 0}}))   # levi 17:21
+        assert off["tiktok"]["lambda_per_s"] == 0.0                                                    # lever disabled
         bad = [{k: v for k, v in GOOD.items() if k != "tiktok"},                                    # a platform missing
                {**GOOD, "youtube": {**GOOD["youtube"], "extra": 1}},                                # an extra key
                {**GOOD, "youtube": {**GOOD["youtube"], "d_lo_s": float("nan")}},                    # NaN
                {**GOOD, "youtube": {**GOOD["youtube"], "d_lo_s": True}},                            # a bool
-               {**GOOD, "youtube": {**GOOD["youtube"], "lambda_per_s": 0}},                         # lambda 0
+               {**GOOD, "youtube": {**GOOD["youtube"], "lambda_per_s": -0.001}},                    # lambda < 0
                {**GOOD, "youtube": {**GOOD["youtube"], "d_lo_s": 60.0}},                            # d_lo > d_hi
                "not json", [1, 2]]
         for b in bad:

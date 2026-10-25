@@ -6,6 +6,8 @@ the shaper's band drops below the session's lowest offered rung for d seconds, t
   any episode) at rate lambda_per_s, durations d ~ U[d_lo_s, d_hi_s], the whole
   plan drawn at session start from random.Random("lever:<session name>"): never tied to elapsed state, the player or
   the labels (an onset inside a running episode is skipped and counted).
+- lambda_per_s = 0 (levi 17:21: the counted file keeps tt episode-free): no plan is drawn, no rung is read, nothing is
+  applied; meta.json lever records lever_disabled true with the params as passed.
 - Rate: RATE_SHARE x the session's lowest offered rung, fixed ONCE for every episode (levi 19:49 / 19:57): exp.py reads
   it after playback started (browser.start returns then) and, while only the fallback is known, retries off the shaper
   path until the first onset (the first read on exp.py's main thread, the retries on a daemon thread; browser._current_rung: twitch's HLS master, yt / tt page JS). The shaper path makes no
@@ -30,8 +32,10 @@ ABORT_GRACE_S = 30.0            # an abort this long after an episode's end stil
 
 
 def plan(session_name: str, session_s: float, lambda_per_s: float, d_lo_s: float, d_hi_s: float) -> dict:
-    if not (lambda_per_s > 0 and 0 < d_lo_s <= d_hi_s and session_s > 0):
+    if not (lambda_per_s >= 0 and 0 < d_lo_s <= d_hi_s and session_s > 0):
         raise ValueError(f"lever: lambda {lambda_per_s}, d [{d_lo_s}, {d_hi_s}], session {session_s} s")
+    if lambda_per_s == 0:                        # disabled: no draw at all
+        return {"episodes": [], "skipped_overlapping": 0}
     rng = random.Random(f"lever:{session_name}")
     eps, skipped, t, end = [], 0, FIRST_ONSET_MIN_S, -1.0
     while True:
@@ -62,6 +66,7 @@ class Lever:
         p = plan(session_name, session_s, float(params["lambda_per_s"]), float(params["d_lo_s"]),
                  float(params["d_hi_s"]))
         self.episodes, self.skipped = p["episodes"], p["skipped_overlapping"]
+        self.disabled = float(params["lambda_per_s"]) == 0
         self.t0: float | None = None
         self.rate: dict | None = None
         self.first_applied: dict[int, float] = {}
@@ -111,7 +116,7 @@ class Lever:
             hit = next((ep["id"] for ep in self.episodes if ep["onset_s"] <= t <= ep["onset_s"] + ep["d_s"] + ABORT_GRACE_S),
                        None)
         r = self.rate or {}
-        return {"params": self.params, "rate_share": RATE_SHARE, "fallback_kbit": FALLBACK_KBIT[self.platform],
+        return {"params": self.params, "lever_disabled": self.disabled, "rate_share": RATE_SHARE, "fallback_kbit": FALLBACK_KBIT[self.platform],
                 "first_onset_min_s": FIRST_ONSET_MIN_S, "t0": self.t0, "fix_t": r.get("at"),
                 "fix_margin_s": (round((self.t0 + self.first_onset_s) - r["at"], 3)   # levi 20:06: > 0 required
                                             if r.get("at") is not None and self.t0 is not None and self.episodes
