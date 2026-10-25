@@ -57,6 +57,14 @@ def test_era_predicate():
         assert not CS.picture_runs_era(m), m                                 # fail-safe: unknown era = stall-only
 
 
+def test_current_era_reads_the_union():
+    """levi 9048534c: record.ERA (the era this collector writes) is one picture_runs_era treats as v3, so an ERA bump
+    fails here unless check_session.PICTURE_RUN_ERAS is widened in the same commit."""
+    assert record.ERA in CS.PICTURE_RUN_ERAS, (record.ERA, sorted(CS.PICTURE_RUN_ERAS))
+    assert CS.picture_runs_era(_meta(record.ERA))
+    assert record.T58_ERA not in CS.PICTURE_RUN_ERAS
+
+
 def test_measure_selector():
     rows = _picture_only_rows()
     assert CS.frozen_runs(rows) == [] and CS.frozen_runs_all(rows) == [(T0 + 50, T0 + 350)]
@@ -127,6 +135,7 @@ def test_reentry_read_by_era():
 
 def main() -> int:
     test_era_predicate()
+    test_current_era_reads_the_union()
     test_measure_selector()
     test_labels_block_classes_by_era()
     test_recovery_reads_the_same_measure()

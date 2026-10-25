@@ -206,15 +206,19 @@ def frozen_runs_all(rows: list[dict]) -> list[tuple[float, float]]:
     return _union_runs(frozen_runs(rows) + frozen_picture_runs(rows))
 
 
+# levi 9048534c: the eras whose sessions read the union frozen measure, as LITERAL strings (not record.ERA), so an ERA
+# bump fails test_frozen_era's pin (record.ERA in PICTURE_RUN_ERAS) until this set is widened in the same commit
+PICTURE_RUN_ERAS = frozenset({"v3-collector-2026-10-24"})
+
+
 def picture_runs_era(meta: dict | None) -> bool:
     """levi 00:51 known gap (era-gated in the post-W-B batch): the frozen-picture runs belong to the v3 collector's
-    measure only. A session whose meta.json concurrency.era is record.ERA (the era the v3 collector writes; the one
-    source of truth for era strings) reads frozen_runs_all; any other era (T58_ERA, the stated t55 / t56 / t57 eras)
-    and a session with no era at all (single mode, pre-trio, a missing meta) read addendum N's stall-only frozen_runs,
-    so a re-run of check_session on an old-era session reproduces its old classes (fail-safe: unknown = not v3). An
-    ERA bump that keeps the union measure must widen this predicate in the same commit."""
-    import record
-    return ((meta or {}).get("concurrency") or {}).get("era") == record.ERA
+    measure only. A session whose meta.json concurrency.era is in PICTURE_RUN_ERAS (the v3 collector's record.ERA)
+    reads frozen_runs_all; any other era (T58_ERA, the stated t55 / t56 / t57 eras) and a session with no era at all
+    (single mode, pre-trio, a missing meta) read addendum N's stall-only frozen_runs, so a re-run of check_session on an
+    old-era session reproduces its old classes (fail-safe: unknown = not v3). An ERA bump that keeps the union measure
+    widens PICTURE_RUN_ERAS in the same commit (test_frozen_era fails until it does)."""
+    return ((meta or {}).get("concurrency") or {}).get("era") in PICTURE_RUN_ERAS
 
 
 def frozen_runs_of(rows: list[dict], picture: bool = True) -> list[tuple[float, float]]:
