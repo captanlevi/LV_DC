@@ -19,6 +19,12 @@ the leave to data/_summaries/yt_list_leaves.jsonl, which keeps it out after the 
 here (LIST_CHANGES, REMOVED_CHANNELS) and in Addendum P. A spare is promoted only after its live check passes. Every
 session's meta.json carries the list record (list_record: version and every change, committed or on disk).
 
+Provisional channels (levi 2026-10-26 03:29, gate list: a live check proves liveness, not motion): a spare, and a spare
+promoted with "provisional": True, is provisional until its first collected session reads static share
+<= STATIC_SHARE_MAX (brad's post-copy QA read), committed here as a LIST_CHANGES "static_read" entry. While provisional
+the picker holds it after one accepted session until that read is committed (no second session before the read), and
+pauses it on a recorded fail (it goes to rushi under the static-channel rule). static_holds() names both.
+
 Not-live skips (shagun 2026-10-17: @Sypherpkvods, never collected, so always least-collected, failed not-live on yt_7,
 yt_12 and yt_30): read from the not-live failures archived in data/_failed, so they survive a batch restart. One in the
 last NOT_LIVE_RETRY_S skips the channel that long; NOT_LIVE_STRIKES within NOT_LIVE_OUT_S put it out for NOT_LIVE_OUT_S
@@ -267,6 +273,40 @@ def spares_needing_promotion(leaves: list[dict]) -> list[str]:
     return out
 
 
+
+STATIC_SHARE_MAX = 0.5          # levi 03:29: a provisional channel's first collected session at <= this confirms it
+
+
+def static_reads(handle: str) -> list[dict]:
+    """The committed static reads of `handle` (LIST_CHANGES "static_read"), in list order."""
+    return [c for c in LIST_CHANGES if c["change"] == "static_read" and c["handle"] == handle]
+
+
+def provisional(handle: str) -> bool:
+    """levi 03:29: a spare, or a spare promoted with "provisional": True, until a passing static read is committed."""
+    c = by_handle(handle)
+    if c is None or not (c["role"] == "spare" or c.get("provisional")):
+        return False
+    return not any(r["result"] == "pass" for r in static_reads(handle))
+
+
+def static_holds(data_dir: Path) -> dict[str, str]:
+    """{handle: why} for the provisional channels the picker holds: a recorded static fail (paused, to rushi), or an
+    accepted session under data_dir with no static read committed yet (one session until its read)."""
+    started = accepted_starts(data_dir)
+    out = {}
+    for c in YT_CHANNELS:
+        h = c["handle"]
+        if not provisional(h):
+            continue
+        reads = static_reads(h)
+        if reads and reads[-1]["result"] == "fail":
+            out[h] = (f"provisional, static share {reads[-1]['static_share']} > {STATIC_SHARE_MAX} on "
+                      f"{reads[-1]['session']}: paused, to rushi (static-channel rule)")
+        elif not reads and started.get(h):
+            out[h] = f"provisional, {len(started[h])} accepted session(s) and no static read committed: held until its read"
+    return out
+
 def list_record(data_dir: Path, handle: str | None) -> dict:
     """meta.json's channel list record: the version, the channel's role, every committed change and every leave the
     collector applied on disk."""
@@ -352,7 +392,8 @@ def last_draws(data_dir: Path) -> dict[str, float]:
 def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: bool | None = None, select=None) -> dict:
     """The next channel by DIVERSITY_RULE (the comment above). The previous draw is least recent by construction, so
     no immediate repeat while another channel is eligible (no_repeat kept for the callers; the rule implies it)."""
-    exclude = set(exclude or ()) | {r["handle"] for r in disk_leaves(data_dir)}
+    holds = static_holds(data_dir)                                   # levi 03:29: provisional channels
+    exclude = set(exclude or ()) | {r["handle"] for r in disk_leaves(data_dir)} | set(holds)
     counts = collected_counts(data_dir, select)
     prim = [c for c in YT_CHANNELS if c["role"] == "primary"]
     seed = draw_seed(data_dir)
@@ -382,7 +423,8 @@ def next_channel(data_dir: Path, exclude: set[str] | None = None, no_repeat: boo
                      stages=stages or ["lru"], candidates=[c["handle"] for c in cands],
                      tied=sorted(c["handle"] for c in cands if last.get(c["handle"], float("-inf")) == first),
                      counts={c["handle"]: counts[c["handle"]] for c in elig},
-                     last_draw={c["handle"]: last.get(c["handle"]) for c in elig}, drawn=cands[0]["handle"])
+                     last_draw={c["handle"]: last.get(c["handle"]) for c in elig}, drawn=cands[0]["handle"],
+                     static_holds=holds)
     return cands[0]
 
 

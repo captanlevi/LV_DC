@@ -112,6 +112,55 @@ def test_promotion():
     assert not P([live(0), live(12 * H), {**live(24 * H), "handle": "@x"}], h)["passed"]
 
 
+
+def test_provisional_channels():
+    """levi 03:29 (gate list): a spare, or a spare promoted provisional, is provisional until its first collected session
+    reads static share <= STATIC_SHARE_MAX (a committed LIST_CHANGES static_read); the picker holds it after one
+    accepted session until the read, and pauses it on a recorded fail; a pass ends it."""
+    for c in Y.YT_CHANNELS:                                   # committed state: every spare provisional, no primary
+        assert Y.provisional(c["handle"]) == (c["role"] == "spare" or bool(c.get("provisional"))), c
+    for r in (c for c in Y.LIST_CHANGES if c["change"] == "static_read"):     # every committed read is consistent
+        assert r["result"] == ("pass" if r["static_share"] <= Y.STATIC_SHARE_MAX else "fail") and r["session"], r
+    for r in map(json.loads, (HERE / "channel_checks" / "yt_live_checks.jsonl").read_text().splitlines()):
+        assert {"ts", "handle", "state"} <= set(r) and r["state"] in ("live", "not_live", "unknown"), r
+    sky, lofi = "@SkyofFairyTales", "@LofiGirl"
+    music_out = {c["handle"] for c in Y.YT_CHANNELS if c["type"] == "music" and c["role"] == "primary"}
+    saved = list(Y.LIST_CHANGES), [dict(c) for c in Y.YT_CHANNELS]
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            # every other type and music's primaries out: the music spare substitutes (the spare rule)
+            only_spare = {c["handle"] for c in Y.YT_CHANNELS if c["type"] != "music"} | music_out
+            assert lofi in music_out and Y.static_holds(d) == {}
+            assert Y.next_channel(d, exclude=only_spare)["handle"] == sky
+            meta(d, "youtube/yt_1", channel_handle=sky, started_at=1.0)          # its first accepted session
+            assert "held until its read" in Y.static_holds(d)[sky]
+            import pytest
+            with pytest.raises(RuntimeError, match="no live channel"):          # held: no second session before the read
+                Y.next_channel(d, exclude=only_spare)
+            Y.next_channel(d)                                                    # the hold is in the pick record
+            assert sky in Y.LAST_PICK["static_holds"]
+            read = {"date": "2026-10-26", "change": "static_read", "handle": sky, "session": "WCx/youtube/yt_1",
+                    "static_share": 0.12, "result": "pass", "rule": "levi 03:29", "evidence": "test"}
+            Y.LIST_CHANGES.append(read)                                          # a pass ends provisional
+            assert not Y.provisional(sky) and Y.static_holds(d) == {}
+            assert Y.next_channel(d, exclude=only_spare)["handle"] == sky
+            Y.LIST_CHANGES[-1] = {**read, "static_share": 0.97, "result": "fail"}  # a fail pauses it, sessions or not
+            assert Y.provisional(sky) and "paused, to rushi" in Y.static_holds(Path(d) / "empty")[sky]
+            assert "paused, to rushi" in Y.static_holds(d)[sky]
+            Y.LIST_CHANGES[:] = saved[0]
+            for c in Y.YT_CHANNELS:                                              # promoted, provisional: still held
+                if c["handle"] == sky:
+                    c.update(role="primary", provisional=True)
+            assert Y.provisional(sky) and sky in Y.static_holds(d)
+            for c in Y.YT_CHANNELS:                                              # promoted without the flag: never held
+                if c["handle"] == sky:
+                    c.pop("provisional")
+            assert not Y.provisional(sky) and Y.static_holds(d) == {}
+    finally:
+        Y.LIST_CHANGES[:] = saved[0]
+        Y.YT_CHANNELS[:] = saved[1]
+
 @of_record
 def test_no_immediate_repeat_and_trio_excluded():
     """levi 00133's full rule: the least-recently-drawn primary (so never the previous yt session's channel while another
