@@ -160,6 +160,21 @@ def test_a_starved_join_raises_join_timeout_and_a_dead_page_does_not():
     assert B._navigate_to_live(_Page(), "youtube", timeout=0.2, first_url=url) is None     # no join_state: pre-B9
 
 
+def test_tt_dead_clocks_scale_during_the_join():
+    """levi 23:48: during the join TTRoomWatch's player_dead (readyState 0) and no-progress clocks scale by the join's
+    scale, so a slow low-state join is not a dead room; scale 1 (after the join) is unchanged."""
+    w1, w4 = B.TTRoomWatch(), B.TTRoomWatch(scale=4.0)
+    assert w4.t_dead_s == 4 * w1.t_dead_s and w4.t_max_s == 4 * w1.t_max_s and B.TTRoomWatch(scale=0.5).scale == 1.0
+    dead = {"has_video": True, "src": "blob:x", "rs": 0, "ct": 0.0, "buf_end": 0.0, "decoded": 0}
+    for w, fire_at in ((w1, w1.t_dead_s), (w4, w4.t_dead_s)):
+        got = None
+        for k in range(int(fire_at) + 2):
+            got = w.feed(dict(dead), 1000.0 + k)
+            if got:
+                break
+        assert got == "player_dead" and k == int(fire_at) + 1, (w.scale, k, got)   # the first sample starts the clock
+
+
 def test_wiring():
     src = (HERE / "exp.py").read_text()
     main = src[src.index('if __name__ == "__main__":'):]
@@ -173,7 +188,8 @@ def test_wiring():
     assert "browser.start()" not in stmts                               # the join thread is the only start
     bsrc = (HERE / "browser.py").read_text()
     assert "scale=self.join_scale, join_state=self.join_state" in bsrc
-    assert "_tt_confirm_playing(page, TT_QUICK_CONFIRM_S * sc)" in bsrc and 'raise JoinTimeout(self.join_state' in bsrc
+    assert "_tt_confirm_playing(page, TT_QUICK_CONFIRM_S * sc, scale=sc)" in bsrc and 'raise JoinTimeout(self.join_state' in bsrc
+    assert "_tt_preroll(page, TT_PREROLL_S, scale=sc)" in bsrc
 
 
 def main() -> int:
@@ -182,6 +198,7 @@ def main() -> int:
     test_the_session_ends_at_navigation_plus_its_length()
     test_the_first_apply_comes_first_and_the_lever_waits_for_playing()
     test_a_starved_join_raises_join_timeout_and_a_dead_page_does_not()
+    test_tt_dead_clocks_scale_during_the_join()
     test_wiring()
     print("test_b9_join: ok")
     return 0

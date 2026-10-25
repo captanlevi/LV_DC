@@ -714,12 +714,16 @@ class TTRoomWatch:
     TT_LOW_STATES and for TT_STALL_GRACE_S after leaving them (levi 2026-10-21, t58 w2: below tt's lowest rendition the
     player sits at readyState 0 under the shaping)."""
 
-    def __init__(self, t_max_s: float | None = None, log: dict | None = None) -> None:
+    def __init__(self, t_max_s: float | None = None, log: dict | None = None, scale: float = 1.0) -> None:
         # record only (levi 09:54, the end-of-day-2 tip): the hold's low spans and each dead clock as THIS watch saw
         # them, so the reader can match the collector exactly (meta.json player_dead_watch; shared across re-entries)
         self.log = log if log is not None else {"low_spans": [], "dead_clocks": []}
-        self.t_max_s = t_max_s if t_max_s is not None else FROZEN_PLAYHEAD_MAX_S.get("tiktok", 720)
-        self.t_dead_s = PLAYER_DEAD_MAX_S.get("tiktok", 60)
+        # B9 (levi 23:48): during the join the dead signals' clocks (player_dead's readyState-0, rule (b)'s no-progress)
+        # scale by the join's scale, so a slow low-state join is not read as a dead room (selection by first state);
+        # the ended banner stays as is; after the join (scale 1) as before
+        self.scale = max(1.0, float(scale))
+        self.t_max_s = (t_max_s if t_max_s is not None else FROZEN_PLAYHEAD_MAX_S.get("tiktok", 720)) * self.scale
+        self.t_dead_s = PLAYER_DEAD_MAX_S.get("tiktok", 60) * self.scale
         self.dead_since: float | None = None          # player_dead clock
         self.last_low: float | None = None            # the last sample in TT_LOW_STATES (the player_dead hold)
         self.last_media: tuple | None = None
@@ -842,10 +846,12 @@ def _tt_state(page: "CDPPage") -> dict:
         return {}
 
 
-def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = None) -> tuple[bool, dict]:
-    """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal). With `trace`, one
-    (t, rs, has_video, loading) per sample is appended (re-entry diagnostics)."""
-    w, first_ct, s, fg = TTRoomWatch(), None, {}, _FramesGate()
+def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = None,
+                        scale: float = 1.0) -> tuple[bool, dict]:
+    """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal; its clocks scaled by
+    `scale` during the B9 join). With `trace`, one (t, rs, has_video, loading) per sample is appended (re-entry
+    diagnostics)."""
+    w, first_ct, s, fg = TTRoomWatch(scale=scale), None, {}, _FramesGate()
     page.eval(_CLICK_PLAY_JS)                         # autoplay may not have started: click, then give it the grace
     time.sleep(TT_AUTOPLAY_GRACE_S)
     deadline = time.time() + seconds
@@ -866,10 +872,10 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = No
     return False, {"dead": "not_playing", **s, **fg.record()}
 
 
-def _tt_preroll(page: "CDPPage", seconds: float) -> tuple[bool, dict]:
-    """The pre-roll before the session clock: no dead signal for `seconds`, playhead advancing >= half of it and media
-    appended (buffered end moved)."""
-    w, s, adv, prev = TTRoomWatch(), {}, 0.0, _tt_state(page).get("ct")
+def _tt_preroll(page: "CDPPage", seconds: float, scale: float = 1.0) -> tuple[bool, dict]:
+    """The pre-roll before the session clock: no dead signal for `seconds` (its clocks scaled by `scale` during the B9
+    join), playhead advancing >= half of it and media appended (buffered end moved)."""
+    w, s, adv, prev = TTRoomWatch(scale=scale), {}, 0.0, _tt_state(page).get("ct")
     end = time.time() + seconds
     while time.time() < end:
         s = _tt_state(page)
@@ -4654,7 +4660,7 @@ class BrowserSession:
                 if not c.get("fallback"):
                     page.navigate(c["href"])
                     _wait_for_load(page, timeout=15 * sc)
-                ok, detail = _tt_confirm_playing(page, TT_QUICK_CONFIRM_S * sc)
+                ok, detail = _tt_confirm_playing(page, TT_QUICK_CONFIRM_S * sc, scale=sc)
                 if ok and not c.get("fallback"):        # levi 00:09: the landed room is the picked one, else next
                     t["identity"] = idc = identity_check("tiktok", c["href"], page)
                     if idc["ok"] is False:
@@ -4664,7 +4670,7 @@ class BrowserSession:
                             {"intended": c["href"], "landed_url": idc.get("landed_url"), "try": len(rec["tries"])})
                 if ok:
                     t["t_playing"] = time.time()
-                    ok, detail = _tt_preroll(page, TT_PREROLL_S)
+                    ok, detail = _tt_preroll(page, TT_PREROLL_S, scale=sc)
             except Exception as exc:
                 ok, detail = False, {"dead": "error", "error": repr(exc)}
             t.update(ok=ok, detail=detail, t_done=time.time())
