@@ -206,6 +206,23 @@ def frozen_runs_all(rows: list[dict]) -> list[tuple[float, float]]:
     return _union_runs(frozen_runs(rows) + frozen_picture_runs(rows))
 
 
+def picture_runs_era(meta: dict | None) -> bool:
+    """levi 00:51 known gap (era-gated in the post-W-B batch): the frozen-picture runs belong to the v3 collector's
+    measure only. A session whose meta.json concurrency.era is record.ERA (the era the v3 collector writes; the one
+    source of truth for era strings) reads frozen_runs_all; any other era (T58_ERA, the stated t55 / t56 / t57 eras)
+    and a session with no era at all (single mode, pre-trio, a missing meta) read addendum N's stall-only frozen_runs,
+    so a re-run of check_session on an old-era session reproduces its old classes (fail-safe: unknown = not v3). An
+    ERA bump that keeps the union measure must widen this predicate in the same commit."""
+    import record
+    return ((meta or {}).get("concurrency") or {}).get("era") == record.ERA
+
+
+def frozen_runs_of(rows: list[dict], picture: bool = True) -> list[tuple[float, float]]:
+    """The frozen measure a reader uses: the union (frozen_runs_all) when picture, else addendum N's stall-only
+    frozen_runs as written (picture_runs_era decides per session)."""
+    return frozen_runs_all(rows) if picture else frozen_runs(rows)
+
+
 def _union_runs(runs: list[tuple[float, float]]) -> list[tuple[float, float]]:
     """brad 00:45 M1: the stall-only and picture runs over the same seconds are ONE run (overlapping or abutting merged),
     so a recovery is excluded once and held_frozen_s never double-counts; content.js publishes the same union."""
@@ -286,17 +303,19 @@ def stall_loop_s(rows: list[dict]) -> dict:
     return {"stall_loop_s": round(total, 1), "stall_loops": loops}
 
 
-def frozen_playhead_run(rows: list[dict]) -> float:
-    """Longest frozen-playhead run, in seconds (frozen_runs)."""
-    return max((b - a for a, b in frozen_runs_all(rows)), default=0.0)
+def frozen_playhead_run(rows: list[dict], picture: bool = True) -> float:
+    """Longest frozen-playhead run, in seconds (frozen_runs_of: the union by default, as content.js publishes it;
+    picture False: addendum N's stall-only run, for a non-v3-era session)."""
+    return max((b - a for a, b in frozen_runs_of(rows, picture)), default=0.0)
 
 
-def recovered_frozen(rows: list[dict], frozen_reentries: list[dict] | None, n_dead_recovered: int = 0) -> dict:
+def recovered_frozen(rows: list[dict], frozen_reentries: list[dict] | None, n_dead_recovered: int = 0,
+                     picture: bool = True) -> dict:
     """Addendum Q am. 6: the frozen run that holds an outcome-continue stuck-player re-entry's t_nav (from 2 s before its
     first tick to 5 s after its last: the page load) is not the player_frozen measure; it is reported with its window
     and the part after the shaper went back above the lowest rung (the T2 window, a sensitivity). One recovery of either
-    kind per session: with a player_dead recovery too, nothing is excluded."""
-    runs = frozen_runs_all(rows)
+    kind per session: with a player_dead recovery too, nothing is excluded. picture: frozen_runs_of (picture_runs_era)."""
+    runs = frozen_runs_of(rows, picture)
     cont = [r for r in frozen_reentries or [] if r.get("outcome") == "continue" and r.get("t_nav")]
     rec = [(run, r) for run in runs for r in cont if run[0] - 2.0 <= r["t_nav"] <= run[1] + 5.0]
     ok = len(rec) == 1 and n_dead_recovered == 0
@@ -501,7 +520,7 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
                  frozen_reentries: list[dict] | None = None, window: tuple[float, float] | None = None,
                  entry_win: tuple[float, float] | None = None, net_labels: list | None = None,
                  navs: list[float] | None = None, shared_navs: list[float] | None = None,
-                 loads: list[tuple[float, float]] | None = None) -> dict:
+                 loads: list[tuple[float, float]] | None = None, picture_runs: bool = True) -> dict:
     meta = [r for r in rows if r.get("type") == "res_meta"]
     if len(meta) < 2:
         return {"n_res_meta": len(meta)}
@@ -541,7 +560,7 @@ def label_checks(rows: list[dict], platform: str, reentries: list[dict] | None =
     # levi 11:40: dead runs split at our navigations (E.nav_times), where the collector's clock is cut
     dp = E.dead_player(rows, reentries, net_labels if platform == "tiktok" and net_labels else None, navs, shared_navs,
                        loads)
-    fp = recovered_frozen(rows, frozen_reentries, n_dead_recovered=dp["recovered_runs"])
+    fp = recovered_frozen(rows, frozen_reentries, n_dead_recovered=dp["recovered_runs"], picture=picture_runs)
     if dp["recovered"] and any(r.get("outcome") == "continue" for r in frozen_reentries or []):
         dp = {**dp, "max_s": dp["max_all_s"], "recovered": None}   # one recovery of either kind per session (am. 6)
     out = {
@@ -1138,7 +1157,7 @@ def shared_deadline_reentries(meta: dict, rows: list[dict], net_labels: list) ->
     clocks = ((meta.get("player_dead_watch") or {}).get("dead_clocks")) or []
     spans = stuck.low_spans(net_labels or [])
     rung = stuck.t2_rung(meta.get("lowest_rung"))
-    runs = frozen_runs_all(rows)
+    runs = frozen_runs_of(rows, picture_runs_era(meta))
     out = []
     for kind, recs in (("player_frozen", meta.get("frozen_reentries") or []),
                        ("player_dead", meta.get("player_dead_reentries") or [])):
@@ -1232,7 +1251,7 @@ def frozen_clock_of_record(lab: dict, label_rows: list[dict], platform: str, net
             sha in FROZEN_HOLD_COLLECTORS or (meta or {}).get("frozen_clock_hold") is True):
         return
     rec = (lab.get("recovered_frozen") or {}).get("window")
-    runs = [r for r in frozen_runs_all(label_rows) if not rec or list(r) != list(rec)]
+    runs = [r for r in frozen_runs_of(label_rows, picture_runs_era(meta)) if not rec or list(r) != list(rec)]
     held, raw, T = E.held_frozen_s(runs, net_labels), lab["frozen_playhead_max_s"], lab.get("frozen_playhead_T_s")
     disagree = E.frozen_over_t(raw, T) and not E.frozen_over_t(held, T)
     lab["frozen_playhead_class_s"] = round(held, 3)
@@ -1256,7 +1275,7 @@ def labels_block(sd: Path, meta: dict, platform: str | None = None) -> tuple[lis
     tie = shared_deadline_reentries({**meta, "platform": platform}, label_rows, nl)
     shared = [x["t_nav"] for x in tie if x["shared_deadline_reentry"]]
     lab = label_checks(label_rows, platform, meta.get("player_dead_reentries"), meta.get("frozen_reentries"), win,
-                       entry_window(ents, win), nl, navs, shared, E.nav_loads(meta))
+                       entry_window(ents, win), nl, navs, shared, E.nav_loads(meta), picture_runs=picture_runs_era(meta))
     lab["shot_effects"] = shot_effects(label_rows, sd)
     dead_clock_of_record(lab, label_rows, platform, meta.get("player_dead_watch"), nl, navs, shared)
     lab["shared_deadline_reentries"] = tie
