@@ -150,7 +150,7 @@ function visible(el) {
   return !!el && el.offsetParent !== null && el.getClientRects().length > 0;
 }
 
-// Which ad signals fire now. is_ad = any of these. A <video> swap is NOT an ad signal on its own (twitch swaps the
+// Which ad signals fire now. is_ad = any of these but duration_finite alone (isAdFrom). A <video> swap is NOT an ad signal on its own (twitch swaps the
 // element on quality changes too); it is reported separately as src_changed.
 function adSignals(v) {
   const sig = [];
@@ -168,6 +168,13 @@ function adSignals(v) {
     }
   }
   return sig;
+}
+
+// levi 00176 (2c): every page this collector opens is a LIVE stream (a yt channel's /live, a twitch channel, a tt
+// /live room), where a short finite duration is also what a young stream's DVR window looks like; so duration_finite
+// alone never marks an ad: is_ad needs a platform signal. duration_finite stays in ad_signals (recorded).
+function isAdFrom(sig) {
+  return sig.some((s) => s !== "duration_finite");
 }
 
 function bufferedAhead(v) {
@@ -397,7 +404,7 @@ function adCheck(reason) {
   const key = sig.join("|");
   if (adLast !== null && key === adLast) return;
   const pn = performance.now();
-  side("ad_edges", { source: "dom", ts: performance.timeOrigin + pn, pn, wall: Date.now(), is_ad: sig.length > 0,
+  side("ad_edges", { source: "dom", ts: performance.timeOrigin + pn, pn, wall: Date.now(), is_ad: isAdFrom(sig),
                      signals: key, prev: adLast, reason, el: elId(video), ct: video.currentTime ?? null });
   adLast = key;
 }
@@ -494,7 +501,7 @@ function buildEvent(type) {
 
 function withAdState(evt) {
   const sig = adSignals(video);
-  evt.is_ad = sig.length > 0;
+  evt.is_ad = isAdFrom(sig);
   evt.ad_signals = sig.join("|");
   evt.src_changed = srcChanged(video);
   if (evt.type === "res_meta") updateWallClock(video);

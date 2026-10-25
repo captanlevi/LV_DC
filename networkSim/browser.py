@@ -143,13 +143,22 @@ _SKIP_AD_JS: dict[str, str] = {
             const adDom = ['.ytp-ad-player-overlay', '.ytp-ad-player-overlay-layout', '.ytp-ad-preview-container',
                            '.ytp-ad-text', '.ytp-ad-simple-ad-badge', '.ytp-ad-badge', '.ytp-ad-duration-remaining'];
             if (adDom.some((s) => [...document.querySelectorAll(s)].some(vis))) sig.push('yt_ad_dom');
-            if (sig.length === 0) {
+            // levi 00176 (2c): a live page's short DVR window is a finite duration too; duration_finite alone is no ad
+            // (content.js isAdFrom), so nothing is skipped, fast-forwarded or muted on it
+            if (sig.length === 0 || sig.every((s) => s === 'duration_finite')) {
                 if (v && v.muted && v.dataset.lvqoeMutedForAd === '1') {
                     v.muted = false; delete v.dataset.lvqoeMutedForAd; return 'unmuted';
                 }
                 return null;
             }
             const tag = ' [' + sig.join('|') + ']';
+            // levi 00176 (2b) / 14:35: SKIP_FUTILE_CLICKS skip clicks with the ad state and its countdown text unchanged
+            // stop the clicking (skip_futile, logged every second); the re-entry is the existing ad_frozen clock's
+            const cdEl = document.querySelector('.ytp-ad-duration-remaining, .ytp-ad-preview-text, .ytp-ad-text');
+            const adKey = sig.join('|') + '#' + (cdEl ? cdEl.textContent : '');
+            if (mp && mp.dataset.lvqoeAdKey !== adKey) { mp.dataset.lvqoeAdKey = adKey; mp.dataset.lvqoeFutile = '0'; }
+            const futile = mp ? Number(mp.dataset.lvqoeFutile || 0) : 0;
+            if (futile >= %(futile)d) return 'skip_futile' + tag;
             // a skip button can be visible while its countdown runs (clicks do nothing): after 2 clicks with the ad still
             // showing, fall through to fast-forward (laptop probe 2026-10-16)
             const tries = mp ? Number(mp.dataset.lvqoeSkipTries || 0) : 0;
@@ -164,14 +173,14 @@ _SKIP_AD_JS: dict[str, str] = {
                              '.ytp-ad-skip-button-container button', 'button.ytp-ad-skip-button-modern'];
             for (const s of skipSel) {
                 const b = document.querySelector(s);
-                if (vis(b) && !b.disabled) { b.click(); if (mp) mp.dataset.lvqoeSkipTries = String(tries + 1); return 'skipped' + tag; }
+                if (vis(b) && !b.disabled) { b.click(); if (mp) { mp.dataset.lvqoeSkipTries = String(tries + 1); mp.dataset.lvqoeFutile = String(futile + 1); } return 'skipped' + tag; }
             }
             // only buttons inside the player: the page has a "Skip navigation" a11y button that matches by text and
             // does nothing to the ad (laptop test 2026-10-16: it was clicked every second during a 15 s ad)
             for (const b of (mp ? mp.querySelectorAll('button') : [])) {
                 if (!vis(b) || b.disabled) continue;
                 const label = (b.textContent + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase();
-                if (label.includes('skip')) { b.click(); if (mp) mp.dataset.lvqoeSkipTries = String(tries + 1); return 'text-skipped' + tag; }
+                if (label.includes('skip')) { b.click(); if (mp) { mp.dataset.lvqoeSkipTries = String(tries + 1); mp.dataset.lvqoeFutile = String(futile + 1); } return 'text-skipped' + tag; }
             }
             // 2. fast-forward a finite ad to its end
             if (v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d) {
@@ -185,7 +194,7 @@ _SKIP_AD_JS: dict[str, str] = {
             if (v && !v.muted) { v.muted = true; v.dataset.lvqoeMutedForAd = '1'; return 'muted-wait' + tag; }
             return 'waiting' + tag;
         })()
-    """ % {"max_dur": 600},
+    """ % {"max_dur": 600, "futile": 10},
     "twitch": """
         (function() {
             // Detect Twitch mid-roll ad
@@ -1977,6 +1986,10 @@ class SelfPauseResumer:
         self.last_poll = None         # (time, state) of the last poll with a state
         self.data_flat_since = None   # levi 18:16: start of the current run of polls paused with data and flat (the lift)
         self._df_ref = (None, None)   # that run's first (buffer, playhead)
+        # levi 00176 (W-B yt_100003): the same run counted WITH ad polls, for the ad_frozen clock's lift (an ad break stuck
+        # over a paused, buffered element); the press trigger's run above keeps excluding ads
+        self.data_flat_any_since = None
+        self._dfa_ref = (None, None)
 
     def record(self) -> dict:
         return {"rule": RESUME_RULE, "hold_s": self.hold_s, "min_buffer_s": self.min_buffer_s,
@@ -2029,6 +2042,12 @@ class SelfPauseResumer:
         buf, ct = state.get("buf"), state.get("ct")
         ok = (bool(state.get("paused")) and not state.get("ad") and not state.get("ended")
               and (state.get("rs") or 0) >= 3 and buf is not None and buf >= self.min_buffer_s)
+        ok_any = (bool(state.get("paused")) and not state.get("ended")
+                  and (state.get("rs") or 0) >= 3 and buf is not None and buf >= self.min_buffer_s)
+        a0, d0 = self._dfa_ref
+        if not (ok_any and self.data_flat_any_since is not None and abs(buf - a0) <= PAUSE_GROWTH_EPS_S
+                and (ct is None or d0 is None or abs(ct - d0) <= PAUSE_GROWTH_EPS_S)):
+            self.data_flat_any_since, self._dfa_ref = (now, (buf, ct)) if ok_any else (None, (None, None))
         b0, c0 = self._df_ref
         if ok and self.data_flat_since is not None and abs(buf - b0) <= PAUSE_GROWTH_EPS_S \
                 and (ct is None or c0 is None or abs(ct - c0) <= PAUSE_GROWTH_EPS_S):
@@ -2600,6 +2619,7 @@ AD_NO_PLAYER_MAX_S = 60.0
 # session lasted 7-27 s).
 AD_FROZEN_MAX_S = 60.0
 AD_FROZEN_TOL_S = 0.05
+SKIP_FUTILE_CLICKS = 10      # levi 00176 (2b): yt's skip loop stops after this many clicks with the ad unchanged
 PLAYER_ERROR_PLATFORMS = ("youtube", "twitch")
 LOWSTATE_FREE_MAX = 3      # levi 11:48: at most this many low-state error_page re-entries skip the one recovery
 _PLAYER_ERROR_JS = """
@@ -2663,6 +2683,19 @@ class PlayerErrorWatch:
         self.fz_since, self.fz_ct, self.fz_cd = None, None, None   # the frozen-ad run: since, playhead, countdown
         self.ad_runs: list[list[float]] = []
         self.held_fn = None          # yt / twitch (levi 10:27): now -> True while the shaper's low-state hold runs
+        self.skip_futile_since = None   # levi 14:35: the yt skip loop stopped (skip_futile) in the current ad run
+        # sup 14:13 (4) / levi 00176: stuck-ad spans, the ad state over a player whose playhead and countdown stay still
+        # for more than frozen_s, recorded whatever the low-state hold (meta.json ad_wait.ad_stuck_runs)
+        self.stk_since, self.stk_ct, self.stk_cd, self.stk_st = None, None, None, None
+        self.ad_stuck_runs: list[dict] = []
+
+    def _close_stuck(self, end: float) -> None:
+        if self.stk_since is not None and end - self.stk_since > self.frozen_s and len(self.ad_stuck_runs) < WATCH_LOG_MAX:
+            st = self.stk_st or {}
+            self.ad_stuck_runs.append({"start": round(self.stk_since, 3), "end": round(end, 3),
+                                       "s": round(end - self.stk_since, 1), "skip_futile": self.skip_futile_since is not None,
+                                       **{k: st.get(k) for k in ("ct", "rs", "paused", "cd")}})
+        self.stk_since = self.stk_ct = self.stk_cd = self.stk_st = None
 
     def step(self, err: dict | None, st: dict | None, now: float) -> dict | None:
         ad = bool((st or {}).get("ad"))
@@ -2673,6 +2706,7 @@ class PlayerErrorWatch:
             self.ad_runs[-1][1] = now
         else:
             self.ad_since = None
+            self.skip_futile_since = None
         if err:
             if self.err_since is None and self.on_onset is not None:   # v3 (levi 16:57): the error page shot, at onset
                 try:
@@ -2693,6 +2727,13 @@ class PlayerErrorWatch:
         else:
             self.np_since = None
         ct, cd = (st or {}).get("ct"), (st or {}).get("cd")
+        if ad and not no_player and isinstance(ct, (int, float)):     # the stuck-ad span, never held
+            if (self.stk_since is None or cd != self.stk_cd or self.stk_ct is None
+                    or abs(ct - self.stk_ct) > AD_FROZEN_TOL_S):
+                self._close_stuck(now)
+                self.stk_since, self.stk_ct, self.stk_cd, self.stk_st = now, ct, cd, dict(st or {})
+        else:
+            self._close_stuck(now)
         if ad and not no_player and isinstance(ct, (int, float)):     # an unread playhead is no evidence of a freeze
             held = bool(self.held_fn and self.held_fn(now))       # levi 10:27: the ad_frozen clock holds in low states
             moved = (held or self.fz_since is None or cd != self.fz_cd or self.fz_ct is None
@@ -2700,7 +2741,10 @@ class PlayerErrorWatch:
             if moved:                                         # the countdown or the playhead moved: the run starts here
                 self.fz_since, self.fz_ct, self.fz_cd = now, ct, cd
             elif now - self.fz_since > self.frozen_s:
-                return {"reason": "ad_frozen", "since": self.fz_since, "t_trigger": now, "error": err, "player": st}
+                trig = {"reason": "ad_frozen", "since": self.fz_since, "t_trigger": now, "error": err, "player": st,
+                        "skip_futile": self.skip_futile_since is not None}
+                self._close_stuck(now)                        # the re-entry ends the span
+                return trig
         else:
             self.fz_since = self.fz_ct = self.fz_cd = None
         return None
@@ -2708,12 +2752,16 @@ class PlayerErrorWatch:
     def reset(self) -> None:
         """After a recovery: every trigger starts over."""
         self.err_since = self.np_since = self.fz_since = self.fz_ct = self.fz_cd = None
+        self.skip_futile_since = None
+        self.stk_since = self.stk_ct = self.stk_cd = self.stk_st = None
 
     def exposure(self) -> dict:
         d = [b - a for a, b in self.ad_runs]
         return {"ad_runs": len(d), "ad_total_s": round(sum(d), 1), "ad_longest_s": round(max(d), 1) if d else 0.0,
                 "error_page_confirm_s": self.confirm_s, "ad_no_player_max_s": self.no_player_s,
-                "ad_frozen_max_s": self.frozen_s}
+                "ad_frozen_max_s": self.frozen_s, "ad_stuck_runs": self.ad_stuck_runs,
+                "ad_stuck_total_s": round(sum(r["s"] for r in self.ad_stuck_runs), 1),
+                "skip_futile_clicks": SKIP_FUTILE_CLICKS}
 
 
 # boundary bundle item 3 (levi f2fb3ee7 + brad / levi 03:35, the reader's stream_ended rule in LVQoE checkpoint_session_list,
@@ -2994,6 +3042,9 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 if log_path is not None:
                     with open(log_path, "a") as fh:
                         fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": result}) + "\n")
+                if str(result).startswith("skip_futile") and error_watch is not None \
+                        and error_watch.skip_futile_since is None:    # levi 14:35: the re-entry is tagged with it
+                    error_watch.skip_futile_since = time.time()
         except Exception:
             pass
         if on_player_error is not None and error_watch is not None:   # t56 tw_100016: error page / ad, no player
@@ -3680,7 +3731,7 @@ class BrowserSession:
         self.player_dead_reentries: list[dict] = []   # tt: the re-entries after a player_dead (meta.json)
         self.frozen_reentries: list[dict] = []    # the stuck-player re-entry (Addendum Q am. 6; meta.json)
         self.error_watch = PlayerErrorWatch()       # t56 tw_100016: yt / twitch error page or ad with no player
-        self.error_watch.held_fn = self._lowstate_held
+        self.error_watch.held_fn = self._ad_frozen_held     # levi 00176: lifted while paused with data, ad or not
         self._shot_reasons: list[str] = []          # v3 (levi 16:57): Python-side shot triggers, consumed by the shooter
         self.shot_triggers_py: dict[str, int] = {"error_page": 0}   # meta.json shot_triggers_py (brad / levi 18:00)
         # levi 00:53: the same event-shot gap on the Python side; suppressed onsets counted (meta shot_triggers_py_suppressed)
@@ -4464,6 +4515,28 @@ class BrowserSession:
         """The shaper's low-state hold runs at t."""
         he = self._low_hold_end(t)
         return he is not None and t <= he
+
+    def _ad_frozen_held(self, t: float) -> bool:
+        """The ad_frozen clock's hold (levi 10:27), lifted as the frozen clocks' is (levi 13:09 / 18:16) and, unlike
+        them, with ad polls counted (levi 00176, W-B yt_100003: an ad break stuck over a PAUSED element with 9.6 s
+        buffered sat 16 min under the low-state hold, because this clock never looked at the lift and the lift's run
+        skips ad polls): low bandwidth cannot explain a paused player with data. Held = the low-state hold runs and the
+        resumer's polls have NOT shown the element paused with data and flat (readyState >= 3, buffer >= the floor,
+        ad or not) for PAUSE_DEADLOCK_S, with a poll no older than FROZEN_HOLD_POLL_MAX_AGE_S. Each lift is recorded
+        once per run (meta.json frozen_hold.bypassed, clock "ad_frozen")."""
+        if not self._lowstate_held(t):
+            return False
+        r = getattr(self, "resumer", None)
+        last, since = getattr(r, "last_poll", None), getattr(r, "data_flat_any_since", None)
+        if last is None or t - last[0] > FROZEN_HOLD_POLL_MAX_AGE_S or since is None or t < since + PAUSE_DEADLOCK_S:
+            return True
+        if not any(x.get("clock") == "ad_frozen" and abs(x.get("data_flat_since", 0) - since) <= 1e-6
+                   for x in self.frozen_hold_bypassed) and len(self.frozen_hold_bypassed) < WATCH_LOG_MAX:
+            st = last[1]
+            self.frozen_hold_bypassed.append({"clock": "ad_frozen", "t": t, "data_flat_since": since,
+                                              "lift": since + PAUSE_DEADLOCK_S,
+                                              **{k: st.get(k) for k in ("paused", "rs", "buf", "stall", "ad")}})
+        return False
 
     def _on_error_onset(self, t: float) -> None:
         last = getattr(self, "_shot_last_py", {}).get("error_page")
