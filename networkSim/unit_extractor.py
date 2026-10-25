@@ -22,6 +22,8 @@ def _parse_h1(path: str, stats: dict) -> dict:
 
 
 def _write_stats(save_path: str, stats: dict) -> None:
+    """{network_core, http_v2_sha256 (the file it counts; brad 09:35), h1_body_only_packets} beside http_v2."""
+    import hashlib
     import json
     try:
         import network_core
@@ -29,7 +31,8 @@ def _write_stats(save_path: str, stats: dict) -> None:
     except Exception:
         ver = None
     with open(os.path.join(os.path.dirname(os.path.abspath(save_path)), STATS_FILE), "w") as fh:
-        json.dump({"network_core": ver, **stats}, fh, indent=1)
+        json.dump({"network_core": ver, "http_v2_sha256": hashlib.sha256(open(save_path, "rb").read()).hexdigest(),
+                   **stats}, fh, indent=1)
 
 
 def _merge_into(ft_to_stream_to_units, master_dict):
@@ -115,10 +118,14 @@ if __name__ == "__main__":
         print("Error parsing tshark logs: no http_v2.json written")
         print(tb)
         marker = os.path.join(os.path.dirname(os.path.abspath(args.save_path)), ERROR_MARKER)
+        ts_ = int(time.time())
         if os.path.exists(args.save_path):        # brad 06:56: a failed re-run never leaves an older output beside the
-            stale = f"{args.save_path}.stale_{int(time.time())}"      # fresh marker (archived, never deleted)
+            stale = f"{args.save_path}.stale_{ts_}"      # fresh marker (archived, never deleted)
             os.replace(args.save_path, stale)
             print(f"older {args.save_path} archived as {stale}")
+        _st = os.path.join(os.path.dirname(os.path.abspath(args.save_path)), STATS_FILE)
+        if os.path.exists(_st):                   # brad 09:35: nor the older output's stats (same <ts>)
+            os.replace(_st, f"{_st}.stale_{ts_}")
         with open(marker, "w") as fh:
             json.dump({"error": repr(e)[:500], "traceback": tb[-4000:], "ts": time.time(),
                        "save_path": args.save_path, "pcap": args.pcap}, fh, indent=1)

@@ -27,11 +27,15 @@ def test_unit_extractor_fails_closed():
         m = json.loads((d / CS.HTTP_V2_ERROR).read_text())
         assert m["error"] and "Traceback" in m["traceback"] and m["save_path"] == str(d / "http_v2.json")
         (d / "http_v2.json").write_text('{"old": []}')                 # a re-run over an older output (brad 06:56)
+        (d / "http_v2_stats.json").write_text('{"old": 1}')             # ... and its stats (brad 09:35)
         r = subprocess.run([sys.executable, str(HERE / "unit_extractor.py"), "--path", str(d),
                             "--save_path", str(d / "http_v2.json")], capture_output=True, text=True)
         assert r.returncode == 3 and not (d / "http_v2.json").exists()
         stale = list(d.glob("http_v2.json.stale_*"))
         assert len(stale) == 1 and stale[0].read_text() == '{"old": []}'
+        st_stale = list(d.glob("http_v2_stats.json.stale_*"))
+        assert len(st_stale) == 1 and st_stale[0].read_text() == '{"old": 1}' and not (d / "http_v2_stats.json").exists()
+        assert st_stale[0].name.split("stale_")[1] == stale[0].name.split("stale_")[1]          # the same <ts>
         (d / "h1_raw.json").unlink()                                    # the repaired re-run (the marker is NOT removed
         r = subprocess.run([sys.executable, str(HERE / "unit_extractor.py"), "--path", str(d),     # by hand: brad 07:13)
                             "--save_path", str(d / "http_v2.json")], capture_output=True, text=True)
@@ -39,6 +43,8 @@ def test_unit_extractor_fails_closed():
         assert len(list(d.glob(CS.HTTP_V2_ERROR + ".stale_*"))) == 1                 # the old marker, archived
         st = json.loads((d / "http_v2_stats.json").read_text())                       # brad 08:59: the count beside
         assert "network_core" in st and st["h1_body_only_packets"] in (None, 0), st    # None: an nc without stats=
+        import hashlib
+        assert st["http_v2_sha256"] == hashlib.sha256((d / "http_v2.json").read_bytes()).hexdigest()   # names its file
         assert CS.http_v2_missing(d, {"n_res_meta": 0}) is None                       # the repaired session stops flagging
 
 
