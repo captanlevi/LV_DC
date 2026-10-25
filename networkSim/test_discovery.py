@@ -153,7 +153,36 @@ def test_check_session_reports_the_join_order():
         (sd / "http_v2.json").write_text(json.dumps({"a->b": recs + [
             {"request_url": "https://x/stream-1_ld5.flv", "request_start": t0 + 21.5}]}))     # a leak: preview after
         assert CS.join_order(sd, meta, net)["media_between_discovery_and_apply"] == 1
+        assert CS.join_order_violation(CS.join_order(sd, meta, net)).startswith("join_order: 1 media request")
         assert CS.join_order(sd, {"join": {}}, net) is None                                 # before the rule
+        assert CS.join_order_violation(None) is None
+
+
+def test_media_before_the_shaped_join_fails_the_session(tmp_path):
+    """levi 08:15: a simulated session whose stream media starts after the discovery and before the first apply FAILs
+    in check_session (its check.json reasons), and the same session with the order held does not carry that reason."""
+    import subprocess
+    t0 = 1_800_000_000.0
+    sd = tmp_path / "data" / "_trio" / "tiktok" / "ti_100001"
+    sd.mkdir(parents=True)
+    (sd / "meta.json").write_text(json.dumps({"platform": "tiktok", "ended_at": t0 + 600, "started_at": t0,
+                                              "join": {"discovery": {"kind": "tt /live", "t_end": t0 + 20.0}}}))
+    (sd / "net_labels.txt").write_text(json.dumps({"timestamp": t0 + 23.0, "apply_start": t0 + 22.9, "state": 3,
+                                                   "speed": 600}) + "\n")
+    (sd / "labels.csv").write_text("ts,type\n")
+
+    def run(leak):
+        recs = [{"request_url": "https://x/stream-2_or4.flv", "request_start": t0 + 30.0}]
+        if leak:
+            recs.append({"request_url": "https://x/stream-2_or4.flv", "request_start": t0 + 21.0})
+        (sd / "http_v2.json").write_text(json.dumps({"a->b": recs}))
+        subprocess.run([sys.executable, str(HERE / "check_session.py"), str(sd)], capture_output=True, text=True)
+        return json.loads((sd / "check.json").read_text())
+    c = run(True)
+    assert c["verdict"] == "FAIL" and any(r.startswith("join_order:") for r in c["reasons"]), c["reasons"]
+    assert c["join_order"]["media_between_discovery_and_apply"] == 1
+    c = run(False)
+    assert not any(r.startswith("join_order:") for r in c["reasons"]) and c["join_order"]["media_between_discovery_and_apply"] == 0
 
 
 def main() -> int:

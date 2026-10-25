@@ -859,6 +859,15 @@ def http_media_flows(sd: Path) -> set:
     return keys
 
 
+def join_order_violation(jo: dict | None) -> str | None:
+    """levi 08:15: the order is enforced, not only reported: a media request that STARTED after the discovery ended
+    (its tab already closed) and before the shaper's first apply means the stream began unshaped: a FAIL reason.
+    None when the order holds or join_order does not apply."""
+    n = (jo or {}).get("media_between_discovery_and_apply")
+    return (f"join_order: {n} media request(s) between the unshaped discovery's end and the first apply "
+            f"(the stream started before the shaped join; levi 07:48 (iii))") if n else None
+
+
 def join_order(sd: Path, meta: dict, net: list[dict]) -> dict | None:
     """levi 07:48 (iii), reported: the unshaped discovery precedes the shaped join. From http_v2's media requests
     (MEDIA_URL_PATTERNS or a video/* response_ct, by request_start), meta.join.discovery's end and the shaper's first
@@ -1525,6 +1534,10 @@ def main() -> int:
     eq = entry_quality_summary(meta)
     if eq and eq["qa_fail"]:      # Q am. 10: a restore not verified from state is QA-flagged
         v, why = "FAIL", why + [f"entry_quality: Auto not restored ({eq['qa_fail']})"]
+    jo = join_order(sd, meta, E.read_net_labels(sd))     # levi 07:48 (iii) / 08:15: reported, and the order enforced
+    jo_why = join_order_violation(jo)
+    if jo_why:
+        v, why = "FAIL", why + [jo_why]
     # levi 2026-10-17: one session class by the fixed precedence (entries above); only `normal` counts toward quotas
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_class_s", lab.get("dead_player_max_s")),
                               lab.get("dead_player_T_s"), lab.get("frozen_playhead_class_s", lab.get("frozen_playhead_max_s")),
@@ -1537,7 +1550,6 @@ def main() -> int:
     for fns in (fullscreen_not_screen(meta), fullscreen_player_lt_screen(meta), chrome_version_missing(meta)):
         if fns:
             sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
-    jo = join_order(sd, meta, E.read_net_labels(sd))     # levi 07:48 (iii): reported only
     import decode_path as DP
     _dp = meta.get("decode_path") or {}
     dp_hevc = DP.hevc_decision(_dp.get("gpu"), _dp.get("page"), (sreg.get("regime") or {}).get("played_codec")) if _dp else {}
