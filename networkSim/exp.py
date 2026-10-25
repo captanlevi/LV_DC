@@ -1180,6 +1180,8 @@ if __name__ == "__main__":
                                                 "edges": browser._master.ad_edges,
                                                 "overflow": browser._master.ad_edges_overflow}
                                                if getattr(browser, "_master", None) is not None else None),
+                              tw_stream_type=(browser._master.tw_stream_type()        # record only (2026-10-25)
+                                              if getattr(browser, "_master", None) is not None else None),
                               **({"channel_pick": {**channel_pick_start, **browser.channel_pick}}     # twitch: + the category draw
                                  if browser.channel_pick is not None else {}),
                               t2_skipped=browser.t2_skipped, player_ladder=browser.player_ladder,

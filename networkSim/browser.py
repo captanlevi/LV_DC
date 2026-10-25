@@ -2147,6 +2147,14 @@ _USHER_RE = re.compile(r"usher\.ttvnw\.net/api/(?:v2/)?channel/hls/[^/?]+\.m3u8"
 # the listener reads each body it already sees (no request of ours) and records every flip of "an ad marker present"
 _TW_MEDIA_RE = re.compile(r"\.m3u8(?:\?|$)")
 _TW_AD_MARK_RE = re.compile(r'stitched-ad|CLASS="twitch-ad|X-TV-TWITCH-AD', re.I)
+# meta.json tw_stream_type (record only, 2026-10-25): the page's own GQL responses (gql.twitch.tv/gql, fetched by the
+# twitch page itself) carry the channel's stream type in user.stream.type ("live" for a broadcast; "rerun" etc. otherwise;
+# StreamMetadata is the operation that carries it, the one streamlink's --twitch-disable-reruns reads). The listener
+# reads the bodies it already sees (Network.getResponseBody, no request of ours) and keeps only type / stream id /
+# the channel login per operation, never a body.
+_TW_GQL_RE = re.compile(r"^https://gql\.twitch\.tv/gql(?:[?#]|$)")
+TW_STREAM_TYPE_OP = "StreamMetadata"      # the preferred operation for the session's value
+TW_GQL_LOGIN_VARS = ("channelLogin", "login", "channel", "channelName")
 
 
 LADDER_PROBE_FROZEN_S = 60.0   # twitch, master unread: the quality menu is read only inside a frozen run this long
@@ -2315,6 +2323,14 @@ class MasterListener:
         self.ladder_errors = 0                     # levi 18:22: master reads whose parse raised (the offer reads missing)
         self.ladder_last_error: str | None = None
         self._ladder_last = None
+        self.gql_bodies = 0                        # tw_stream_type: GQL response bodies read
+        self.gql_errors = 0                        # ... whose parse raised
+        self.gql_last_error: str | None = None
+        self._gql_ops: dict = {}                   # (session, requestId) -> [(operationName, login)] from the request
+        self.stream_type_edges: list[dict] = []    # each operation's (login, stream id, type) read, on change
+        self.stream_type_reads: dict[str, int] = {}   # operation -> reads that carried user.stream
+        self.stream_type_overflow = 0
+        self._stream_type_last: dict[str, tuple] = {}
 
     def start(self) -> "MasterListener":
         self._t = threading.Thread(target=self._run, daemon=True, name="master-listener")
@@ -2332,19 +2348,31 @@ class MasterListener:
         if m == "Target.attachedToTarget" and (prm.get("targetInfo") or {}).get("type") in self.WORKER_TYPES:
             self.workers.append((prm.get("targetInfo") or {}).get("type"))
             send("Network.enable", {"maxTotalBufferSize": 4_000_000, "maxResourceBufferSize": 500_000}, prm.get("sessionId"))
+        elif m == "Network.requestWillBeSent" and _TW_GQL_RE.search((prm.get("request") or {}).get("url", "")):
+            self._gql_ops[(sid, prm.get("requestId"))] = self.gql_request_ops((prm.get("request") or {}).get("postData"))
+        elif m == "Network.responseReceived" and _TW_GQL_RE.search((prm.get("response") or {}).get("url", "")):
+            self._wanted[(sid, prm.get("requestId"))] = prm["response"]["url"]   # tw_stream_type: the page's own GQL
         elif m == "Network.responseReceived" and _USHER_RE.search((prm.get("response") or {}).get("url", "")):
             self._wanted[(sid, prm.get("requestId"))] = prm["response"]["url"]
         elif m == "Network.responseReceived" and _TW_MEDIA_RE.search((prm.get("response") or {}).get("url", "")):
             self._wanted[(sid, prm.get("requestId"))] = prm["response"]["url"]   # a media playlist (A3 source 2)
         elif m == "Network.loadingFinished" and (sid, prm.get("requestId")) in self._wanted:
             url = self._wanted.pop((sid, prm["requestId"]))
-            self._pending[send("Network.getResponseBody", {"requestId": prm["requestId"]}, sid)] = (sid, url)
+            self._pending[send("Network.getResponseBody", {"requestId": prm["requestId"]}, sid)] = (sid, url, prm["requestId"])
         elif msg.get("id") in self._pending:
-            (req_sid, url), res = self._pending.pop(msg["id"]), msg.get("result") or {}
+            (req_sid, url, rid), res = self._pending.pop(msg["id"]), msg.get("result") or {}
             body = res.get("body") or ""
             if res.get("base64Encoded"):
                 body = base64.b64decode(body).decode("utf-8", "replace")
-            if _USHER_RE.search(url):
+            if _TW_GQL_RE.search(url):
+                hint = self._gql_ops.pop((req_sid, rid), None)
+                if body:                               # a preflight / evicted body reads empty: nothing to parse
+                    try:                               # a malformed body never breaks the listener
+                        self.stream_type_read(body, time.time(), hint)
+                    except Exception as exc:
+                        self.gql_errors += 1
+                        self.gql_last_error = repr(exc)[:200]
+            elif _USHER_RE.search(url):
                 kbit = stuck.rung_from_master(body)
                 if kbit:
                     self.latest = {"kbit": kbit, "t": time.time(), "path": urlsplit(url).path, "from_worker": req_sid is not None}
@@ -2375,6 +2403,83 @@ class MasterListener:
         return {"n_reads": self.ladder_n_reads, "reads": self.ladder_reads, "overflow": self.ladder_overflow,
                 "errors": self.ladder_errors, "last_error": self.ladder_last_error,
                 "rule": "collector v3 A4: each HLS master read's STREAM-INF video variants, on change"}
+
+    @staticmethod
+    def gql_request_ops(post_data) -> list | None:
+        """A GQL request's postData (one operation or a batch) -> [(operationName, channel login)] in batch order; None
+        when absent or unreadable (the response's own extensions.operationName is then the op)."""
+        try:
+            req = json.loads(post_data) if post_data else None
+        except (ValueError, TypeError):
+            return None
+        if req is None:
+            return None
+        out = []
+        for op in (req if isinstance(req, list) else [req]):
+            op = op if isinstance(op, dict) else {}
+            v = op.get("variables") if isinstance(op.get("variables"), dict) else {}
+            login = next((v[k] for k in TW_GQL_LOGIN_VARS if isinstance(v.get(k), str)), None)
+            out.append((op.get("operationName"), login))
+        return out
+
+    def stream_type_read(self, body: str, t: float, hint: list | None = None) -> None:
+        """tw_stream_type: one GQL response body (one result or a batch): every result whose data.user (or
+        data.userOrError) has a `stream` key gives (login, stream id, type); a null stream reads as type None (offline).
+        Recorded per operation on change; capped, counted."""
+        self.gql_bodies += 1
+        res = json.loads(body)
+        for i, r in enumerate(res if isinstance(res, list) else [res]):
+            if not isinstance(r, dict) or not isinstance(r.get("data"), dict):
+                continue
+            h = (hint[i] if hint and i < len(hint) else (None, None))
+            op = ((r.get("extensions") or {}).get("operationName") if isinstance(r.get("extensions"), dict) else None) \
+                or h[0] or "?"
+            for key in ("user", "userOrError"):
+                u = r["data"].get(key)
+                if not isinstance(u, dict) or "stream" not in u:
+                    continue
+                st = u["stream"]
+                if st is not None and not (isinstance(st, dict) and "type" in st):
+                    continue                           # a stream object without its type: not this field's source
+                value = None if st is None else st.get("type")
+                sid = None if st is None else st.get("id")
+                login = h[1] if h[1] is not None else (u.get("login") if isinstance(u.get("login"), str) else None)
+                self.stream_type_reads[op] = self.stream_type_reads.get(op, 0) + 1
+                cur = (login, sid, value)
+                if self._stream_type_last.get(op) != cur:
+                    self._stream_type_last[op] = cur
+                    if len(self.stream_type_edges) < WATCH_LOG_MAX:
+                        self.stream_type_edges.append({"t": t, "op": op, "login": login, "stream_id": sid,
+                                                       "value": value})
+                    else:
+                        self.stream_type_overflow += 1
+                break
+
+    def tw_stream_type(self) -> dict:
+        """meta.json tw_stream_type: {value, source, t} from the first non-null read of TW_STREAM_TYPE_OP (else of any
+        operation), with the channel login and stream id it named; value None with a reason when no read carried a type."""
+        edges = self.stream_type_edges
+        typed = [e for e in edges if e["value"] is not None]
+        pick = next((e for e in typed if e["op"] == TW_STREAM_TYPE_OP), typed[0] if typed else None)
+        if pick is not None:
+            reason = None
+        elif self.error is not None:
+            reason = f"listener error: {self.error}"
+        elif edges:
+            reason = "user.stream was null in every read (channel offline)"
+        elif self.gql_bodies:
+            reason = "no GQL response carried user.stream.type"
+        else:
+            reason = "no GQL response body read"
+        same_op = [e for e in typed if pick is not None and e["op"] == pick["op"]]
+        return {"value": pick["value"] if pick else None, "source": f"gql:{pick['op']}" if pick else None,
+                "t": pick["t"] if pick else None, "login": pick["login"] if pick else None,
+                "stream_id": pick["stream_id"] if pick else None, "reason": reason,
+                "changed": len({(e["login"], e["stream_id"], e["value"]) for e in same_op}) > 1,
+                "edges": edges, "reads_by_op": dict(self.stream_type_reads), "gql_bodies": self.gql_bodies,
+                "overflow": self.stream_type_overflow, "errors": self.gql_errors, "last_error": self.gql_last_error,
+                "rule": "record only: the page's own GQL responses (user.stream.type), bodies read via "
+                        "Network.getResponseBody, no request of ours; value from the first typed StreamMetadata read"}
 
     def playlist_ad(self, body: str, url: str, t: float) -> None:
         """v3 A3 source 2: one media playlist body: a flip of 'an ad marker present' is an edge (time.time; the A11 clock
