@@ -1157,6 +1157,7 @@ if __name__ == "__main__":
                                                       else {})} or None),
                               yt_ladder=browser.yt_ladder.record() if browser.yt_ladder else None,
                               tt_codec=browser.tt_codec.record() if browser.tt_codec else None,
+                              tt_onboarding=(browser.tt_onboarding if browser.platform == "tiktok" else None),   # #10
                               lowstate_hold_available=browser.lowstate_hold_available,
                               frozen_clock_hold=True if browser.platform in ("youtube", "twitch") else None,  # 032f6d31
                               frozen_hold=({"rule": FROZEN_HOLD_RULE, "bypassed": browser.frozen_hold_bypassed}

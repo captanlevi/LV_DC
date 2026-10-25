@@ -215,7 +215,31 @@ _SKIP_AD_JS: dict[str, str] = {
             return null;
         })()
     """,
-    "tiktok": "null",  # TikTok live has no pre-roll
+    # TikTok live has no pre-roll. levi 03:29 / batch #10: TikTok's own feed-navigation guide ("Scroll, use the up / down
+    # keys, or click the arrows on the right to browse your feed." + a "Got it" button) covers the video in a session's
+    # first shots (WA3 pinned rooms); dismissed by its own button, only when the guide's text is that guide's, at most
+    # TT_GUIDE_MAX_TRIES clicks (then tt_onboarding_stuck, no more clicks); every action recorded (meta.json tt_onboarding)
+    "tiktok": """
+        (function() {
+            const vis = (el) => !!el && el.offsetParent !== null && el.getClientRects().length > 0;
+            const btn = [...document.querySelectorAll('button, [role="button"]')]
+                .find((b) => vis(b) && /^\\s*got it\\s*$/i.test(b.textContent || ''));
+            if (!btn) return null;
+            let host = btn;
+            for (let i = 0; i < 6 && host.parentElement; i++) {
+                host = host.parentElement;
+                if (/browse your feed/i.test(host.textContent || '')) break;
+            }
+            const txt = (host.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+            if (!/browse your feed/i.test(txt)) return null;          // only the feed-navigation guide, never another dialog
+            const d = document.documentElement.dataset;
+            const tries = Number(d.lvqoeTtGuideTries || 0);
+            if (tries >= %(max_tries)d) return 'tt_onboarding_stuck [' + txt + ']';
+            d.lvqoeTtGuideTries = String(tries + 1);
+            btn.click();
+            return 'tt_onboarding_dismissed [' + txt + ']';
+        })()
+    """ % {"max_tries": 3},
     "bilibili": """
         (function() {
             const btn = document.querySelector(
@@ -3110,7 +3134,7 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                      on_wall=None, on_frozen=None, on_stuck=None, on_player_error=None,
                      error_watch: PlayerErrorWatch | None = None, resumer: "SelfPauseResumer | None" = None,
                      on_stream_ended=None, stream_watch: "StreamEndedWatch | None" = None,
-                     yt_ladder: "YtLadderRecorder | None" = None, clock_sample=None) -> None:
+                     yt_ladder: "YtLadderRecorder | None" = None, clock_sample=None, on_action=None) -> None:
     """Run the platform's ad action once a second; every action is logged with a timestamp (ad_actions.jsonl).
     Also watches for the login wall content.js marks (t37) and calls on_wall() once when it appears, and (addendum N)
     calls on_frozen(seconds) once when the frozen-playhead run passes the platform's T (check_session table); passes the
@@ -3158,6 +3182,11 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
                 if str(result).startswith("skip_futile") and error_watch is not None \
                         and error_watch.skip_futile_since is None:    # levi 14:35: the re-entry is tagged with it
                     error_watch.skip_futile_since = time.time()
+                if on_action is not None:                     # batch #10: tt's guide dismiss into meta.json too
+                    try:
+                        on_action(str(result), time.time())
+                    except Exception:
+                        pass
         except Exception:
             pass
         if on_player_error is not None and error_watch is not None:   # t56 tw_100016: error page / ad, no player
@@ -3870,6 +3899,7 @@ class BrowserSession:
         self.yt_ladder: "YtLadderRecorder | None" = YtLadderRecorder() if platform == "youtube" else None
         # levi 18:36 (A): tt's codec / renditions, record-only, one recorder for the session
         self.tt_codec: "TtCodecRecorder | None" = TtCodecRecorder() if platform == "tiktok" else None
+        self.tt_onboarding: list[dict] = []          # batch #10 (levi 03:29): the feed-navigation guide's dismiss actions
         # restart §8: twitch's drawn low-latency setting ("on" / "off"; None = the profile's own, untouched), set before
         # the first navigation and read back once (tw_latency.py); its record goes to meta.json tw_low_latency
         self.tw_low_latency = tw_low_latency if platform == "twitch" else None
@@ -4231,7 +4261,7 @@ class BrowserSession:
                   self._stuck_tick if self.platform in stuck.FALLBACK_RUNG_KBIT else None,
                   self._player_error if self.platform in PLAYER_ERROR_PLATFORMS else None, self.error_watch,
                   self.resumer, self._stream_ended if self.platform in STREAM_ENDED_PLATFORMS else None,
-                  self._stream_watch(), self.yt_ladder or self.tt_codec, self._clock_sample),
+                  self._stream_watch(), self.yt_ladder or self.tt_codec, self._clock_sample, self._on_ad_action),
             daemon=True,
             name="ad-watcher",
         )
@@ -4696,6 +4726,12 @@ class BrowserSession:
         if getattr(self, "lowstate_hold_available", None) is None:
             self.lowstate_hold_available = True
         return stuck.low_hold_end(labels, t)
+
+    def _on_ad_action(self, result: str, t: float) -> None:
+        """batch #10: tt's guide actions (dismissed / stuck) recorded with their time (meta.json tt_onboarding)."""
+        if result.startswith("tt_onboarding") and len(self.tt_onboarding) < WATCH_LOG_MAX:
+            self.tt_onboarding.append({"t": round(t, 3), "action": result.split(" [", 1)[0],
+                                       "text": result.split(" [", 1)[1].rstrip("]") if " [" in result else None})
 
     def _lowstate_held(self, t: float) -> bool:
         """The shaper's low-state hold runs at t."""
