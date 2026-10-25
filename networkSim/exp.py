@@ -73,6 +73,15 @@ def join_meta(join: dict) -> dict:
                     "session", **{k: v for k, v in join.items() if k != "abort"}, "abort": join.get("abort")}
 
 
+def join_final_write(write) -> bool:
+    """The join thread's own meta.join write, unless after_schedule already recorded the join as unfinished (brad / levi
+    00:03-00:04: a thread outliving JOIN_STOP_WAIT_S must not overwrite that record). True when written."""
+    if JOIN.get("unfinished"):
+        return False
+    write(join_meta(JOIN))
+    return True
+
+
 def join_unfinished_reason(join: dict, now: float) -> str:
     """B9 D2 (levi 23:49): the schedule ended with the join still running: a join_timeout at its first state (shagun's
     prefix), over the time since navigation."""
@@ -1148,14 +1157,15 @@ if __name__ == "__main__":
         except Exception as e:
             from browser import JoinTimeout
             jt = isinstance(e, JoinTimeout)
-            JOIN.update(outcome="join_timeout" if jt else "error", detail=getattr(e, "detail", None))
-            JOIN["abort"] = str(e) if jt else f"error: {type(e).__name__}: {e}"
-            print(f"[join] {JOIN['abort']}", flush=True)
+            msg = str(e) if jt else f"error: {type(e).__name__}: {e}"
+            if not JOIN.get("unfinished"):        # after_schedule already ended it (a cancelled join's error): keep that
+                JOIN.update(outcome="join_timeout" if jt else "error", detail=getattr(e, "detail", None), abort=msg)
+            print(f"[join] {msg}", flush=True)
         finally:
             try:
                 JOIN.update(join_record(JOIN.get("t_first_apply"), JOIN.get("t_nav"), JOIN.get("t_playing"),
                                         (args.episodes * SCHEDULE["episode_s"]) if args.episodes else None))
-                session_meta.write(session_dir, join=join_meta(JOIN))
+                join_final_write(lambda j: session_meta.write(session_dir, join=j))
             except Exception as e:
                 print(f"[join] meta write failed: {e!r}", flush=True)
 

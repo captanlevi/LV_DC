@@ -1796,7 +1796,9 @@ def join_timeout_due(ev0: dict, ev1: dict, rx0: int | None, rx1: int | None, liv
     """B9 D3 / Q1 (levi 23:49): a join timed out (rather than a dead or not-live page) iff, over the full scaled wait,
     media was attached, media bytes advanced (the slot's ingress counter by >= JOIN_RX_MIN_BYTES; without one, the
     page's buffered end or decoded bytes moved) and the page showed the live evidence the playing check uses (a
-    non-finite duration or the live badge; `live` overrides, tt's list badge). (due, the evidence)."""
+    non-finite duration or the live badge; `live` overrides, tt's list badge). (due, the evidence). The rx counter is all
+    of the slot's ingress (page, chat, ads too: brad 00:03), so "flowing" is nearly always true in a slow join; attached
+    and live evidence do the discriminating."""
     attached = bool(ev1.get("attached"))
     if rx0 is not None and rx1 is not None:
         flowing, how = (rx1 - rx0) >= JOIN_RX_MIN_BYTES, "rx"

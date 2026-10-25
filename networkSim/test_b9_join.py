@@ -213,6 +213,23 @@ def test_a_join_still_running_at_the_schedule_end():
         assert wrote and wrote[0]["abort"] == r and time.time() - t0 < 2
         assert t.is_alive() == stubborn
         stop_forever.set()
+    # brad / levi 00:04: a join thread outliving JOIN_STOP_WAIT_S then finishes and writes: after_schedule's unfinished
+    # record stands (the thread's write is skipped), while a normal join still writes its own
+    late = {"first_state": "3", "t_nav": 1000.0}
+    ns = {"JOIN": late, "time": time, "JOIN_STOP_WAIT_S": 0.2}
+    exec(compile(ast.Module(fns + [_exp_fn("join_final_write")], []), "exp.join", "exec"), ns)
+    br = type("Br", (), {"join_cancel": threading.Event()})()
+    hold = threading.Event()
+    th = threading.Thread(target=hold.wait, daemon=True)
+    th.start()
+    meta = {}
+    ns["after_schedule"](th, br, None, now=1900.0, write=lambda j: meta.update(join=j))
+    late.update(outcome="error", abort="error: RuntimeError: Failed to navigate to a live youtube stream")   # the thread
+    assert ns["join_final_write"](lambda j: meta.update(join=j)) is False
+    assert meta["join"]["abort"] == "join_timeout at state 3 (900 s)" and meta["join"]["unfinished"] is True
+    hold.set()
+    ns["JOIN"] = {"outcome": "playing"}
+    assert ns["join_final_write"](lambda j: meta.update(join=j)) is True and meta["join"]["outcome"] == "playing"
     ns = {"JOIN": {"outcome": "playing"}, "time": time, "JOIN_STOP_WAIT_S": 0.3}
     exec(compile(ast.Module(fns, []), "exp.after_schedule", "exec"), ns)
     done = threading.Thread(target=lambda: None)
@@ -254,6 +271,8 @@ def test_wiring():
     assert "rx=self.join_rx, cancel=self.join_cancel.is_set)" in bsrc
     assert "browser.join_rx = lambda: int(_rx_path.read_text())" in src
     assert "abort_reason = after_schedule(_join_t, browser, abort_reason," in main
+    assert "join_final_write(lambda j: session_meta.write(session_dir, join=j))" in join   # brad 00:03
+    assert 'if not JOIN.get("unfinished"):        # after_schedule already ended it' in join
     assert "_tt_preroll(page, TT_PREROLL_S, scale=sc)" in bsrc
 
 
