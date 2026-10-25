@@ -875,25 +875,41 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = No
     return False, {"dead": "not_playing", **s, **fg.record(), "ev0": ev0 or {}}
 
 
-def _tt_preroll(page: "CDPPage", seconds: float, scale: float = 1.0) -> tuple[bool, dict]:
-    """The pre-roll before the session clock: no dead signal for `seconds` (its clocks scaled by `scale` during the B9
-    join), playhead advancing >= half of it and media appended (buffered end moved)."""
+TT_PREROLL_MIN_ADV_S = 1.0     # levi 06:40: the pre-roll's acceptance, identical at every state and throughput-free
+
+
+def _tt_preroll(page: "CDPPage", seconds: float, scale: float = 1.0, cancel=None,
+                until: float | None = None) -> tuple[bool, dict]:
+    """The pre-roll: no dead signal for `seconds` (its clocks scaled by `scale` during the B9 join), and the playhead
+    advancing >= TT_PREROLL_MIN_ADV_S within the scaled pre-roll (levi 06:40, WC3 r1 ti_100001: the old test, advance >=
+    seconds / 2, is throughput-dependent on a shaped link, and skipped 4 live rooms at 204 kbit for the lowest-viewer
+    one). A room still short of it after `seconds` waits up to seconds x scale for its first second (clipped to `until`,
+    stopped by `cancel`); the advance share (ct_advance_s / the seconds watched) is recorded as a covariate, never a
+    filter."""
     w, s, adv, prev = TTRoomWatch(scale=scale), {}, 0.0, _tt_state(page).get("ct")
-    end = time.time() + seconds
-    while time.time() < end:
+    t0 = time.time()
+    end = t0 + seconds
+    longest = t0 + seconds * max(1.0, scale)
+    if until is not None:
+        longest = max(end, min(longest, until))
+    while True:
+        now = time.time()
+        if now >= longest or (now >= end and adv >= TT_PREROLL_MIN_ADV_S) or (cancel is not None and cancel.is_set()):
+            break
         s = _tt_state(page)
         dead = w.feed(s, time.time())
         if dead:
-            return False, {"dead": dead, **s}
+            return False, {"dead": dead, **s, "ct_advance_s": adv, "watched_s": round(time.time() - t0, 1)}
         ct = s.get("ct")
         if ct is not None and prev is not None and ct > prev:
             adv += ct - prev                          # cumulative: a player reconnect restarts the playhead at 0
         prev = ct if ct is not None else prev
         time.sleep(1)
-    # media arriving = the playhead advancing at play rate (tt's MediaStream player exposes no buffer or decoded bytes)
-    ok = adv >= seconds / 2
-    return ok, {"ct_advance_s": adv, "buf_end": s.get("buf_end"), "decoded": s.get("decoded"),
-                **({} if ok else {"dead": "preroll_short"})}
+    watched = max(1e-9, time.time() - t0)
+    ok = adv >= TT_PREROLL_MIN_ADV_S
+    return ok, {"ct_advance_s": adv, "watched_s": round(watched, 1), "advance_share": round(adv / watched, 4),
+                "extended": watched > seconds + 1.5, "buf_end": s.get("buf_end"), "decoded": s.get("decoded"),
+                **({} if ok else {"dead": "preroll_no_advance"})}
 
 
 # v2 (supervisor 2026-10-16): pin the player to the old collection's modal player size over the CURRENT-era sessions
@@ -4735,7 +4751,9 @@ class BrowserSession:
                             {"intended": c["href"], "landed_url": idc.get("landed_url"), "try": len(rec["tries"])})
                 if ok:
                     t["t_playing"] = time.time()
-                    ok, detail = _tt_preroll(page, TT_PREROLL_S, scale=sc)
+                    ok, detail = _tt_preroll(page, TT_PREROLL_S, scale=sc,
+                                             cancel=self.join_cancel if self.join_state is not None else None,
+                                             until=(t_walk + JOIN_CAP_S) if self.join_state is not None else None)
             except Exception as exc:
                 ok, detail = False, {"dead": "error", "error": repr(exc)}
             t.update(ok=ok, detail=detail, t_done=time.time())

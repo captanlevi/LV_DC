@@ -273,7 +273,9 @@ def test_wiring():
     assert "abort_reason = after_schedule(_join_t, browser, abort_reason," in main
     assert "join_final_write(lambda j: session_meta.write(session_dir, join=j))" in join   # brad 00:03
     assert 'if not JOIN.get("unfinished"):        # after_schedule already ended it' in join
-    assert "_tt_preroll(page, TT_PREROLL_S, scale=sc)" in bsrc
+    assert "_tt_preroll(page, TT_PREROLL_S, scale=sc," in bsrc                         # levi 06:40: + cancel / cap
+    assert "cancel=self.join_cancel if self.join_state is not None else None" in bsrc
+    assert "until=(t_walk + JOIN_CAP_S) if self.join_state is not None else None)" in bsrc
 
 
 def main() -> int:
