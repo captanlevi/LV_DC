@@ -131,6 +131,32 @@ def test_tick_presence_is_phase_free() -> None:
     assert lab["entry_tick_presence"] == 1.0 and lab["tick_window"] == list(win)
 
 
+
+def test_b9_join_is_outside_the_tick_window() -> None:
+    """levi 06:36-06:37 (WC3 r1 ti_100001: join_s 475 at state 1, tick_presence 0.94995 < 0.95, playing part 0.9955):
+    under B9 the first apply precedes navigation, so the tick window starts at meta.join.t_playing; before B9 (no
+    meta.join) and for an unfinished join (no t_playing) the shaper's first label stays the start."""
+    t0 = 1_800_000_000.0
+    net = [{"timestamp": t0, "state": 1}, {"timestamp": t0 + 900.0, "state": 4}]
+    meta = {"ended_at": t0 + 1800.0}
+    assert CS.session_window(meta, net) == (t0, t0 + 1800.0)                               # pre-B9: unchanged
+    assert CS.session_window({**meta, "join": {"t_nav": t0 + 1, "abort": "x"}}, net) == (t0, t0 + 1800.0)
+    b9 = {**meta, "join": {"t_first_apply": t0, "t_nav": t0 + 1.0, "t_playing": t0 + 200.0, "join_s": 199.0}}
+    assert CS.session_window(b9, net) == (t0 + 200.0, t0 + 1800.0)
+    ticks = [t0 + 200.0 + k for k in range(1601)]                                          # 1 Hz from playing
+    old = CS.tick_presence(ticks, CS.session_window(meta, net))
+    new = CS.tick_presence(ticks, CS.session_window(b9, net))
+    assert old < CS.CHECKS["tick_presence_min"] <= new == 1.0, (old, new)
+    assert abs(old - (1 - 199.0 / 1801.0)) < 1e-9
+    # slow start under shaping: under B9 the entry met the first state (applied before it), not the next transition
+    ent = {"kind": "stream", "t": t0 + 30.0, "sustained_60s": False}
+    assert E.slow_start_shaped([{**ent, "shaper_at_entry": {"state": "1"},
+                                 "first_shaped_after": {"state": "4", "t": t0 + 900.0}}])          # B9: state 1 met
+    assert not E.slow_start_shaped([{**ent, "shaper_at_entry": {"state": "unshaped"},
+                                     "first_shaped_after": {"state": "4", "t": t0 + 900.0}}])      # pre-B9 unchanged
+    assert E.slow_start_shaped([{**ent, "shaper_at_entry": {"state": "unshaped"},
+                                 "first_shaped_after": {"state": "2", "t": t0 + 40.0}}])
+
 def test_hold_schedule_low_cap_is_complete() -> None:
     """v3 C13 (shagun t59 yt_900048): a decode_stress hold (matrix_id hold:<state>) has no low-state cap by construction;
     its None is not 'meta.json incomplete'. Any other matrix with a missing cap still is."""
@@ -147,6 +173,7 @@ def main() -> int:
     test_hold_schedule_low_cap_is_complete()
     test_check_json_schema()
     test_tick_presence_is_phase_free()
+    test_b9_join_is_outside_the_tick_window()
     test_dead_recovery_revoked_by_a_frozen_continue()
     print("test_check_schema: ok")
     return 0

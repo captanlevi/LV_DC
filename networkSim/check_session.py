@@ -465,13 +465,19 @@ def substeps(lab: list[dict], t_end: float) -> list[tuple[dict, float, float | N
 
 
 def session_window(meta: dict, net: list[dict]) -> tuple[float, float] | None:
-    """The seconds the res_meta ticks must cover: from the shaper's first label (the schedule starts once the stream
-    plays; earlier time is browser start and entry) to the session's end (meta ended_at); None when either is missing."""
+    """The seconds the res_meta ticks must cover: from the stream playing to the session's end (meta ended_at); None
+    when either is missing. Playing = the shaper's first label before B9 (the schedule started once the stream played);
+    under B9 (levi 06:36, WC3 r1 ti_100001) the first apply precedes navigation, so the join (no player, no ticks) would
+    count as one uncovered gap: the window starts at meta.join.t_playing when the join recorded it (an unfinished join
+    has none and keeps the shaper's start; that session is a join_timeout)."""
     try:
         lo = min(float(r["timestamp"]) for r in net if r.get("timestamp") is not None)
         hi = float(meta["ended_at"])
     except (ValueError, KeyError, TypeError):
         return None
+    t_playing = (meta.get("join") or {}).get("t_playing")
+    if isinstance(t_playing, (int, float)):
+        lo = max(lo, float(t_playing))
     return (lo, hi) if hi > lo else None
 
 

@@ -429,6 +429,9 @@ def slow_start_shaped(entries: list[dict]) -> bool:
     if s is None or s.get("sustained_60s"):
         return False
     f = s.get("first_shaped_after") or {}
+    at = s.get("shaper_at_entry") or {}
+    if at.get("state") not in (None, "unshaped"):     # B9 (levi 06:37 audit): the first state was applied before the
+        f = {"state": at["state"], "t": s.get("t")}     # entry, so it is the state the entry met (before B9: unshaped)
     try:
         state = int(f.get("state"))
     except (TypeError, ValueError):
