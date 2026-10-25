@@ -1177,6 +1177,8 @@ if __name__ == "__main__":
                                      if LEVER is not None else None),
                               tw_ladder=(browser._master.tw_ladder()                  # v3 A4 (twitch's offer)
                                          if getattr(browser, "_master", None) is not None else None),
+                              tt_room_enter=(browser._tt_room.tt_room_enter()          # item #9 (tt's played offer)
+                                             if getattr(browser, "_tt_room", None) is not None else None),
                               tw_playlist_ads=({"fetches": browser._master.playlist_fetches,          # v3 A3 src 2
                                                 "edges": browser._master.ad_edges,
                                                 "overflow": browser._master.ad_edges_overflow}

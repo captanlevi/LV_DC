@@ -2567,6 +2567,210 @@ class MasterListener:
                 pass
 
 
+_TT_ROOM_API_RE = re.compile(r"/webcast/room/(?:enter|info)/")
+TT_ROOM_SDK_KEYS = ("VCodec", "resolution", "vbitrate", "v_rtbitrate", "fps", "gop")
+TT_ROOM_OPTION_KEYS = ("name", "sdk_key", "level", "resolution")
+TT_ROOM_STREAM_KEYS = ("default_resolution", "resolution_name", "stream_size_width", "stream_size_height")
+
+
+def _json_or_dict(v):
+    """tt nests JSON as strings (pull_data.stream_data, each quality's sdk_params); a dict is taken as is."""
+    if isinstance(v, dict) or v is None:
+        return v
+    return json.loads(v)
+
+
+def _size(v):
+    return len(v) if isinstance(v, (dict, list, tuple)) else None
+
+
+class TtRoomListener:
+    """tiktok (record only, item #9): the page's own /webcast/room/enter/ (and /webcast/room/info/) responses, read by a
+    second CDP client on the page exactly as MasterListener reads twitch's master (Network domain on the page and on every
+    worker it auto-attaches; the body via Network.getResponseBody on loadingFinished, no request of ours). tt_codec reads
+    the SSR document's sdk_params, a stale ladder; room/enter carries the ladder the player is handed, and the room's
+    link-mic / co-host / battle state (a multi-guest room composites several hosts into one stream). Each read is parsed
+    (parse(); never the body itself, never a pull URL) and recorded when its content changed for that path; capped at
+    WATCH_LOG_MAX and counted. A body that does not parse is counted (errors, last_error) and never breaks the listener.
+    tt_room_enter() is meta.json tt_room_enter."""
+
+    WORKER_TYPES = ("worker", "shared_worker", "service_worker")
+    NETWORK = {"maxTotalBufferSize": 8_000_000, "maxResourceBufferSize": 2_000_000}   # a room/enter body is large
+    RULE = ("item #9: each /webcast/room/enter|info/ response the page read (Network.getResponseBody), parsed to the "
+            "offered qualities (stream_data sdk_params) + options.qualities + the multi-guest fields, on change per path; "
+            "multi_guest = with_linkmic OR linkmic_layout != 0 OR multi_stream_scene != 0 OR linker_map size > 0 OR "
+            "battle_status != 0 (None when none of them is present)")
+
+    def __init__(self, ws_url: str):
+        self.ws_url, self.error = ws_url, None
+        self.workers: list[str] = []
+        self.reads: list[dict] = []
+        self.n_reads = 0
+        self.overflow = 0
+        self.errors = 0
+        self.last_error: str | None = None
+        self.ready = threading.Event()             # set once Network.enable + setAutoAttach are sent
+        self._last: dict[str, str] = {}            # path -> the last recorded content key
+        self._wanted: dict = {}
+        self._pending: dict = {}
+        self._stop = threading.Event()
+        self._t: threading.Thread | None = None
+
+    def start(self, wait_s: float = 2.0) -> "TtRoomListener":
+        """Started before tt's room navigation; waits (<= wait_s) until Network is enabled so the first room/enter is
+        seen."""
+        self._t = threading.Thread(target=self._run, daemon=True, name="tt-room-listener")
+        self._t.start()
+        self.ready.wait(wait_s)
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _err(self, what: str) -> None:
+        self.errors += 1
+        self.last_error = what[:200]
+
+    def handle(self, msg: dict, send) -> None:
+        """One CDP message; send(method, params, session_id) -> the command id."""
+        import base64
+        from urllib.parse import urlsplit
+        m, prm, sid = msg.get("method"), msg.get("params") or {}, msg.get("sessionId")
+        if m == "Target.attachedToTarget" and (prm.get("targetInfo") or {}).get("type") in self.WORKER_TYPES:
+            self.workers.append((prm.get("targetInfo") or {}).get("type"))
+            send("Network.enable", dict(self.NETWORK), prm.get("sessionId"))
+        elif m == "Network.responseReceived":
+            url = (prm.get("response") or {}).get("url", "")
+            if _TT_ROOM_API_RE.search(urlsplit(url).path):
+                self._wanted[(sid, prm.get("requestId"))] = urlsplit(url).path      # the path only: no query tokens
+        elif m == "Network.loadingFinished" and (sid, prm.get("requestId")) in self._wanted:
+            path = self._wanted.pop((sid, prm["requestId"]))
+            self._pending[send("Network.getResponseBody", {"requestId": prm["requestId"]}, sid)] = (sid, path)
+        elif m == "Network.loadingFailed":
+            self._wanted.pop((sid, prm.get("requestId")), None)
+        elif msg.get("id") in self._pending:
+            (req_sid, path) = self._pending.pop(msg["id"])
+            try:                                   # a malformed body (or an evicted one) never breaks the listener
+                if msg.get("error"):
+                    raise ValueError(f"getResponseBody: {(msg['error'] or {}).get('message')}")
+                res = msg.get("result") or {}
+                body = res.get("body") or ""
+                if res.get("base64Encoded"):
+                    body = base64.b64decode(body).decode("utf-8", "replace")
+                self.record(body, path, time.time(), req_sid is not None)
+            except Exception as exc:
+                self._err(repr(exc))
+
+    def record(self, body: str, path: str, t: float, from_worker: bool = False) -> None:
+        """One body read: parsed, recorded when its content changed for this path (capped, counted)."""
+        self.n_reads += 1
+        r = self.parse(body)                       # raises on a body that is not a JSON object
+        if r.pop("parse_errors"):
+            self._err(r["parse_error"])
+        key = json.dumps(r, sort_keys=True, default=str)
+        if key == self._last.get(path):
+            return
+        self._last[path] = key
+        if len(self.reads) < WATCH_LOG_MAX:
+            self.reads.append({"t": t, "path": path, "from_worker": from_worker, "body_bytes": len(body), **r})
+        else:
+            self.overflow += 1
+
+    @staticmethod
+    def parse(body: str) -> dict:
+        """A room/enter body -> {status_code, room_id, qualities, options, stream, multi_guest, multi_guest_signals,
+        fired, parse_error}. Every value read is a scalar or a size (never a URL). A section that does not parse is None
+        with its error in parse_error; a missing key is None, never False."""
+        top = json.loads(body)
+        if not isinstance(top, dict):
+            raise ValueError(f"room body is {type(top).__name__}, not an object")
+        data = top.get("data") if isinstance(top.get("data"), dict) else {}
+        errs: list[str] = []
+        su = data.get("stream_url") if isinstance(data.get("stream_url"), dict) else {}
+        pull = ((su.get("live_core_sdk_data") or {}).get("pull_data") or {}) if isinstance(
+            su.get("live_core_sdk_data"), dict) else {}
+        qualities = None
+        if pull.get("stream_data") is not None:
+            try:
+                sd = (_json_or_dict(pull["stream_data"]) or {}).get("data") or {}
+                qualities = []
+                for name, q in sd.items():
+                    main = (q or {}).get("main") or {}
+                    try:
+                        sp = _json_or_dict(main.get("sdk_params")) or {}
+                    except (ValueError, TypeError) as exc:
+                        sp = {}
+                        errs.append(f"sdk_params[{name}]: {exc!r}")
+                    if "fps" not in sp and "Fps" in sp:
+                        sp = {**sp, "fps": sp["Fps"]}
+                    qualities.append({"name": name, **{k: sp.get(k) for k in TT_ROOM_SDK_KEYS}})
+            except (ValueError, TypeError, AttributeError) as exc:
+                qualities = None
+                errs.append(f"stream_data: {exc!r}")
+        options = None
+        opts = pull.get("options")
+        if isinstance(opts, dict) and isinstance(opts.get("qualities"), list):
+            options = [{k: q.get(k) for k in TT_ROOM_OPTION_KEYS} for q in opts["qualities"] if isinstance(q, dict)]
+        lm = data.get("link_mic") if isinstance(data.get("link_mic"), dict) else {}
+        bs = lm.get("battle_settings") if isinstance(lm.get("battle_settings"), dict) else {}
+        sig = {"with_linkmic": data.get("with_linkmic"), "linkmic_layout": data.get("linkmic_layout"),
+               "multi_stream_scene": data.get("multi_stream_scene"), "linker_map_size": _size(data.get("linker_map")),
+               "battle_status": bs.get("battle_status"), "battle_id": bs.get("battle_id"),
+               "audience_id_list_n": _size(lm.get("audience_id_list")), "battle_scores_n": _size(lm.get("battle_scores"))}
+        conds = {"with_linkmic": sig["with_linkmic"] is True,
+                 "linkmic_layout": sig["linkmic_layout"] not in (None, 0),
+                 "multi_stream_scene": sig["multi_stream_scene"] not in (None, 0),
+                 "linker_map": (sig["linker_map_size"] or 0) > 0,
+                 "battle_status": sig["battle_status"] not in (None, 0)}
+        fired = [k for k, v in conds.items() if v]
+        present = any(sig[k] is not None for k in ("with_linkmic", "linkmic_layout", "multi_stream_scene",
+                                                   "linker_map_size", "battle_status"))
+        return {"status_code": top.get("status_code"), "room_id": data.get("id_str") or data.get("id"),
+                "qualities": qualities, "options": options, "stream": {k: su.get(k) for k in TT_ROOM_STREAM_KEYS},
+                "multi_guest": True if fired else (False if present else None), "multi_guest_signals": sig,
+                "fired": fired, "parse_errors": bool(errs), "parse_error": "; ".join(errs)[:200] if errs else None}
+
+    def tt_room_enter(self) -> dict:
+        return {"rule": self.RULE, "n_reads": self.n_reads, "reads": self.reads, "overflow": self.overflow,
+                "errors": self.errors, "last_error": self.last_error, "workers": len(self.workers),
+                "ready": self.ready.is_set(), "error": self.error}
+
+    def _run(self) -> None:
+        try:
+            ws = websocket.WebSocket()
+            ws.settimeout(1)
+            ws.connect(self.ws_url)
+        except Exception as exc:
+            self.error = repr(exc)
+            self.ready.set()
+            return
+        seq = 0
+
+        def send(method: str, params: dict, session_id: str | None = None) -> int:
+            nonlocal seq
+            seq += 1
+            ws.send(json.dumps({"id": seq, "method": method, "params": params,
+                                **({"sessionId": session_id} if session_id else {})}))
+            return seq
+        try:
+            send("Network.enable", dict(self.NETWORK))
+            send("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True})
+            self.ready.set()
+            while not self._stop.is_set():
+                try:
+                    msg = json.loads(ws.recv())
+                except websocket.WebSocketTimeoutException:
+                    continue
+                self.handle(msg, send)
+        except Exception as exc:
+            self.error = repr(exc)
+        finally:
+            self.ready.set()
+            try:
+                ws.close()
+            except Exception:
+                pass
+
 
 DRAIN_FLAT_S = 0.5     # v3 A12: downstream bytes flat this long = the in-flight responses landed
 DRAIN_MAX_S = 5.0      # ... or this cap (the pcap end moves by at most this)
@@ -3968,6 +4172,7 @@ class BrowserSession:
         self.decode_gpu: dict | None = None       # Chrome's GPU video-decode report at launch (decode_path.py; meta.json)
         self.decode_page: dict | None = None      # the page's HEVC probe (MSE / WebCodecs hvc1)
         self._master: MasterListener | None = None   # twitch: the master playlist listener
+        self._tt_room: TtRoomListener | None = None  # tiktok: the room/enter listener (meta.json tt_room_enter)
         self.t2_skipped: list[dict] = []            # stuck rule: T2_S frozen with only the fallback rung (no T2)
         self.player_ladder: dict | None = None      # twitch: the quality menu's options when the master was not read
         self.shot_origin: dict | None = None        # the X11 shot origin calibration (t37; calibrate_shot_origin)
@@ -4085,6 +4290,8 @@ class BrowserSession:
         # every platform (decision A, levi 00271 item 3): the decoder per session; tt also attaches snapshot() to player_dead
         self._media = MediaListener(self._ws_url, (Path(self._session_dir) / MEDIA_EVENTS_FILE)
                                     if self._session_dir else None).start()
+        if self.platform == "tiktok":            # item #9: before any room navigation, so the first room/enter is read
+            self._tt_room = TtRoomListener(self._ws_url).start()
         if self.platform == "tiktok" and not self.first_url:
             self.list_url = self._tt_choose_room()
         elif self.platform == "twitch":
@@ -5037,6 +5244,8 @@ class BrowserSession:
         self._stop.set()
         if self._master is not None:
             self._master.stop()
+        if self._tt_room is not None:
+            self._tt_room.stop()
         if self._media is not None:
             self._media.stop()
             self.media_decoders = self._media.summary()
