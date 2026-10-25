@@ -92,6 +92,10 @@ if __name__ == "__main__":
         print("Error parsing tshark logs: no http_v2.json written")
         print(tb)
         marker = os.path.join(os.path.dirname(os.path.abspath(args.save_path)), ERROR_MARKER)
+        if os.path.exists(args.save_path):        # brad 06:56: a failed re-run never leaves an older output beside the
+            stale = f"{args.save_path}.stale_{int(time.time())}"      # fresh marker (archived, never deleted)
+            os.replace(args.save_path, stale)
+            print(f"older {args.save_path} archived as {stale}")
         with open(marker, "w") as fh:
             json.dump({"error": repr(e)[:500], "traceback": tb[-4000:], "ts": time.time(),
                        "save_path": args.save_path, "pcap": args.pcap}, fh, indent=1)

@@ -26,6 +26,12 @@ def test_unit_extractor_fails_closed():
         assert not (d / "http_v2.json").exists()
         m = json.loads((d / CS.HTTP_V2_ERROR).read_text())
         assert m["error"] and "Traceback" in m["traceback"] and m["save_path"] == str(d / "http_v2.json")
+        (d / "http_v2.json").write_text('{"old": []}')                 # a re-run over an older output (brad 06:56)
+        r = subprocess.run([sys.executable, str(HERE / "unit_extractor.py"), "--path", str(d),
+                            "--save_path", str(d / "http_v2.json")], capture_output=True, text=True)
+        assert r.returncode == 3 and not (d / "http_v2.json").exists()
+        stale = list(d.glob("http_v2.json.stale_*"))
+        assert len(stale) == 1 and stale[0].read_text() == '{"old": []}'
         (d / "h1_raw.json").unlink()
         (d / CS.HTTP_V2_ERROR).unlink()
         r = subprocess.run([sys.executable, str(HERE / "unit_extractor.py"), "--path", str(d),
@@ -47,6 +53,8 @@ def test_check_session_names_http_v2_missing():
         assert "1 flows, 0 media requests" in CS.http_v2_missing(sd, played)
         (sd / "http_v2.json").write_text(json.dumps({"a->b": [rec]}))
         assert CS.http_v2_missing(sd, played) is None
+        (sd / "http_v2.json").write_text(json.dumps({"a->b": [{"request_url": None, "response_ct": "video/mp4"}]}))
+        assert CS.http_v2_missing(sd, played) is None                    # an h3 record without its URL (migration)
         (sd / "http_v2.json").write_text("{ broken")
         assert CS.http_v2_missing(sd, played) == "http_v2_missing: http_v2.json unreadable (JSONDecodeError)"
         (sd / CS.HTTP_V2_ERROR).write_text(json.dumps({"error": "RuntimeError('tshark died')"}))

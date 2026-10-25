@@ -914,7 +914,8 @@ HTTP_V2_ERROR = "http_v2_error.json"      # unit_extractor.ERROR_MARKER (levi 06
 def http_v2_missing(sd: Path, lab: dict) -> str | None:
     """levi 06:29 (WC2 tw_100001's "{}"): a named QA flag, never the verdict (http_v2 is re-derivable from the kept pcap
     + keylog): the extractor's error marker, or on a session that played (n_res_meta > 0) an http_v2.json that is absent,
-    unreadable or holds no media request (MEDIA_URL_PATTERNS). None when http_v2 is in order."""
+    unreadable or holds no media request (MEDIA_URL_PATTERNS on the URL, or a video/* response_ct: an h3 record can lose
+    its URL after a QUIC migration). None when http_v2 is in order."""
     m = sd / HTTP_V2_ERROR
     if m.exists():
         try:
@@ -932,7 +933,8 @@ def http_v2_missing(sd: Path, lab: dict) -> str | None:
     except Exception as e:
         return f"http_v2_missing: http_v2.json unreadable ({type(e).__name__})"
     n = sum(1 for recs in (d.values() if isinstance(d, dict) else []) for r in (recs if isinstance(recs, list) else [])
-            if any(x in (r.get("request_url") or "").split("?")[0] for x in MEDIA_URL_PATTERNS))
+            if any(x in (r.get("request_url") or "").split("?")[0] for x in MEDIA_URL_PATTERNS)
+            or str(r.get("response_ct") or "").startswith("video/"))          # brad 06:56: as shagun's sweep counted
     return None if n else f"http_v2_missing: {len(d) if isinstance(d, dict) else 0} flows, 0 media requests on a session that played"
 
 
