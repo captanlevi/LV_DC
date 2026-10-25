@@ -1024,7 +1024,7 @@ if __name__ == "__main__":
 
     browser = None
     abort_reason = None
-    _display_start = None                 # set once the browser runs; display_change reads it at the end
+    _display_start = None                 # set just before browser.start(); display_change reads it at the end
     try:
         # inside the try: a failed start (e.g. the channel is not live) still runs the finalise path below, which stops
         # tcpdump and the shaper (they were left running before, writing into the dead session's pcap)
@@ -1054,6 +1054,13 @@ if __name__ == "__main__":
                 import lever as _lever
                 _horizon = (args.episodes or coverage_report.SESSION_EPISODES.get(platform) or 1) * SCHEDULE["episode_s"]
                 LEVER = _lever.Lever(platform, session_dir.name, float(_horizon), json.loads(args.lever))
+            # decision A (levi 00271 item 4): the monitor's DPMS state and the display topology, read at the start and at
+            # the end; both change GPU load (reverse PRIME's copy). Read and written BEFORE browser.start() (WA3 r4 ruling,
+            # 2026-10-25): start() returns only once playing, so a session that aborts in start() had no display_start and
+            # A15 ("display held at session start") misread it. The --dpms-off force-off below runs after start(), so with
+            # --dpms-off this is the state before the forced off (dpms_forced_off holds the force-off's own record).
+            _display_start = {**session_meta.display_state(), "dpms_off_requested": bool(args.dpms_off)}
+            session_meta.write(session_dir, display_start=_display_start)
             browser.start()
             if SLOT is not None:   # supervisor v3: the socket owner (network service) and its cgroup, once playing
                 TRIO["socket_owner_start"] = trio_slots.socket_owner(trio_slots.chrome_pid_of(SLOT), SLOT)
@@ -1071,10 +1078,6 @@ if __name__ == "__main__":
                 except Exception as e:
                     rec = {"rc": None, "error": repr(e)}
                 session_meta.write(session_dir, dpms_forced_off={**rec, "at": time.time()})
-            # decision A (levi 00271 item 4): the monitor's DPMS state and the display topology, read at the start (after
-            # any forced off) and at the end; both change GPU load (reverse PRIME's copy)
-            _display_start = {**session_meta.display_state(), "dpms_off_requested": bool(args.dpms_off)}
-            session_meta.write(session_dir, display_start=_display_start)
             # the launched browser's argv once it is up (levi 13:44, the Cast fix's S3 reads the flag): the end read alone
             # misses a browser already gone at finish (w10 yt_100096 / ti_100090: "no browser process"); record only
             session_meta.write(session_dir, chrome_cmdline_start=session_meta.chrome_cmdline())

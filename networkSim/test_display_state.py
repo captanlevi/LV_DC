@@ -64,7 +64,22 @@ def test_display_change():
     assert 'meta_extra["display_change"] = session_meta.display_change(_display_start, meta_extra["display_end"])' in src
 
 
+def test_display_start_before_browser_start():
+    """WA3 r4 ruling (2026-10-25): exp.py reads and writes display_start BEFORE browser.start(), which returns only once
+    playback started; written after it, a session that aborted in start() had none and A15 ("display held at session
+    start") misread it. Source order, in the auto branch: the read, then its write, then browser.start(), and no second
+    display_start write anywhere in exp.py."""
+    src = (Path(__file__).resolve().parent / "exp.py").read_text()
+    read = src.index('_display_start = {**session_meta.display_state(), "dpms_off_requested": bool(args.dpms_off)}')
+    write = src.index("session_meta.write(session_dir, display_start=_display_start)")
+    start = src.index("\n            browser.start()\n", src.index("browser = BrowserSession("))   # the call, not a comment
+    assert read < write < start, (read, write, start)
+    assert src.count("display_start=") == 1, src.count("display_start=")
+    assert src.count("session_meta.display_state()") == 2      # the start read and the end read (display_end)
+
+
 if __name__ == "__main__":
     test_display_state()
     test_display_change()
+    test_display_start_before_browser_start()
     print("test_display_state: ok")
