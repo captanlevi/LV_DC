@@ -19,6 +19,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import orchestrate as O  # noqa: E402
+O.network_core_installed = O.network_core_pin   # the record lines' venv is at the pin (test_nc_guard tests it)
 import stratum_draw as S  # noqa: E402
 
 ERA = "v3-test-era"

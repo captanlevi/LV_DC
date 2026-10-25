@@ -16,6 +16,7 @@ sys.path.insert(0, str(HERE))
 
 import data_root as DR  # noqa: E402
 import orchestrate as O  # noqa: E402
+O.network_core_installed = O.network_core_pin   # the record lines' venv is at the pin (test_nc_guard tests it)
 
 ORCH = str(HERE / "orchestrate.py")
 # a dry gate line (C8: no marker under the data root), the record line's flags less the record ones

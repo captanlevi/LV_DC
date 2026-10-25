@@ -121,8 +121,14 @@ echo "Installing Python packages..."
     numpy \
     pytest          # the apply gate's second runner (levi t58 T-1: ops/apply_at_boundary.sh runs pytest too)
 
-# Optional: network_core (may not be needed on all machines).
+# network_core: optional on a laptop, FATAL on a record box (levi 02:12, brad 02:11: a record box that cannot install the pin
+# would collect with no / another network_core). A record box = LVDC_RECORD_BOX=1, or a data root holding the record marker.
+# orchestrate --trio-record also refuses a venv whose network_core is not this pin (network_core_refusal).
 if ! "$VENV/bin/pip" install --quiet "network_core==0.8.1" 2>/dev/null; then
+    if [ "${LVDC_RECORD_BOX:-0}" = 1 ] || [ -f "${LVDC_DATA_ROOT:-$ROOT/data}/.lvdc_record_root" ]; then
+        echo "FATAL: network_core==0.8.1 install failed on a record box" >&2
+        exit 1
+    fi
     warn "network_core install failed — unit_extractor features will be unavailable"
     ISSUES+=("network_core not installed — HTTP log processing unavailable")
 fi
