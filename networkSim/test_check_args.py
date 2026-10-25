@@ -66,6 +66,13 @@ def test_in_process():
         try:
             DR.volume_uuid = lambda p, run=None: "TEST-VOL"
             renv = {"LVDC_DATA_ROOT": rec, "LVDC_DATA_ROOT_UUID": "0000-test"}
+            # levi 22:18 (B8): a steered record line needs a table that steers every platform (steer_preflight)
+            assert "would fall back to the base schedule" in O.check_args(RECORD, renv)
+            summ = Path(rec) / "_trio" / "_summaries"
+            summ.mkdir(parents=True)
+            pp = {"tiers": {"Q_480p": 600.0}, "stall_s": 60.0, "by_state": {}}
+            (summ / "coverage_joint.json").write_text(json.dumps({"era": "v3-collector-2026-10-24", "per_platform": {
+                p: pp for p in ("youtube", "twitch", "tiktok")}}))
             assert O.check_args(RECORD, renv) is None
             assert "not of record on a marked record root" in O.check_args(DRY, {"LVDC_DATA_ROOT": rec})
             assert "not the verified record root" in O.check_args(RECORD, {**renv, "LVDC_DATA_ROOT": dry})
@@ -122,6 +129,7 @@ def test_main_block_refusals_are_mirrored():
         "sys.exit(str(e))",                         # stratum_draw.draw: not covered (live)
         'sys.exit("--lever-params: the file changed after its check (sha mismatch); refused before trio_up")',  # not covered
         "sys.exit(_ref)",                           # stratum_apply
+        "sys.exit(_sref)",                          # steer_preflight (levi 22:18 B8), mirrored
         "sys.exit(str(e))",                         # n_draw parse (covered) / n_draw.draw (not) / slots
         "sys.exit(run_trio(targets, yt_matrix=args.yt_matrix, rotate_geometry=not args.fixed_geometry,",
         "sys.exit(0)",
@@ -129,7 +137,7 @@ def test_main_block_refusals_are_mirrored():
     ], exits
     st = src[src.index("def _static_refusal("):src.index("def check_args(")]
     for fn in ("arg_refusal(", "coverage_allowed_parse(", "batch_targets(", "parse_pin(", "pin_geometry_refusal(",
-               "stratum_apply(", "parse_support(", "parse_exclude(", "parse_composition(", "build_slots("):
+               "stratum_apply(", "steer_preflight(", "parse_support(", "parse_exclude(", "parse_composition(", "build_slots("):
         assert fn in st and fn in main, fn
 
 

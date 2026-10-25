@@ -141,6 +141,29 @@ def start_state(transition: dict[str, dict[str, float]], seed: str) -> str:
     return random.Random(f"steering:{seed}").choices(states, weights=[pi[s] for s in states], k=1)[0]
 
 
+def fallback_reason(table: dict | None, trec: dict, platform: str, era: str | None = None,
+                    allow_table_era: str | None = None) -> tuple[str | None, bool]:
+    """(why steer() falls back to the base schedule, or None; whether allow_table_era admitted another era's table): the
+    one definition steer() and orchestrate's record pre-flight (levi 22:18, B8) both read."""
+    allowed = False
+    if table is not None and era is not None:
+        t_era = table.get("era")
+        if t_era != era:
+            if allow_table_era is not None and t_era == allow_table_era:
+                allowed = True
+            else:
+                return f"era-start: table era {t_era!r}", False
+    if table is not None and platform in TARGETS_S:
+        pp = (table.get("per_platform") or {}).get(platform) or {}
+        tot = (sum(float(v or 0) for v in (pp.get("tiers") or {}).values()) + float(pp.get("stall_s") or 0)
+               + sum(float(c or 0) for row in (pp.get("by_state") or {}).values() for c in (row or {}).values()))
+        if tot <= 0:
+            return f"era-start: no {platform} seconds of this era", allowed
+    if table is None or platform not in TARGETS_S:
+        return "base schedule" + ("" if table is not None else f" (no table: {trec.get('error')})"), allowed
+    return None, allowed
+
+
 def steer(platform: str, transition: dict[str, dict[str, float]], table_path: str | os.PathLike | None,
           seed: str, tier_cap: str | None = None, era: str | None = None,
           allow_table_era: str | None = None) -> tuple[dict[str, dict[str, float]], str | None, dict]:
@@ -154,23 +177,12 @@ def steer(platform: str, transition: dict[str, dict[str, float]], table_path: st
     rec = {"rule": RULE, "floor": FLOOR, "targets_s": TARGETS_S.get(platform), "table": trec, "seed": seed,
            "applied": False, "tier_cap": tier_cap}
     if table is not None and era is not None:
-        t_era = table.get("era")
-        rec["table_era"], rec["allowed_by_flag"] = t_era, False
-        if t_era != era:
-            if allow_table_era is not None and t_era == allow_table_era:
-                rec["allowed_by_flag"] = True
-            else:
-                rec["fallback"] = f"era-start: table era {t_era!r}"
-                return transition, None, rec
-    if table is not None and platform in TARGETS_S:
-        pp = (table.get("per_platform") or {}).get(platform) or {}
-        tot = (sum(float(v or 0) for v in (pp.get("tiers") or {}).values()) + float(pp.get("stall_s") or 0)
-               + sum(float(c or 0) for row in (pp.get("by_state") or {}).values() for c in (row or {}).values()))
-        if tot <= 0:
-            rec["fallback"] = f"era-start: no {platform} seconds of this era"
-            return transition, None, rec
-    if table is None or platform not in TARGETS_S:
-        rec["fallback"] = "base schedule" + ("" if table is not None else f" (no table: {trec.get('error')})")
+        rec["table_era"], rec["allowed_by_flag"] = table.get("era"), False
+    why, allowed = fallback_reason(table, trec, platform, era, allow_table_era)
+    if allowed:
+        rec["allowed_by_flag"] = True
+    if why:
+        rec["fallback"] = why
         return transition, None, rec
     states = sorted(transition, key=int)
     w, pulls = state_weights(table, platform, states, tier_cap)

@@ -371,6 +371,52 @@ def steer_env(platform: str, troot) -> dict:
     return {"LVDC_STEER_SKIPPED": STEER_SKIPPED}
 
 
+STEER_PLATFORMS_ALL = ("youtube", "twitch", "tiktok")
+
+
+def _data_root(environ) -> Path:
+    """The data root a launch with `environ` uses (LVDC_DATA_ROOT, else the repo's data dir; _RUNS_DIR at a launch)."""
+    import data_root as _drs
+    return Path(environ.get("LVDC_DATA_ROOT") or _drs.REPO_DATA)
+
+
+def _record_root_marker(environ) -> bool:
+    """The data root carries the record marker (data_root.record_root_check, as --steer-allow-table-era's refusal)."""
+    import data_root as _drs
+    return bool(_drs.record_root_check(_data_root(environ))["marker"])
+
+
+def steer_table_refusal(troot, platforms, era: str) -> str | None:
+    """levi 22:18 (B8): a steered stratum on record never starts on a table its sessions would fall back from (a silent
+    base-schedule round labelled steered). The table at <trio root>/_summaries/coverage_joint.json (steer_env's path)
+    is read with steering.load_table and judged per steered platform by steering.fallback_reason, the sessions' own rule,
+    with no allow-era (dry only); any fallback refuses before trio_up, named. None = every steered platform steers."""
+    import steering
+    path = Path(troot) / "_summaries" / steering.TABLE_NAME
+    table, trec = steering.load_table(path)
+    bad = []
+    for pf in sorted(platforms):
+        why, _ = steering.fallback_reason(table, trec, pf, era, None)
+        if why:
+            bad.append(f"{pf}: {why}")
+    if not bad:
+        return None
+    return (f"steered stratum on record: the steering table {path} (sha256 {str(trec.get('sha256'))[:12]}) would fall "
+            f"back to the base schedule ({'; '.join(bad)}); refused before trio_up")
+
+
+def steer_preflight(args, environ, steer: bool) -> str | None:
+    """levi 22:18 (B8): on record (--trio-record, or a data root carrying the record marker), a steered run's table must
+    steer every steered platform (steer_table_refusal); the main block and --check-args (_static_refusal) both call it."""
+    if not (steer and (args.trio_record or _record_root_marker(environ))):
+        return None
+    import record
+    import trio_slots
+    plats = ({x.strip() for x in args.trio_steer_platforms.split(",") if x.strip()} if args.trio_steer_platforms
+             else set(STEER_PLATFORMS_ALL))
+    return steer_table_refusal(_data_root(environ) / trio_slots.TRIO_DIR, plats, record.ERA)
+
+
 def steer_balancer(platforms: set[str] | None) -> None:
     """--trio-steer's balancer side (items 4 / 5; levi 20:58): TARGET_MINUTES for the steered platforms only, and TW-H in
     twitch's candidates only when twitch is steered (an explicit --coverage-allowed list stands)."""
@@ -1575,9 +1621,14 @@ def _static_refusal(args, environ) -> str | None:
             import lever_params as _lp_mod
             lp = _lp_mod.load_params(args.lever_params)
         sd = {"stratum": args.expect_stratum} if args.expect_stratum else None     # the draw, assumed to match
-        _, _, r = stratum_apply(sd, args.expect_stratum, args.stratum_force, bool(args.trio_steer), lp)
+        _, steer, r = stratum_apply(sd, args.expect_stratum, args.stratum_force, bool(args.trio_steer), lp)
         if r:
             return r
+    else:
+        steer = bool(args.trio_steer)
+    r = steer_preflight(args, environ, steer)       # levi 22:18 (B8): reads the table file, as a launch does
+    if r:
+        return r
     if args.concurrent:
         try:
             if args.n_draw:
@@ -1597,7 +1648,8 @@ def check_args(argv: list[str], environ) -> str | None:
     (argparse's error line, as a real launch prints it last) and every refusal that needs no live state, through the
     functions a real launch calls (_static_refusal); an exception a real launch would die on is reported as its
     traceback's last line. No browser, shaper, tc, sudo, network, session dir, slot claim or write. Reads, as a real
-    launch's arg_refusal does: the --lever-params file, the data root's record marker, findmnt's volume UUID (C8).
+    launch's arg_refusal does: the --lever-params file, the data root's record marker, findmnt's volume UUID (C8), and,
+    for a steered run on record, the steering table (steer_preflight, levi 22:18 B8).
     CHECK_ARGS_NOT_COVERED lists what is left to the launch."""
     import contextlib
     import io
@@ -1700,6 +1752,9 @@ if __name__ == "__main__":
         TRIO_STEER = bool(args.trio_steer)
         if args.trio_steer_platforms is not None:          # arg_refusal checked the names
             TRIO_STEER_PLATFORMS = {x.strip() for x in args.trio_steer_platforms.split(",") if x.strip()}
+        _sref = steer_preflight(args, os.environ, TRIO_STEER)    # levi 22:18 (B8): before trio_up
+        if _sref:
+            sys.exit(_sref)
         if TRIO_STEER:                                   # prereg d32a48ce items 4 / 5; levi 20:58: per platform
             steer_balancer(TRIO_STEER_PLATFORMS)
         if args.concurrent:
