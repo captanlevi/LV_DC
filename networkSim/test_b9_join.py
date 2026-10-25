@@ -127,10 +127,12 @@ def test_the_first_apply_comes_first_and_the_lever_waits_for_playing():
 
 
 class _Page:
-    """A page that loads and attaches media but never advances (a starved join)."""
+    """A page for _navigate_to_live: loads (or not), never advances; its join evidence as given (buf_end grows when
+    `flowing`)."""
 
-    def __init__(self, attached=True):
-        self.attached, self.url = attached, None
+    def __init__(self, attached=True, live=True, flowing=True, loads=True):
+        self.ev = {"attached": attached, "dur_inf": False, "badge": live}
+        self.flowing, self.loads, self.url, self.buf = flowing, loads, None, 0.0
 
     def navigate(self, url):
         self.url = url
@@ -139,25 +141,84 @@ class _Page:
         if js == "location.href":
             return self.url
         if js == "document.readyState":
-            return "complete"
+            return "complete" if self.loads else "loading"
         if js == B._CURRENT_TIME_JS:
             return 0.0
-        if js == B._MEDIA_ATTACHED_JS:
-            return self.attached
+        if js == B._JOIN_EVIDENCE_JS:
+            self.buf += 1.0 if self.flowing else 0.0
+            return json.dumps({**self.ev, "buf_end": self.buf, "decoded": None})
         return None
 
 
-def test_a_starved_join_raises_join_timeout_and_a_dead_page_does_not():
-    url = "https://www.youtube.com/@x/live"
-    t0 = time.time()
+URL = "https://www.youtube.com/@x/live"
+
+
+def test_join_timeout_needs_the_full_wait_bytes_flowing_and_live_evidence():
+    """levi 23:49 (D3 / Q1): JoinTimeout only with media attached, bytes advancing and live evidence over the full
+    scaled wait; a dead page, an offline channel's non-live video, a page with nothing arriving: next URL / None."""
+    rec = {}
     try:
-        B._navigate_to_live(_Page(), "youtube", timeout=0.2, first_url=url, join_state="1")
+        B._navigate_to_live(_Page(), "youtube", timeout=0.2, first_url=URL, join_state="1", record=rec)
         raise AssertionError("must raise JoinTimeout")
     except B.JoinTimeout as e:
-        assert str(e) == "join_timeout at state 1 (0 s)" and e.detail == {"url": url}
-    assert time.time() - t0 < 20
-    assert B._navigate_to_live(_Page(attached=False), "youtube", timeout=0.2, first_url=url, join_state="1") is None
-    assert B._navigate_to_live(_Page(), "youtube", timeout=0.2, first_url=url) is None     # no join_state: pre-B9
+        assert str(e).startswith("join_timeout at state 1 (") and e.detail["url"] == URL
+        assert e.detail["flowing_by"] == "page_media" and e.detail["live"] and rec["join_tries"][0]["flowing"]
+    for page in (_Page(attached=False), _Page(live=False), _Page(flowing=False)):
+        assert B._navigate_to_live(page, "youtube", timeout=0.2, first_url=URL, join_state="1") is None, page.ev
+    assert B._navigate_to_live(_Page(), "youtube", timeout=0.2, first_url=URL) is None     # no join_state: pre-B9
+    due, why = B.join_timeout_due({"attached": True}, {"attached": True, "badge": True}, 1000, 1000 + B.JOIN_RX_MIN_BYTES)
+    assert due and why["flowing_by"] == "rx" and why["rx_bytes"] == B.JOIN_RX_MIN_BYTES
+    assert not B.join_timeout_due({}, {"attached": True, "badge": True}, 1000, 1000 + B.JOIN_RX_MIN_BYTES - 1)[0]
+    assert B.join_timeout_due({}, {"attached": True, "buf_end": 3.0}, None, None, live=True)[0]        # tt: list badge
+    assert not B.join_timeout_due({}, {"attached": True, "buf_end": 3.0, "dur_inf": True}, None, None, live=False)[0]
+
+
+def test_one_deadline_per_url_a_walk_cap_and_a_cancel():
+    """D1: every wait clips to the URL's deadline (a page that never loads at scale 40 takes about the deadline, not
+    40 x the sum of the waits); the walk stops at JOIN_CAP_S, or at once when cancelled (D2)."""
+    t0 = time.time()
+    assert B._navigate_to_live(_Page(loads=False, attached=False), "youtube", timeout=0.05, first_url=URL,
+                               scale=40.0, join_state="1") is None
+    assert time.time() - t0 < 12, time.time() - t0                  # 2 s deadline + the fixed kicks; was > 1 h
+    saved = B.JOIN_CAP_S
+    try:
+        B.JOIN_CAP_S = 0.0
+        t0 = time.time()
+        assert B._navigate_to_live(_Page(), "youtube", timeout=5.0, join_state="1") is None and time.time() - t0 < 1
+    finally:
+        B.JOIN_CAP_S = saved
+    t0 = time.time()
+    assert B._navigate_to_live(_Page(), "youtube", timeout=5.0, first_url=URL, join_state="1",
+                               cancel=lambda: True) is None and time.time() - t0 < 1
+
+
+def test_a_join_still_running_at_the_schedule_end():
+    """D2 (levi 23:49): the schedule ended with the join running: the join is cancelled before teardown and the
+    session ends "join_timeout at state <s> (<n> s)" (shagun's prefix), recorded, even when the thread never returns."""
+    import ast
+    fns = [_exp_fn(n) for n in ("join_meta", "join_unfinished_reason", "after_schedule")]
+    for stubborn in (False, True):
+        join = {"first_state": "2", "t_nav": 1000.0}
+        ns = {"JOIN": join, "time": time, "JOIN_STOP_WAIT_S": 0.3}
+        exec(compile(ast.Module(fns, []), "exp.after_schedule", "exec"), ns)
+        br = type("Br", (), {"join_cancel": threading.Event()})()
+        stop_forever = threading.Event()
+        t = threading.Thread(target=(stop_forever.wait if stubborn else br.join_cancel.wait), daemon=True)
+        t.start()
+        wrote = []
+        t0 = time.time()
+        r = ns["after_schedule"](t, br, None, now=2800.0, write=wrote.append)
+        assert r == "join_timeout at state 2 (1800 s)" and r.startswith(B.JOIN_TIMEOUT_PREFIX)
+        assert br.join_cancel.is_set() and join["outcome"] == "join_timeout" and join["unfinished"] is True
+        assert wrote and wrote[0]["abort"] == r and time.time() - t0 < 2
+        assert t.is_alive() == stubborn
+        stop_forever.set()
+    ns = {"JOIN": {"outcome": "playing"}, "time": time, "JOIN_STOP_WAIT_S": 0.3}
+    exec(compile(ast.Module(fns, []), "exp.after_schedule", "exec"), ns)
+    done = threading.Thread(target=lambda: None)
+    done.start()
+    assert ns["after_schedule"](done, None, None) is None                 # a finished join: unchanged
+    assert ns["after_schedule"](None, None, "x") == "x"                   # manual mode
 
 
 def test_tt_dead_clocks_scale_during_the_join():
@@ -188,7 +249,11 @@ def test_wiring():
     assert "browser.start()" not in stmts                               # the join thread is the only start
     bsrc = (HERE / "browser.py").read_text()
     assert "scale=self.join_scale, join_state=self.join_state" in bsrc
-    assert "_tt_confirm_playing(page, TT_QUICK_CONFIRM_S * sc, scale=sc)" in bsrc and 'raise JoinTimeout(self.join_state' in bsrc
+    assert "ok, detail = _tt_confirm_playing(page, confirm_s, scale=sc)" in bsrc and "raise JoinTimeout(self.join_state" in bsrc
+    assert "live=bool(c.get(\"live_badge\") or detail.get(\"dur_inf\")))" in bsrc
+    assert "rx=self.join_rx, cancel=self.join_cancel.is_set)" in bsrc
+    assert "browser.join_rx = lambda: int(_rx_path.read_text())" in src
+    assert "abort_reason = after_schedule(_join_t, browser, abort_reason," in main
     assert "_tt_preroll(page, TT_PREROLL_S, scale=sc)" in bsrc
 
 
@@ -197,7 +262,9 @@ def main() -> int:
     test_join_timeout_is_its_own_class_never_a_channel_problem()
     test_the_session_ends_at_navigation_plus_its_length()
     test_the_first_apply_comes_first_and_the_lever_waits_for_playing()
-    test_a_starved_join_raises_join_timeout_and_a_dead_page_does_not()
+    test_join_timeout_needs_the_full_wait_bytes_flowing_and_live_evidence()
+    test_one_deadline_per_url_a_walk_cap_and_a_cancel()
+    test_a_join_still_running_at_the_schedule_end()
     test_tt_dead_clocks_scale_during_the_join()
     test_wiring()
     print("test_b9_join: ok")

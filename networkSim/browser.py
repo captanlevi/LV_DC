@@ -436,6 +436,7 @@ _TT_PLAYER_STATE_JS = """
     return JSON.stringify({has_video: !!v, src: !!(v && (v.currentSrc || v.src || v.srcObject)), rs: v ? v.readyState : null,
                            ct: v ? v.currentTime : null, paused: v ? v.paused : null, buf_end: buf,
                            decoded: v ? (v.webkitVideoDecodedByteCount || null) : null,
+                           dur_inf: v ? v.duration === Infinity : null,
                            tf: v && v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : null,
                            ended_text: hit('live has ended'),
                            // a visible loading indicator (heuristic, diagnostics only: tt's two-dot loader on a blank
@@ -852,12 +853,14 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = No
     `scale` during the B9 join). With `trace`, one (t, rs, has_video, loading) per sample is appended (re-entry
     diagnostics)."""
     w, first_ct, s, fg = TTRoomWatch(scale=scale), None, {}, _FramesGate()
+    ev0 = None                                        # B9 D3: the first sample's media counters (page-side bytes)
     page.eval(_CLICK_PLAY_JS)                         # autoplay may not have started: click, then give it the grace
     time.sleep(TT_AUTOPLAY_GRACE_S)
     deadline = time.time() + seconds
     while time.time() < deadline:
         page.eval(_CLICK_PLAY_JS)
         s = _tt_state(page)
+        ev0 = ev0 if ev0 is not None else {"buf_end": s.get("buf_end"), "decoded": s.get("decoded")}
         if trace is not None:
             trace.append((round(time.time(), 2), s.get("rs"), bool(s.get("has_video")), bool(s.get("loading"))))
         dead = w.feed(s, time.time())
@@ -869,7 +872,7 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = No
             if s["ct"] - first_ct >= 2.0 and fg.ok():
                 return True, {**s, **fg.record()}
         time.sleep(1)
-    return False, {"dead": "not_playing", **s, **fg.record()}
+    return False, {"dead": "not_playing", **s, **fg.record(), "ev0": ev0 or {}}
 
 
 def _tt_preroll(page: "CDPPage", seconds: float, scale: float = 1.0) -> tuple[bool, dict]:
@@ -1752,6 +1755,13 @@ def join_timeout_s(platform: str, rate_kbit: float | None) -> float:
     return round(min(JOIN_CAP_S, max(JOIN_BASE_S, 1.5 * JOIN_BYTES.get(platform, 8.5e6) / (rate_kbit * 125.0))), 1)
 
 
+def _rx_or_none(rx) -> int | None:
+    try:
+        return int(rx()) if rx is not None else None
+    except Exception:
+        return None
+
+
 class JoinTimeout(RuntimeError):
     """B9: the page loaded and media was attached, but no first frame by the scaled cap."""
 
@@ -1760,19 +1770,48 @@ class JoinTimeout(RuntimeError):
         self.detail = detail or {}
 
 
-_MEDIA_ATTACHED_JS = """
+JOIN_RX_MIN_BYTES = 65536        # D3 (levi 23:49): media bytes advancing over the wait, on the slot's ingress counter
+_JOIN_EVIDENCE_JS = """
 (function() {
     const v = document.querySelector('#movie_player video') || document.querySelector('video');
-    if (!v) return false;
-    return !!((v.currentSrc || v.srcObject) && (v.readyState >= 1 || v.networkState === 2 ||
-              (v.buffered && v.buffered.length > 0)));
+    if (!v) return JSON.stringify({attached: false});
+    let buf = null;
+    try { if (v.buffered.length) buf = v.buffered.end(v.buffered.length - 1); } catch (e) {}
+    const badge = !!document.querySelector('.ytp-live-badge, .ytp-live, .channel-root--live, .live-time, ' +
+                                           'p[data-a-target="stream-title"]');
+    return JSON.stringify({attached: !!(v.currentSrc || v.srcObject), dur_inf: v.duration === Infinity, badge: badge,
+                           buf_end: buf, decoded: v.webkitVideoDecodedByteCount || null});
 })()
 """
 
 
+def _join_evidence(page) -> dict:
+    try:
+        return json.loads(page.eval(_JOIN_EVIDENCE_JS) or "{}") or {}
+    except Exception:
+        return {}
+
+
+def join_timeout_due(ev0: dict, ev1: dict, rx0: int | None, rx1: int | None, live: bool | None = None) -> tuple[bool, dict]:
+    """B9 D3 / Q1 (levi 23:49): a join timed out (rather than a dead or not-live page) iff, over the full scaled wait,
+    media was attached, media bytes advanced (the slot's ingress counter by >= JOIN_RX_MIN_BYTES; without one, the
+    page's buffered end or decoded bytes moved) and the page showed the live evidence the playing check uses (a
+    non-finite duration or the live badge; `live` overrides, tt's list badge). (due, the evidence)."""
+    attached = bool(ev1.get("attached"))
+    if rx0 is not None and rx1 is not None:
+        flowing, how = (rx1 - rx0) >= JOIN_RX_MIN_BYTES, "rx"
+    else:
+        flowing, how = ((ev1.get("buf_end") or 0) > (ev0.get("buf_end") or 0)
+                        or (ev1.get("decoded") or 0) > (ev0.get("decoded") or 0)), "page_media"
+    is_live = bool(live) if live is not None else bool(ev1.get("dur_inf") or ev1.get("badge"))
+    why = {"attached": attached, "flowing": flowing, "flowing_by": how, "live": is_live,
+           **({"rx_bytes": rx1 - rx0} if rx0 is not None and rx1 is not None else {})}
+    return attached and flowing and is_live, why
+
+
 def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first_url: str | None = None,
                       exclude: list[str] | None = None, record: dict | None = None, claim=None,
-                      scale: float = 1.0, join_state=None) -> str | None:
+                      scale: float = 1.0, join_state=None, rx=None, cancel=None) -> str | None:
     """Returns the list URL that delivered a playing live video (None if none did). claim(url), when given, is called with
     the channel as soon as it is picked (a given channel page before navigating; twitch's directory pick on the click),
     before the playback check (t58 N-2: the sibling claim)."""
@@ -1780,27 +1819,40 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
     Try each URL in LIVE_URLS[platform].  For directory/discovery pages,
     execute platform-specific JS to click into a live room.  Then kick play
     via JS and verify the video timestamp is actually advancing.
-    B9: every wait scales by `scale` (the first shaped state's join_timeout_s / JOIN_BASE_S); a URL whose page attached
-    media but showed no advancing video by its scaled deadline raises JoinTimeout (the walk stops: never re-picked).
+    B9 (with join_state): each URL has ONE deadline, its start + timeout x scale (= browser.join_timeout_s), that every
+    wait inside clips to (D1); the walk stops at JOIN_CAP_S over all URLs, or when cancel() (the session's schedule
+    ended); a URL that spent its full wait with media attached, media bytes advancing (rx(), the slot's ingress
+    counter) and live evidence raises JoinTimeout (D3 / Q1: the walk stops, never re-picked); else the next URL, and None
+    at the end (the caller's "Failed to navigate to a live"). Without join_state: the pre-B9 waits.
     """
     urls = list(LIVE_URLS[platform])
     if first_url:
         # the rotation's channel only: falling back to another channel would break the rotation's accounting
         urls = [first_url]
+    t_walk = time.time()
+    stop = (lambda: bool(cancel and cancel()))                     # noqa: E731
     for url in urls:
+        if join_state is not None and (time.time() - t_walk >= JOIN_CAP_S or stop()):
+            print(f"[browser] join walk stopped ({'cancelled' if stop() else 'the cap'})", flush=True)
+            break
+        t_url = time.time()
+        url_deadline = t_url + timeout * scale if join_state is not None else None
+
+        def wait_s(own: float) -> float:                           # D1: every wait clips to the URL's deadline
+            return own * scale if url_deadline is None else max(0.0, min(own * scale, url_deadline - time.time()))
         print(f"[browser] Navigating to {url}", flush=True)
         if claim is not None and first_url:
             claim(url)
         page.navigate(url)
         # Wait until location.href actually changes — _wait_for_load alone is not
         # enough because the old page may already be in readyState=complete.
-        nav_deadline = time.time() + 25 * scale
+        nav_deadline = time.time() + wait_s(25)
         while time.time() < nav_deadline:
             current = page.eval("location.href") or ""
             if current.startswith(url[:30]):
                 break
             time.sleep(0.5)
-        _wait_for_load(page, timeout=15 * scale)
+        _wait_for_load(page, timeout=wait_s(15))
 
         # For directory/discovery pages, click into the first live stream.
         # Twitch is a heavy SPA — wait for stream cards to render after load.
@@ -1813,7 +1865,7 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
             card_js = _CARD_READY_JS.get(platform)
             if card_js:
                 # Poll until at least one card link is visible (max 15s); the pick otherwise runs before the list renders
-                card_deadline = time.time() + 15 * scale
+                card_deadline = time.time() + wait_s(15)
                 while time.time() < card_deadline:
                     if page.eval(card_js):
                         break
@@ -1833,7 +1885,7 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
                 clicked = page.eval(pick_js)
             if clicked:
                 print(f"[browser] Clicked into stream: {clicked}", flush=True)
-                _wait_for_load(page, timeout=15 * scale)
+                _wait_for_load(page, timeout=wait_s(15))
 
         # Kick playback (handles Chrome autoplay block)
         page.eval(_CLICK_PLAY_JS)
@@ -1842,9 +1894,10 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
 
         # Verify the video is actually advancing (not just paused at t=0). Pre-roll ads are handled here too: the
         # ad watcher only starts after navigation, and a pre-roll would otherwise keep the content from advancing.
-        deadline = time.time() + timeout * scale
+        deadline = url_deadline if url_deadline is not None else time.time() + timeout * scale
+        ev0, rx0 = (_join_evidence(page), _rx_or_none(rx)) if join_state is not None else ({}, None)
         skip_js = _SKIP_AD_JS.get(platform, "null")
-        while time.time() < deadline:
+        while time.time() < deadline and not stop():
             if skip_js.strip() != "null":
                 act = page.eval(skip_js)
                 if act:
@@ -1883,15 +1936,13 @@ def _navigate_to_live(page: CDPPage, platform: str, timeout: float = 45.0, first
                 print(f"[browser] Video is playing on {platform}", flush=True)
                 return url
             time.sleep(2)
-        if time.time() >= deadline and join_state is not None:   # B9: media attached, no first frame by the cap
-            try:
-                attached = bool(page.eval(_MEDIA_ATTACHED_JS))
-            except Exception:
-                attached = False
-            if attached:
-                print(f"[browser] join timeout on {url}: media attached, no advancing video in {timeout * scale:.0f} s",
-                      flush=True)
-                raise JoinTimeout(join_state, timeout * scale, {"url": url})
+        if join_state is not None and time.time() >= deadline and not stop():   # B9: the full wait spent
+            due, why = join_timeout_due(ev0, _join_evidence(page), rx0, _rx_or_none(rx))
+            if record is not None:
+                record.setdefault("join_tries", []).append({"url": url, "s": round(time.time() - t_url, 1), **why})
+            if due:
+                print(f"[browser] join timeout on {url}: {why}", flush=True)
+                raise JoinTimeout(join_state, time.time() - t_url, {"url": url, **why})
 
     print(f"[browser] Could not find a playing live stream for {platform}", flush=True)
     return None
@@ -4158,6 +4209,8 @@ class BrowserSession:
         # the pre-B9 waits; join_state None never raises JoinTimeout)
         self.join_scale: float = 1.0
         self.join_state = None
+        self.join_rx = None                             # B9 D3: the slot's ingress byte counter (callable), when known
+        self.join_cancel = threading.Event()            # B9 D2: set when the schedule ended with the join still running
         # levi 16:27: yt's ladder, record-only, one recorder for the session (re-entries included)
         self.yt_ladder: "YtLadderRecorder | None" = YtLadderRecorder() if platform == "youtube" else None
         # levi 18:36 (A): tt's codec / renditions, record-only, one recorder for the session
@@ -4382,11 +4435,13 @@ class BrowserSession:
                                                              | set((cap or {}).get("capped") or [])),
                                               record=self.tw_pick,
                                               claim=lambda u: publish_stream(self._session_dir, "twitch", u, "intent"),
-                                              scale=self.join_scale, join_state=self.join_state)
+                                              scale=self.join_scale, join_state=self.join_state,
+                                              rx=self.join_rx, cancel=self.join_cancel.is_set)
         else:
             nav_first = self.first_url
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=self.first_url,
-                                              scale=self.join_scale, join_state=self.join_state)
+                                              scale=self.join_scale, join_state=self.join_state,
+                                              rx=self.join_rx, cancel=self.join_cancel.is_set)
         if not self.list_url:
             raise RuntimeError(f"Failed to navigate to a live {self.platform} stream")
         if self.platform != "tiktok" or self.first_url:          # tt unpinned: checked per try in _tt_choose_room
@@ -4653,14 +4708,22 @@ class BrowserSession:
                 order = [{"href": href, "viewers": None, "live_badge": None, "fallback": True}]
         print(f"[browser] tt rooms: {len(cands)} candidates, {sum(1 for c in cands if c['recent'])} used in the last "
               f"{TT_RECENT_ROOMS_N} sessions", flush=True)
+        t_walk = time.time()
         for c in order[:TT_MAX_TRIES]:
+            if self.join_state is not None and (time.time() - t_walk >= JOIN_CAP_S or self.join_cancel.is_set()):
+                rec["join_walk_stopped"] = "cancelled" if self.join_cancel.is_set() else "cap"      # B9 D1 / D2
+                break
             t: dict = {"room": c["href"], "viewers": c["viewers"], "live_badge": c["live_badge"], "t_nav": time.time()}
+            try_deadline = time.time() + JOIN_BASE_S * sc if self.join_state is not None else None
+            left = (lambda own: own if try_deadline is None else max(0.0, min(own, try_deadline - time.time())))  # noqa
+            rx0 = _rx_or_none(self.join_rx) if self.join_state is not None else None
             publish_stream(self._session_dir, "tiktok", c["href"], "intent")      # t58 N-2: claimed before the preroll
             try:
                 if not c.get("fallback"):
                     page.navigate(c["href"])
-                    _wait_for_load(page, timeout=15 * sc)
-                ok, detail = _tt_confirm_playing(page, TT_QUICK_CONFIRM_S * sc, scale=sc)
+                    _wait_for_load(page, timeout=left(15 * sc))
+                confirm_s = left(TT_QUICK_CONFIRM_S * sc)
+                ok, detail = _tt_confirm_playing(page, confirm_s, scale=sc)
                 if ok and not c.get("fallback"):        # levi 00:09: the landed room is the picked one, else next
                     t["identity"] = idc = identity_check("tiktok", c["href"], page)
                     if idc["ok"] is False:
@@ -4675,11 +4738,18 @@ class BrowserSession:
                 ok, detail = False, {"dead": "error", "error": repr(exc)}
             t.update(ok=ok, detail=detail, t_done=time.time())
             rec["tries"].append(t)
-            if (not ok and self.join_state is not None and detail.get("dead") == "not_playing"
-                    and detail.get("has_video")):        # B9: media attached, no first frame by the scaled cap
-                rec["join_timeout"] = c["href"]
-                self._room_mismatch_next(rec)
-                raise JoinTimeout(self.join_state, TT_QUICK_CONFIRM_S * sc, {"room": c["href"]})
+            if not ok and self.join_state is not None and detail.get("dead") == "not_playing" \
+                    and confirm_s > 0 and not self.join_cancel.is_set():          # B9 D3: the full scaled wait spent
+                due, why = join_timeout_due(detail.get("ev0") or {},
+                                            {"attached": bool(detail.get("has_video") and detail.get("src")),
+                                             "buf_end": detail.get("buf_end"), "decoded": detail.get("decoded")},
+                                            rx0, _rx_or_none(self.join_rx),
+                                            live=bool(c.get("live_badge") or detail.get("dur_inf")))
+                t["join_evidence"] = why
+                if due:                                     # media flowing on a live room, no first frame: a slow join
+                    rec["join_timeout"] = c["href"]
+                    self._room_mismatch_next(rec)
+                    raise JoinTimeout(self.join_state, time.time() - t["t_nav"], {"room": c["href"], **why})
             print(f"[browser] tt room {c['href']} ({c['viewers']} viewers): {'OK' if ok else detail.get('dead')}", flush=True)
             if ok:
                 rec["choice"] = c["href"]

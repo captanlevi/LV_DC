@@ -64,6 +64,39 @@ JOIN: dict = {}
 JOIN_FIRST_WAIT_S = 120.0
 
 
+JOIN_STOP_WAIT_S = 30.0
+
+
+def join_meta(join: dict) -> dict:
+    """meta.json join: the rule beside the join's record (JOIN)."""
+    return {"rule": "B9 (levi 23:21-23:22, 23:49): the first schedule state before navigation; the join inside the "
+                    "session", **{k: v for k, v in join.items() if k != "abort"}, "abort": join.get("abort")}
+
+
+def join_unfinished_reason(join: dict, now: float) -> str:
+    """B9 D2 (levi 23:49): the schedule ended with the join still running: a join_timeout at its first state (shagun's
+    prefix), over the time since navigation."""
+    return f"join_timeout at state {join.get('first_state')} ({int(round(now - (join.get('t_nav') or now)))} s)"
+
+
+def after_schedule(join_t, browser, abort_reason, now: float | None = None, write=None):
+    """B9 D2: once the shaper returned. A join still running is stopped before teardown (browser.join_cancel; the
+    thread is given JOIN_STOP_WAIT_S) and the session ends as join_timeout (it overrides what the cancelled join then
+    wrote); else the join's own abort, if any. `write(meta_join)` records the final JOIN."""
+    if join_t is None:
+        return abort_reason
+    if JOIN.get("outcome") is None:
+        reason = join_unfinished_reason(JOIN, time.time() if now is None else now)
+        browser.join_cancel.set()
+        join_t.join(timeout=JOIN_STOP_WAIT_S)
+        JOIN.update(outcome="join_timeout", unfinished=True, abort=reason)
+        if write is not None:
+            write(join_meta(JOIN))
+        return abort_reason or reason
+    join_t.join(timeout=10)
+    return abort_reason or JOIN.get("abort")
+
+
 def join_record(t_first_apply: float | None, t_nav: float | None, t_playing: float | None,
                 scheduled_s: float | None) -> dict:
     """levi 23:22: the join inside the session: join_s (navigation -> playing), the schedule seconds played while
@@ -1060,6 +1093,9 @@ if __name__ == "__main__":
             from browser import JOIN_BASE_S, join_timeout_s
             per_url = join_timeout_s(browser.platform, JOIN.get("first_rate_kbit"))
             browser.join_scale, browser.join_state = per_url / JOIN_BASE_S, JOIN.get("first_state")
+            if SLOT is not None:            # D3: the slot's own ingress counter (media bytes advancing over the wait)
+                _rx_path = Path(f"/sys/class/net/{SLOT.ifb_in}/statistics/rx_bytes")
+                browser.join_rx = lambda: int(_rx_path.read_text())
             JOIN.update(t_nav=round(time.time(), 3), per_url_timeout_s=per_url, scale=round(browser.join_scale, 3))
             browser.start()
             JOIN["t_playing"] = round(time.time(), 3)
@@ -1119,10 +1155,7 @@ if __name__ == "__main__":
             try:
                 JOIN.update(join_record(JOIN.get("t_first_apply"), JOIN.get("t_nav"), JOIN.get("t_playing"),
                                         (args.episodes * SCHEDULE["episode_s"]) if args.episodes else None))
-                session_meta.write(session_dir, join={"rule": "B9 (levi 23:21-23:22): the first schedule state before "
-                                                      "navigation; the join inside the session",
-                                                      **{k: v for k, v in JOIN.items() if k != "abort"},
-                                                      "abort": JOIN.get("abort")})
+                session_meta.write(session_dir, join=join_meta(JOIN))
             except Exception as e:
                 print(f"[join] meta write failed: {e!r}", flush=True)
 
@@ -1189,9 +1222,8 @@ if __name__ == "__main__":
             max_episodes=args.episodes,
             abort_check=(lambda: browser.abort_reason or JOIN.get("abort")) if browser is not None else None,
         ))
-        if _join_t is not None:              # B9: a failed or timed-out join ends the session with its own reason
-            _join_t.join(timeout=10)
-            abort_reason = abort_reason or JOIN.get("abort")
+        abort_reason = after_schedule(_join_t, browser, abort_reason,     # B9: a failed / unfinished join ends it
+                                      write=lambda j: session_meta.write(session_dir, join=j))
 
     except KeyboardInterrupt:
         print("\nInterrupted before collection started — finalising")
