@@ -23,7 +23,10 @@ sys.path.insert(0, str(HERE))
 try:
     import websocket  # noqa: F401
 except ImportError:
-    sys.modules["websocket"] = types.ModuleType("websocket")
+    _ws = types.ModuleType("websocket")             # the stub test_drain expects (sorted before it, never a bare module)
+    _ws.WebSocketTimeoutException = type("WebSocketTimeoutException", (Exception,), {})
+    _ws.WebSocket = object
+    sys.modules["websocket"] = _ws
 import browser as B  # noqa: E402
 
 SKIP_STUB = r"""
