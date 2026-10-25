@@ -72,7 +72,8 @@ def session_shaping(session_name: str) -> tuple[random.Random, dict]:
 
 
 def substep_changes(state: str, rate: int, dur: float, delay_ms: int, loss_pct: float,
-                    walk_rng: random.Random | None = None, dl_factor: float = 1.0) -> list[NetStat]:
+                    walk_rng: random.Random | None = None, dl_factor: float = 1.0,
+                    episode: int | None = None) -> list[NetStat]:
     """One sub-step's tc changes: its re-draw at 0 (walk_step 0), then, with walk_rng, the walk's steps (§2 (a); the
     set rate is the walk's position rounded to the kbit). Delay and loss are the re-draw's x dl_factor (§2 (b)) for the
     whole sub-step. Without walk_rng and with factor 1 this is the single change the generators yielded before §2."""
@@ -87,7 +88,8 @@ def substep_changes(state: str, rate: int, dur: float, delay_ms: int, loss_pct: 
             x = walk_step(x, state, walk_rng)
         end = starts[k + 1] if k + 1 < len(starts) else dur
         out.append(NetStat(rate=int(round(x)), duration=end - t, delay_ms=d, loss_pct=loss, state=state,
-                           redraw_kbit=rate, redraw_delay_ms=delay_ms, redraw_loss_pct=loss_pct, walk_step=k))
+                           redraw_kbit=rate, redraw_delay_ms=delay_ms, redraw_loss_pct=loss_pct, walk_step=k,
+                           episode=episode))
     return out
 
 
@@ -158,7 +160,7 @@ def net_episode_generator(
                 dur = max(1, remaining_time)
                 run_inner = False
             rate, delay, loss = scenario.sample_rate(), scenario.sample_delay(), scenario.sample_loss()
-            yield from substep_changes(state, rate, dur, delay, loss, walk_rng, dl_factor)
+            yield from substep_changes(state, rate, dur, delay, loss, walk_rng, dl_factor, episode_count)
             curr_time += dur
 
         # Track consecutive stall-risk episodes and force recovery if needed
@@ -211,8 +213,135 @@ def family_episode_generator(
                 dur = limit
             scenario = SCENARIOS[state]
             rate, delay, loss = scenario.sample_rate(), scenario.sample_delay(), scenario.sample_loss()
-            yield from substep_changes(state, rate, dur, delay, loss, walk_rng, dl_factor)
+            yield from substep_changes(state, rate, dur, delay, loss, walk_rng, dl_factor, episode_count)
             t += dur
             low_s = low_s + dur if low else 0.0
         state = next_state(state, transition_dict=transition_dict) if self_loops else next_state_no_self(state, transition_dict)
         episode_count += 1
+
+
+# W (levi 48888ba7 / 00171, supervisor 13:03; peter's sims cdcdf38a3088): the coverage rule's forced start (Q am. 15 (5))
+# made the state law depend on elapsed time (the chain relaxes from the band); so does the low-state cap from any start.
+# A chain session's whole schedule is generated up front, as before, and played from a uniformly random EPISODE boundary,
+# wrapping at its end: the marginal state at every elapsed time is then the schedule's own time-average (flat by
+# construction, targeting kept). The seam (the schedule's end followed by its start) obeys the generator's own low-state
+# cap (b'): a low run joined across it past the cap is cut exactly as the generator cuts one, nothing is redrawn.
+WRAP_RULE = ("W (levi 48888ba7): the chain schedule generated up front, played from a uniform episode boundary, wrapping "
+             "at its end; the seam obeys the generator's own low-state cap (b')")
+
+
+def _low(state: str) -> bool:
+    return int(state) <= _LOW_STATE_THRESHOLD
+
+
+def _recovery_substep(dur: float, episode, walk_rng, dl_factor) -> list[NetStat]:
+    sc = SCENARIOS[_MIN_RECOVERY_STATE]
+    return substep_changes(_MIN_RECOVERY_STATE, sc.sample_rate(), dur, sc.sample_delay(), sc.sample_loss(), walk_rng,
+                           dl_factor, episode)
+
+
+def _substeps(items: list[NetStat]) -> list[list[NetStat]]:
+    """Changes grouped by sub-step (a re-draw, walk_step 0, then its walk steps)."""
+    out: list[list[NetStat]] = []
+    for x in items:
+        if x.walk_step == 0 or not out:
+            out.append([x])
+        else:
+            out[-1].append(x)
+    return out
+
+
+def _seam_recover(eps: list[list[NetStat]], cap_episodes: int | None, low_cap_s: float | None,
+                  walk_rng, dl_factor) -> float:
+    """(b') in place on the episodes in generation order: the run of low time ending the schedule continues, across the
+    seam, into the run starting it. Base (cap in episodes, net_episode_generator): the generator lets at most cap low
+    episodes run, then forces one episode at _MIN_RECOVERY_STATE and restarts its count; so the first head episode past
+    cap - tail becomes that recovery episode and the rest stays. Family (cap in seconds, family_episode_generator): the low
+    time is cut where it reaches low_cap_s and _MIN_RECOVERY_STATE held for the rest of that episode. Returns the
+    seconds re-drawn at _MIN_RECOVERY_STATE (0.0: the seam needed nothing)."""
+    if low_cap_s is None:
+        allep = lambda e: all(_low(x.state) for x in e)
+        tail = 0
+        for e in reversed(eps):
+            if not allep(e):
+                break
+            tail += 1
+        if tail == 0 or tail == len(eps):
+            return 0.0
+        for i, e in enumerate(eps[:len(eps) - tail]):
+            if not allep(e):
+                return 0.0
+            if tail + i + 1 > cap_episodes:                  # the (cap + 1)-th low episode in the joined run
+                dur = sum(x.duration for x in e)
+                eps[i] = [y for ss in _substeps(e) for y in
+                          _recovery_substep(sum(x.duration for x in ss), e[0].episode, walk_rng, dl_factor)]
+                return dur
+        return 0.0
+    tail_s = 0.0
+    for e in reversed(eps):
+        stop = False
+        for x in reversed(e):
+            if not _low(x.state):
+                stop = True
+                break
+            tail_s += x.duration
+        if stop:
+            break
+    else:
+        return 0.0                                           # all low: no seam to speak of
+    if tail_s <= 0:
+        return 0.0
+    budget = low_cap_s - tail_s
+    for i, e in enumerate(eps):
+        acc, out, subs = 0.0, [], _substeps(e)
+        for j, ss in enumerate(subs):
+            if not _low(ss[0].state):
+                return 0.0                                   # the head's low run ended within the cap
+            d = sum(x.duration for x in ss)
+            if acc + d <= budget + 1e-9:
+                acc += d
+                out += ss
+                continue
+            keep = max(0.0, budget - acc)                    # cut here: the low part kept, then "4" to the episode's end,
+            kept, t = [], 0.0                                # each remaining sub-step re-drawn at its own length
+            for x in ss:
+                if t >= keep - 1e-9:
+                    break
+                kept.append(NetStat(**{**x.__dict__, "duration": min(x.duration, keep - t)}))
+                t += x.duration
+            rec = _recovery_substep(d - keep, e[0].episode, walk_rng, dl_factor)
+            for later in subs[j + 1:]:
+                rec += _recovery_substep(sum(x.duration for x in later), e[0].episode, walk_rng, dl_factor)
+            eps[i] = out + kept + rec
+            return sum(x.duration for x in rec)
+        budget -= acc
+    return 0.0
+
+
+def wrap_schedule(items: list[NetStat], rng: random.Random, max_consecutive_low: int | None = None,
+                  low_cap_s: float | None = None, walk_rng=None, dl_factor: float = 1.0) -> tuple[list[NetStat], dict]:
+    """W: (the changes played from a uniformly random episode boundary, wrapping; the record for meta.json shaper). `items`
+    is a chain generator's whole finite output (every item carries its episode); the cap is the generator's own (episodes
+    for net_episode_generator, seconds for family_episode_generator). `rng` draws only the offset (seeded per session,
+    never the module's random, so the schedule's own draws are as without W); the seam's recovery draws use the module's
+    random after the schedule is complete. Offset 0 = the schedule as generated (no seam)."""
+    eps: list[list[NetStat]] = []
+    for x in items:
+        if x.episode is None:
+            raise ValueError("wrap_schedule: a change without its episode (replay / hold schedules are never wrapped)")
+        if not eps or eps[-1][0].episode != x.episode:
+            eps.append([x])
+        else:
+            eps[-1].append(x)
+    n = len(eps)
+    k = rng.randrange(n) if n else 0
+    rec_s = _seam_recover(eps, max_consecutive_low, low_cap_s, walk_rng, dl_factor) if k else 0.0
+    head, tail = eps[k:], eps[:k]
+    out = [x for e in head + tail for x in e]
+    total = sum(x.duration for x in out)
+    offset_s = sum(x.duration for e in eps[:k] for x in e)
+    seam_index = sum(len(e) for e in head) if k else None
+    return out, {"rule": WRAP_RULE, "episodes": n, "offset_episode": k, "schedule_offset_s": round(offset_s, 3),
+                 "schedule_s": round(total, 3), "wrap_elapsed_s": round(total - offset_s, 3) if k else None,
+                 "seam_index": seam_index, "seam_recovery_s": round(rec_s, 3),
+                 "cap": {"episodes": max_consecutive_low} if low_cap_s is None else {"seconds": low_cap_s}}

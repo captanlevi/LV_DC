@@ -142,10 +142,12 @@ def _ossilate_ns(**stubs):
     from dataclasses import replace as dc_replace
     from utils.dataModels import NetLabel
     src = (HERE / "exp.py").read_text()
-    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.AsyncFunctionDef) and n.name == "_ossilate")
+    fns = [n for n in ast.parse(src).body if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+           and n.name in ("_ossilate", "_schedule")]                # W: _ossilate plays _schedule's changes
     ns = {"asyncio": asyncio, "time": time, "dc_replace": dc_replace, "NetLabel": NetLabel, "SYSTEM_TICK": 0.0,
-          "SHAPER_OPTS": {}, **stubs}
-    exec(compile(ast.Module([fn], []), "exp._ossilate", "exec"), ns)
+          "SHAPER_OPTS": {}, "WRAP_SEED": None, "SCHEDULE_WRAP": {}, "net_episode_generator": None,
+          "family_episode_generator": None, **stubs}
+    exec(compile(ast.Module(fns, []), "exp._ossilate", "exec"), ns)
     return ns
 
 

@@ -24,8 +24,10 @@ import signal
 import threading
 import argparse
 import asyncio
+import random
 
-from utils.netStat import net_episode_generator, family_episode_generator, session_shaping, replay_generator, replay_record
+from utils.netStat import (net_episode_generator, family_episode_generator, session_shaping, replay_generator, replay_record,
+                           wrap_schedule)
 from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
                            get_higher_state, get_lower_state, schedule_of)
@@ -313,6 +315,26 @@ def _apply_net_stat(net_stat : NetStat):
 
 SHAPER_OPTS: dict = {}     # v2 (t38): low-state cap and initial-state rule of the active config, set in __main__
 SHAPER_GEN = net_episode_generator   # Q am. 17: a schedule family's session runs utils/netStat.family_episode_generator
+WRAP_SEED: str | None = None   # W (levi 48888ba7): the session's offset seed; None = the schedule is played as generated
+SCHEDULE_WRAP: dict = {}       # W's record (meta.json shaper.schedule_wrap)
+
+
+def _schedule(gen_kwargs: dict):
+    """The shaper's changes: W (levi 48888ba7) on every chain-generated session (unsteered, lever, steered: the two chain
+    generators with a finite episode count), never on a replay or a held state; else the generator's own stream."""
+    if WRAP_SEED is None or SHAPER_GEN not in (net_episode_generator, family_episode_generator) \
+            or gen_kwargs.get("max_episodes") is None:
+        SCHEDULE_WRAP.update(applied=False, why="not a finite chain schedule (replay / hold / unbounded)")
+        return iter(SHAPER_GEN(**gen_kwargs))
+    items = list(SHAPER_GEN(**gen_kwargs))
+    fam = SHAPER_GEN is family_episode_generator
+    out, rec = wrap_schedule(items, random.Random(f"wrap:{WRAP_SEED}"),
+                             max_consecutive_low=None if fam else SHAPER_OPTS.get("max_consecutive_low", 2),
+                             low_cap_s=SHAPER_OPTS.get("low_cap_s") if fam else None,
+                             walk_rng=SHAPER_OPTS.get("walk_rng"), dl_factor=SHAPER_OPTS.get("dl_factor", 1.0))
+    SCHEDULE_WRAP.clear()
+    SCHEDULE_WRAP.update(applied=True, seed=f"wrap:{WRAP_SEED}", wrap_t=None, **rec)
+    return iter(out)
 
 
 async def _ossilate(
@@ -326,14 +348,17 @@ async def _ossilate(
 )-> bool:
     # returns True if the for loop ends
     deadline = None
-    for net_stat in SHAPER_GEN(
+    for i_change, net_stat in enumerate(_schedule(dict(
         episode_length=episode_time_in_seconds,
         transition_dict=transition_dct,
         forced_initial_state=forced_initial_state,
         max_episodes=max_episodes,
         **SHAPER_OPTS,
-    ):
+    ))):
         t_apply = time.time()                 # v3 A9: a change lies in [apply_start, timestamp]
+        seam = 1 if SCHEDULE_WRAP.get("seam_index") is not None and i_change == SCHEDULE_WRAP["seam_index"] else None
+        if seam:
+            SCHEDULE_WRAP["wrap_t"] = round(t_apply, 3)
         ep = LEVER.active(t_apply) if LEVER is not None else None   # v3 B4: inside a lever episode only the rate changes
         if ep is not None:
             net_stat = dc_replace(net_stat, rate=LEVER.rate_for(ep, t_apply))
@@ -344,7 +369,7 @@ async def _ossilate(
                      loss_pct=net_stat.loss_pct, redraw_kbit=net_stat.redraw_kbit,
                      redraw_delay_ms=net_stat.redraw_delay_ms, redraw_loss_pct=net_stat.redraw_loss_pct,
                      walk_step=net_stat.walk_step, apply_start=t_apply, apply="rate" if net_stat.walk_step else "slow",
-                     lever=ep["id"] if ep is not None else None)
+                     lever=ep["id"] if ep is not None else None, seam=seam)
         )
         # restart §2: a change every 2 s, so the changes keep the schedule's own clock (deadline + duration); an apply's
         # time (make slow) and the tick's overshoot no longer add to the session per change
@@ -823,6 +848,7 @@ if __name__ == "__main__":
     # record (rules, sigma per state, factor, seeds) goes to meta.json shaper
     WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)
     SHAPER_OPTS.update(walk_rng=WALK_RNG, dl_factor=SHAPING_REC["dl_factor"]["value"])
+    WRAP_SEED = session_dir.name if args.hold_state is None and not args.replay_schedule else None   # W: chain sessions
     if args.replay_schedule:              # v3 W-A: one fixed schedule for every round; the session-name draws are unused
         if args.hold_state is not None or args.lever or os.environ.get("LVDC_STEER_TABLE") is not None:
             sys.exit("--replay-schedule excludes --hold-state, --lever and steering (W-A's arms differ only in the flag)")
@@ -1257,6 +1283,8 @@ if __name__ == "__main__":
         # v2: the TLS keys (<session_dir>/ssl_keys.log) and raw decoder outputs stay in the session dir
 
         save_json(session_dir / "net_labels.txt", net_labels)
+        session_meta.merge(session_dir, "shaper", schedule_wrap=dict(SCHEDULE_WRAP) or {"applied": False,
+                                                                                    "why": "the shaper never started"})
         if STEERING is not None:            # t65: the start the shaper applied (its first row), beside the draw
             session_meta.merge(session_dir, "steering", start_applied=session_meta.steering_start_applied(net_labels))
         if platform == "tiktok":   # supervisor 2026-10-18: the stream regime (codec, ladder) per session, from http_v2

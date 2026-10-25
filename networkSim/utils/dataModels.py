@@ -19,6 +19,7 @@ class NetLabel:
     apply_start: float | None = None    # v3 A9 (t67): the apply began (before `make slow` / `make rate`); timestamp = it returned
     apply: str | None = None            # "slow" (delay / loss / rate re-set) or "rate" (a walk step: the HTB rate only)
     lever: int | None = None            # v3 B4: the lever episode this step ran under (its rate replaced the step's)
+    seam: int | None = None             # W (levi 48888ba7): 1 on the first change after the rotated schedule's wrap
 
 
 @dataclass
@@ -34,3 +35,4 @@ class NetStat:
     redraw_delay_ms: int | None = None
     redraw_loss_pct: float | None = None
     walk_step: int = 0
+    episode: int | None = None          # W: the generator's episode index (None: replay / hand-made changes)
