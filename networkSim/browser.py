@@ -883,15 +883,16 @@ def _tt_preroll(page: "CDPPage", seconds: float, scale: float = 1.0, cancel=None
     """The pre-roll: no dead signal for `seconds` (its clocks scaled by `scale` during the B9 join), and the playhead
     advancing >= TT_PREROLL_MIN_ADV_S within the scaled pre-roll (levi 06:40, WC3 r1 ti_100001: the old test, advance >=
     seconds / 2, is throughput-dependent on a shaped link, and skipped 4 live rooms at 204 kbit for the lowest-viewer
-    one). A room still short of it after `seconds` waits up to seconds x scale for its first second (clipped to `until`,
-    stopped by `cancel`); the advance share (ct_advance_s / the seconds watched) is recorded as a covariate, never a
-    filter."""
+    one). A room still short of it after `seconds` waits up to seconds x scale for its first second; `until` (the join
+    walk's cap) clips both, so the join cap is authoritative (brad / levi 06:45), and `cancel` stops it. The advance share
+    (ct_advance_s / the seconds watched) is recorded as a covariate, never a filter."""
     w, s, adv, prev = TTRoomWatch(scale=scale), {}, 0.0, _tt_state(page).get("ct")
     t0 = time.time()
     end = t0 + seconds
     longest = t0 + seconds * max(1.0, scale)
-    if until is not None:
-        longest = max(end, min(longest, until))
+    if until is not None:                             # the join cap is authoritative: no overrun past it
+        longest = min(longest, until)
+        end = min(end, longest)
     while True:
         now = time.time()
         if now >= longest or (now >= end and adv >= TT_PREROLL_MIN_ADV_S) or (cancel is not None and cancel.is_set()):

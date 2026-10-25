@@ -79,6 +79,10 @@ def test_dead_cancel_and_cap():
     assert not ok and d["watched_s"] < 95, d               # the join's cancel stops the extension
     ok, d = _run(rate=0.0, seconds=60.0, scale=10.0, until=120)
     assert not ok and d["watched_s"] < 125, d              # clipped to the join walk's cap
+    ok, d = _run(rate=1.0, seconds=60.0, scale=1.0, until=30)
+    assert ok and d["watched_s"] < 32, d                   # a cap inside the base pre-roll ends it there (no overrun)
+    ok, d = _run(rate=0.0, seconds=60.0, scale=1.0, until=30)
+    assert not ok and d["watched_s"] < 32, d
 
 
 def main() -> int:
