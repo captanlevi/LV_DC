@@ -32,11 +32,12 @@ def test_unit_extractor_fails_closed():
         assert r.returncode == 3 and not (d / "http_v2.json").exists()
         stale = list(d.glob("http_v2.json.stale_*"))
         assert len(stale) == 1 and stale[0].read_text() == '{"old": []}'
-        (d / "h1_raw.json").unlink()
-        (d / CS.HTTP_V2_ERROR).unlink()
-        r = subprocess.run([sys.executable, str(HERE / "unit_extractor.py"), "--path", str(d),
+        (d / "h1_raw.json").unlink()                                    # the repaired re-run (the marker is NOT removed
+        r = subprocess.run([sys.executable, str(HERE / "unit_extractor.py"), "--path", str(d),     # by hand: brad 07:13)
                             "--save_path", str(d / "http_v2.json")], capture_output=True, text=True)
         assert r.returncode == 0 and (d / "http_v2.json").exists() and not (d / CS.HTTP_V2_ERROR).exists()
+        assert len(list(d.glob(CS.HTTP_V2_ERROR + ".stale_*"))) == 1                 # the old marker, archived
+        assert CS.http_v2_missing(d, {"n_res_meta": 0}) is None                       # the repaired session stops flagging
 
 
 def test_check_session_names_http_v2_missing():

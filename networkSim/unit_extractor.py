@@ -102,3 +102,7 @@ if __name__ == "__main__":
         raise SystemExit(3)
 
     save_ft_to_http_units(path=args.save_path, data=master_dict)
+    _marker = os.path.join(os.path.dirname(os.path.abspath(args.save_path)), ERROR_MARKER)
+    if os.path.exists(_marker):                   # brad 07:13: a repaired re-run never keeps an older failure's marker
+        import time
+        os.replace(_marker, f"{_marker}.stale_{int(time.time())}")      # archived, never deleted
