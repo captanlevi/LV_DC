@@ -16,7 +16,7 @@ import orchestrate as O  # noqa: E402
 
 
 def test_the_pin_is_read_from_setup_sh():
-    assert O.network_core_pin() == "0.8.1"
+    assert O.network_core_pin() == "0.8.2"                     # nc 0.8.2 (levi 08:51; published 09:15)
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "s.sh").write_text('pip install --quiet "network_core>=0.5.3"\n')
         assert O.network_core_pin(Path(d) / "s.sh") is None
@@ -58,8 +58,8 @@ def test_record_lines_are_refused_off_the_pin_and_dry_lines_never():
 
 def test_setup_sh_is_fatal_on_a_record_box():
     src = (HERE.parent / "setup.sh").read_text()
-    assert src.count("0.8.1") == 1 and src.count('network_core==${NC_PIN}') == 2   # brad 02:51: one literal, two uses
-    blk = src[src.index("\nNC_PIN=0.8.1\n"):][:700]
+    assert src.count("0.8.2") == 1 and src.count('network_core==${NC_PIN}') == 2   # brad 02:51: one literal, two uses
+    blk = src[src.index("\nNC_PIN=0.8.2\n"):][:700]
     assert 'LVDC_RECORD_BOX:-0}" = 1' in blk and ".lvdc_record_root" in blk and "exit 1" in blk
     assert subprocess.run(["bash", "-n", str(HERE.parent / "setup.sh")]).returncode == 0
 
