@@ -1592,7 +1592,7 @@ def main() -> int:
             sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
     h2m = http_v2_missing(sd, lab)                  # levi 06:29: reported, never the verdict
     if h2m:
-        sreg["suspicious"] = list(sreg.get("suspicious") or []) + [h2m]
+        sreg["suspicious"] = list(sreg.get("suspicious") or []) + [{"flag": "http_v2_missing", "detail": h2m}]
     import decode_path as DP
     _dp = meta.get("decode_path") or {}
     dp_hevc = DP.hevc_decision(_dp.get("gpu"), _dp.get("page"), (sreg.get("regime") or {}).get("played_codec")) if _dp else {}

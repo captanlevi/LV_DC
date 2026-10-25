@@ -61,9 +61,17 @@ def test_check_session_names_http_v2_missing():
         assert CS.http_v2_missing(sd, idle).startswith("http_v2_missing: unit_extractor failed (RuntimeError")
 
 
+def test_the_flag_is_a_suspicious_entry_of_the_regime_shape():
+    """suspicious entries are {"flag": ...} dicts (stream_regime.flag_keys reads s["flag"]; a bare string broke main())"""
+    import inspect
+    src = inspect.getsource(CS.main)
+    assert '{"flag": "http_v2_missing", "detail": h2m}' in src
+
+
 def main() -> int:
     test_unit_extractor_fails_closed()
     test_check_session_names_http_v2_missing()
+    test_the_flag_is_a_suspicious_entry_of_the_regime_shape()
     print("test_http_v2_failclosed: ok")
     return 0
 
