@@ -691,11 +691,32 @@ def _parent(obj: dict) -> str | None:
     return "root" if obj.get("root") else obj.get("parent")
 
 
+def _tc_classes_text(text: str) -> dict:
+    """tc_classes' rows from `tc -s class show` TEXT (levi 18:11: chaos's iproute2-5.15.0 prints text for `class -j`;
+    WC1 r1 dumps): the counters and rate from parse_classes (the legacy row's parser, unchanged), kind / parent / leaf
+    and requeues from each block's own lines."""
+    out = {}
+    pc = parse_classes(text)
+    for blk in re.split(r"\n(?=class )", text or ""):
+        h = re.match(r"class (\S+) (\S+) (?:(root)|parent (\S+))?.*?(?:leaf (\S+))?\s+prio", blk)
+        if not h or h.group(2) not in pc:
+            continue
+        rq = re.search(r"overlimits \d+ requeues (\d+)\)", blk)
+        rec = pc[h.group(2)]
+        out[h.group(2)] = {"kind": h.group(1), "parent": "root" if h.group(3) else h.group(4), "leaf": h.group(5),
+                           "rate_kbit": rec.get("rate_kbit"),
+                           **{k: (int(rq.group(1)) if rq else None) if k == "requeues" else rec.get(k) for k in TC_FIELDS}}
+    return out
+
+
 def tc_classes(text: str) -> dict:
     """{classid: {kind, parent, leaf, rate_kbit, bytes, packets, drops, overlimits, requeues, backlog, qlen}} from
-    `tc -s -j class show` (JSON prints a rate in bytes / s: x 8 / 1000 = kbit); {} when the text is not JSON."""
+    `tc -s -j class show` (JSON prints a rate in bytes / s: x 8 / 1000 = kbit); when the output is not JSON (iproute2
+    5.15 prints htb classes as text whatever -j), the same rows from the text (_tc_classes_text)."""
     out = {}
-    j = _tc_json(text) or []
+    j = _tc_json(text)
+    if j is None:
+        return _tc_classes_text(text)
     for c in j:
         if not c.get("handle"):
             continue
@@ -792,8 +813,8 @@ class TcSampler:
             text, _cpu, err = self.read(kind, dev)
             if err:
                 errs.append(err)
-            elif text.strip() and _tc_json(text) is None:
-                errs.append(f"{kind} {dev}: not JSON: {text.strip()[:80]}")
+            elif text.strip() and _tc_json(text) is None and not (kind == "class" and tc_classes(text)):
+                errs.append(f"{kind} {dev}: not JSON: {text.strip()[:80]}")   # class text parsed: no error (levi 18:11)
             texts.append(text)
         return {"slot_tc": slot_tc_record(self.slot, self.iface, *texts), **({"tc_err": errs} if errs else {})}
 

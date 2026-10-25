@@ -14,6 +14,7 @@ import importlib.util
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -90,11 +91,15 @@ def test_parse_recorded_json():
     assert T.tc_classes("[]") == {} and T.tc_qdiscs("") == {} and T.tc_classes("[not json") == {}
 
 
-def test_json_only():
-    """slot_tc reads JSON only: text output parses to nothing (TcSampler's tc_err names it), never the legacy parser"""
+def test_qdiscs_json_only_classes_also_text():
+    """qdisc reads are JSON only (text parses to nothing; TcSampler's tc_err names it); class reads fall back to the text
+    rows (levi 18:11: iproute2 5.15 prints htb classes as text under -j), the legacy parser itself untouched"""
     txt = ("class htb 1:10 root leaf 8001: prio 0 rate 465Kbit ceil 465Kbit burst 1600b cburst 1600b \n"
            " Sent 48298 bytes 39 pkt (dropped 4, overlimits 35 requeues 0) \n backlog 70979b 59p requeues 0\n")
-    assert T.tc_classes(txt) == {} and T.tc_qdiscs(txt.replace("class", "qdisc")) == {}
+    assert T.tc_qdiscs(txt.replace("class", "qdisc")) == {}
+    assert T.tc_classes(txt)["1:10"] == {"kind": "htb", "parent": "root", "leaf": "8001:", "rate_kbit": 465.0,
+                                         "bytes": 48298, "packets": 39, "drops": 4, "overlimits": 35, "requeues": 0,
+                                         "backlog": 70979, "qlen": 59}
     assert T.parse_classes(txt)["1:10"]["bytes"] == 48298          # the legacy text parser, untouched
 
 
@@ -376,6 +381,28 @@ WC1_DIR = HERE / "fixtures"          # expected at networkSim/fixtures/tc_json_w
 #            "class <iface>": "...", "qdisc <iface>": "..."}}   (raw stdout text, captured while the slot is shaped)
 
 
+def _sampler_on(texts):
+    """A TcSampler whose four slot_tc reads return `texts` (class in, class out, qdisc in, qdisc out)."""
+    it = iter(texts)
+    return T.TcSampler(Path(tempfile.mkdtemp()), T.Slot("tiktok", "tt1", 0x113, 0, 0), read=lambda k, d: (next(it), 0.0, None))
+
+
+def test_class_text_parses_as_json_would():
+    """levi 18:11: chaos's iproute2 5.15 prints `tc -s -j class show` as text; the text rows carry the JSON rows' keys."""
+    txt = ("class htb 1:10 root leaf 8059: prio 0 rate 1989Kbit ceil 1989Kbit burst 1600b cburst 1600b \n Sent 7680498 bytes "
+           "5551 pkt (dropped 5, overlimits 5453 requeues 2) \n backlog 30214b 21p requeues 2\n lended: 5551 borrowed: 0 giants: 0\n"
+           " tokens: -95098 ctokens: -95098\n\nclass htb 1:20 parent 1:1 prio 0 rate 1Gbit ceil 1Gbit burst 1600b cburst 1600b \n"
+           " Sent 583426 bytes 801 pkt (dropped 0, overlimits 96 requeues 0) \n backlog 0b 0p requeues 0\n\n")
+    c = T.tc_classes(txt)
+    assert c["1:10"] == {"kind": "htb", "parent": "root", "leaf": "8059:", "rate_kbit": 1989.0, "bytes": 7680498,
+                         "packets": 5551, "drops": 5, "overlimits": 5453, "requeues": 2, "backlog": 30214, "qlen": 21}
+    assert c["1:20"]["parent"] == "1:1" and c["1:20"]["leaf"] is None and c["1:20"]["rate_kbit"] == 1e6
+    assert set(c["1:10"]) == set(T.tc_classes(json.dumps([{"class": "htb", "handle": "1:10", "root": True}]))["1:10"])
+    assert T.parse_classes(txt)["1:10"] == {"rate_kbit": 1989.0, "bytes": 7680498, "packets": 5551, "drops": 5,
+                                            "overlimits": 5453, "backlog": 30214, "qlen": 21}   # the legacy parser, unchanged
+    assert T.tc_classes("garbage") == {} and T.tc_classes("") == {}
+
+
 def test_wc1_live_json_fixture():
     files = sorted(WC1_DIR.glob(WC1_GLOB))
     if not files:
@@ -387,16 +414,28 @@ def test_wc1_live_json_fixture():
         return
     for f in files:
         fx = json.loads(f.read_text())
-        slot = T.Slot(platform="", tag=fx["slot"], mark=int(fx["mark"], 16), cdp_port=0, prio=0)   # names only
         dm = fx["dumps"]
+        # WC1 r1 (shagun 18:11) wrote the slot's BASE mark; the session's mark carries the epoch byte (Slot.with_epoch),
+        # so the egress class is the interface's one class whose low byte is the base mark
+        base = int(fx["mark"], 16) & 0xFF
+        ecs = [h for h in re.findall(r"class \S+ 1:([0-9a-f]+) ", dm[f"class {fx['iface']}"]) if int(h, 16) & 0xFF == base
+               and int(h, 16) > 0xFF] or [f"{int(fx['mark'], 16):x}"]
+        assert len(ecs) == 1, (f.name, ecs)
+        slot = T.Slot(platform="", tag=fx["slot"], mark=int(ecs[0], 16), cdp_port=0, prio=0)   # names only
         texts = [dm[f"class {slot.ifb_in}"], dm[f"class {fx['iface']}"], dm[f"qdisc {slot.ifb_in}"],
                  dm[f"qdisc {fx['iface']}"]]
-        for t in texts:
+        for t in texts[2:]:                    # qdisc reads are JSON on every tc seen
             assert T._tc_json(t) is not None, (f.name, t[:120])
+        for t in texts[:2]:                    # levi 18:11: class reads are text on iproute2 5.15 (JSON elsewhere)
+            assert T.tc_classes(t), (f.name, t[:120])
         sc = T.slot_tc_record(slot, fx["iface"], *texts)
         for d_, p in T.SLOT_TC_PARTS:
             assert sc[d_][p] is not None, (f.name, d_, p)
             assert all(isinstance(sc[d_][p][k], int) for k in T.TC_FIELDS), (f.name, d_, p, sc[d_][p])
+        assert sc["in"]["class"]["leaf"] == sc["in"]["netem"]["handle"], f.name     # the class's leaf is the netem read
+        assert sc["out"]["class"]["leaf"] == sc["out"]["netem"]["handle"], f.name
+        if T._tc_json(texts[0]) is None:
+            assert "tc_err" not in _sampler_on(texts).slot_tc(), f.name              # parsed text is no error
         assert sc["in"]["class"]["rate_kbit"] and sc["out"]["class"]["rate_kbit"], f.name
         assert sc["in"]["qdisc"]["kind"] == "htb" and sc["in"]["netem"]["kind"] == sc["out"]["netem"]["kind"] == "netem"
 
