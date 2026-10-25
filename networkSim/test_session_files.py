@@ -26,6 +26,7 @@ NON_SESSION = frozenset({
     "not_usable_cleared.json", "preflight_last.json", "trio_preflight_last.json", "restart_simulation.json",
     "schedule_occupancy.json", "walk_simulation.json", "trio_slots.jsonl", "tw_esports_skips.jsonl",
     "yt_channel_picks.jsonl", "yt_list_leaves.jsonl", "yt_live_checks.jsonl", "yt_precheck_skips.jsonl",
+    "setup.sh",                                   # the repo's installer: orchestrate reads its network_core pin
 })
 
 

@@ -1525,10 +1525,6 @@ def arg_refusal(args, environ) -> str | None:
             return "--session-range LO,HI with 0 < LO <= HI"
     # levi on a2f0cac (bundle item 6): a counted run never runs with the data volume check off; preflight's
     # check_data_uuid is "not checked" when LVDC_DATA_ROOT_UUID is unset, so the record refuses that here
-    if args.trio_record:                              # levi 02:12 (brad 02:11): the pinned network_core, or no record run
-        _nc = network_core_refusal()
-        if _nc:
-            return _nc
     if args.trio_record and not (environ.get("LVDC_DATA_ROOT_UUID") or "").strip():
         return ("--trio-record needs LVDC_DATA_ROOT_UUID (the data volume's filesystem UUID; ops/env.sh / "
                 "env.local.sh): preflight's data volume check must run for the record")
@@ -1599,6 +1595,10 @@ def arg_refusal(args, environ) -> str | None:
     r = _dr.kind_refusal(bool(args.trio_record), Path(environ.get("LVDC_DATA_ROOT") or _dr.REPO_DATA))
     if r:
         return ("--trio-record: " if args.trio_record else "") + r
+    if args.trio_record:     # levi 02:12 (brad 02:11), after every argument refusal: the pinned network_core, or no record run
+        _nc = network_core_refusal()
+        if _nc:
+            return _nc
     return None
 
 

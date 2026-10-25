@@ -34,15 +34,22 @@ def test_the_refusal():
 def test_record_lines_are_refused_off_the_pin_and_dry_lines_never():
     """arg_refusal (the launch and --check-args): --trio-record off the pin is refused; a dry line never reads it."""
     import test_check_args as TC
-    saved = O.network_core_installed
+    import data_root as DR
+    saved, saved_kind = O.network_core_installed, DR.kind_refusal
     try:
+        DR.kind_refusal = lambda record, root: None       # C8 passes: the version check runs last, after it
         O.network_core_installed = lambda: "0.6.7"
         args = O.build_parser().parse_args(TC.RECORD)
         r = O.arg_refusal(args, {"LVDC_DATA_ROOT_UUID": "x"})
         assert r and "network_core 0.6.7" in r, r
+        O.network_core_installed = O.network_core_pin
+        assert O.arg_refusal(args, {"LVDC_DATA_ROOT_UUID": "x"}) is None
+        O.network_core_installed = lambda: "0.6.7"
         assert "network_core" not in str(O.arg_refusal(O.build_parser().parse_args(TC.DRY), {}))
+        # every argument refusal comes first: a malformed record line names its own defect, not the version
+        assert "LVDC_DATA_ROOT_UUID" in O.arg_refusal(args, {})
     finally:
-        O.network_core_installed = saved
+        O.network_core_installed, DR.kind_refusal = saved, saved_kind
 
 
 def test_setup_sh_is_fatal_on_a_record_box():
