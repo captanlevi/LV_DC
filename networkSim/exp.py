@@ -319,9 +319,14 @@ WRAP_SEED: str | None = None   # W (levi 48888ba7): the session's offset seed; N
 SCHEDULE_WRAP: dict = {}       # W's record (meta.json shaper.schedule_wrap)
 
 
-def _schedule(gen_kwargs: dict):
+def _schedule(gen_kwargs: dict, wrap: bool = True):
     """The shaper's changes: W (levi 48888ba7) on every chain-generated session (unsteered, lever, steered: the two chain
-    generators with a finite episode count), never on a replay or a held state; else the generator's own stream."""
+    generators with a finite episode count), never on a replay or a held state; else the generator's own stream. An
+    interactive u / d jump (wrap=False; levi 13:29) plays its new schedule as generated and leaves the session's record."""
+    if not wrap:
+        SCHEDULE_WRAP["interactive_restarts"] = SCHEDULE_WRAP.get("interactive_restarts", 0) + 1
+        SCHEDULE_WRAP["seam_index"] = None                   # the restarted stream has no seam
+        return iter(SHAPER_GEN(**gen_kwargs))
     if WRAP_SEED is None or SHAPER_GEN not in (net_episode_generator, family_episode_generator) \
             or gen_kwargs.get("max_episodes") is None:
         SCHEDULE_WRAP.update(applied=False, why="not a finite chain schedule (replay / hold / unbounded)")
@@ -333,7 +338,10 @@ def _schedule(gen_kwargs: dict):
                              low_cap_s=SHAPER_OPTS.get("low_cap_s") if fam else None,
                              walk_rng=SHAPER_OPTS.get("walk_rng"), dl_factor=SHAPER_OPTS.get("dl_factor", 1.0))
     SCHEDULE_WRAP.clear()
-    SCHEDULE_WRAP.update(applied=True, seed=f"wrap:{WRAP_SEED}", wrap_t=None, **rec)
+    # levi 13:29: the start the generator drew (forced band / steering / stationary) is the schedule's first change BEFORE
+    # the rotation; under W the first APPLIED row (steering.start_applied) is a random episode's, by design
+    SCHEDULE_WRAP.update(applied=True, seed=f"wrap:{WRAP_SEED}", wrap_t=None,
+                         start_state_prewrap=items[0].state if items else None, **rec)
     return iter(out)
 
 
@@ -344,7 +352,7 @@ async def _ossilate(
     transition_dct: dict[str, dict[str, float]],
     forced_initial_state: str | None = None,
     max_episodes: int | None = None,
-    
+    wrap: bool = True,
 )-> bool:
     # returns True if the for loop ends
     deadline = None
@@ -354,7 +362,7 @@ async def _ossilate(
         forced_initial_state=forced_initial_state,
         max_episodes=max_episodes,
         **SHAPER_OPTS,
-    ))):
+    ), wrap=wrap)):
         t_apply = time.time()                 # v3 A9: a change lies in [apply_start, timestamp]
         seam = 1 if SCHEDULE_WRAP.get("seam_index") is not None and i_change == SCHEDULE_WRAP["seam_index"] else None
         if seam:
@@ -423,7 +431,7 @@ async def experiment(
     reason stops the shaper loop like 'q' does, and is returned."""
     stop_event = asyncio.Event()
 
-    def _make_task(initial_state: str | None) -> asyncio.Task:
+    def _make_task(initial_state: str | None, wrap: bool = True) -> asyncio.Task:
         return asyncio.create_task(
             _ossilate(
                 episode_time_in_seconds=episode_time_in_seconds,
@@ -432,6 +440,7 @@ async def experiment(
                 forced_initial_state=initial_state,
                 max_episodes=max_episodes,
                 transition_dct=transition_dct,
+                wrap=wrap,
             )
         )
 
@@ -511,7 +520,7 @@ async def experiment(
                 else:
                     next_s = None
                 print(f"  → jumping to state {next_s}")
-                osc_task = _make_task(next_s)
+                osc_task = _make_task(next_s, wrap=False)       # levi 13:29: an interactive jump is never wrapped
             # unrecognized input: re-enter the wait
     except asyncio.CancelledError:
         stop_event.set()

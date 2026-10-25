@@ -120,6 +120,40 @@ def test_exp_wraps_chain_sessions_only_and_flags_the_seam_row():
     assert "seam=seam)" in src and '"shaper", schedule_wrap=' in src
 
 
+def _schedule_ns(**stubs):
+    """exp._schedule's own source, exec'd with stubs (exp.py exits at import without the repo's .venv)."""
+    import ast
+    src = (HERE / "exp.py").read_text()
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "_schedule")
+    ns = {"random": random, "wrap_schedule": NS.wrap_schedule, "net_episode_generator": NS.net_episode_generator,
+          "family_episode_generator": NS.family_episode_generator, "SHAPER_OPTS": {"max_consecutive_low": 99},
+          "SCHEDULE_WRAP": {}, **stubs}
+    exec(compile(ast.Module([fn], []), "exp._schedule", "exec"), ns)
+    return ns
+
+
+def test_the_record_keeps_the_prewrap_start_and_an_interactive_jump_is_never_wrapped():
+    """levi 13:29: (1) meta.shaper.schedule_wrap.start_state_prewrap = the schedule's first change before rotation (the
+    start cross-check compares against it; start_applied is a random episode's by design); (2) a u / d jump plays as
+    generated, counted, and leaves the session's record."""
+    t = PLATFORM_MATRICES["youtube"]["B"][0]
+    ns = _schedule_ns(WRAP_SEED="yt_100009", SHAPER_GEN=NS.net_episode_generator)
+    kw = dict(episode_length=60, transition_dict=t, forced_initial_state="7", max_episodes=12)
+    random.seed(5)
+    out = list(ns["_schedule"](kw))
+    rec = dict(ns["SCHEDULE_WRAP"])
+    assert rec["applied"] and rec["start_state_prewrap"] == "7" and len(out) > 0
+    random.seed(5)
+    jump = list(ns["_schedule"]({**kw, "forced_initial_state": "2"}, wrap=False))
+    random.seed(5)
+    assert jump == list(NS.net_episode_generator(**{**kw, "forced_initial_state": "2"}))      # as generated
+    after = ns["SCHEDULE_WRAP"]
+    assert after["interactive_restarts"] == 1 and after["seam_index"] is None
+    assert after["start_state_prewrap"] == "7" and after["offset_episode"] == rec["offset_episode"]
+    src = (HERE / "exp.py").read_text()
+    assert "_make_task(next_s, wrap=False)" in src and "), wrap=wrap)):" in src
+
+
 # ---------------------------------------------------------------------------------- the flatness check (levi 00171 (4))
 N_SIM, TOL = 2000, 0.03
 WB_CONFIGS = [("youtube", "B", "Q_360p"), ("twitch", "current", "Q_480p"), ("twitch", "TW-M@slow", "Q_480p"),
@@ -200,6 +234,7 @@ def main() -> int:
     test_family_cut_inside_a_sub_step_keeps_its_low_part()
     test_steering_draw_and_its_deficits_do_not_depend_on_w()
     test_exp_wraps_chain_sessions_only_and_flags_the_seam_row()
+    test_the_record_keeps_the_prewrap_start_and_an_interactive_jump_is_never_wrapped()
     for c in WB_CONFIGS:
         test_w_is_flat_by_elapsed_quintile(*c)
     print("test_schedule_wrap: ok")
