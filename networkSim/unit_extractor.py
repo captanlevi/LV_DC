@@ -8,6 +8,28 @@ from network_core.dataModels import HttpUnit, FiveTuple
 
 TSHARK = shutil.which("tshark") or "tshark"
 ERROR_MARKER = "http_v2_error.json"     # levi 06:29: written instead of http_v2.json when the extraction fails
+STATS_FILE = "http_v2_stats.json"       # brad 08:59: network_core >= 0.8.2's h1_body_only_packets, beside http_v2
+
+
+def _parse_h1(path: str, stats: dict) -> dict:
+    """HTTP/1 through parse_tshark_http, with stats= when this network_core takes it (0.8.2: the body-only packets it
+    skips are counted); an older one leaves the count None (not counted)."""
+    import inspect
+    if "stats" in inspect.signature(parse_tshark_http).parameters:
+        return parse_tshark_http(path, http_version=1, stats=stats)
+    stats["h1_body_only_packets"] = None
+    return parse_tshark_http(path, http_version=1)
+
+
+def _write_stats(save_path: str, stats: dict) -> None:
+    import json
+    try:
+        import network_core
+        ver = getattr(network_core, "__version__", None)
+    except Exception:
+        ver = None
+    with open(os.path.join(os.path.dirname(os.path.abspath(save_path)), STATS_FILE), "w") as fh:
+        json.dump({"network_core": ver, **stats}, fh, indent=1)
 
 
 def _merge_into(ft_to_stream_to_units, master_dict):
@@ -43,12 +65,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     h1_path = os.path.join(args.path, "h1_raw.json")
+    stats: dict = {"h1_body_only_packets": 0}
 
     try:
         master_dict: dict[FiveTuple, list[HttpUnit]] = {}
 
         if os.path.exists(h1_path):
-            _merge_into(parse_tshark_http(h1_path, http_version=1), master_dict)
+            _merge_into(_parse_h1(h1_path, stats), master_dict)
 
         if args.pcap and args.ssl_keys:
             if args.save_pdml:
@@ -102,6 +125,7 @@ if __name__ == "__main__":
         raise SystemExit(3)
 
     save_ft_to_http_units(path=args.save_path, data=master_dict)
+    _write_stats(args.save_path, stats)            # brad 08:59: the count in the output, never only on stderr
     _marker = os.path.join(os.path.dirname(os.path.abspath(args.save_path)), ERROR_MARKER)
     if os.path.exists(_marker):                   # brad 07:13: a repaired re-run never keeps an older failure's marker
         import time

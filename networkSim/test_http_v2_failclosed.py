@@ -37,6 +37,8 @@ def test_unit_extractor_fails_closed():
                             "--save_path", str(d / "http_v2.json")], capture_output=True, text=True)
         assert r.returncode == 0 and (d / "http_v2.json").exists() and not (d / CS.HTTP_V2_ERROR).exists()
         assert len(list(d.glob(CS.HTTP_V2_ERROR + ".stale_*"))) == 1                 # the old marker, archived
+        st = json.loads((d / "http_v2_stats.json").read_text())                       # brad 08:59: the count beside
+        assert "network_core" in st and st["h1_body_only_packets"] in (None, 0), st    # None: an nc without stats=
         assert CS.http_v2_missing(d, {"n_res_meta": 0}) is None                       # the repaired session stops flagging
 
 
