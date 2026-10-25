@@ -3440,17 +3440,80 @@ def _downscale_jpeg(raw: bytes) -> tuple[bytes, list | None, list | None]:
 # the player's rectangle in CSS px and the viewport, recorded with each shot (addendum O: motion is computed on the
 # player crop, chat / side panes outside it); the viewport size and dpr come back even with no player (supervisor
 # 2026-10-17: every shot carries the viewport at capture). One eval, so the shot loop adds no extra page call.
-_PLAYER_RECT_JS = """
+_RECT_JS_TEMPLATE = """
 (function() {
     const vs = [...document.querySelectorAll('video')].filter(v => v.offsetParent !== null);
     const v = vs.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
     const inner = [window.innerWidth, window.innerHeight], dpr = window.devicePixelRatio || 1;
     let player = null;
     if (v) { const r = v.getBoundingClientRect(); player = {rect: [r.x, r.y, r.width, r.height], inner, dpr}; }
+    /*GRID*/
     return JSON.stringify({player, viewport: inner, dpr, fullscreen: !!document.fullscreenElement,
-                           screen: [screen.width, screen.height]});
+                           screen: [screen.width, screen.height]/*GRID_OUT*/});
 })()
 """
+_PLAYER_RECT_JS = _RECT_JS_TEMPLATE.replace("    /*GRID*/\n", "").replace("/*GRID_OUT*/", "")
+
+# levi 88410f0b (#8', record-only; brad on WA3 tw_100003: twitch's "Stream Chat" panel is drawn over the right ~40 % of
+# the <video> element, so player.rect is the element's box, not the visible picture's): each shot row carries an
+# SHOT_GRID (cols x rows) document.elementFromPoint grid over player.rect, read in the SAME eval as player.rect (the same
+# moment, the same chosen <video>: the largest visible one). Cell centres, row-major from the top-left. Per cell one code:
+#   "v" the topmost element at the centre is the chosen <video> itself
+#   "o" the centre lies outside the viewport (not on the video)
+#   "n" elementFromPoint returned nothing (not on the video)
+#   other letters (never v / o / n): a legend entry {"id": "tag#id.class1.class2" (truncated), "up": levels from the <video> up to the
+#       lowest common ancestor (null if none), "bg": the element's own background is not transparent}
+#   "*" the legend is full (more distinct top elements than letters)
+# Note elementFromPoint skips pointer-events:none elements; a transparent full-player overlay that takes events (a
+# click handler) is the top element over the whole picture: "up" / "bg" let a reader tell it from a side panel.
+# occlusion = {grid, cells, legend} (null with no player; {"error"} if the grid threw: player.rect is unaffected);
+# video_cell_share = "v" cells / (cols x rows), on the row beside player.
+SHOT_GRID = (16, 9)
+_SHOT_GRID_JS = """
+    let occlusion = null;
+    if (v) {
+        try {
+            const r = v.getBoundingClientRect(), C = %d, R = %d, letters = 'abcdefghijklmpqrstuwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            const anc = new Map();
+            for (let e = v, k = 0; e; e = e.parentElement, k++) anc.set(e, k);
+            const ident = el => {
+                let s = String(el.tagName || '?').toLowerCase();
+                if (el.id) s += '#' + String(el.id).slice(0, 24);
+                const cl = typeof el.className === 'string' ? el.className.trim().split(/\\s+/).filter(Boolean) : [];
+                for (const c of cl.slice(0, 2)) s += '.' + c.slice(0, 24);
+                return s.slice(0, 64);
+            };
+            const up = el => { for (let e = el; e; e = e.parentElement) if (anc.has(e)) return anc.get(e); return null; };
+            const bg = el => {
+                try {
+                    const cs = getComputedStyle(el), c = cs.backgroundColor || '';
+                    const m = c.match(/rgba?\\(([^)]*)\\)/), parts = m ? m[1].split(',') : [];
+                    const alpha = parts.length === 4 ? parseFloat(parts[3]) : (c === 'transparent' ? 0 : 1);
+                    return alpha > 0 || (cs.backgroundImage || 'none') !== 'none';
+                } catch (e) { return null; }
+            };
+            const codes = new Map(), legend = {};
+            let cells = '', on = 0;
+            for (let j = 0; j < R; j++) for (let i = 0; i < C; i++) {
+                const x = r.x + (i + 0.5) * r.width / C, y = r.y + (j + 0.5) * r.height / R;
+                if (!(x >= 0 && y >= 0 && x < inner[0] && y < inner[1])) { cells += 'o'; continue; }
+                const el = document.elementFromPoint(x, y);
+                if (!el) { cells += 'n'; continue; }
+                if (el === v) { cells += 'v'; on++; continue; }
+                if (!codes.has(el)) {
+                    const code = codes.size < letters.length ? letters[codes.size] : '*';
+                    codes.set(el, code);
+                    if (code !== '*') legend[code] = {id: ident(el), up: up(el), bg: bg(el)};
+                    else legend['*'] = {id: 'legend full', up: null, bg: null};
+                }
+                cells += codes.get(el);
+            }
+            occlusion = {grid: [C, R], cells, legend, share: Math.round(on / (C * R) * 1e4) / 1e4};
+        } catch (e) { occlusion = {error: String(e).slice(0, 160)}; }
+    }
+""" % SHOT_GRID
+# the shot loop's one eval: _PLAYER_RECT_JS plus the grid (the calibrations keep the plain _PLAYER_RECT_JS)
+_SHOT_RECT_JS = _RECT_JS_TEMPLATE.replace("/*GRID*/", _SHOT_GRID_JS.strip()).replace("/*GRID_OUT*/", ", occlusion")
 
 
 # t53 fullscreen in the trio (supervisor decision (a); adopted only at a count boundary, probe v4 first): a composite-
@@ -3570,10 +3633,12 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
             # The surface is grabbed as is and downscaled here.
             t_decide = time.time()
             try:
-                pr_ = json.loads(page.eval(_PLAYER_RECT_JS) or "null") or {}
+                pr_ = json.loads(page.eval(_SHOT_RECT_JS) or "null") or {}
             except Exception:
                 pr_ = {}
             player, viewport = pr_.get("player"), {"inner": pr_.get("viewport"), "dpr": pr_.get("dpr")}
+            occ = pr_.get("occlusion")                 # #8' (levi 88410f0b): the grid, same eval as player.rect
+            occ_share = occ.pop("share", None) if isinstance(occ, dict) else None
             data, capture, capture_px, shot_px, region, crop = None, None, None, None, None, "viewport"
             t_js = t_grab = None
             comp = None
@@ -3644,7 +3709,7 @@ def _screenshot_loop(page: CDPPage, shots_dir: Path, stop: threading.Event, orig
             with open(index, "a") as fh:
                 fh.write(json.dumps({"ts": ts, "file": name, "tick": tick_id, "tick_ts": tick_ts, "reason": reason,
                                      "request": req if reason != "cadence" else None, "player": player,
-                                     "viewport": viewport,
+                                     "viewport": viewport, "occlusion": occ, "video_cell_share": occ_share,
                                      "capture_px": capture_px, "shot_px": shot_px, "capture": capture,
                                      "screen_region": region, "crop": crop, "fullscreen": bool((pr_ or {}).get("fullscreen")),
                                      "origin_offset": off if capture == "x11" and not (pr_ or {}).get("fullscreen") else None,

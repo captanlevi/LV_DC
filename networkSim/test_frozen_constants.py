@@ -174,6 +174,7 @@ def current() -> dict:
                         "SHOT_CALIB_MAX_RESIDUAL": B.SHOT_CALIB_MAX_RESIDUAL, "SHOT_CALIB_MIN_GAP": B.SHOT_CALIB_MIN_GAP},
         # v3 shots (levi 16:57; WA2 r1 levi 00:53): the cadence and the event-shot gap (Python and content.js)
         "shots_v3": {"SHOT_INTERVAL_S": B.SHOT_INTERVAL_S, "SHOT_EVENT_MIN_GAP_S": B.SHOT_EVENT_MIN_GAP_S,
+                     "SHOT_GRID": list(B.SHOT_GRID),   # #8' (levi 88410f0b): the occlusion grid, cols x rows
                      "content_js": _js_consts(["SHOT_EVENT_MIN_GAP_S"])},
         "entry_quality": {"ENTRY_QUALITY_PLATFORMS": EQ.ENTRY_QUALITY_PLATFORMS, "ENTRY_RULE": EQ.ENTRY_RULE,
                           "AD_WAIT_S": EQ.AD_WAIT_S, "PICK_HOLD_MAX_S": EQ.PICK_HOLD_MAX_S,
