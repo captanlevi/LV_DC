@@ -277,6 +277,13 @@ def _nft_rule(s: Slot) -> str:
             f'comment "lvdc slot {s.tag}"')
 
 
+# levi 8a81bd5d (WC1 r1 dumps, peter 18:2x): until the first `make slow` creates class 1:10, htb sends the slot's ingress
+# by its DIRECT path, whose queue defaults to the IFB's txqueuelen (32 packets): every slot tail-dropped there (root htb
+# drops >> the class's). The direct queue gets the shaped phase's queue size instead: tc's netem default limit, 1000
+# packets (the netem under 1:10 runs at it). The pre-apply phase stays unshaped, as single mode's entry is.
+IFB_DIRECT_QLEN = 1000
+
+
 def slot_up_cmds(s: Slot, iface: str = IFACE_DEFAULT) -> list[str]:
     """A slot's own part: its cgroup (before its nft rule: nft resolves the path to the cgroup's id when the rule is
     added), IFBs, the ingress redirect and the egress classification + mirror. Its rate / delay / loss are single mode's
@@ -285,7 +292,7 @@ def slot_up_cmds(s: Slot, iface: str = IFACE_DEFAULT) -> list[str]:
             f"nft add rule inet {NFT_TABLE} out '{_nft_rule(s)}'",
             f"ip link add {s.ifb_in} type ifb", f"ip link set {s.ifb_in} up",
             f"ip link add {s.ifb_out} type ifb", f"ip link set {s.ifb_out} up",
-            f"tc qdisc add dev {s.ifb_in} root handle 1: htb default 10",
+            f"tc qdisc add dev {s.ifb_in} root handle 1: htb default 10 direct_qlen {IFB_DIRECT_QLEN}",
             f"tc filter add dev {iface} parent ffff: protocol all prio {s.prio} handle {s.mark:#x} fw "
             f"action mirred egress redirect dev {s.ifb_in}",
             f"tc filter add dev {iface} parent 1: protocol all prio {s.prio} handle {s.mark:#x} fw "
@@ -727,10 +734,19 @@ def tc_classes(text: str) -> dict:
     return out
 
 
+def _htb_direct(q: dict) -> dict:
+    """An htb root's direct path (levi 8a81bd5d): packets htb sent with no class to take them, and that queue's size."""
+    o = q.get("options") if isinstance(q.get("options"), dict) else {}
+    return {k: (o.get(k) if isinstance(o.get(k), int) and not isinstance(o.get(k), bool) else None)
+            for k in ("direct_packets_stat", "direct_qlen")}
+
+
 def tc_qdiscs(text: str) -> dict:
-    """{handle: {kind, parent, <TC_FIELDS>}} from `tc -s -j qdisc show`; {} when the text is not JSON."""
+    """{handle: {kind, parent, <TC_FIELDS>[, direct_packets_stat, direct_qlen]}} from `tc -s -j qdisc show` (the two
+    direct-path keys on htb rows only); {} when the text is not JSON."""
     j = _tc_json(text) or []
-    return {q["handle"]: {"kind": q.get("kind"), "parent": _parent(q), **_counters(q)} for q in j if q.get("handle")}
+    return {q["handle"]: {"kind": q.get("kind"), "parent": _parent(q), **_counters(q),
+                          **(_htb_direct(q) if q.get("kind") == "htb" else {})} for q in j if q.get("handle")}
 
 
 def _child_of(qdiscs: dict, parent: str, kind: str = "netem") -> dict | None:

@@ -10,8 +10,8 @@ Chrome) through those variables; plus the shared tree. fixtures/trio_slot_comman
 c1f9181's trio code (its trio_slots.py and Makefile, this file's commands(); never rewrite it). The N line's intended
 differences are outside these commands (FROZEN_COLLECTOR, the c1f9181 row's known deltas): tt's own-IFB room rule,
 the sibling claim, the steering / membership / ERA, the live management port (equal here at its default). One known
-delta lies inside them and is asserted, then undone, by name (KNOWN_DELTAS): the capture buffer's -B 65536 (t57) and the
-staged tcpdump's -Z root (t58).
+delta lies inside them and is asserted, then undone, by name (KNOWN_DELTAS): the capture buffer's -B 65536 (t57), the
+staged tcpdump's -Z root (t58), Cast off (levi 13:41) and the ingress htb's direct_qlen 1000 (levi 8a81bd5d).
 
     python3 test_nslot_equivalence.py        (exit 0 = pass)
 """
@@ -144,7 +144,21 @@ def cast_disabled(got: dict) -> list[str]:
     return seen or ["no make here"]
 
 
-KNOWN_DELTAS = (("Cast discovery off (levi 13:41)", cast_disabled),
+def ifb_direct_qlen(got: dict) -> list[str]:
+    """Known delta (levi 8a81bd5d, WC1 r1: the pre-apply direct path tail-dropped at the IFB's 32-packet queue): every
+    slot's ingress htb gets direct_qlen 1000. Asserted on both epochs' slot_up, then taken out."""
+    seen = []
+    for tag, s in got["slots"].items():
+        for k in ("up_e0", "up_e3"):
+            hit = [i for i, c in enumerate(s[k]) if c.endswith(" htb default 10 direct_qlen 1000")]
+            assert len(hit) == 1, (tag, k, s[k])
+            s[k][hit[0]] = s[k][hit[0]][:-len(" direct_qlen 1000")]
+            seen.append(f"{tag}: {k} htb direct_qlen 1000")
+    return seen
+
+
+KNOWN_DELTAS = (("the ingress htb direct queue, 1000 packets (levi 8a81bd5d)", ifb_direct_qlen),
+                ("Cast discovery off (levi 13:41)", cast_disabled),
                 ("the capture buffer, 64 MiB (t57 tw_100023)", capture_buffer_64mib),
                 ("staged tcpdump runs as root (t58: staging on the data volume)", staged_tcpdump_as_root))
 

@@ -39,6 +39,9 @@ IF = "wlp0s20f3"
 
 def test_tree_is_gate1s():
     ours = T.shared_up_cmds(IF) + [c for s in T.SLOTS.values() for c in T.slot_up_cmds(s, IF)]
+    dq = f" direct_qlen {T.IFB_DIRECT_QLEN}"              # levi 8a81bd5d: the one delta from gate 1's tree, per slot
+    assert sum(c.endswith(" htb default 10" + dq) for c in ours) == len(T.SLOTS)
+    ours = [c[:-len(dq)] if c.endswith(" htb default 10" + dq) else c for c in ours]
     for c in D.tree_up_cmds(IF):
         if c.startswith("modprobe") or " del " in c or c.startswith("mkdir"):
             continue

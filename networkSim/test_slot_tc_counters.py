@@ -381,6 +381,22 @@ WC1_DIR = HERE / "fixtures"          # expected at networkSim/fixtures/tc_json_w
 #            "class <iface>": "...", "qdisc <iface>": "..."}}   (raw stdout text, captured while the slot is shaped)
 
 
+def test_direct_path_recorded_and_sized():
+    """levi 8a81bd5d: slot_tc's in.qdisc carries the htb root's direct path (direct_packets_stat, direct_qlen; brad
+    18:15), and slot_up gives the ingress htb a 1000-packet direct queue (WC1 r1: the IFB's 32 tail-dropped)."""
+    fx = json.loads((WC1_DIR / "tc_json_wc1_tt1.json").read_text())
+    q = T.tc_qdiscs(fx["dumps"]["qdisc lvi_tt1"])
+    assert q["1:"]["direct_packets_stat"] == 38455 and q["1:"]["direct_qlen"] == 32       # the WC1 r1 dump, as read
+    assert "direct_packets_stat" not in q["8059:"]                                         # netem rows: no such keys
+    assert T.tc_qdiscs(json.dumps([{"kind": "htb", "handle": "1:", "root": True}]))["1:"]["direct_qlen"] is None
+    sc = T.slot_tc_record(T.Slot("tiktok", "tt1", 0x113, 0, 0), fx["iface"], fx["dumps"]["class lvi_tt1"],
+                          fx["dumps"]["class wlp0s20f3"], fx["dumps"]["qdisc lvi_tt1"], fx["dumps"]["qdisc wlp0s20f3"])
+    assert sc["in"]["qdisc"]["direct_packets_stat"] == 38455
+    up = T.slot_up_cmds(T.SLOTS["tt1"], IFACE)
+    assert f"tc qdisc add dev lvi_tt1 root handle 1: htb default 10 direct_qlen {T.IFB_DIRECT_QLEN}" in up
+    assert T.IFB_DIRECT_QLEN == 1000
+
+
 def _sampler_on(texts):
     """A TcSampler whose four slot_tc reads return `texts` (class in, class out, qdisc in, qdisc out)."""
     it = iter(texts)
