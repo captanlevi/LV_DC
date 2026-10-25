@@ -2717,7 +2717,7 @@ class TtRoomListener:
                "multi_stream_scene": data.get("multi_stream_scene"), "linker_map_size": _size(data.get("linker_map")),
                "battle_status": bs.get("battle_status"), "battle_id": bs.get("battle_id"),
                "audience_id_list_n": _size(lm.get("audience_id_list")), "battle_scores_n": _size(lm.get("battle_scores"))}
-        conds = {"with_linkmic": sig["with_linkmic"] is True,
+        conds = {"with_linkmic": sig["with_linkmic"] in (True, 1),   # levi 15:39: a bool in W-B; an int 1 counts too
                  "linkmic_layout": sig["linkmic_layout"] not in (None, 0),
                  "multi_stream_scene": sig["multi_stream_scene"] not in (None, 0),
                  "linker_map": (sig["linker_map_size"] or 0) > 0,
