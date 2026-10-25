@@ -401,21 +401,55 @@ JSON.stringify((() => { const e = performance.getEntriesByType('resource');
 """
 
 
-def _discovery_tab() -> tuple[str | None, "CDPPage"]:
-    """A separate tab for the unshaped discovery (levi 07:48 (i): closed before the shaper's first apply): (target id,
-    page). The session page and its listeners never load the list page."""
-    req = urllib.request.Request(f"{CDP_BASE}/json/new?about:blank", method="PUT")
-    with urllib.request.urlopen(req, timeout=5) as r:
-        t = json.loads(r.read())
-    return t.get("id"), CDPPage(t["webSocketDebuggerUrl"])
+DISCOVERY_CLOSE_WAIT_S = 5.0   # brad / levi 08:18 (i): the discovery target must be gone from /json within this
 
 
-def _close_discovery_tab(tid: str | None, page) -> None:
+def _cdp_targets() -> list[dict]:
+    with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
+        return json.loads(r.read())
+
+
+def _discovery_tab() -> tuple[tuple[str | None, str | None], "CDPPage"]:
+    """A tab for the unshaped discovery in its OWN browser context (brad / levi 08:18 (iii): Target.createBrowserContext
+    -> createTarget; its socket pools, cache and cookies are not the session's, so no connection opened during discovery
+    carries into the shaped join, and our extension does not run there): ((context id, target id), page). The session
+    page and its listeners never load the list page."""
+    ctx = _browser_call("Target.createBrowserContext", {"disposeOnDetach": False}).get("browserContextId")
+    tid = _browser_call("Target.createTarget", {"url": "about:blank", "browserContextId": ctx}).get("targetId")
+    ws, deadline = None, time.time() + 5
+    while ws is None and time.time() < deadline:
+        ws = next((t.get("webSocketDebuggerUrl") for t in _cdp_targets() if t.get("id") == tid), None)
+        if ws is None:
+            time.sleep(0.25)
+    if ws is None:
+        _browser_call("Target.disposeBrowserContext", {"browserContextId": ctx})
+        raise RuntimeError(f"discovery tab {tid} not listed in /json")
+    return (ctx, tid), CDPPage(ws)
+
+
+def _close_discovery_tab(ids, page) -> bool:
+    """Close the discovery page, dispose its browser context (its sockets close with it), then VERIFY (brad / levi 08:18
+    (i)): True once the target is gone from /json within DISCOVERY_CLOSE_WAIT_S, else False; never raises (the caller
+    raises before any shaping)."""
+    ctx, tid = ids
     try:
         page.close()
     except Exception:
         pass
-    _close_target(tid)
+    try:
+        _browser_call("Target.disposeBrowserContext", {"browserContextId": ctx})
+    except Exception as exc:
+        print(f"[browser] discovery context dispose failed: {exc!r}", flush=True)
+        _close_target(tid)
+    deadline = time.time() + DISCOVERY_CLOSE_WAIT_S
+    while time.time() < deadline:
+        try:
+            if not any(t.get("id") == tid for t in _cdp_targets()):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.25)
+    return False
 
 _TT_CANDIDATES_JS = """
 (function() {
@@ -4382,6 +4416,9 @@ class BrowserSession:
                 rec["pick"] = self._tw_discovered.get("pick")
             else:
                 rec["kind"] = "none (a direct stream URL)"
+            if rec.get("tab_closed") is False:      # brad / levi 08:18 (i): never shape with the list page still open
+                raise RuntimeError(f"Failed to navigate to a live {self.platform} stream (discovery: its tab did not "
+                                   f"close within {DISCOVERY_CLOSE_WAIT_S:g} s)")
         finally:
             rec.update(t_end=round(time.time(), 3), s=round(time.time() - t0, 3))
         self._reset_for_session()
@@ -4524,7 +4561,10 @@ class BrowserSession:
             first = self.first_url
             if self._tw_discovered is not None:  # levi 07:48: the channel discovered unshaped, opened by its URL (ii)
                 self.tw_pick.update(self._tw_discovered)
-                first = self._tw_discovered["pick"]
+                first = self._tw_discovered.get("pick")
+                if not first or _norm_room(first) in set(sib):      # brad / levi 08:18 (2): never the directory walk
+                    raise RuntimeError(f"Failed to navigate to a live twitch stream (the discovered channel {first} is "
+                                       f"held by a sibling at the join, or none; no directory walk on the shaped link)")
             if first and "/directory/" not in first and _norm_room(first) in set(sib):
                 self.tw_pick["first_url_held_by_sibling"] = first     # t58 L-7: never the channel a sibling plays
                 first = None
@@ -4763,7 +4803,7 @@ class BrowserSession:
         exclude = sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)
                          | set((cap or {}).get("capped") or []))
         rec: dict = {"directory": url, "excluded_recent": exclude, "discovery": "unshaped, own tab (levi 07:48)"}
-        tid, tp = _discovery_tab()
+        ids, tp = _discovery_tab()
         try:
             res: dict = {}
             for attempt in range(2):
@@ -4786,7 +4826,7 @@ class BrowserSession:
                     rec["page_resources"] = {"error": repr(exc)[:200]}
                 rec["empty_shot"] = self._discovery_shot(tp)
         finally:
-            _close_discovery_tab(tid, tp)
+            self.discovery["tab_closed"] = _close_discovery_tab(ids, tp)
         rec.update(candidates=res.get("candidates"), pick=res.get("pick"), error=res.get("error"))
         self.tw_pick = {**(self.tw_pick or {}), **rec}
         if not res.get("pick"):
@@ -4843,14 +4883,14 @@ class BrowserSession:
         """tt's room list and its try order. page None (levi 07:48): the unshaped discovery in its own tab, closed here
         before returning; an empty /live is re-navigated once, then shot and its resources recorded; no room raises (a
         startup failure before any shaping). Returns (tt_room_choice record, ordered candidates)."""
-        own, tid = page is None, None
+        own, ids = page is None, None
         if own:
-            tid, page = _discovery_tab()
+            ids, page = _discovery_tab()
         try:
             return self._tt_discover_in(page, sc, own)
         finally:
             if own:
-                _close_discovery_tab(tid, page)
+                self.discovery["tab_closed"] = _close_discovery_tab(ids, page)
 
     def _tt_discover_in(self, page, sc: float, own: bool) -> tuple[dict, list[dict]]:
         sib = sibling_streams(self._session_dir, "tiktok")      # t56: a running sibling's room is never taken

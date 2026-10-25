@@ -861,11 +861,16 @@ def http_media_flows(sd: Path) -> set:
 
 def join_order_violation(jo: dict | None) -> str | None:
     """levi 08:15: the order is enforced, not only reported: a media request that STARTED after the discovery ended
-    (its tab already closed) and before the shaper's first apply means the stream began unshaped: a FAIL reason.
-    None when the order holds or join_order does not apply."""
+    (its tab already closed) and before the shaper's first apply means the stream began unshaped; levi 08:18: so does
+    room media after the apply on a flow that carried a request during the discovery (a connection reused across it).
+    Either is a FAIL reason; None when the order holds or join_order does not apply."""
     n = (jo or {}).get("media_between_discovery_and_apply")
-    return (f"join_order: {n} media request(s) between the unshaped discovery's end and the first apply "
-            f"(the stream started before the shaped join; levi 07:48 (iii))") if n else None
+    if n:
+        return (f"join_order: {n} media request(s) between the unshaped discovery's end and the first apply "
+                f"(the stream started before the shaped join; levi 07:48 (iii))")
+    f = (jo or {}).get("room_media_on_discovery_flow")
+    return (f"join_order: {f} room media request(s) after the first apply on a flow opened during the unshaped "
+            f"discovery (a reused connection; brad / levi 08:18)") if f else None
 
 
 def join_order(sd: Path, meta: dict, net: list[dict]) -> dict | None:
@@ -887,15 +892,22 @@ def join_order(sd: Path, meta: dict, net: list[dict]) -> dict | None:
         d = json.loads(p.read_text())
     except Exception:
         return {"discovery_end": t_disc, "first_apply": t_apply, "http_v2": "absent or unreadable"}
-    ts = sorted(float(r["request_start"]) for recs in (d.values() if isinstance(d, dict) else [])
-                for r in (recs if isinstance(recs, list) else []) if r.get("request_start") is not None
-                and (any(x in (r.get("request_url") or "").split("?")[0] for x in MEDIA_URL_PATTERNS)
-                     or str(r.get("response_ct") or "").startswith("video/")))
+    def media(r):
+        return (any(x in (r.get("request_url") or "").split("?")[0] for x in MEDIA_URL_PATTERNS)
+                or str(r.get("response_ct") or "").startswith("video/"))
+    flows = d.items() if isinstance(d, dict) else []
+    rows = [(k, float(r["request_start"]), media(r)) for k, recs in flows for r in (recs if isinstance(recs, list) else [])
+            if r.get("request_start") is not None]
+    ts = sorted(t for _, t, m in rows if m)
     after = [t for t in ts if t >= t_apply]
+    disc_flows = {k for k, t, _ in rows if t <= t_disc}      # brad / levi 08:18: a flow that carried any request by then
     return {"discovery_kind": disc.get("kind"), "discovery_end": t_disc, "first_apply": t_apply,
             "discovery_media_requests": sum(1 for t in ts if t <= t_disc),
             "media_between_discovery_and_apply": sum(1 for t in ts if t_disc < t < t_apply),
-            "room_first_media_after_apply_s": round(after[0] - t_apply, 3) if after else None}
+            "room_first_media_after_apply_s": round(after[0] - t_apply, 3) if after else None,
+            "discovery_flows": len(disc_flows),
+            # the shaped join's media on a connection opened during the unshaped discovery (reuse; a time count misses it)
+            "room_media_on_discovery_flow": sum(1 for k, t, m in rows if m and t >= t_apply and k in disc_flows)}
 
 
 def dns_answers_names(sd: Path) -> dict[str, set]:

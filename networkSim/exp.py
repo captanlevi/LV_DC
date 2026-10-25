@@ -1228,10 +1228,18 @@ if __name__ == "__main__":
             session_meta.write(session_dir, display_start=_display_start)
             # levi 07:48: discovery UNSHAPED, before the shaper starts (experiment() below makes the first apply): the
             # list page in its own tab, closed again; a failure here ends the session before any shaping
+            _tc0 = None                      # brad / levi 08:18: the slot's tree at the discovery's start, recorded
+            if tc_sampler is not None:       # (no netem under the slot = unshaped), not assumed
+                try:
+                    _st = tc_sampler.slot_tc().get("slot_tc") or {}
+                    _tc0 = {"in_netem": (_st.get("in") or {}).get("netem"), "out_netem": (_st.get("out") or {}).get("netem")}
+                    _tc0["unshaped"] = not (_tc0["in_netem"] or _tc0["out_netem"])
+                except Exception as e:
+                    _tc0 = {"error": repr(e)[:200]}
             try:
                 browser.discover()
             finally:                         # written now too: a failed discovery has no join thread to write it
-                JOIN["discovery"] = dict(browser.discovery)
+                JOIN["discovery"] = {**browser.discovery, "tc_at_start": _tc0}
                 session_meta.write(session_dir, join=join_meta(JOIN))
             _join_t = threading.Thread(target=_join, args=(browser,), name="join", daemon=True)
             _join_t.start()                  # B9: it waits for the shaper's first apply, then navigates
