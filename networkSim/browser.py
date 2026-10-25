@@ -4729,8 +4729,16 @@ class BrowserSession:
 
     def _on_ad_action(self, result: str, t: float) -> None:
         """batch #10: tt's guide actions (dismissed / stuck) recorded with their time (meta.json tt_onboarding)."""
-        if result.startswith("tt_onboarding") and len(self.tt_onboarding) < WATCH_LOG_MAX:
-            self.tt_onboarding.append({"t": round(t, 3), "action": result.split(" [", 1)[0],
+        if not result.startswith("tt_onboarding"):
+            return
+        action = result.split(" [", 1)[0]
+        last = self.tt_onboarding[-1] if self.tt_onboarding else None
+        if last is not None and last["action"] == "tt_onboarding_stuck" and action == last["action"]:
+            last["n"] = last.get("n", 1) + 1                  # brad 15:03: a stuck guide is one entry, counted
+            last["t_last"] = round(t, 3)
+            return
+        if len(self.tt_onboarding) < WATCH_LOG_MAX:
+            self.tt_onboarding.append({"t": round(t, 3), "action": action,
                                        "text": result.split(" [", 1)[1].rstrip("]") if " [" in result else None})
 
     def _lowstate_held(self, t: float) -> bool:

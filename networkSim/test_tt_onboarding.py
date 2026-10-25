@@ -67,10 +67,13 @@ def test_another_got_it_dialog_is_never_clicked():
 
 def test_the_session_record():
     class S:
-        tt_onboarding = []
+        tt_onboarding: list = []
     B.BrowserSession._on_ad_action(S, "tt_onboarding_dismissed [Scroll ... browse your feed. Got it]", 12.3456)
     B.BrowserSession._on_ad_action(S, "skipped [yt_ad_showing]", 13.0)
     assert S.tt_onboarding == [{"t": 12.346, "action": "tt_onboarding_dismissed", "text": "Scroll ... browse your feed. Got it"}]
+    for k in range(5):                                   # brad 15:03: a stuck guide polled each second is ONE entry
+        B.BrowserSession._on_ad_action(S, "tt_onboarding_stuck [Scroll ... browse your feed. Got it]", 20.0 + k)
+    assert len(S.tt_onboarding) == 2 and S.tt_onboarding[1]["n"] == 5 and S.tt_onboarding[1]["t_last"] == 24.0
     src = (HERE / "browser.py").read_text()
     assert "self._clock_sample, self._on_ad_action)," in src and "on_action(str(result), time.time())" in src
     assert "tt_onboarding=(browser.tt_onboarding if browser.platform == \"tiktok\" else None)" in (HERE / "exp.py").read_text()
