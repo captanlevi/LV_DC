@@ -27,13 +27,18 @@ def meta(d: Path, rel: str, **m):
 
 def test_list():
     handles = [c["handle"] for c in Y.YT_CHANNELS]
-    assert "@Sypherpkvods" not in handles and "@FUELTVMoto" not in handles
-    assert [c["handle"] for c in Y.REMOVED_CHANNELS] == ["@Sypherpkvods", "@FUELTVMoto"]        # archived, in order
+    assert "@Sypherpkvods" not in handles and "@FUELTVMoto" not in handles and "@everybodychillradio" not in handles
+    assert [c["handle"] for c in Y.REMOVED_CHANNELS] == ["@Sypherpkvods", "@FUELTVMoto",         # archived, in order
+                                                         "@everybodychillradio"]
     assert any(c["handle"] == "@Sypherpkvods" and c["change"] == "removed" for c in Y.LIST_CHANGES)
     fuel = [c for c in Y.LIST_CHANGES if c["handle"] == "@FUELTVMoto"]         # 2026-10-26: static source (rushi)
     assert len(fuel) == 1 and fuel[0]["change"] == "removed" and "static source" in fuel[0]["rule"]
     assert "W-B yt_100001" in fuel[0]["evidence"] and "WC2 yt_100001" in fuel[0]["evidence"]
     assert [c["handle"] for c in Y.YT_CHANNELS if c["type"] == "sport" and c["role"] == "primary"] == ["@MonsterJam"]
+    chill = [c for c in Y.LIST_CHANGES if c["handle"] == "@everybodychillradio"]   # 2026-10-26: static source (brad)
+    assert len(chill) == 1 and chill[0]["change"] == "removed" and "static source" in chill[0]["rule"]
+    assert all(f"{w} yt_100004" in chill[0]["evidence"] for w in ("W-B", "WC0", "WC1"))
+    assert [c["handle"] for c in Y.YT_CHANNELS if c["type"] == "music" and c["role"] == "primary"] == ["@LofiGirl"]
     gaming = [c for c in Y.YT_CHANNELS if c["type"] == "gaming"]
     assert {(c["handle"], c["role"]) for c in gaming} == {("@RetroWorldVideos", "primary"), ("@BeanBoltTV", "primary")}
     assert any(c["handle"] == "@BeanBoltTV" and c["change"] == "promoted" for c in Y.LIST_CHANGES)    # 2026-10-18
@@ -85,16 +90,17 @@ def test_precheck_observations():
         meta(d, "_failed/youtube/yt_5", channel_handle="@dwnews", started_at=t0 + 13 * H, abort_reason=NL)
         new = Y.apply_leave_rule(d, t0 + 14 * H)
         assert [(r["handle"], r["not_live_at"]) for r in new] == [("@dwnews", [t0, t0 + 7 * H, t0 + 13 * H])], new
-        # a leave that leaves news with one owner puts its spare up for the live check (sport's is already up: 2026-10-26)
-        assert Y.spares_needing_promotion(Y.disk_leaves(d)) == ["@channelnewsasia", "@FuboSports"]
+        # a leave that leaves news with one owner puts its spare up for the live check (sport's and music's are already
+        # up: 2026-10-26)
+        assert Y.spares_needing_promotion(Y.disk_leaves(d)) == ["@channelnewsasia", "@FuboSports", "@SkyofFairyTales"]
 
 
 def test_spares_needing_promotion():
-    # BeanBoltTV promoted 2026-10-18; @FUELTVMoto removed 2026-10-26 (static source): sport has one primary owner left,
-    # so its spare is up for the Addendum P live check
-    assert Y.spares_needing_promotion([]) == ["@FuboSports"]
-    assert Y.spares_needing_promotion([{"handle": "@MonsterJam"}]) == ["@FuboSports"]
-    assert Y.spares_needing_promotion([{"handle": "@dwnews"}]) == ["@channelnewsasia", "@FuboSports"]
+    # BeanBoltTV promoted 2026-10-18; @FUELTVMoto and @everybodychillradio removed 2026-10-26 (static source): sport and
+    # music each have one primary owner left, so their spares are up for the Addendum P live check
+    assert Y.spares_needing_promotion([]) == ["@FuboSports", "@SkyofFairyTales"]
+    assert Y.spares_needing_promotion([{"handle": "@MonsterJam"}]) == ["@FuboSports", "@SkyofFairyTales"]
+    assert Y.spares_needing_promotion([{"handle": "@dwnews"}]) == ["@channelnewsasia", "@FuboSports", "@SkyofFairyTales"]
 
 
 def test_promotion():
@@ -261,7 +267,9 @@ def test_the_restart_pair_is_broken_by_the_seeded_tie():
         a = Y.next_channel(tr, select=record.counted_any_era)
         assert Y.LAST_PICK["seed"] == 24 and Y.LAST_PICK["stages"] == ["floor"] and Y.LAST_PICK["tied"] == sorted(
             ["@AlJazeeraEnglish", "@MonsterJam", "@BeanBoltTV"]), Y.LAST_PICK
-        assert Y.LAST_PICK["n_record"] == 24 and Y.LAST_PICK["distinct_record"] == 6
+        # 2026-10-26: @everybodychillradio left the list, so its one t55 session no longer counts (n_record and
+        # distinct_record count listed channels, as F counts listed primaries); it was 24 / 6
+        assert Y.LAST_PICK["n_record"] == 23 and Y.LAST_PICK["distinct_record"] == 5
         b = Y.next_channel(tr, exclude={a["handle"]}, select=record.counted_any_era)
         # 2026-10-26: with @MonsterJam out, sport has no eligible primary left (@FUELTVMoto removed), so its spare
         # substitutes (the spare rule, docstring above next_channel); before the removal this pick was @AlJazeeraEnglish

@@ -51,7 +51,6 @@ YT_CHANNELS: list[dict] = [
     {"handle": "@MonsterJam", "type": "sport", "owner": "Feld Entertainment (Monster Jam)", "role": "primary"},
     {"handle": "@RetroWorldVideos", "type": "gaming", "owner": "RetroWorld", "role": "primary"},
     {"handle": "@LofiGirl", "type": "music", "owner": "Lofi Girl", "role": "primary"},
-    {"handle": "@everybodychillradio", "type": "music", "owner": "Everybody Chill Radio", "role": "primary"},
     {"handle": "@SBC-TV1", "type": "nature_cams", "owner": "SBC-TV (Maasai Mara Live Safari)", "role": "primary"},
     {"handle": "@ScottishWildlifeGarden", "type": "nature_cams", "owner": "Scottish Wildlife Garden", "role": "primary"},
     {"handle": "@channelnewsasia", "type": "news", "owner": "Mediacorp (CNA)", "role": "spare"},
@@ -66,6 +65,7 @@ YT_CHANNELS: list[dict] = [
 REMOVED_CHANNELS: list[dict] = [
     {"handle": "@Sypherpkvods", "type": "gaming", "owner": "SypherPK", "role": "primary"},
     {"handle": "@FUELTVMoto", "type": "sport", "owner": "FUEL TV", "role": "primary"},
+    {"handle": "@everybodychillradio", "type": "music", "owner": "Everybody Chill Radio", "role": "primary"},
 ]
 # every list change after the 2026-10-16 verification (version = the number of changes)
 LIST_CHANGES: list[dict] = [
@@ -84,6 +84,12 @@ LIST_CHANGES: list[dict] = [
      "evidence": "a source-side still ('WSX Vancouver', a crowd image) on 2 of 2 dry sessions with the player presenting "
                  "normally: W-B yt_100001 (decoded mad < 0.5 on 0.996 of frames, peter 2fc266a9) and WC2 yt_100001 "
                  "(shots byte-identical across ~25 min, shagun 22:56)"},
+    {"date": "2026-10-26", "change": "removed", "handle": "@everybodychillradio", "type": "music", "role": "primary",
+     "rule": "static source (levi 22:56: a channel with static share > 0.5 in >= 2 sessions goes to rushi before the next "
+             "window; rushi: <PENDING, supervisor 03:16: prepared, not landed until rushi answers>); the music type's spare "
+             "is promoted only after its Addendum P live check",
+     "evidence": "a source-side still on 3 of 3 v3 dry sessions (brad 90b35524, motion_dist_v3dry.json 7feb5fe8, "
+                 "consecutive-frame MAD): W-B yt_100004 static share 1.00, WC0 yt_100004 0.99, WC1 yt_100004 1.00"},
 ]
 LEAVE_WINDOW_S = 48 * 3600
 LEAVE_NOT_LIVE = 3
