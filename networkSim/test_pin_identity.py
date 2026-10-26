@@ -205,7 +205,7 @@ def test_an_unreadable_identity_is_re_read_before_refusing():
 
 def test_wiring():
     src = (HERE / "browser.py").read_text()
-    assert 'if ok and not c.get("fallback"):' in src and '{"dead": "room_mismatch"' in src   # unpinned tt tries
+    assert 'if ok and not c.get("fallback"):' in src and '"dead": "room_mismatch", "landed": idc["landed"]}' in src   # unpinned tt tries (12:19 (g): keeps the measures)
     assert "pin_check=browser.pin_check" in (HERE / "exp.py").read_text()
 
 
