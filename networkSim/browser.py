@@ -1641,11 +1641,42 @@ def _side_streams(store: dict) -> dict[str, list]:
     return out
 
 
+# boundary after window 1 (codex, levi 00106): before the export reads storage, the session page posts one "lvqoe-flush"
+# (content.js flushes its event, side and stats buffers); iframes flush on their own 1 s timer, so the wait covers one
+FINAL_FLUSH_WAIT_S = 1.5
+
+
+def _final_flush(page) -> None:
+    """Ask the session page's content script for a last flush, then wait for it (and the iframes' timers) to land."""
+    if page is None:
+        return
+    try:
+        page.eval("window.postMessage({source: 'lvqoe-flush'}, '*'); true")
+    except Exception as exc:
+        print(f"[browser] final flush not posted: {exc!r}", flush=True)
+        return
+    time.sleep(FINAL_FLUSH_WAIT_S)
+
+
+def _write_durable(path: Path, text: str) -> None:
+    """tmp -> fsync -> rename: the file is whole on disk, or absent, before storage is cleared."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
 def _export_via_service_worker(session_dir: Path) -> bool:
     """
     Read QoE events from the extension's chrome.storage.local via CDP,
     write labels.csv, and clear the storage for the next run.
     Returns True on success.
+
+    Boundary after window 1 (codex, levi 00106): every file (side streams, player_stats.jsonl, labels.csv) is written
+    durably BEFORE the storage clear; an exception or a full disk on the way leaves storage uncleared (the start path
+    of the next session clears it, so the record is lost only if nothing reads it first, never by our own clear).
     """
     try:
         with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
@@ -1693,9 +1724,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             fname, mapped = session_files.side_file(stream)
             if not mapped:
                 unmapped.append({"stream": stream, "file": fname, "records": len(recs)})
-            with open(session_dir / fname, "w") as fh:
-                for rec in recs:
-                    fh.write(json.dumps(rec) + "\n")
+            _write_durable(session_dir / fname, "".join(json.dumps(rec) + "\n" for rec in recs))
             print(f"[browser] {stream} ({len(recs)} records) → {session_dir / fname}", flush=True)
         if unmapped:
             try:
@@ -1703,21 +1732,22 @@ def _export_via_service_worker(session_dir: Path) -> bool:
                 session_meta.write(session_dir, side_streams_unmapped=unmapped)
             except Exception as exc:
                 print(f"[browser] side_streams_unmapped not recorded: {exc!r} {unmapped}", flush=True)
-        # Clear storage so the next run starts fresh (only after the side streams are on disk)
-        sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s), r))"
-                % json.dumps(sorted(side)), await_promise=True)
-        sw.close()
-        _close_target(tmp_tab)
         stats = json.loads(stats_json) if stats_json else []
         if stats:
-            with open(session_dir / "player_stats.jsonl", "w") as fh:
-                for rec in stats:
-                    fh.write(json.dumps(rec) + "\n")
+            _write_durable(session_dir / "player_stats.jsonl", "".join(json.dumps(rec) + "\n" for rec in stats))
             print(f"[browser] Player stats ({len(stats)} records) → {session_dir / 'player_stats.jsonl'}", flush=True)
+
+        def clear_storage():
+            # Clear storage so the next run starts fresh: only after every file above / below is on disk
+            sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s), r))"
+                    % json.dumps(sorted(side)), await_promise=True)
+            sw.close()
+            _close_target(tmp_tab)
 
         events: list[dict] = json.loads(events_json) if events_json else []
         if not events:
             print("[browser] Extension storage empty — no QoE events collected", flush=True)
+            clear_storage()
             return False
 
         # v2 (LVQoE t35): new columns appended after the v1 ones (additive; v1 readers keep working)
@@ -1727,15 +1757,21 @@ def _export_via_service_worker(session_dir: Path) -> bool:
                   "login_wall_text", "login_wall", "quality_countdown", "paused", "playhead_still_s", "ready_state",
                   "visibility", "total_frames",                        # t53 (am. 13 / gate-2 4a): additive
                   "el_id", "src_key",                                  # v3 A10 (t67): additive
-                  "buffered_ranges"]                                   # v3 A6 (t67): additive
+                  "buffered_ranges",                                   # v3 A6 (t67): additive
+                  # boundary after window 1 (codex item 1): the content-script instance, the sending frame / document,
+                  # and the instance's cumulative overflow drops (empty when none): additive
+                  "cs", "frameId", "documentId", "dropped_n", "dropped_first_id", "dropped_last_id"]
         rows = [",".join(
             '"{}"'.format(str(e.get(k, "")).replace('"', '""')) for k in header
         ) for e in events]
         csv_text = "\n".join([",".join(header)] + rows)
 
         dest = session_dir / "labels.csv"
-        dest.write_text(csv_text)
+        _write_durable(dest, csv_text)
         print(f"[browser] Extension labels ({len(events)} events) → {dest}", flush=True)
+        print("[browser] labels.csv written before storage clear", flush=True)
+        clear_storage()
+        print("[browser] Extension storage cleared after export", flush=True)
         return True
 
     except Exception as exc:
@@ -5661,6 +5697,7 @@ class BrowserSession:
         self._clock_sample("stop")                 # v3 A11: the last offset, before the tab closes
         # Read QoE events from the extension service worker before closing the tab
         if self._session_dir:
+            _final_flush(self._page)
             _export_via_service_worker(self._session_dir)
 
         # v3 A12: the labels are exported; new requests now fail while in-flight responses land (bytes flat or 5 s), so

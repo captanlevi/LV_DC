@@ -54,7 +54,7 @@ def test_ranges():
 def test_header():
     src = (HERE / "browser.py").read_text()
     i = src.index('"el_id", "src_key",')
-    assert '"buffered_ranges"]' in src[i:i + 200]
+    assert '"buffered_ranges",' in src[i:i + 200]          # additive columns follow it (boundary after window 1)
 
 
 def main() -> int:

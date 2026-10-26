@@ -11,6 +11,13 @@ const MAX_BUFFER_SIZE = 1000;
 const FLUSH_INTERVAL_MS = 1000;
 const RESOLUTION_POLL_INTERVAL_MS = 1000;
 let flushInProgress = false;
+// boundary after window 1 (codex item 1, levi 00106): one id per content-script instance, so a reload or a second frame is
+// a new event_id sequence, not a gap; the flush drops only the ids the background acked (never by count), and an event
+// the overflow shifts out unacked is counted, cumulative per instance, on every later batch (dropped_n / _first / _last)
+const CS_ID = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+let inflightMaxId = -1;            // the in-flight batch's last event_id (-1: none in flight)
+const shiftedInFlight = [];        // ids the overflow shifted out while their batch was in flight (lost only if unacked)
+const evDropped = { n: 0, first_id: null, last_id: null };
 let collecting = true;
 let inStall = false;
 // v2 (LVQoE t35): element / source identity, to report a swap on the first tick after it
@@ -466,6 +473,7 @@ function flushSide() {
 function buildEvent(type) {
   return {
     event_id: event_id++,
+    cs: CS_ID,
     ts: performance.timeOrigin + performance.now(),
     type,
     video_w: video?.videoWidth ?? null,
@@ -605,12 +613,20 @@ function emit(type) {
     shotLastAd = !!evt.is_ad;
   }
 
-  if (eventBuffer.length > MAX_BUFFER_SIZE) {
-    eventBuffer.shift();
+  while (eventBuffer.length > MAX_BUFFER_SIZE) {
+    const old = eventBuffer.shift();
+    if (old.event_id <= inflightMaxId) shiftedInFlight.push(old.event_id);
+    else recordDrop(old.event_id);
   }
 
   tryFlush();
   console.log("[YT][EVENT]", evt);
+}
+
+function recordDrop(id) {
+  evDropped.n += 1;
+  evDropped.first_id = evDropped.first_id === null ? id : Math.min(evDropped.first_id, id);
+  evDropped.last_id = evDropped.last_id === null ? id : Math.max(evDropped.last_id, id);
 }
 
 function tryFlush() {
@@ -618,21 +634,32 @@ function tryFlush() {
   flushInProgress = true;
 
   const batch = eventBuffer.slice();
+  const batchMax = batch[batch.length - 1].event_id;
+  inflightMaxId = batchMax;
 
   try {
     chrome.runtime.sendMessage(
-      { kind: "video-events-batch", payload: batch },
+      { kind: "video-events-batch", payload: batch, cs: CS_ID, dropped: evDropped.n ? { ...evDropped } : null },
       (resp) => {
-        flushInProgress = false;
-        if (chrome.runtime.lastError) return;
-        if (!resp?.ok) return;
-        eventBuffer.splice(0, batch.length);
+        const ok = !chrome.runtime.lastError && resp?.ok;
+        flushSettled(ok ? (typeof resp.acked_max_id === "number" ? resp.acked_max_id : batchMax) : null);
       },
     );
   } catch (e) {
     console.log("[YT][ERROR] Message failed", e);
-    flushInProgress = false;
+    flushSettled(null);
   }
+}
+
+// acked: the highest event_id the background stored (null: the batch was not stored). Drop by id, never by count.
+function flushSettled(acked) {
+  flushInProgress = false;
+  inflightMaxId = -1;
+  for (const id of shiftedInFlight.splice(0)) if (acked === null || id > acked) recordDrop(id);
+  if (acked === null) return;
+  const keep = eventBuffer.filter((e) => e.event_id > acked);
+  eventBuffer.length = 0;
+  eventBuffer.push(...keep);
 }
 
 function observeVideo(v) {
@@ -743,6 +770,10 @@ window.addEventListener("message", (e) => {
     announceInstruments();
     return;
   }
+  if (e.source === window && e.data && e.data.source === "lvqoe-flush") {   // browser.py's final flush before export
+    tryFlush(); flushSide(); flushStats();
+    return;
+  }
   if (e.source === window && e.data && e.data.source === "lvqoe-ad-src-polls") {
     src3Polls += Number(e.data.polls) || 0;
     return;
@@ -759,15 +790,19 @@ window.addEventListener("message", (e) => {
                      tick_ts: lastTick ? lastTick.ts : null, stats: e.data.stats, url: location.href });
   if (statsBuffer.length > 200) statsBuffer.shift();
 });
-setInterval(() => {
+// boundary after window 1: a batch the background did not store goes back to the buffer (it was dropped silently before)
+function flushStats() {
   if (statsBuffer.length === 0) return;
   const batch = statsBuffer.splice(0, statsBuffer.length);
   try {
-    chrome.runtime.sendMessage({ kind: "player-stats-batch", payload: batch }, () => void chrome.runtime.lastError);
+    chrome.runtime.sendMessage({ kind: "player-stats-batch", payload: batch }, (resp) => {
+      if (chrome.runtime.lastError || !resp?.ok) statsBuffer.unshift(...batch);
+    });
   } catch (e) {
     statsBuffer.unshift(...batch);
   }
-}, FLUSH_INTERVAL_MS);
+}
+setInterval(flushStats, FLUSH_INTERVAL_MS);
 
 window.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") tryFlush();
