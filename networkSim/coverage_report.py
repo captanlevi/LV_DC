@@ -189,11 +189,15 @@ def _load(p: Path) -> dict:
 
 def session_classes(sd: Path) -> dict:
     """{minutes per class, stall_share, buffer_s quantiles over the playing ticks} from labels.csv; at a fixed J (levi
-    15:25) only the schedule's ticks (ts from meta.join.t_settle_end): the join and its settle are never coverage."""
+    15:25) only the schedule's ticks (ts from meta.join.t_settle_end): the join and its settle are never coverage; a J
+    session with no t_settle_end (stopped in the settle) counts nothing."""
     p = Path(sd) / "labels.csv"
     if not p.exists():
         return {"minutes": {}, "stall_share": None, "buffer_s": None, "stall_onsets": 0, "stall_runs_s": []}
-    since = (_load(Path(sd) / "meta.json").get("join") or {}).get("t_settle_end")
+    join = _load(Path(sd) / "meta.json").get("join") or {}
+    since = join.get("t_settle_end")
+    if join.get("J") is not None and since is None:          # J, stopped before its schedule (levi 16:03): counts 0
+        return {"minutes": {}, "stall_share": None, "buffer_s": None, "stall_onsets": 0, "stall_runs_s": []}
     ticks: dict = collections.Counter()
     buf, stall, runs, cur = [], False, [], 0
     with open(p, newline="") as fh:

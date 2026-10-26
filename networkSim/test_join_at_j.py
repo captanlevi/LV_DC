@@ -115,7 +115,8 @@ def test_j_before_navigation_the_settle_then_the_schedule():
     first_sched = applied[1][0]
     assert first_sched >= j["t_playing"] + 0.3 - 0.01 and j["t_settle_end"] <= first_sched + 0.01
     assert abs(first_sched - (j["t_playing"] + 0.3)) < 0.1                           # levi's PASS item 1: +/- 2 s
-    assert lever.calls and lever.calls[0] >= j["t_settle_end"] - 0.01                 # the lever's t0: the first schedule apply
+    assert lever.calls and j["t_settle_end"] - 0.01 <= lever.calls[0] <= first_sched   # the lever's t0 (its first active()):
+    assert lever.calls[0] - j["t_J_apply"] >= 0.3 + 0.2 - 0.02                          # the first schedule apply, never J's
     assert len(lever.calls) == 2                                                      # never consulted during J
 
 
@@ -203,6 +204,8 @@ def test_the_label_window_and_coverage_start_at_the_settle_end():
     meta = {"ended_at": 1400.0, "join": {"t_playing": 1030.0, "t_settle_end": 1090.0}}
     assert check_session.session_window(meta, net) == (1090.0, 1400.0)
     assert check_session.session_window({"ended_at": 1400.0, "join": {"t_playing": 1030.0}}, net) == (1030.0, 1400.0)
+    stopped = {"ended_at": 1060.0, "join": {"J": "8", "t_J_apply": 1000.0, "t_playing": 1030.0}}   # stopped in the settle
+    assert check_session.session_window(stopped, net) is None                          # levi 16:03: no schedule seconds
     with tempfile.TemporaryDirectory() as d:
         sd = Path(d)
         with open(sd / "labels.csv", "w", newline="") as fh:
@@ -215,6 +218,15 @@ def test_the_label_window_and_coverage_start_at_the_settle_end():
         assert sum(coverage_report.session_classes(sd)["minutes"].values()) == 1.0
         (sd / "meta.json").write_text(json.dumps({"join": {"t_playing": 1030.0}}))      # pre-J: every tick
         assert sum(coverage_report.session_classes(sd)["minutes"].values()) == round(119 / 60, 3)
+        (sd / "meta.json").write_text(json.dumps(stopped))                              # J, stopped in the settle: 0
+        assert coverage_report.session_classes(sd)["minutes"] == {}
+
+
+def test_join_meta_names_the_j_rule():
+    ns: dict = {}
+    exec(compile(ast.Module(_fns("join_meta"), []), "exp", "exec"), ns)
+    assert ns["join_meta"]({"J": "8"})["rule"].startswith("J (rushi 15:20, levi 15:25): the fixed join state J")
+    assert ns["join_meta"]({})["rule"].startswith("B9 (levi 23:21-23:22, 23:49)")
 
 
 def test_wiring():

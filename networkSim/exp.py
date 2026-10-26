@@ -75,9 +75,11 @@ JOIN_STOP_WAIT_S = 30.0
 
 def join_meta(join: dict) -> dict:
     """meta.json join: the rule beside the join's record (JOIN)."""
-    return {"rule": "B9 (levi 23:21-23:22, 23:49): the first schedule state before navigation; the join inside the "
-                    "session; levi 07:48: discovery (the list page) unshaped before the first apply, in its own tab, "
-                    "outside join_s", **{k: v for k, v in join.items() if k != "abort"}, "abort": join.get("abort")}
+    rule = ("J (rushi 15:20, levi 15:25): the fixed join state J before navigation, held through the join and settle_s "
+            "after t_playing; the schedule from t_settle_end" if join.get("J") is not None else
+            "B9 (levi 23:21-23:22, 23:49): the first schedule state before navigation; the join inside the session")
+    return {"rule": rule + "; levi 07:48: discovery (the list page) unshaped before the first apply, in its own tab, "
+                           "outside join_s", **{k: v for k, v in join.items() if k != "abort"}, "abort": join.get("abort")}
 
 
 def join_final_write(write) -> bool:
