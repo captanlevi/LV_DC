@@ -116,6 +116,48 @@ def test_tw_100109_replay():
     assert [(t, x["reason"], x["stall_label"]) for t, x in p] == [(30, "paused_flat_above_floor", False)], p
 
 
+def test_t79_dry_pause():
+    """t79 (levi 16:56, 2026-10-26): WC3 tw_100001 paused at readyState 2 with 0.0674 s buffered and the playhead still
+    at 989.724 s from +1028.5 s to the session end, under a stall label (recorded: 0 presses, held "stall" 765). On its
+    ticks the resumer presses once, 30 s into the flat dry pause, reason paused_dry_flat under the label; the element
+    still paused (as recorded), the pause feeds the stuck-player rule 30 s later. Never: a dry stall whose buffer or
+    playhead moves (a fetching player), readyState 0, the startup rebuffer (playhead 0), an ad, ended."""
+    assert B.DRY_PAUSE_MIN_PLAYHEAD_S == 1.0
+    fx = json.loads((HERE / "fixtures" / "tw_100001_drypause_2026-10-26.json").read_text())
+    assert fx["recorded_self_pause_resume"] == {"presses": 0, "held_polls": {"stall": 765, "waiting": 4}}
+    r, made = B.SelfPauseResumer(), []
+    for t, paused, rs, buf, ad, stall, ct in fx["ticks"]:
+        if (p := r.step({"paused": paused, "rs": rs, "buf": buf, "ad": ad, "stall": stall, "ended": False, "ct": ct}, t)):
+            made.append((t, p))
+    t_pause = min(t for t, paused, *_ in fx["ticks"] if paused)
+    assert t_pause == 1028.5
+    assert [(t, x["reason"], x["stall_label"], x["buffer_s"], x["flat_s"], x["paused_s"]) for t, x in made] == \
+        [(t_pause + 30, "paused_dry_flat", True, 0.0674, 30.0, 30.0)], made
+    t_press = made[0][0]
+    assert r.stuck_frozen_s(t_press + 29) == 0.0 and r.stuck_frozen_s(t_press + 30) == 60.0
+    # levi's label check, the collector's side: the press stamps the pause's start and its own time under the stall label
+    # (the reader's STALL run over [paused_since, t) stays a stall, right-censored at the pause); the resumer never
+    # writes the label, which is content.js's
+    assert r.record()["deadlocks"] == [{"t": t_press, "paused_since": t_pause, "buffer_s": 0.0674,
+                                        "reason": "paused_dry_flat", "stall_label": True}]
+
+    def D(t, buf=0.05, ct=500.0, **k):
+        return t, {**S(buf=buf, rs=k.pop("rs", 2), stall=k.pop("stall", True), **k), "ct": ct}
+    # a fetching player: the dry buffer grows 0.2 s every 4 s, or the playhead creeps (both above 0.1 s): never pressed
+    for seq in ([D(t, buf=0.05 + 0.2 * (t // 4)) for t in range(0, 30)] + [D(t, buf=1.45) for t in range(30, 40)],
+                [D(t, ct=500.0 + 0.2 * (t // 4)) for t in range(0, 200)]):
+        assert presses(seq) == [], seq[-1]
+    # rs 0 (no data: player_dead's), the startup rebuffer (playhead 0), ad, ended, no stall label at rs 2: never
+    for k in ({"rs": 0}, {"ct": 0.0}, {"ct": None}, {"ad": True}, {"ended": True}, {"stall": False}):
+        assert presses([D(t, **dict(k)) for t in range(0, 200)]) == [], k
+    # buffer unknown (WC2 tw_100005's second run: rs 1, buf None): the playhead alone is the flat test
+    p = presses([D(t, buf=None, rs=1, ct=380.223) for t in range(0, 100)])
+    assert [(t, x["reason"]) for t, x in p] == [(30, "paused_dry_flat")], p
+    # the clock restarts on growth: 25 s flat, a 0.2 s step, flat again -> pressed 30 s after the step
+    p = presses([D(t) for t in range(0, 25)] + [D(t, buf=0.25) for t in range(25, 80)])
+    assert [t for t, _ in p] == [55], p
+
+
 def test_decision():
     assert (B.SELF_PAUSE_HOLD_S, B.SELF_PAUSE_MIN_BUFFER_S, B.RESUME_BACKOFF_S) == (2.0, 1.5, 10.0)
     # a self-pause with the buffer: eligible from 10, held 2 s, pressed at 12, its buffer and the pause duration logged
@@ -274,6 +316,7 @@ def test_button_js_on_the_fixture():
 def main() -> int:
     test_pause_deadlock()
     test_tw_100109_replay()
+    test_t79_dry_pause()
     test_decision()
     test_tw_100010_replay_no_press_in_the_loops()
     test_twitch_resume_through_the_button()

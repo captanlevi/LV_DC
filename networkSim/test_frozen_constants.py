@@ -182,6 +182,7 @@ def current() -> dict:
                                   "RESUME_BACKOFF_S": B.RESUME_BACKOFF_S, "RESUME_CHECK_S": B.RESUME_CHECK_S,
                                   "RESUME_RULE": B.RESUME_RULE, "PAUSE_DEADLOCK_S": B.PAUSE_DEADLOCK_S,
                                   "PAUSE_GROWTH_EPS_S": B.PAUSE_GROWTH_EPS_S,
+                                  "DRY_PAUSE_MIN_PLAYHEAD_S": B.DRY_PAUSE_MIN_PLAYHEAD_S,   # t79 (levi 16:56)
                                   "FROZEN_HOLD_POLL_MAX_AGE_S": B.FROZEN_HOLD_POLL_MAX_AGE_S,
                                   "FROZEN_HOLD_RULE": B.FROZEN_HOLD_RULE}},
         "capture_offloads": {"OFF": OFF.OFF}, "record_era": REC.ERA, "record_eras": list(REC.RECORD_ERAS), "record_lines": dict(REC.RECORD_LINES), "record_boundary": REC.RECORD_BOUNDARY, "stated_eras": list(REC.STATED_ERAS),
