@@ -20,6 +20,7 @@ class NetLabel:
     apply: str | None = None            # "slow" (delay / loss / rate re-set) or "rate" (a walk step: the HTB rate only)
     lever: int | None = None            # v3 B4: the lever episode this step ran under (its rate replaced the step's)
     seam: int | None = None             # W (levi 48888ba7): 1 on the first change after the rotated schedule's wrap
+    phase: str | None = None            # "join": the fixed-J join + settle before the schedule (levi 15:25); never labelled
 
 
 @dataclass

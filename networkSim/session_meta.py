@@ -267,6 +267,8 @@ def steering_start_applied(rows: list) -> str | None:
     (exp.py's net labels, written at finish), the start the session actually ran, whatever chose it; None without rows.
     Kept out of steering.py, whose draw must read nothing of the running session (test_steering's static proof)."""
     for n in rows or []:
+        if (getattr(n, "phase", None) if hasattr(n, "state") else (n or {}).get("phase")) is not None:
+            continue                                  # J (levi 15:25): the join's state, not the schedule's start
         st = n.state if hasattr(n, "state") else (n or {}).get("state")
         if st is not None:
             return str(st)

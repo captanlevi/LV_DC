@@ -209,8 +209,12 @@ def test_apply_instants():
     n = NetLabel(timestamp=2.0, speed=900, state="7", apply_start=1.9, apply="slow")
     assert (n.apply_start, n.apply) == (1.9, "slow") and NetLabel(timestamp=1.0, speed=1, state="1").apply_start is None
     src = (HERE / "exp.py").read_text()
-    i = src.index("t_apply = time.time()")
+    i = src.index("t_apply = time.time()", src.index("async def _ossilate("))     # the schedule's applies (J's: _join_phase)
     assert i < src.index("_apply_net_stat(net_stat= net_stat)", i) < src.index("ts = time.time()", i)
+    j = src.index("async def _join_phase(")
+    j = src.index("t_apply = time.time()", j)
+    assert j < src.index("_apply_net_stat(net_stat=js)", j) < src.index("ts = time.time()", j)
+    assert 'apply_start=t_apply, apply="slow", phase="join"' in src
     assert 'apply_start=t_apply, apply="rate" if net_stat.walk_step else "slow"' in src
 
 

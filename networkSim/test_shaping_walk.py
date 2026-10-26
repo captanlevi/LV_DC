@@ -156,7 +156,7 @@ def test_net_labels_and_the_wiring():
     names = [x.name for x in fields(NetLabel)]
     assert names == ["timestamp", "speed", "state", "delay_ms", "loss_pct", "redraw_kbit", "redraw_delay_ms",
                      "redraw_loss_pct", "walk_step", "apply_start", "apply", "lever",
-                     "seam"]                                    # v3 A9 apply instants, B4 lever, W's seam row
+                     "seam", "phase"]                           # v3 A9 apply instants, B4 lever, W's seam row, J's phase
     assert NetLabel(1.0, 500, "2").delay_ms is None                           # the old three-field rows still build
     src = (HERE / "exp.py").read_text()
     assert "WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)" in src

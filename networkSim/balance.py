@@ -53,8 +53,9 @@ def stationary_distribution(transitions: dict[str, dict[str, float]]) -> dict[st
 # ---------------------------------------------------------------------------
 
 def load_run(path: Path) -> list[dict]:
+    """The schedule's rows: a J join row (phase "join", levi 15:25) is never coverage."""
     with open(path) as f:
-        return [json.loads(line) for line in f if line.strip()]
+        return [r for r in (json.loads(line) for line in f if line.strip()) if r.get("phase") is None]
 
 
 def time_weighted_dist(labels: list[dict]) -> dict[str, float]:

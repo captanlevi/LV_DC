@@ -53,6 +53,16 @@ def _js_consts(names: list[str]) -> dict:
     return {n: json.loads(re.search(rf"^const {n} = ([^;]+);", src, re.M).group(1)) for n in names}
 
 
+def _exp_consts(names: list[str]) -> dict:
+    """exp.py's module-level literals (exp.py exits at import without the repo's .venv, so they are read, not imported)."""
+    import ast
+    tree = ast.parse((HERE / "exp.py").read_text())
+    got = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+           and isinstance(n.targets[0], ast.Name) and n.targets[0].id in names}
+    assert sorted(got) == sorted(names), names
+    return got
+
+
 def _matrices(m: dict) -> dict:
     return {k: {"transitions": v[0], "low_state_cap": v[1], "initial_state_rule": v[2]} for k, v in sorted(m.items())}
 
@@ -96,7 +106,8 @@ def current() -> dict:
                          "PLAYER_ERROR_PLATFORMS": B.PLAYER_ERROR_PLATFORMS},
         "join": {"JOIN_BASE_S": B.JOIN_BASE_S, "JOIN_CAP_S": B.JOIN_CAP_S, "JOIN_BYTES": B.JOIN_BYTES,     # B9
                  "JOIN_RX_MIN_BYTES": B.JOIN_RX_MIN_BYTES,
-                 "JOIN_TIMEOUT_PREFIX": B.JOIN_TIMEOUT_PREFIX, "JOIN_TIMEOUT_MARK": E.JOIN_TIMEOUT_MARK},
+                 "JOIN_TIMEOUT_PREFIX": B.JOIN_TIMEOUT_PREFIX, "JOIN_TIMEOUT_MARK": E.JOIN_TIMEOUT_MARK,
+                 **_exp_consts(["JOIN_J", "JOIN_SETTLE_S"])},                                      # J (levi 15:25)
         "classes": {"CLASS_PRECEDENCE": E.CLASS_PRECEDENCE, "RECOVERED_DEAD_CLASS": E.RECOVERED_DEAD_CLASS,
                     "RECOVERED_FROZEN_CLASS": E.RECOVERED_FROZEN_CLASS, "RECOVERY_SLACK_S": E.RECOVERY_SLACK_S},
         "entries": {"SUSTAIN_WINDOW_S": E.SUSTAIN_WINDOW_S, "SUSTAIN_RUN_S": E.SUSTAIN_RUN_S,

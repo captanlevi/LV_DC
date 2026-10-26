@@ -476,7 +476,8 @@ def session_window(meta: dict, net: list[dict]) -> tuple[float, float] | None:
         hi = float(meta["ended_at"])
     except (ValueError, KeyError, TypeError):
         return None
-    t_playing = (meta.get("join") or {}).get("t_playing")
+    join = meta.get("join") or {}
+    t_playing = join.get("t_settle_end", join.get("t_playing"))    # J (levi 15:25): the schedule's start, after the settle
     if isinstance(t_playing, (int, float)):
         lo = max(lo, float(t_playing))
     return (lo, hi) if hi > lo else None

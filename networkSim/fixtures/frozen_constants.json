@@ -366,7 +366,9 @@
    "youtube": 5000000.0
   },
   "JOIN_CAP_S": 600.0,
+  "JOIN_J": "8",
   "JOIN_RX_MIN_BYTES": 65536,
+  "JOIN_SETTLE_S": 60.0,
   "JOIN_TIMEOUT_MARK": "join_timeout at state ",
   "JOIN_TIMEOUT_PREFIX": "join_timeout at state "
  },

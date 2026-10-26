@@ -188,10 +188,12 @@ def _load(p: Path) -> dict:
 
 
 def session_classes(sd: Path) -> dict:
-    """{minutes per class, stall_share, buffer_s quantiles over the playing ticks} from labels.csv."""
+    """{minutes per class, stall_share, buffer_s quantiles over the playing ticks} from labels.csv; at a fixed J (levi
+    15:25) only the schedule's ticks (ts from meta.join.t_settle_end): the join and its settle are never coverage."""
     p = Path(sd) / "labels.csv"
     if not p.exists():
         return {"minutes": {}, "stall_share": None, "buffer_s": None, "stall_onsets": 0, "stall_runs_s": []}
+    since = (_load(Path(sd) / "meta.json").get("join") or {}).get("t_settle_end")
     ticks: dict = collections.Counter()
     buf, stall, runs, cur = [], False, [], 0
     with open(p, newline="") as fh:
@@ -202,6 +204,8 @@ def session_classes(sd: Path) -> dict:
             elif ty in ("start", "video_start"):
                 stall = False
             if ty != "res_meta" or str(r.get("is_ad")).lower() in ("true", "1"):
+                continue
+            if since is not None and (_f(r.get("ts")) or 0) / 1000.0 < since:
                 continue
             if stall:
                 ticks["STALL"] += 1

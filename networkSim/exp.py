@@ -31,9 +31,9 @@ from utils.netStat import (net_episode_generator, family_episode_generator, sess
                            wrap_schedule)
 from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
-                           get_higher_state, get_lower_state, schedule_of)
+                           get_higher_state, get_lower_state, schedule_of, SCENARIOS)
 from utils.dataModels import NetLabel, NetStat
-from browser import BrowserSession, FROZEN_HOLD_RULE
+from browser import BrowserSession, FROZEN_HOLD_RULE, JOIN_CAP_S
 import session_meta
 import session_names
 import compute_load
@@ -63,6 +63,12 @@ JOIN_FIRST = threading.Event()
 JOIN_PLAYING = threading.Event()
 JOIN: dict = {}
 JOIN_FIRST_WAIT_S = 120.0
+# rushi 15:20 / levi 15:24-15:25 (kb collector.v3.join_at_fixed_mid_speed): every auto session joins at ONE fixed state J
+# with fixed tc (the band's midpoints, no walk, no delay / loss factor), applied before navigation (discovery stays
+# unshaped), then settles JOIN_SETTLE_S at J from join.t_playing; the schedule (W, steering, forced start) starts after
+# (t_settle_end). The J row in net_labels carries phase "join": never labelled, never coverage (readers skip it).
+JOIN_J = "8"
+JOIN_SETTLE_S = 60.0
 
 
 JOIN_STOP_WAIT_S = 30.0
@@ -105,17 +111,23 @@ def after_schedule(join_t, browser, abort_reason, now: float | None = None, writ
             write(join_meta(JOIN))
         return abort_reason or reason
     join_t.join(timeout=10)
+    if write is not None and JOIN.get("t_settle_end") is not None:     # J: the settle's end, after the thread's write
+        write(join_meta(JOIN))
     return abort_reason or JOIN.get("abort")
 
 
 def join_record(t_first_apply: float | None, t_nav: float | None, t_playing: float | None,
-                scheduled_s: float | None) -> dict:
+                scheduled_s: float | None, settle_s: float | None = None) -> dict:
     """levi 23:22: the join inside the session: join_s (navigation -> playing), the schedule seconds played while
-    playing (the schedule clock runs from the first apply, just before navigation), and the planned end."""
+    playing (the schedule clock runs from the first apply, just before navigation), and the planned end. At a fixed J
+    (settle_s): the schedule starts settle_s after playing and is played whole."""
     out: dict = {}
     if t_nav is not None and t_playing is not None:
         out["join_s"] = round(t_playing - t_nav, 3)
-    if t_first_apply is not None and scheduled_s is not None:
+    if settle_s is not None and scheduled_s is not None:
+        if t_playing is not None:
+            out.update(session_end_planned=round(t_playing + settle_s + scheduled_s, 3), schedule_played_s=scheduled_s)
+    elif t_first_apply is not None and scheduled_s is not None:
         out["session_end_planned"] = round(t_first_apply + scheduled_s, 3)
         if t_playing is not None:
             out["schedule_played_s"] = round(max(0.0, scheduled_s - (t_playing - t_first_apply)), 3)
@@ -435,6 +447,40 @@ def _schedule(gen_kwargs: dict, wrap: bool = True):
     return iter(out)
 
 
+def join_phase_stat(state: str) -> NetStat:
+    """J's one tc change (levi 15:24): the state's band midpoints, the same in every session."""
+    sc = SCENARIOS[state]
+    return NetStat(rate=(sc.rate_min + sc.rate_max) // 2, duration=0.0, delay_ms=(sc.delay_min + sc.delay_max) // 2,
+                   loss_pct=round((sc.loss_pct_min + sc.loss_pct_max) / 2, 3), state=state)
+
+
+async def _join_phase(net_labels: list[NetLabel], stop_event: asyncio.Event, cap_s: float) -> bool:
+    """J before navigation (JOIN_FIRST), held through the join and JOIN_SETTLE_S after join.t_playing; True once the
+    settle ended (t_settle_end). False on a stop (an abort / signal) or when nothing played within cap_s of the apply:
+    the shaper returns and after_schedule ends an unfinished join as join_timeout (D2)."""
+    js = join_phase_stat(JOIN_J)
+    t_apply = time.time()
+    _apply_net_stat(net_stat=js)
+    ts = time.time()
+    net_labels.append(NetLabel(timestamp=ts, speed=js.rate, state=js.state, delay_ms=js.delay_ms, loss_pct=js.loss_pct,
+                               apply_start=t_apply, apply="slow", phase="join"))
+    JOIN.update(J=js.state, t_J_apply=round(t_apply, 3), t_first_apply=round(t_apply, 3), first_state=js.state,
+                first_rate_kbit=js.rate, J_tc={"rate_kbit": js.rate, "delay_ms": js.delay_ms, "loss_pct": js.loss_pct},
+                settle_s=JOIN_SETTLE_S)
+    JOIN_FIRST.set()
+    while not JOIN_PLAYING.is_set():
+        if stop_event.is_set() or time.time() >= ts + cap_s:
+            return False
+        await asyncio.sleep(SYSTEM_TICK)
+    end = (JOIN.get("t_playing") or time.time()) + JOIN_SETTLE_S
+    while time.time() < end:
+        if stop_event.is_set():
+            return False
+        await asyncio.sleep(SYSTEM_TICK)
+    JOIN["t_settle_end"] = round(time.time(), 3)
+    return True
+
+
 async def _ossilate(
     episode_time_in_seconds: int,
     net_labels: list[NetLabel],
@@ -445,6 +491,10 @@ async def _ossilate(
     wrap: bool = True,
 )-> bool:
     # returns True if the for loop ends
+    if not JOIN_FIRST.is_set() and not JOIN_PLAYING.is_set() and JOIN_J is not None:    # auto mode, once per session
+        if not await _join_phase(net_labels, stop_event,
+                                 cap_s=episode_time_in_seconds * max_episodes if max_episodes else JOIN_CAP_S):
+            return False
     deadline = None
     for i_change, net_stat in enumerate(_schedule(dict(
         episode_length=episode_time_in_seconds,
@@ -1194,7 +1244,8 @@ if __name__ == "__main__":
         finally:
             try:
                 JOIN.update(join_record(JOIN.get("t_first_apply"), JOIN.get("t_nav"), JOIN.get("t_playing"),
-                                        (args.episodes * SCHEDULE["episode_s"]) if args.episodes else None))
+                                        (args.episodes * SCHEDULE["episode_s"]) if args.episodes else None,
+                                        settle_s=JOIN.get("settle_s")))
                 join_final_write(lambda j: session_meta.write(session_dir, join=j))
             except Exception as e:
                 print(f"[join] meta write failed: {e!r}", flush=True)
