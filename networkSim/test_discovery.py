@@ -256,6 +256,35 @@ def test_check_session_reports_the_join_order():
         assert CS.join_order_violation(None) is None
 
 
+def test_a_sentinel_request_start_never_makes_a_discovery_flow():
+    """levi 14:01 (WC3d r2 yt_100002 / ti_100002: http_v2's request_start -1 on an untimed record is <= the discovery's
+    end, so its flow counted as a discovery flow and the room's later media on it failed the session): rows with a
+    request_start that is not finite or before meta started_at are dropped from every count; a real discovery-carried
+    flow still fails."""
+    t0 = 1_800_000_000.0
+    meta = {"started_at": t0 - 30.0, "join": {"discovery": {"kind": "tt /live", "t_start": t0, "t_end": t0 + 20.0}}}
+    net = [{"timestamp": t0 + 23.0, "apply_start": t0 + 22.9, "state": 3}]
+    late = "192.168.4.50$42650->144.6.4.207$443$UDP"
+    recs = {late: [{"request_url": "", "method": None, "request_start": -1},                      # untimed (h3)
+                   {"request_url": "", "request_start": float("nan")},
+                   {"request_url": "", "request_start": t0 - 3600.0},                             # before the session
+                   {"request_url": "https://x/videoplayback?itag=1", "request_start": t0 + 511.7}]}
+    with tempfile.TemporaryDirectory() as d:
+        sd = Path(d)
+        (sd / "http_v2.json").write_text(json.dumps(recs))
+        jo = CS.join_order(sd, meta, net)
+        assert jo["discovery_flows"] == 0 and jo["room_media_on_discovery_flow"] == 0 and jo["request_start_invalid"] == 3
+        assert jo["discovery_media_requests"] == 0 and jo["room_media_on_discovery_flow_keys"] == []
+        assert CS.join_order_violation(jo) is None
+        reused = "192.168.4.50$39924->79.127.201.190$443$TCP"
+        recs[reused] = [{"request_url": "https://x/page.js", "request_start": t0 + 5.0},             # the discovery's
+                        {"request_url": "https://x/stream-2_or4.flv", "request_start": t0 + 71.3}]   # then the room's
+        (sd / "http_v2.json").write_text(json.dumps(recs))
+        jo = CS.join_order(sd, meta, net)
+        assert jo["room_media_on_discovery_flow"] == 1 and jo["room_media_on_discovery_flow_keys"] == [reused]
+        assert CS.join_order_violation(jo).startswith("join_order: 1 room media request(s) after the first apply")
+
+
 def test_media_before_the_shaped_join_fails_the_session(tmp_path):
     """levi 08:15: a simulated session whose stream media starts after the discovery and before the first apply FAILs
     in check_session (its check.json reasons), and the same session with the order held does not carry that reason."""

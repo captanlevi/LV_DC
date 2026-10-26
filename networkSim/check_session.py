@@ -35,6 +35,7 @@ import collections
 import csv
 import ipaddress
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -896,18 +897,35 @@ def join_order(sd: Path, meta: dict, net: list[dict]) -> dict | None:
         return (any(x in (r.get("request_url") or "").split("?")[0] for x in MEDIA_URL_PATTERNS)
                 or str(r.get("response_ct") or "").startswith("video/"))
     flows = d.items() if isinstance(d, dict) else []
-    rows = [(k, float(r["request_start"]), media(r)) for k, recs in flows for r in (recs if isinstance(recs, list) else [])
-            if r.get("request_start") is not None]
+    # levi 14:01 (WC3d r2: http_v2's request_start -1 for an untimed record made its flow a "discovery flow"): only
+    # finite times at or after the session's start (meta started_at, before the capture starts) are counted, everywhere
+    lo = meta.get("started_at") if isinstance(meta.get("started_at"), (int, float)) else 0.0
+    rows, invalid = [], 0
+    for k, recs in flows:
+        for r in (recs if isinstance(recs, list) else []):
+            if r.get("request_start") is None:
+                continue
+            try:
+                t = float(r["request_start"])
+            except (TypeError, ValueError):
+                t = float("nan")
+            if not math.isfinite(t) or t < max(0.0, lo):
+                invalid += 1
+                continue
+            rows.append((k, t, media(r)))
     ts = sorted(t for _, t, m in rows if m)
     after = [t for t in ts if t >= t_apply]
     disc_flows = {k for k, t, _ in rows if t <= t_disc}      # brad / levi 08:18: a flow that carried any request by then
+    reused = sorted({k for k, t, m in rows if m and t >= t_apply and k in disc_flows})
     return {"discovery_kind": disc.get("kind"), "discovery_end": t_disc, "first_apply": t_apply,
+            "request_start_invalid": invalid,
             "discovery_media_requests": sum(1 for t in ts if t <= t_disc),
             "media_between_discovery_and_apply": sum(1 for t in ts if t_disc < t < t_apply),
             "room_first_media_after_apply_s": round(after[0] - t_apply, 3) if after else None,
             "discovery_flows": len(disc_flows),
             # the shaped join's media on a connection opened during the unshaped discovery (reuse; a time count misses it)
-            "room_media_on_discovery_flow": sum(1 for k, t, m in rows if m and t >= t_apply and k in disc_flows)}
+            "room_media_on_discovery_flow": sum(1 for k, t, m in rows if m and t >= t_apply and k in disc_flows),
+            "room_media_on_discovery_flow_keys": reused[:5]}          # levi 14:01: for the hand read (pcap headers)
 HTTP_V2_ERROR = "http_v2_error.json"      # unit_extractor.ERROR_MARKER (levi 06:29)
 
 
