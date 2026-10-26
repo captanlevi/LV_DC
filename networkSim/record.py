@@ -26,7 +26,9 @@ from pathlib import Path
 T58_ERA = "t58-restart-2026-10-21"
 T58_RECORD_BOUNDARY = "975a493f7959ce39ce4977f2b91b8b7c9e7e231e"   # t58's day-1 tip T (stated reference)
 ERA = "v3-collector-2026-10-24"   # the era this collector writes
-RECORD_BOUNDARY: str | None = None                 # v3: set after the tip's gate (levi); None = nothing of record
+# levi / supervisor 20:4x (window 1, run 20261026_185406): the boundary was never set, so a counted run's orchestrator saw
+# no session of record (accepted 0/N, each slot's failure streak paused its platform); b06b82f4 is counted window 1's sha
+RECORD_BOUNDARY: str | None = "b06b82f4a05906f44698627ca6ec6afa2eabb2f8"   # v3: counted window 1's collector and every descendant
 RECORD_LINES = {ERA: RECORD_BOUNDARY}          # era -> its counted line's boundary sha (None: nothing counts yet)
 RECORD_ERAS = tuple(RECORD_LINES)
 REPO = Path(__file__).resolve().parent.parent
