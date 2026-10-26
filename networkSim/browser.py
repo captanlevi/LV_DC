@@ -2174,7 +2174,9 @@ RESUME_RULE = ("levi 00130 (2026-10-20): no press in a stall; a self-pause press
                "30 s -> one press, still paused 30 s later -> a stuck player; levi 13:09 (2026-10-23, tw_100109): "
                "paused at readyState >= 3 with buffer >= 1.5 s, flat for 30 s -> the same one press, whatever the stall "
                "label; levi 16:56 (2026-10-26, t79, WC3 tw_100001): paused under a stall label at readyState 1-2 with "
-               "buffer < 1.5 s, the playhead past 1 s, buffer and playhead flat for 30 s -> the same one press (paused_dry_flat)")
+               "buffer < 1.5 s, the playhead past 1 s, buffer and playhead flat for 30 s -> the same one press (paused_dry_flat); "
+               "levi 01:40 (2026-10-27, W1 tw_100113): the same at readyState >= 3 with 0 <= buffer < 1.5 s "
+               "(paused_under_floor_flat)")
 # levi w6 (15:38, tw_100079): 00130's buffer floor deadlocks a live player that paused itself: paused, it stops
 # fetching, so the buffer never reaches the floor, nothing presses, and the frozen watchdog (content.js) skips paused
 # ticks. A pause whose polls are held for "buffer" (levi / supervisor 15:40: never "stall"; the twitch startup
@@ -2196,6 +2198,11 @@ RESUME_RULE = ("levi 00130 (2026-10-20): no press in a stall; a self-pause press
 # lowest rung ~230 kbit at the lever's 115 kbit: a 2 s segment in ~4 s), so flat to 0.1 s for 30 s means not fetching. The
 # playhead floor keeps the twitch startup rebuffer (playhead 0, levi / supervisor 15:40) out; the 9 pilot dry runs of
 # >= 30 s (WB..WC3b) all sat at a playhead >= 4.7 s.
+# levi 01:40 (2026-10-27, 00283 (a); counted window 1 tw_100113: paused 1272 s from +373.9 under a stall label, readyState 1
+# for 16 s then 4 with 1.149 s buffered, the playhead 342.817 s still; freed only when the preview element's start cleared
+# the page's label): the shape between the two rules above (readyState >= 3, a buffer known and under the floor, under a
+# stall label, the playhead past DRY_PAUSE_MIN_PLAYHEAD_S) counts toward the same flat clock, reason
+# paused_under_floor_flat. A pause moving from readyState 1-2 to >= 3 keeps its clock; only growth restarts it.
 PAUSE_DEADLOCK_S = 30.0
 PAUSE_GROWTH_EPS_S = 0.1
 DRY_PAUSE_MIN_PLAYHEAD_S = 1.0
@@ -2278,13 +2285,16 @@ class SelfPauseResumer:
         the buffer is flat AND the playhead still for PAUSE_DEADLOCK_S. Any other poll restarts the clock (the startup
         rebuffer: readyState 2 under a stall label; a stall label over a buffer under the floor), except a dry pause (t79:
         a stall label, readyState 1-2, the buffer under the floor or none, the playhead past DRY_PAUSE_MIN_PLAYHEAD_S),
-        which counts toward the same flat test (reason paused_dry_flat)."""
+        which counts toward the same flat test (reason paused_dry_flat), and the same at readyState >= 3 with a known
+        buffer under the floor (levi 01:40, W1 tw_100113; reason paused_under_floor_flat)."""
         buf, ct = state.get("buf"), state.get("ct")
+        rs = state.get("rs") or 0
         above = buf is not None and buf >= self.min_buffer_s
-        dry = (bool(state.get("stall")) and not above and (state.get("rs") or 0) in (1, 2)
-               and ct is not None and ct > DRY_PAUSE_MIN_PLAYHEAD_S)
+        starved = (bool(state.get("stall")) and not above and ct is not None and ct > DRY_PAUSE_MIN_PLAYHEAD_S)
+        dry = starved and rs in (1, 2)
+        under = starved and rs >= 3 and buf is not None
         if (state.get("ad") or state.get("ended")
-                or (not dry and ((state.get("rs") or 0) < 3 or (state.get("stall") and not above)))):
+                or (not dry and not under and (rs < 3 or (state.get("stall") and not above)))):
             self.flat_since, self.buf_peak, self.ct_last = now, buf, ct
             return None
         grew = buf is not None and (self.buf_peak is None or buf > self.buf_peak + PAUSE_GROWTH_EPS_S)
@@ -2302,6 +2312,7 @@ class SelfPauseResumer:
         self.deadlock_press_at = now
         self.presses += 1
         rec = {"action": "resume_after_self_pause", "reason": "paused_dry_flat" if dry else
+               "paused_under_floor_flat" if under else
                "paused_flat_above_floor" if above else "paused_no_buffer_growth", "buffer_s": buf, "paused_s": round(now - self.paused_since, 3),
                "flat_s": round(now - self.flat_since, 3), "stall_label": bool(state.get("stall"))}
         self.deadlocks.append({"t": now, "paused_since": self.paused_since, "buffer_s": buf, "reason": rec["reason"],

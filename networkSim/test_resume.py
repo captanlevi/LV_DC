@@ -158,6 +158,64 @@ def test_t79_dry_pause():
     assert [t for t, _ in p] == [55], p
 
 
+def _replay_fixture(name):
+    fx = json.loads((HERE / "fixtures" / name).read_text())
+    assert fx["columns"] == ["t", "paused", "rs", "buf", "ad", "stall", "ct"]
+    r, made = B.SelfPauseResumer(), []
+    for t, paused, rs, buf, ad, stall, ct in fx["ticks"]:
+        if (p := r.step({"paused": paused, "rs": rs, "buf": buf, "ad": ad, "stall": stall, "ended": False, "ct": ct}, t)):
+            made.append((t, p))
+    return fx, r, made
+
+
+def test_t79_tt_dry_pause():
+    """levi 01:35 / 01:39 (2026-10-27): the tt paused_dry_flat path, which window 1 + WCJb never reach. WC3 ti_100001
+    (collector 3bde2340): stalled at a playhead of 4.697 s, paused at readyState 2 from +295.8 s with 0.817 s buffered,
+    buffer and playhead flat, under the stall label, until the page reloaded at +345.2 (recorded: 0 presses). On its
+    ticks the resumer presses once, 30 s into the pause, reason paused_dry_flat under the label."""
+    fx, r, made = _replay_fixture("ti_100001_drypause_tt_2026-10-26.json")
+    assert fx["labels_csv_sha256"].startswith("b1955a8c7cd9") and fx["recorded_self_pause_resume"]["presses"] == 0
+    t_pause = min(t for t, paused, *_ in fx["ticks"] if paused)
+    assert t_pause == 295.798
+    assert [(t, x["reason"], x["stall_label"], x["buffer_s"], x["flat_s"]) for t, x in made] == \
+        [(t_pause + 30, "paused_dry_flat", True, 0.8174, 30.0)], made
+
+
+def test_under_floor_flat():
+    """levi 01:40 (2026-10-27, 00283 (a)): counted window 1 tw_100113 paused 1272 s from +373.8 under a stall label,
+    readyState 1 for 16 s, then readyState 4 with 1.149 s buffered (under the floor) and the playhead 342.817 s still;
+    neither paused_dry_flat (readyState 1-2) nor paused_flat_above_floor (buffer >= 1.5 s) pressed it, and it was freed
+    only when the preview element's start cleared the page's label. On its ticks the resumer presses once, 30 s after
+    the buffer last grew (+399.6), reason paused_under_floor_flat under the label."""
+    assert B.SELF_PAUSE_MIN_BUFFER_S == 1.5
+    fx, r, made = _replay_fixture("tw_100113_underfloor_2026-10-27.json")
+    assert fx["labels_csv_sha256"].startswith("65a3e18c82b5")
+    assert fx["recorded_self_pause_resume"]["deadlocks_rel"][0]["t"] == 1645.774          # live: 1272 s into the pause
+    grew = min(t for t, paused, rs, buf, *_ in fx["ticks"] if buf == 1.149)
+    assert grew == 399.616
+    assert [(t, x["reason"], x["stall_label"], x["buffer_s"], x["flat_s"], x["paused_s"]) for t, x in made] == \
+        [(grew + 30, "paused_under_floor_flat", True, 1.149, 30.0, 56.0)], made
+    assert r.record()["deadlocks"][0]["reason"] == "paused_under_floor_flat"
+
+    def U(t, buf=1.149, ct=342.8, rs=4, **k):
+        return t, {**S(buf=buf, rs=rs, stall=k.pop("stall", True), **k), "ct": ct}
+    p = presses([U(t) for t in range(0, 100)])
+    assert [(t, x["reason"]) for t, x in p] == [(30, "paused_under_floor_flat")], p
+    # nulls: the buffer at the floor -> the existing above-floor rule; the playhead at the start (<= 1 s) or unknown, the
+    # buffer unknown at readyState >= 3, an ad, ended -> never; no stall label -> the existing paused_no_buffer_growth
+    p = presses([U(t, buf=1.5) for t in range(0, 100)])
+    assert [(t, x["reason"]) for t, x in p] == [(30, "paused_flat_above_floor")], p
+    for k in ({"ct": 1.0}, {"ct": 0.0}, {"ct": None}, {"buf": None}, {"ad": True}, {"ended": True}):
+        assert presses([U(t, **dict(k)) for t in range(0, 200)]) == [], k
+    p = presses([U(t, stall=False) for t in range(0, 100)])
+    assert [(t, x["reason"]) for t, x in p] == [(30, "paused_no_buffer_growth")], p
+    # growth restarts the clock; a pause moving from readyState 1-2 to 4 keeps it (tw_100113's shape)
+    p = presses([U(t) for t in range(0, 25)] + [U(t, buf=1.3) for t in range(25, 80)])
+    assert [t for t, _ in p] == [55], p
+    p = presses([U(t, rs=1, buf=0.05) for t in range(0, 16)] + [U(t, buf=0.05) for t in range(16, 60)])
+    assert [(t, x["reason"]) for t, x in p] == [(30, "paused_under_floor_flat")], p
+
+
 def test_decision():
     assert (B.SELF_PAUSE_HOLD_S, B.SELF_PAUSE_MIN_BUFFER_S, B.RESUME_BACKOFF_S) == (2.0, 1.5, 10.0)
     # a self-pause with the buffer: eligible from 10, held 2 s, pressed at 12, its buffer and the pause duration logged
@@ -317,6 +375,8 @@ def main() -> int:
     test_pause_deadlock()
     test_tw_100109_replay()
     test_t79_dry_pause()
+    test_t79_tt_dry_pause()
+    test_under_floor_flat()
     test_decision()
     test_tw_100010_replay_no_press_in_the_loops()
     test_twitch_resume_through_the_button()

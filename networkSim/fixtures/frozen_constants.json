@@ -70,7 +70,7 @@
    "PAUSE_GROWTH_EPS_S": 0.1,
    "RESUME_BACKOFF_S": 10.0,
    "RESUME_CHECK_S": 1.0,
-   "RESUME_RULE": "levi 00130 (2026-10-20): no press in a stall; a self-pause pressed at buffer >= 1.5 s held 2 s, 10 s after the last restart; levi w6 (2026-10-21): paused outside a stall label with no buffer growth for 30 s -> one press, still paused 30 s later -> a stuck player; levi 13:09 (2026-10-23, tw_100109): paused at readyState >= 3 with buffer >= 1.5 s, flat for 30 s -> the same one press, whatever the stall label; levi 16:56 (2026-10-26, t79, WC3 tw_100001): paused under a stall label at readyState 1-2 with buffer < 1.5 s, the playhead past 1 s, buffer and playhead flat for 30 s -> the same one press (paused_dry_flat)",
+   "RESUME_RULE": "levi 00130 (2026-10-20): no press in a stall; a self-pause pressed at buffer >= 1.5 s held 2 s, 10 s after the last restart; levi w6 (2026-10-21): paused outside a stall label with no buffer growth for 30 s -> one press, still paused 30 s later -> a stuck player; levi 13:09 (2026-10-23, tw_100109): paused at readyState >= 3 with buffer >= 1.5 s, flat for 30 s -> the same one press, whatever the stall label; levi 16:56 (2026-10-26, t79, WC3 tw_100001): paused under a stall label at readyState 1-2 with buffer < 1.5 s, the playhead past 1 s, buffer and playhead flat for 30 s -> the same one press (paused_dry_flat); levi 01:40 (2026-10-27, W1 tw_100113): the same at readyState >= 3 with 0 <= buffer < 1.5 s (paused_under_floor_flat)",
    "SELF_PAUSE_HOLD_S": 2.0,
    "SELF_PAUSE_MIN_BUFFER_S": 1.5
   }
