@@ -107,7 +107,7 @@ def current() -> dict:
         "join": {"JOIN_BASE_S": B.JOIN_BASE_S, "JOIN_CAP_S": B.JOIN_CAP_S, "JOIN_BYTES": B.JOIN_BYTES,     # B9
                  "JOIN_RX_MIN_BYTES": B.JOIN_RX_MIN_BYTES,
                  "JOIN_TIMEOUT_PREFIX": B.JOIN_TIMEOUT_PREFIX, "JOIN_TIMEOUT_MARK": E.JOIN_TIMEOUT_MARK,
-                 **_exp_consts(["JOIN_J", "JOIN_SETTLE_S"])},                                      # J (levi 15:25)
+                 **_exp_consts(["JOIN_J"]), "JOIN_SETTLE_S": SH.JOIN_SETTLE_S},                     # J (levi 15:25)
         "classes": {"CLASS_PRECEDENCE": E.CLASS_PRECEDENCE, "RECOVERED_DEAD_CLASS": E.RECOVERED_DEAD_CLASS,
                     "RECOVERED_FROZEN_CLASS": E.RECOVERED_FROZEN_CLASS, "RECOVERY_SLACK_S": E.RECOVERY_SLACK_S},
         "entries": {"SUSTAIN_WINDOW_S": E.SUSTAIN_WINDOW_S, "SUSTAIN_RUN_S": E.SUSTAIN_RUN_S,
@@ -136,6 +136,7 @@ def current() -> dict:
         "abr_only": {"ABR_ONLY": [list(x) for x in CR.ABR_ONLY], "ABR_ONLY_RULE": CR.ABR_ONLY_RULE},
         "qualification": {"EXPECTED_SESSION_MINUTES": CR.EXPECTED_SESSION_MINUTES},
         "windows": {"RECORD_WINDOW_MIN": O.RECORD_WINDOW_MIN, "WINDOW_ALLOWANCE_S": O.WINDOW_ALLOWANCE_S,
+                    "STARTUP_TEARDOWN_S": O.STARTUP_TEARDOWN_S, "JOIN_ALLOWANCE_S": O.JOIN_ALLOWANCE_S,
                     "EXIT_WINDOW_READ": O.EXIT_WINDOW_READ},
         "schedules": {"SCHEDULES": {k: {**v, "redraw_s": list(v["redraw_s"])} for k, v in SH.SCHEDULES.items()},
                       "FAMILY_BASE": SH.FAMILY_BASE, "FAMILY_FLOOR": CR.FAMILY_FLOOR, "DEFICIT_RANK": CR.DEFICIT_RANK,

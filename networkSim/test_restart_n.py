@@ -305,7 +305,7 @@ def test_the_committed_simulation():
     import orchestrate as O
     import restart_simulation as R
     assert R.STAGGER_S == O.TRIO_STAGGER_S and R.WINDOW_MIN == O.RECORD_WINDOW_MIN == 120.0
-    assert R.ALLOWANCE_S == O.WINDOW_ALLOWANCE_S == 180.0
+    assert R.ALLOWANCE_S == O.STARTUP_TEARDOWN_S == 180.0                # the t58 fixture's (J adds join + settle)
     raw = R.FIXTURE.read_bytes()
     # the fixture is the t58 restart's committed design check: reproduced under its own era (record.ERA is v3's, levi 16:49)
     assert R.dumps(R.simulate(era=record.T58_ERA)).encode() == raw, \

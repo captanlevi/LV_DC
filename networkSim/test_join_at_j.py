@@ -94,7 +94,9 @@ def _run(ns, labels, stop=None, play_after=None, episodes=None):
 
 
 def test_j_is_state_8_at_its_band_midpoints_and_a_60_s_settle():
-    assert _const("JOIN_J") == "8" and _const("JOIN_SETTLE_S") == 60.0
+    assert _const("JOIN_J") == "8"
+    from utils.shaping import JOIN_SETTLE_S
+    assert JOIN_SETTLE_S == 60.0 and "SCENARIOS, JOIN_SETTLE_S)" in SRC     # exp uses shaping's
     ns, _, _ = _ns()
     js = ns["join_phase_stat"]("8")
     assert (js.rate, js.delay_ms, js.loss_pct, js.state, js.walk_step) == (3250, 20, 0.075, "8", 0)   # make slow, no walk

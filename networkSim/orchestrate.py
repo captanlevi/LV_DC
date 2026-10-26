@@ -70,7 +70,8 @@ EXIT_WINDOW_READ = 10   # orchestrate.py's own exit code: more than one slot pau
 
 # collection v2 (LVQoE prereg t36 §1): episodes per session are fixed per platform, not left to the operator
 EPISODES_V2 = {"youtube": 21, "tiktok": 23, "twitch": 23}
-from utils.shaping import session_episodes, schedule_of, draw_session_minutes, draw_fast_episode_s  # noqa: E402
+from utils.shaping import (session_episodes, schedule_of, draw_session_minutes, draw_fast_episode_s,  # noqa: E402
+                           JOIN_SETTLE_S)
 
 # --batch (t37, week-long run): stop before a session when the data volume has less than this share free; pause a
 # platform after this many consecutive sessions without a PASS; a yt channel that failed to start is skipped this long
@@ -768,7 +769,11 @@ TRIO_STAGGER_S = 30.0     # at least this long between two slot starts (Chrome l
 # restart prereg §10 (levi 00138): the record's window is RECORD_WINDOW_MIN minutes (--trio-record refuses any other);
 # a slot's next session fits when now + its drawn length + WINDOW_ALLOWANCE_S (startup + teardown) <= the deadline
 RECORD_WINDOW_MIN = 120.0
-WINDOW_ALLOWANCE_S = 180.0
+STARTUP_TEARDOWN_S = 180.0
+# J (levi 15:55): a session runs its join and the settle at J before its drawn schedule; the join allowance covers the
+# longest accepted join seen (tt, under 2 min)
+JOIN_ALLOWANCE_S = 120.0
+WINDOW_ALLOWANCE_S = STARTUP_TEARDOWN_S + JOIN_SETTLE_S + JOIN_ALLOWANCE_S
 
 
 def window_fits(now: float, minutes: float, deadline: float, allowance_s: float | None = None) -> bool:

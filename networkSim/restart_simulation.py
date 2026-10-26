@@ -32,7 +32,7 @@ STAGGER_S = 30.0          # = orchestrate.TRIO_STAGGER_S (tested)
 REFILL_GAP_S = 60.0       # stated assumption: a slot's teardown, pick and next start
 OVERHEAD_S = 300.0        # stated assumption: a window's tree / captures / merge / next window's start
 WINDOW_MIN = 120.0        # restart prereg §10 (levi) = orchestrate.RECORD_WINDOW_MIN (tested)
-ALLOWANCE_S = 180.0       # = orchestrate.WINDOW_ALLOWANCE_S (tested): the fit check's startup + teardown allowance
+ALLOWANCE_S = 180.0       # = orchestrate.STARTUP_TEARDOWN_S (tested): the t58 fixture's allowance (before J's join + settle)
 TAG_PREFIX = {"youtube": "yt", "twitch": "tw", "tiktok": "tt"}
 
 

@@ -373,6 +373,9 @@ PLATFORM_MATRICES = {"youtube": YOUTUBE_MATRICES, "tiktok": TIKTOK_MATRICES, "tw
 # netStat._MIN_RECOVERY_STATE. A family id is "<base>@<schedule>"; its tuple is the base's (transitions, cap in base
 # episodes, start rule): the start rules are the base's (am. 15 (5) included).
 BASE_EPISODE_S = 60
+# J (levi 15:25): every auto session holds the fixed join state this long after playing before its schedule starts
+# (exp._join_phase); orchestrate's window allowance includes it (levi 15:55)
+JOIN_SETTLE_S = 60.0
 SCHEDULES = {
     "slow": {"episodes": 3, "self_loops": False, "redraw_s": (12.0, 30.0)},
     "fast": {"episode_s": 12, "self_loops": False, "redraw_s": (2.4, 6.0)},

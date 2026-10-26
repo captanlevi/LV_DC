@@ -31,7 +31,7 @@ from utils.netStat import (net_episode_generator, family_episode_generator, sess
                            wrap_schedule)
 from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANSITIONS, BILIBILI_TRANSITIONS,
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
-                           get_higher_state, get_lower_state, schedule_of, SCENARIOS)
+                           get_higher_state, get_lower_state, schedule_of, SCENARIOS, JOIN_SETTLE_S)
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession, FROZEN_HOLD_RULE, JOIN_CAP_S
 import session_meta
@@ -67,8 +67,7 @@ JOIN_FIRST_WAIT_S = 120.0
 # with fixed tc (the band's midpoints, no walk, no delay / loss factor), applied before navigation (discovery stays
 # unshaped), then settles JOIN_SETTLE_S at J from join.t_playing; the schedule (W, steering, forced start) starts after
 # (t_settle_end). The J row in net_labels carries phase "join": never labelled, never coverage (readers skip it).
-JOIN_J = "8"
-JOIN_SETTLE_S = 60.0
+JOIN_J = "8"                 # JOIN_SETTLE_S: utils/shaping.py (orchestrate's window allowance reads it too)
 
 
 JOIN_STOP_WAIT_S = 30.0

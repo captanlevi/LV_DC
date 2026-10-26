@@ -285,11 +285,15 @@ def _pkt(t, src, dst, proto, sport, dport, n=100, dcid="", sni="", qname="", res
 
 def test_window_fits_edges():
     """Restart §10 at the edge (hardening stop): a session whose length + the allowance ends exactly at the deadline
-    fits; a microsecond more idles; the allowance counts (levi 00138: 180 s)."""
+    fits; a microsecond more idles; the allowance counts (levi 00138: 180 s startup + teardown; levi 15:55: + J's settle
+    + a 120 s join allowance)."""
     d = 10_000.0
-    assert O.window_fits(d - 600 - 180, 10.0, d) and not O.window_fits(d - 600 - 180 + 1e-6, 10.0, d)
+    assert O.WINDOW_ALLOWANCE_S == O.STARTUP_TEARDOWN_S + O.JOIN_SETTLE_S + O.JOIN_ALLOWANCE_S == 180.0 + 60.0 + 120.0
+    assert O.window_fits(d - 600 - 360, 10.0, d) and not O.window_fits(d - 600 - 360 + 1e-6, 10.0, d)
     assert O.window_fits(d - 600, 10.0, d, allowance_s=0.0) and not O.window_fits(d - 600, 10.0, d)
-    assert O.WINDOW_ALLOWANCE_S == 180.0 and not O.window_fits(d, 0.0, d)        # no time left: nothing starts
+    assert not O.window_fits(d, 0.0, d)                                           # no time left: nothing starts
+    src = (HERE / "orchestrate.py").read_text()
+    assert "WINDOW_ALLOWANCE_S = STARTUP_TEARDOWN_S + JOIN_SETTLE_S + JOIN_ALLOWANCE_S" in src     # from J's settle, not bare
     src = (HERE / "orchestrate.py").read_text()
     assert 'not window_fits(time.time(), slen["minutes"], window["deadline"])' in src
 
@@ -545,15 +549,15 @@ def test_window_refill_and_idle():
             rc, _ = _trio(tmp, {"youtube": 9}, lambda cmd, env, log: spawned.append(cmd) or FakeProc(1, 0, []),
                           max_per_slot=None, window_min=0.05)
             assert rc == 0 and not spawned
-        O.WINDOW_ALLOWANCE_S = saved_allow                # levi 00138: 3 min for startup + teardown in the fit check
+        O.WINDOW_ALLOWANCE_S = saved_allow                # levi 00138 / 15:55: startup + teardown + J's settle + join
         with tempfile.TemporaryDirectory() as t:
             tmp, spawned = Path(t), []
             O.draw_session_minutes = lambda key: {"key": key, "minutes": 0.0001}
             rc, _ = _trio(tmp, {"youtube": 9}, lambda cmd, env, log: spawned.append(cmd) or FakeProc(1, 0, []),
-                          max_per_slot=None, window_min=3.0)    # 180 s: a 0.006 s session + 180 s does not fit
+                          max_per_slot=None, window_min=3.0)    # 180 s: a 0.006 s session + 360 s does not fit
             ev = [json.loads(x) for x in (tmp / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()]
             idle = [e for e in ev if e["event"] == "window_idle"]
-            assert not spawned and idle[0]["allowance_s"] == 180.0 and idle[0]["reason"] == "does not fit", idle
+            assert not spawned and idle[0]["allowance_s"] == 360.0 and idle[0]["reason"] == "does not fit", idle
     finally:
         O.draw_session_minutes, O.WINDOW_ALLOWANCE_S = saved, saved_allow
     with tempfile.TemporaryDirectory() as t:                 # no window: nothing recorded, no env
