@@ -74,7 +74,7 @@ def _ns(settle_s=0.3, playing_preset=False, first_preset=False, J="8"):
           "JOIN": {}, "JOIN_J": J, "JOIN_SETTLE_S": settle_s, "JOIN_CAP_S": 600.0, "LEVER": lever,
           "SHAPER_GEN": lambda **kw: iter([NS(300, "2", 0.05), NS(900, "4", 0.05)]),
           "_apply_net_stat": lambda net_stat: applied.append((time.time(), net_stat))}
-    exec(compile(ast.Module(_fns("_ossilate", "_schedule", "_join_phase", "join_phase_stat"), []), "exp", "exec"), ns)
+    exec(compile(ast.Module(_fns("_ossilate", "_schedule", "_join_phase", "join_phase_stat", "check_apply"), []), "exp", "exec"), ns)
     return ns, applied, lever
 
 

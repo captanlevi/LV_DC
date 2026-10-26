@@ -155,14 +155,27 @@ def run_(cmd):
     subprocess.run(cmd, shell=True)
 
 
-def run(args):
+MAKE_RC: dict = {}     # codex item 2 (levi 18:15): each make target's last non-zero rc this session -> meta.json make_rc
+
+
+def run(args) -> int:
+    """The command's rc (codex item 2: it was dropped, so a failed `make slow` still labelled its state as applied)."""
     proc = subprocess.Popen(args, preexec_fn=os.setsid)  # NEW process group
     try:
-        proc.wait()
+        rc = proc.wait()
     except KeyboardInterrupt:
         print("\n🛑 Ctrl+C received — killing subprocess group")
         os.killpg(proc.pid, signal.SIGTERM)
         raise
+    if rc and args[:1] == ["make"] and len(args) > 1:
+        MAKE_RC[args[1]] = rc
+        print(f"[error] make {args[1]} rc {rc}", flush=True)
+    return rc
+
+
+class ShaperApplyError(RuntimeError):
+    """A tc change that did not apply (make slow / rate rc != 0): its net_labels row carries apply_rc, then the session
+    ends as error (codex item 2): never a state labelled as applied that the link did not get."""
 
 
 def initialize_network() -> bool:
@@ -249,9 +262,8 @@ def open_chrome_with_ssl_key_log(session_dir: Path, chrome_profile: Path, window
         # decode flags (decode_path.py: tt's HEVC path) and the geometry's launch args (geometry.py: a `@D` device scale
         # factor) go in as make variables
         import geometry
-        run(["make", "start_chrome"] + geometry.start_chrome_make_vars(session_dir, chrome_profile, window_size, platform,
-                                                                      geometry_spec, CHROME_EXTRA) + SLOT_VARS)
-        return True
+        return run(["make", "start_chrome"] + geometry.start_chrome_make_vars(
+            session_dir, chrome_profile, window_size, platform, geometry_spec, CHROME_EXTRA) + SLOT_VARS) == 0
     except Exception as e:
         print(e)
         return False
@@ -271,8 +283,7 @@ def finalize_network() -> bool:
 
 def initialize_pcap(session_dir: Path) -> bool:
     try:
-        run(["make", "start-capture", f"SESSION_DIR={session_dir}"] + SLOT_VARS)
-        return True
+        return run(["make", "start-capture", f"SESSION_DIR={session_dir}"] + SLOT_VARS) == 0
     except Exception as e:
         print(e)
         return False
@@ -280,12 +291,30 @@ def initialize_pcap(session_dir: Path) -> bool:
 
 def finalize_pcap(session_dir: Path) -> bool:
     try:
-        run(["make", "stop-capture"] + SLOT_VARS)
-        run(["make", "merge-capture", f"SESSION_DIR={session_dir}"] + SLOT_VARS)
-        return True
+        stop = run(["make", "stop-capture"] + SLOT_VARS)
+        return run(["make", "merge-capture", f"SESSION_DIR={session_dir}"] + SLOT_VARS) == 0 == stop
     except Exception as e:
         print(e)
         return False
+
+
+def startup_undo(caps=(), capture: bool = False, chrome_profile=None) -> dict:
+    """codex triage (b) (levi 18:15): a startup failure after the slot came up, before the session's try, stops what it
+    started (the DNS / default-TCP captures, the session capture, Chrome) and takes the slot down, as the finalise would.
+    Before this the next slot_up's preclean and the round's clean-box gate caught the leftovers. Never raises."""
+    done: dict = {}
+    caps = [p for p in caps if p is not None]
+    for name, step in ([("caps", lambda: [trio_slots.dns_capture_stop(p) for p in caps])] if caps else []) \
+            + ([("capture", lambda: run(["make", "stop-capture"] + SLOT_VARS))] if capture else []) \
+            + ([("chrome", lambda: kill_chrome(chrome_profile))] if chrome_profile is not None else []) \
+            + [("network", finalize_network)]:
+        try:
+            step()
+            done[name] = "ok"
+        except Exception as e:
+            done[name] = repr(e)
+    print(f"[error] startup failed: undone {done}", flush=True)
+    return done
 
 
 CHROME_LOG_COPY = "chrome_stderr.log"   # levi 07:48 (3): the slot's Chrome stderr, kept per session
@@ -351,8 +380,7 @@ def configure_chrome_download_dir(session_dir: Path, chrome_profile: Path) -> No
 
 def make_http_logs(session_dir: Path) -> bool:
     try:
-        run(["make", "make_http_logs", f"SESSION_DIR={session_dir}"])
-        return True
+        return run(["make", "make_http_logs", f"SESSION_DIR={session_dir}"]) == 0
     except Exception as e:
         print(e)
         return False
@@ -360,8 +388,7 @@ def make_http_logs(session_dir: Path) -> bool:
 
 def process_http_logs(session_dir: Path) -> bool:
     try:
-        run(["make", "process_http_logs", f"SESSION_DIR={session_dir}"])
-        return True
+        return run(["make", "process_http_logs", f"SESSION_DIR={session_dir}"]) == 0
     except Exception as e:
         print(e)
         return False
@@ -396,14 +423,14 @@ def change_perm(session_dir: Path) -> bool:
         return False
 
 
-def _apply_net_stat(net_stat : NetStat):
+def _apply_net_stat(net_stat : NetStat) -> int:
+    """make slow / make rate's rc (0 = applied)."""
     global CURRENT_NET_STAT
     print(f"Currently shaping {net_stat}")
     CURRENT_NET_STAT = net_stat
     if net_stat.walk_step:      # restart §2 (levi on 80af314): a walk step changes only the HTB rate (make rate)
-        run(["make", "rate", f"BANDWIDTH={net_stat.rate}kbit"] + SLOT_VARS)
-        return
-    run(
+        return run(["make", "rate", f"BANDWIDTH={net_stat.rate}kbit"] + SLOT_VARS)
+    return run(
             [
                 "make",
                 "slow",
@@ -448,6 +475,12 @@ def _schedule(gen_kwargs: dict, wrap: bool = True):
     return iter(out)
 
 
+def check_apply(rc, row: NetLabel) -> None:
+    """Raise once the failed apply's row is in net_labels (a stub returning None counts as applied)."""
+    if rc:
+        raise ShaperApplyError(f"shaper apply failed (make {row.apply} rc {rc}, state {row.state} at {row.apply_start:.3f})")
+
+
 def join_phase_stat(state: str) -> NetStat:
     """J's one tc change (levi 15:24): the state's band midpoints, the same in every session."""
     sc = SCENARIOS[state]
@@ -461,10 +494,11 @@ async def _join_phase(net_labels: list[NetLabel], stop_event: asyncio.Event, cap
     the shaper returns and after_schedule ends an unfinished join as join_timeout (D2)."""
     js = join_phase_stat(JOIN_J)
     t_apply = time.time()
-    _apply_net_stat(net_stat=js)
+    rc = _apply_net_stat(net_stat=js)
     ts = time.time()
     net_labels.append(NetLabel(timestamp=ts, speed=js.rate, state=js.state, delay_ms=js.delay_ms, loss_pct=js.loss_pct,
-                               apply_start=t_apply, apply="slow", phase="join"))
+                               apply_start=t_apply, apply="slow", phase="join", apply_rc=rc))
+    check_apply(rc, net_labels[-1])
     JOIN.update(J=js.state, t_J_apply=round(t_apply, 3), t_first_apply=round(t_apply, 3), first_state=js.state,
                 first_rate_kbit=js.rate, J_tc={"rate_kbit": js.rate, "delay_ms": js.delay_ms, "loss_pct": js.loss_pct},
                 settle_s=JOIN_SETTLE_S)
@@ -512,15 +546,16 @@ async def _ossilate(
               else None)                                                            # inside an episode only the rate changes
         if ep is not None:
             net_stat = dc_replace(net_stat, rate=LEVER.rate_for(ep, t_apply))
-        _apply_net_stat(net_stat= net_stat)
+        rc = _apply_net_stat(net_stat= net_stat)
         ts = time.time()
         net_labels.append(    # restart §2 (c): the realised rate / delay / loss beside the nominal state and the re-draw
             NetLabel(timestamp=ts, speed=net_stat.rate, state=net_stat.state, delay_ms=net_stat.delay_ms,
                      loss_pct=net_stat.loss_pct, redraw_kbit=net_stat.redraw_kbit,
                      redraw_delay_ms=net_stat.redraw_delay_ms, redraw_loss_pct=net_stat.redraw_loss_pct,
                      walk_step=net_stat.walk_step, apply_start=t_apply, apply="rate" if net_stat.walk_step else "slow",
-                     lever=ep["id"] if ep is not None else None, seam=seam)
+                     lever=ep["id"] if ep is not None else None, seam=seam, apply_rc=rc)
         )
+        check_apply(rc, net_labels[-1])
         if not JOIN_FIRST.is_set():         # B9: the session's first state is on the link before the join starts
             JOIN.update(t_first_apply=round(t_apply, 3), first_state=net_stat.state, first_rate_kbit=net_stat.rate)
             JOIN_FIRST.set()
@@ -635,6 +670,7 @@ async def experiment(
                 return f"signal:{got_signal[0]}" if got_signal else "signal"
 
             if osc_task in done:
+                osc_task.result()   # a shaper exception (ShaperApplyError) ends the session as error, never as a normal end
                 break   # max_episodes reached: the session ends here, whatever stdin is doing
 
             line = input_task.result()
@@ -1150,6 +1186,7 @@ if __name__ == "__main__":
             session_meta.write(session_dir, concurrency=TRIO)
         from profile_clone import remove_profile_clone
         print(f"profile clone removed: {remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)}")
+        startup_undo()
         raise ValueError(f"P3: capture IFB offloads not off: {({d: r['after'] for d, r in ifb_off.items() if not r['ok']})}")
     tc_sampler = (trio_slots.TcSampler(session_dir, SLOT, capacity_kbit=args.link_capacity_kbit).start()
                   if SLOT is not None else None)
@@ -1159,6 +1196,7 @@ if __name__ == "__main__":
     tcp_def_caps = trio_slots.default_tcp_capture_start(staging) if SLOT is not None else []   # v3 A17: its TCP headers
 
     if is_capture and initialize_pcap(session_dir) == False:
+        startup_undo([dns_cap, *tcp_def_caps], capture=True)
         raise ValueError("Cannot initialize pcap capture")
 
     _t_chrome_launch = time.time()               # copy_chrome_log's since: never an earlier session's log (brad 734f961d)
@@ -1168,6 +1206,7 @@ if __name__ == "__main__":
             session_meta.write(session_dir, chrome_log=copy_chrome_log(session_dir, SLOT, since=_t_chrome_launch))
         except Exception as e:
             print(f"chrome log copy failed: {e!r}")
+        startup_undo([dns_cap, *tcp_def_caps], capture=is_capture, chrome_profile=chrome_profile)
         raise ValueError("Cannot open chrome with SSL key log enabled")
     # trio: every Chrome process stays in the slot's cgroup (Chrome moves its browser process into a systemd scope)
     sweeper = trio_slots.CgroupSweeper(SLOT, lambda: trio_slots.chrome_pid_of(SLOT)).start() if SLOT is not None else None
@@ -1469,8 +1508,8 @@ if __name__ == "__main__":
             TRIO["slot_detach"] = trio_slots.apply(trio_slots.slot_detach_cmds(SLOT), check=False)
             time.sleep(0.5)
 
-        if is_capture and finalize_pcap(session_dir) == False:
-            raise ValueError("Cannot finalize pcap capture")
+        if is_capture and finalize_pcap(session_dir) == False:   # recorded in make_rc; the finalise goes on
+            print("[error] capture stop / merge failed: see meta.json make_rc", flush=True)
         if finalize_network() == False:
             raise ValueError("Could not finish removing the network setup")
         if SLOT is not None:   # tcpdump's kernel drop counters; its stderr files join the session dir (staging emptied)
@@ -1519,6 +1558,7 @@ if __name__ == "__main__":
                 session_meta.write(session_dir, tt_stream=tt_stream_regime(session_dir))
             except Exception as e:
                 print(f"tt_stream failed: {e!r}")
+        session_meta.write(session_dir, make_rc=dict(MAKE_RC))   # codex item 2: {} = every make target returned 0
         print(f"Run complete → {session_dir}")
         change_perm(session_dir)
         try:   # addendum O: the screenshot motion cross-check (ground truth, motion.jsonl); never fatal

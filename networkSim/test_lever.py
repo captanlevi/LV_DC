@@ -157,7 +157,7 @@ def _ossilate_ns(**stubs):
     from utils.dataModels import NetLabel
     src = (HERE / "exp.py").read_text()
     fns = [n for n in ast.parse(src).body if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
-           and n.name in ("_ossilate", "_schedule")]                # W: _ossilate plays _schedule's changes
+           and n.name in ("_ossilate", "_schedule", "check_apply")]                # W: _ossilate plays _schedule's changes
     import threading
     playing = threading.Event()
     playing.set()                                                   # B9: the lever overlay runs once playing

@@ -21,6 +21,7 @@ class NetLabel:
     lever: int | None = None            # v3 B4: the lever episode this step ran under (its rate replaced the step's)
     seam: int | None = None             # W (levi 48888ba7): 1 on the first change after the rotated schedule's wrap
     phase: str | None = None            # "join": the fixed-J join + settle before the schedule (levi 15:25); never labelled
+    apply_rc: int | None = None         # make slow / rate's rc (codex item 2): 0 applied; a non-zero row ends the session
 
 
 @dataclass
