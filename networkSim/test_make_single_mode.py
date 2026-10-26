@@ -5,7 +5,7 @@ from the Makefile before the trio parameters (lvdc-v2 51007ea); the checkout pat
 the management port's source is pinned, so the golden holds on any machine (GNU make 3.81 / 4.3, with or without
 tailscaled; supervisor 2026-10-19). A slot's overrides (trio_slots.make_vars: IFB_INGRESS / IFB_EGRESS /
 EGRESS_CLASS / CDP_PORT / SLOT_SUFFIX / CHROME_PREFIX, and the staged capture files / tcpdump stderr) are checked
-to land where meant.
+to land where meant. Rewritten lines: 2026-10-26 kill_chrome keeps the Chrome stderr log (levi 12:19 (f)).
 
     python3 test_make_single_mode.py [--write]        (exit 0 = pass)
 """

@@ -11,7 +11,8 @@ c1f9181's trio code (its trio_slots.py and Makefile, this file's commands(); nev
 differences are outside these commands (FROZEN_COLLECTOR, the c1f9181 row's known deltas): tt's own-IFB room rule,
 the sibling claim, the steering / membership / ERA, the live management port (equal here at its default). One known
 delta lies inside them and is asserted, then undone, by name (KNOWN_DELTAS): the capture buffer's -B 65536 (t57), the
-staged tcpdump's -Z root (t58), Cast off (levi 13:41) and the ingress htb's direct_qlen 1000 (levi 8a81bd5d).
+staged tcpdump's -Z root (t58), Cast off (levi 13:41), the ingress htb's direct_qlen 1000 (levi 8a81bd5d) and
+kill_chrome keeping the Chrome stderr log (levi 12:19 (f), 2026-10-26).
 
     python3 test_nslot_equivalence.py        (exit 0 = pass)
 """
@@ -157,7 +158,23 @@ def ifb_direct_qlen(got: dict) -> list[str]:
     return seen
 
 
-KNOWN_DELTAS = (("the ingress htb direct queue, 1000 packets (levi 8a81bd5d)", ifb_direct_qlen),
+def chrome_log_kept(got: dict) -> list[str]:
+    """Known delta (levi 12:19 (f), WC3b / WC3c: 0 of 21 sessions kept chrome_stderr.log): kill_chrome removes only the
+    slot's Chrome pid file; its stderr log stays for exp.py's copy (start_chrome's > truncates it). Asserted on
+    kill_chrome, then put back."""
+    seen = []
+    for tag, s in got["slots"].items():
+        if "make_n" in s:
+            kc = s["make_n"]["kill_chrome"]
+            line = f"rm -f /C/chrome_{tag}.pid\n"
+            assert kc.count(line) == 1 and f"chrome_{tag}.log" not in kc, (tag, kc)
+            s["make_n"]["kill_chrome"] = kc.replace(line, f"rm -f /C/chrome_{tag}.pid /C/chrome_{tag}.log\n")
+            seen.append(f"{tag}: kill_chrome keeps chrome_{tag}.log")
+    return seen or ["no make here"]
+
+
+KNOWN_DELTAS = (("the chrome stderr log kept by kill_chrome (levi 12:19 (f))", chrome_log_kept),
+                ("the ingress htb direct queue, 1000 packets (levi 8a81bd5d)", ifb_direct_qlen),
                 ("Cast discovery off (levi 13:41)", cast_disabled),
                 ("the capture buffer, 64 MiB (t57 tw_100023)", capture_buffer_64mib),
                 ("staged tcpdump runs as root (t58: staging on the data volume)", staged_tcpdump_as_root))

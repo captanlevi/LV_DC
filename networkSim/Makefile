@@ -241,6 +241,8 @@ start_chrome:
 	echo $$! > $(CAPTURE_DIR)/chrome$(SLOT_SUFFIX).pid
 	@echo "✅ Chrome launched (debug port $(CDP_PORT), log → $(CHROME_LOG))"
 
+# kill_chrome keeps the stderr log (levi 12:19 (f)): exp.py copies it into the session after this; start_chrome's >
+# truncates it at the next launch
 kill_chrome:
 	@echo "🛑 Killing collection Chrome..."
 	@# [r]: the pattern must not match this recipe's own shell, whose command line contains it (make: *** Killed)
@@ -255,7 +257,7 @@ kill_chrome:
 	        "$(CHROME_PROFILE)/Default/Last Tabs" \
 	        "$(CHROME_PROFILE)/Default/Current Tabs" \
 	        "$(CHROME_PROFILE)/Default/Last Browser" 2>/dev/null || true
-	@rm -f $(CAPTURE_DIR)/chrome$(SLOT_SUFFIX).pid $(CAPTURE_DIR)/chrome$(SLOT_SUFFIX).log
+	@rm -f $(CAPTURE_DIR)/chrome$(SLOT_SUFFIX).pid
 	@echo "✅ Chrome killed, session files cleared"
 
 # v2: NOT called by exp.py any more (the keys are kept per session); left for manual use.

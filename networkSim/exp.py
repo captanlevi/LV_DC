@@ -296,8 +296,9 @@ def kill_chrome(chrome_profile: Path | None = None) -> None:
     except Exception as e:
         print(e)
     suffix = f"_{SLOT.tag}" if SLOT is not None else ""
-    for _f in [f"chrome{suffix}.pid", f"chrome{suffix}.log"]:
-        (Path(__file__).parent.parent / "current_data" / _f).unlink(missing_ok=True)
+    # the stderr log is NOT removed (levi 12:19 (f): removing it here and in the Makefile recipe made copy_chrome_log
+    # find nothing on every v3 session); start_chrome's > truncates it at the next launch
+    (Path(__file__).parent.parent / "current_data" / f"chrome{suffix}.pid").unlink(missing_ok=True)
 
 
 def configure_chrome_download_dir(session_dir: Path, chrome_profile: Path) -> None:
@@ -1104,6 +1105,10 @@ if __name__ == "__main__":
 
     if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform), platform,
                                     args.geometry) == False:
+        try:                                    # before the session's try: the only path that skips its teardown copy
+            session_meta.write(session_dir, chrome_log=copy_chrome_log(session_dir, SLOT))
+        except Exception as e:
+            print(f"chrome log copy failed: {e!r}")
         raise ValueError("Cannot open chrome with SSL key log enabled")
     # trio: every Chrome process stays in the slot's cgroup (Chrome moves its browser process into a systemd scope)
     sweeper = trio_slots.CgroupSweeper(SLOT, lambda: trio_slots.chrome_pid_of(SLOT)).start() if SLOT is not None else None

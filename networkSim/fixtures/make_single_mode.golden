@@ -126,7 +126,7 @@ rm -f "/P/prof/Default/Sessions" \
 "/P/prof/Default/Last Tabs" \
 "/P/prof/Default/Current Tabs" \
 "/P/prof/Default/Last Browser" 2>/dev/null || true
-rm -f /C/chrome.pid /C/chrome.log
+rm -f /C/chrome.pid
 echo "✅ Chrome killed, session files cleared"
 === change_perm
 OWNER=${SUDO_USER:-${USER}}; \

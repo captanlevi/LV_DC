@@ -912,28 +912,39 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = No
                         scale: float = 1.0) -> tuple[bool, dict]:
     """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal; its clocks scaled by
     `scale` during the B9 join). With `trace`, one (t, rs, has_video, loading) per sample is appended (re-entry
-    diagnostics)."""
+    diagnostics). Every outcome records watched_s, ct_advance_s, the frames gate and ct_trace (levi 12:19 (g), WC3c
+    ti_100003: its failed try had none); a timeout also records showed_frames (a decoded frame, or the playhead moving
+    when the frame counter is unreadable), which the B9 join reads as a slow start rather than no first frame."""
     w, first_ct, s, fg = TTRoomWatch(scale=scale), None, {}, _FramesGate()
     ev0 = None                                        # B9 D3: the first sample's media counters (page-side bytes)
+    t0, ct_trace = time.time(), []
     page.eval(_CLICK_PLAY_JS)                         # autoplay may not have started: click, then give it the grace
     time.sleep(TT_AUTOPLAY_GRACE_S)
+
+    def measured() -> dict:
+        adv = 0.0 if first_ct is None or s.get("ct") is None else max(0.0, s["ct"] - first_ct)
+        return {**fg.record(), "watched_s": round(time.time() - t0, 1), "ct_advance_s": round(adv, 3),
+                "ct_trace": ct_trace}
     deadline = time.time() + seconds
     while time.time() < deadline:
         page.eval(_CLICK_PLAY_JS)
         s = _tt_state(page)
         ev0 = ev0 if ev0 is not None else {"buf_end": s.get("buf_end"), "decoded": s.get("decoded")}
+        ct_trace.append((round(time.time() - t0, 1), s.get("ct"), s.get("rs"), s.get("tf")))
         if trace is not None:
             trace.append((round(time.time(), 2), s.get("rs"), bool(s.get("has_video")), bool(s.get("loading"))))
         dead = w.feed(s, time.time())
         if dead:
-            return False, {"dead": dead, **s}
+            return False, {"dead": dead, **s, **measured()}
         if s.get("has_video") and (s.get("rs") or 0) >= 3 and s.get("ct") is not None:
             first_ct = s["ct"] if first_ct is None else first_ct
             fg.feed(s.get("tf"))                      # WA2 r1: the clock alone confirmed a re-entry that showed no frame
             if s["ct"] - first_ct >= 2.0 and fg.ok():
-                return True, {**s, **fg.record()}
+                return True, {**s, **measured()}
         time.sleep(1)
-    return False, {"dead": "not_playing", **s, **fg.record(), "ev0": ev0 or {}}
+    m = measured()
+    showed = (fg.last or 0) > 0 if fg.seen else m["ct_advance_s"] > 0
+    return False, {"dead": "not_playing", **s, **m, "showed_frames": showed, "ev0": ev0 or {}}
 
 
 TT_PREROLL_MIN_ADV_S = 1.0     # levi 06:40: the pre-roll's acceptance, identical at every state and throughput-free
@@ -947,7 +958,7 @@ def _tt_preroll(page: "CDPPage", seconds: float, scale: float = 1.0, cancel=None
     one). A room still short of it after `seconds` waits up to seconds x scale for its first second; `until` (the join
     walk's cap) clips both, so the join cap is authoritative (brad / levi 06:45), and `cancel` stops it. The advance share
     (ct_advance_s / the seconds watched) is recorded as a covariate, never a filter."""
-    w, s, adv, prev = TTRoomWatch(scale=scale), {}, 0.0, _tt_state(page).get("ct")
+    w, s, adv, prev, fg = TTRoomWatch(scale=scale), {}, 0.0, _tt_state(page).get("ct"), _FramesGate()
     t0 = time.time()
     end = t0 + seconds
     longest = t0 + seconds * max(1.0, scale)
@@ -959,9 +970,11 @@ def _tt_preroll(page: "CDPPage", seconds: float, scale: float = 1.0, cancel=None
         if now >= longest or (now >= end and adv >= TT_PREROLL_MIN_ADV_S) or (cancel is not None and cancel.is_set()):
             break
         s = _tt_state(page)
+        fg.feed(s.get("tf"))
         dead = w.feed(s, time.time())
         if dead:
-            return False, {"dead": dead, **s, "ct_advance_s": adv, "watched_s": round(time.time() - t0, 1)}
+            return False, {"dead": dead, **s, "ct_advance_s": adv, "watched_s": round(time.time() - t0, 1),
+                           **fg.record()}
         ct = s.get("ct")
         if ct is not None and prev is not None and ct > prev:
             adv += ct - prev                          # cumulative: a player reconnect restarts the playhead at 0
@@ -971,7 +984,7 @@ def _tt_preroll(page: "CDPPage", seconds: float, scale: float = 1.0, cancel=None
     ok = adv >= TT_PREROLL_MIN_ADV_S
     return ok, {"ct_advance_s": adv, "watched_s": round(watched, 1), "advance_share": round(adv / watched, 4),
                 "extended": watched > seconds + 1.5, "buf_end": s.get("buf_end"), "decoded": s.get("decoded"),
-                **({} if ok else {"dead": "preroll_no_advance"})}
+                **fg.record(), **({} if ok else {"dead": "preroll_no_advance"})}
 
 
 # v2 (supervisor 2026-10-16): pin the player to the old collection's modal player size over the CURRENT-era sessions
@@ -4986,12 +4999,18 @@ class BrowserSession:
                 if not c.get("fallback"):
                     page.navigate(c["href"])
                     _wait_for_load(page, timeout=left(15 * sc))
-                confirm_s = left(TT_QUICK_CONFIRM_S * sc)
+                # levi 12:18 (a), WC3c ti_100003: under B9 the confirm runs to the per-URL deadline (the room's <video>
+                # can appear late: +18.7 s there); the quick window is off-B9 only
+                confirm_s = (TT_QUICK_CONFIRM_S if try_deadline is None
+                             else max(0.0, left(JOIN_BASE_S * sc) - TT_AUTOPLAY_GRACE_S))
+                t["confirm_s"] = round(confirm_s, 1)
                 ok, detail = _tt_confirm_playing(page, confirm_s, scale=sc)
+                if not ok and detail.get("dead") == "not_playing" and detail.get("showed_frames"):
+                    detail["dead"] = "slow_start"       # (b): frames but < 2 s of playhead by the deadline: next card
                 if ok and not c.get("fallback"):        # levi 00:09: the landed room is the picked one, else next
                     t["identity"] = idc = identity_check("tiktok", c["href"], page)
                     if idc["ok"] is False:
-                        ok, detail = False, {"dead": "room_mismatch", "landed": idc["landed"]}
+                        ok, detail = False, {**detail, "dead": "room_mismatch", "landed": idc["landed"]}
                         # levi 00:35 (1): never silent: it changes which channel a counted session holds (caps, folds)
                         rec.setdefault("room_mismatches", []).append(
                             {"intended": c["href"], "landed_url": idc.get("landed_url"), "try": len(rec["tries"])})
@@ -5002,10 +5021,14 @@ class BrowserSession:
                                              until=(t_walk + JOIN_CAP_S) if self.join_state is not None else None)
             except Exception as exc:
                 ok, detail = False, {"dead": "error", "error": repr(exc)}
+            for k in ("watched_s", "ct_advance_s", "frames"):      # (g): every try carries them (None: not measured)
+                detail.setdefault(k, None)
             t.update(ok=ok, detail=detail, t_done=time.time())
             rec["tries"].append(t)
+            # B9 D3: no first frame by the per-URL deadline (levi 12:18 (b): a room that showed frames is a slow_start,
+            # the next card; ti_100003 raised at 21 of 45 s with tf 42)
             if not ok and self.join_state is not None and detail.get("dead") == "not_playing" \
-                    and confirm_s > 0 and not self.join_cancel.is_set():          # B9 D3: the full scaled wait spent
+                    and time.time() >= try_deadline - 1.0 and not self.join_cancel.is_set():
                 due, why = join_timeout_due(detail.get("ev0") or {},
                                             {"attached": bool(detail.get("has_video") and detail.get("src")),
                                              "buf_end": detail.get("buf_end"), "decoded": detail.get("decoded")},
