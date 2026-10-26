@@ -121,18 +121,21 @@ def test_a_launch_refused_before_chrome_never_copies_the_previous_log():
         os.utime(old, (time.time() - 120, time.time() - 120))
         session_dir = root / "S" / "yt_100004"
         session_dir.mkdir(parents=True)
-        written = []
+        written, undone = [], []
         ns = {"__file__": str(root / "networkSim" / "exp.py"), "Path": Path, "os": os, "signal": signal,
               "subprocess": subprocess, "shutil": shutil, "time": time, "SLOT": types.SimpleNamespace(tag="zt"),
               "session_dir": session_dir, "chrome_profile": root / "P", "platform": "youtube", "WINDOW_SIZES": {},
               "args": types.SimpleNamespace(geometry="bad"),
               "open_chrome_with_ssl_key_log": lambda *a, **k: False,       # geometry refused before make start_chrome
+              "is_capture": True, "dns_cap": None, "tcp_def_caps": [],
+              "startup_undo": lambda *a, **k: undone.append((a, k)) or {},  # codex triage (b): stops what started
               "session_meta": types.SimpleNamespace(write=lambda sd, **k: written.append(k))}
         exec(_exp_defs(DEFS), ns)
         exec(block, ns)
         assert not (session_dir / "chrome_stderr.log").exists()
         rec = written[0]["chrome_log"]
         assert rec["stale"] is True and rec["mtime"] < rec["since"], rec
+        assert undone == [(([None],), {"capture": True, "chrome_profile": root / "P"})]   # after the copy, before the raise
 
 
 def test_nothing_removes_the_chrome_log_before_the_copy():

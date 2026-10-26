@@ -30,13 +30,13 @@ def test_cadence_and_crop():
     assert B.SHOT_INTERVAL_S == 60.0 and B.SHOT_CROPS == ("player", "viewport")
     saved = os.environ.get("LVQOE_SHOT_CROP")
     try:
-        for env, want in (("viewport", "viewport"), ("screen", "player"), (None, "player")):
+        for env, want in (("viewport", "viewport"), ("player", "player"), ("screen", "viewport"), (None, "viewport")):
             if env is None:
                 os.environ.pop("LVQOE_SHOT_CROP", None)
             else:
                 os.environ["LVQOE_SHOT_CROP"] = env
             R = importlib.reload(B)
-            assert R.SHOT_CROP == want and R.SHOT_CROP_RAW == (env or "player"), (env, R.SHOT_CROP)
+            assert R.SHOT_CROP == want and R.SHOT_CROP_RAW == (env or "viewport"), (env, R.SHOT_CROP)
     finally:
         if saved is None:
             os.environ.pop("LVQOE_SHOT_CROP", None)

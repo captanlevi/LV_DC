@@ -3704,8 +3704,11 @@ SHOT_EVENT_MIN_GAP_S = 10.0   # levi 00:53: event shots of one reason >= this ap
 # levi 17:45 (A7's C5 needs an uncropped shot): "player" (default, as before) crops to the player rect; "viewport" keeps
 # the whole page area (composite: the window's viewport; x11 / cdp: the viewport), so the content box is found in the image
 SHOT_CROPS = ("player", "viewport")
-SHOT_CROP_RAW = os.environ.get("LVQOE_SHOT_CROP", "player")
-SHOT_CROP = SHOT_CROP_RAW if SHOT_CROP_RAW in SHOT_CROPS else "player"   # an unknown value keeps the default, recorded
+# levi 18:34 (boundary after counted window 1): the default is viewport, the crop every v3 window ran (WA..WCJb, and window 1
+# by env.local.sh), so a counted run never depends on the env; player stays selectable
+SHOT_CROP_DEFAULT = "viewport"
+SHOT_CROP_RAW = os.environ.get("LVQOE_SHOT_CROP", SHOT_CROP_DEFAULT)
+SHOT_CROP = SHOT_CROP_RAW if SHOT_CROP_RAW in SHOT_CROPS else SHOT_CROP_DEFAULT   # an unknown value keeps the default, recorded
 SHOT_WIDTH_PX = 640
 SHOT_JPEG_QUALITY = 40
 # shots are grabbed from the X display, outside Chrome's renderer (supervisor 2026-10-17: a CDP capture costs dropped

@@ -95,7 +95,8 @@ def test_shot_crop_and_staleness():
     own = _page_pixels(1)
     origin = {"frame": "0x600003", "viewport_in_frame": [8, 90], "viewport_px": [600, 400], "accepted": True}
     player = {"rect": [100, 50, 320, 180], "inner": [600, 400], "dpr": 1}
-    saved = _stub(_frame(own))
+    saved, crop0 = _stub(_frame(own)), B.SHOT_CROP
+    B.SHOT_CROP = "player"                                             # the player crop (the default is viewport, levi 18:34)
     try:
         prev: dict = {}
         page = _Page(own, ct=10.0)
@@ -119,6 +120,7 @@ def test_shot_crop_and_staleness():
         data, _, _, _, rec = B._composite_shot(origin, player, page, prev)
         assert data is None and rec["blank"] is True
     finally:
+        B.SHOT_CROP = crop0
         _restore(saved)
 
 
