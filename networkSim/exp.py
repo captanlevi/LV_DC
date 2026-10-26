@@ -278,12 +278,19 @@ def finalize_pcap(session_dir: Path) -> bool:
 CHROME_LOG_COPY = "chrome_stderr.log"   # levi 07:48 (3): the slot's Chrome stderr, kept per session
 
 
-def copy_chrome_log(session_dir: Path, slot=None) -> dict:
+CHROME_LOG_MTIME_SLACK_S = 2.0     # exFAT's 2 s mtime granularity
+
+
+def copy_chrome_log(session_dir: Path, slot=None, since: float | None = None) -> dict:
     """levi 07:48 (3) (WC3b r1 ti_100001: the per-slot chrome log was overwritten by the next round's Chrome): the
     slot's Chrome stderr (Makefile CHROME_LOG: current_data/chrome<_tag>.log) copied into the session after Chrome
-    stopped. Never raises; the record goes to meta.json chrome_log."""
+    stopped. Never raises; the record goes to meta.json chrome_log. `since` (the launch time): a log last written
+    before it is an earlier session's (kill_chrome keeps the log, so a launch refused before start_chrome's > leaves the
+    old one; brad 734f961d) and is not copied, recorded stale."""
     src = Path(__file__).resolve().parent.parent / "current_data" / f"chrome{'_' + slot.tag if slot is not None else ''}.log"
     try:
+        if since is not None and src.stat().st_mtime < since - CHROME_LOG_MTIME_SLACK_S:
+            return {"copied_from": str(src), "stale": True, "mtime": round(src.stat().st_mtime, 3), "since": round(since, 3)}
         shutil.copyfile(src, Path(session_dir) / CHROME_LOG_COPY)
         return {"copied_from": str(src), "bytes": src.stat().st_size}
     except OSError as e:
@@ -1103,10 +1110,11 @@ if __name__ == "__main__":
     if is_capture and initialize_pcap(session_dir) == False:
         raise ValueError("Cannot initialize pcap capture")
 
+    _t_chrome_launch = time.time()               # copy_chrome_log's since: never an earlier session's log (brad 734f961d)
     if open_chrome_with_ssl_key_log(session_dir, chrome_profile, WINDOW_SIZES.get(platform), platform,
                                     args.geometry) == False:
         try:                                    # before the session's try: the only path that skips its teardown copy
-            session_meta.write(session_dir, chrome_log=copy_chrome_log(session_dir, SLOT))
+            session_meta.write(session_dir, chrome_log=copy_chrome_log(session_dir, SLOT, since=_t_chrome_launch))
         except Exception as e:
             print(f"chrome log copy failed: {e!r}")
         raise ValueError("Cannot open chrome with SSL key log enabled")
@@ -1401,7 +1409,7 @@ if __name__ == "__main__":
         session_meta.finish(session_dir, channel_url, **meta_extra)   # while Chrome is still up (records its version)
         kill_chrome(chrome_profile)
         try:
-            session_meta.write(session_dir, chrome_log=copy_chrome_log(session_dir, SLOT))   # levi 07:48 (3)
+            session_meta.write(session_dir, chrome_log=copy_chrome_log(session_dir, SLOT, since=_t_chrome_launch))
         except Exception as e:
             print(f"chrome log copy failed: {e!r}")
         if SLOT is not None:   # trio: in-flight packets land, then the slot's filters go, then its capture stops

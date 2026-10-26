@@ -53,6 +53,11 @@ def attached_no_frame(t):
     return {"has_video": True, "src": "blob:x", "rs": 1, "ct": 0.0, "tf": 0, "paused": False, "dur_inf": True}
 
 
+def frozen_first_frame(t):
+    """A decoded first frame (tf 1), the playhead never moving, media flowing (brad 734f961d's probe)."""
+    return {"has_video": True, "src": "blob:x", "rs": 4, "ct": 0.0, "tf": 1, "paused": False, "dur_inf": True}
+
+
 def frames_but_slow(t):
     """Frames from +10 s, the playhead crawling (never 2 s by the deadline): a slow start."""
     if t < 10:
@@ -121,6 +126,18 @@ def test_a_flowing_room_with_no_frame_times_out_only_at_the_deadline(monkeypatch
     assert t["detail"]["dead"] == "not_playing" and not t["detail"]["showed_frames"]
     assert t["t_done"] - t["t_nav"] >= B.JOIN_BASE_S - 1.0, t           # the full per-URL wait, not 21 s
     assert len(rec["tries"]) == 1 and rec["join_timeout"] == room       # D3: the walk stops (no re-pick by bitrate)
+
+
+def test_a_frozen_first_frame_is_a_join_timeout_at_the_deadline(monkeypatch):
+    """levi 12:18 (b) / 12:50: slow_start needs frames AND ct advance; tf > 0 with ct 0 at the deadline is D3."""
+    room = "https://www.tiktok.com/@frozen/live"
+    b = _session(monkeypatch, {room: frozen_first_frame})
+    rec = _rec()
+    with pytest.raises(B.JoinTimeout):
+        b._tt_try_rooms(rec, _order(room, "https://www.tiktok.com/@unused/live"))
+    t = rec["tries"][0]
+    assert len(rec["tries"]) == 1 and t["detail"]["dead"] == "not_playing" and not t["detail"]["showed_frames"]
+    assert t["t_done"] - t["t_nav"] >= B.JOIN_BASE_S - 1.0, t
 
 
 def test_a_slow_start_moves_to_the_next_card_and_every_try_records_its_measures(monkeypatch):

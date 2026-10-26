@@ -913,8 +913,9 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = No
     """src set, readyState >= 3 and the playhead advancing >= 2 s within `seconds` (no dead signal; its clocks scaled by
     `scale` during the B9 join). With `trace`, one (t, rs, has_video, loading) per sample is appended (re-entry
     diagnostics). Every outcome records watched_s, ct_advance_s, the frames gate and ct_trace (levi 12:19 (g), WC3c
-    ti_100003: its failed try had none); a timeout also records showed_frames (a decoded frame, or the playhead moving
-    when the frame counter is unreadable), which the B9 join reads as a slow start rather than no first frame."""
+    ti_100003: its failed try had none); a timeout also records showed_frames (the playhead moved, with a decoded frame
+    when the counter is readable; a frozen first frame is not), which the B9 join reads as a slow start rather than no
+    first frame (levi 12:18 (b))."""
     w, first_ct, s, fg = TTRoomWatch(scale=scale), None, {}, _FramesGate()
     ev0 = None                                        # B9 D3: the first sample's media counters (page-side bytes)
     t0, ct_trace = time.time(), []
@@ -943,7 +944,7 @@ def _tt_confirm_playing(page: "CDPPage", seconds: float, trace: list | None = No
                 return True, {**s, **measured()}
         time.sleep(1)
     m = measured()
-    showed = (fg.last or 0) > 0 if fg.seen else m["ct_advance_s"] > 0
+    showed = m["ct_advance_s"] > 0 and ((fg.last or 0) > 0 if fg.seen else True)     # brad 734f961d: frames AND ct
     return False, {"dead": "not_playing", **s, **m, "showed_frames": showed, "ev0": ev0 or {}}
 
 
