@@ -145,7 +145,61 @@ def test_the_balance_start_state_reads_only_the_selected_runs():
         dist_rec, n_rec = B.load_platform_data("twitch", Path(d), REC)
         assert (n_all, n_rec) == (2, 1) and set(dist_rec) == {"1"} and set(dist_all) == {"1", "9"}, (dist_all, dist_rec)
     src = (Path(__file__).resolve().parent / "orchestrate.py").read_text()
-    assert "most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record)" in src
+    assert ("most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record,\n"
+            "                                                    seed=seed, held=held, record=balance_rec)") in src
+
+
+def _history(d: Path, states_s: dict):
+    """One twitch run of record per state: {state: seconds}."""
+    for k, (st, secs) in enumerate(states_s.items()):
+        sd = d / "twitch" / f"h{k}"
+        sd.mkdir(parents=True)
+        (sd / "net_labels.txt").write_text("".join(json.dumps({"timestamp": 100.0 + 20 * i, "speed": 300, "state": st})
+                                                   + "\n" for i in range(int(secs // 20) + 1)))
+        (sd / "meta.json").write_text(json.dumps({"rec": True}))
+
+
+def test_the_empty_history_balance_draw_is_seeded_and_recorded():
+    """t83 (5): balance.py's empty-history draw (an unseeded random.choice through da202c2c) comes from the session's
+    seed, so it replays; a start a running sibling holds is passed over while another remains (t83 (7))."""
+    with tempfile.TemporaryDirectory() as d:
+        states = sorted(B.PLATFORM_TRANSITIONS["twitch"], key=int)
+        upper = states[len(states) // 2:]
+        picks = {}
+        for k in range(24):
+            r1, r2 = {}, {}
+            a = B.most_needed_state("twitch", Path(d), select=REC, seed=f"S:{k}", record=r1)
+            b = B.most_needed_state("twitch", Path(d), select=REC, seed=f"S:{k}", record=r2)
+            assert a == b and a in upper and r1 == r2, (a, b, r1, r2)
+            assert r1["branch"] == "empty_history" and r1["seed"] == f"S:{k}" and r1["history_runs"] == 0, r1
+            picks[k] = a
+        assert len(set(picks.values())) > 1, picks
+        held = {s: 1 for s in upper[:-1]}
+        r = {}
+        assert B.most_needed_state("twitch", Path(d), select=REC, seed="S:0", held=held, record=r) == upper[-1], r
+        assert r["choices"] == [upper[-1]] and r["held"] == held, r
+        r = {}                                           # every choice held: the whole upper half again
+        assert B.most_needed_state("twitch", Path(d), select=REC, seed="S:0",
+                                   held={s: 1 for s in upper}, record=r) == picks[0] and r["choices"] == upper, r
+
+
+def test_the_balance_start_passes_over_a_held_state():
+    """t83 (7): w3's concurrent tt slots picked the same balance start (a running sibling's is invisible to the
+    history); the worst-deficit state a sibling holds is passed over for the next qualifying one, recorded, and kept
+    when every qualifying state is held. With nothing held the pick is the pre-t83 rule's."""
+    with tempfile.TemporaryDirectory() as d:
+        states = sorted(B.PLATFORM_TRANSITIONS["twitch"], key=int)
+        _history(Path(d), {states[0]: 2000, states[1]: 600})
+        r = {}
+        worst = B.most_needed_state("twitch", Path(d), select=REC, record=r)
+        assert r["branch"] == "deficit" and r["passed_over"] == [] and worst == r["qualifying"][0], r
+        assert worst not in (states[0], states[1]), r
+        r2 = {}
+        nxt = B.most_needed_state("twitch", Path(d), select=REC, held={worst: 1}, record=r2)
+        assert nxt == r["qualifying"][1] and r2["passed_over"] == [worst], r2
+        r3 = {}
+        assert B.most_needed_state("twitch", Path(d), select=REC, held={s: 1 for s in r["qualifying"]},
+                                   record=r3) == worst and r3["passed_over"] == [], r3
 
 
 @of_record

@@ -109,7 +109,7 @@ def load_platform_data(platform: str, data_dir: Path, select=None) -> tuple[dict
 # ---------------------------------------------------------------------------
 
 def balance_report(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None,
-                   matrix_id: str | None = None) -> None:
+                   matrix_id: str | None = None, select=None) -> None:
     matrix_id = matrix_id or (yt_matrix if platform == "youtube" else None)
     m = _matrix(platform, matrix_id)
     transitions = m[0] if m else PLATFORM_TRANSITIONS[platform]
@@ -174,10 +174,15 @@ def balance_target(platform: str, matrix_id: str | None = None) -> dict[str, flo
 
 
 def most_needed_state(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matrix: str | None = None,
-                      matrix_id: str | None = None, select=None) -> str | None:
+                      matrix_id: str | None = None, select=None, seed: str | None = None,
+                      held: dict | None = None, record: dict | None = None) -> str | None:
     """Return the state with the largest gap below its target share (balance_target), or None if balanced.
     A stationary-start matrix returns None (no forced start): exp.py draws the start from the stationary
-    distribution, which is the target itself. yt_matrix is the older name of matrix_id (yt only)."""
+    distribution, which is the target itself. yt_matrix is the older name of matrix_id (yt only).
+    seed (t83 (5)): the empty-history draw comes from random.Random(f"balance:{seed}") so it replays; None keeps the
+    unseeded draw (single mode). held (t83 (7)): {state: n}, the start states the running sibling slots already hold
+    (their net_labels.txt is written only at session end, so the history cannot see them); a state a sibling holds is
+    passed over for the next qualifying one, and kept when none is left. record: filled with the pick's inputs."""
     matrix_id = matrix_id or (yt_matrix if platform == "youtube" else None)
     m = _matrix(platform, matrix_id)
     if m and m[2] == "stationary":
@@ -185,14 +190,28 @@ def most_needed_state(platform: str, data_dir: Path = _DEFAULT_DATA_DIR, yt_matr
     transitions = PLATFORM_TRANSITIONS[platform]
     states = sorted(transitions.keys(), key=int)
     target = balance_target(platform, matrix_id)
+    held = {s: n for s, n in (held or {}).items() if n}
+    rec = record if record is not None else {}
 
     actual, run_count = load_platform_data(platform, data_dir, select)
+    rec.update(rule="balance", history_runs=run_count, seed=seed, held=held)
     if not actual:
-        return random.choice(states[len(states) // 2:])
+        upper = states[len(states) // 2:]
+        free = [s for s in upper if s not in held]
+        pick = (random.Random(f"balance:{seed}") if seed is not None else random).choice(free or upper)
+        rec.update(branch="empty_history", choices=free or upper, state=pick)
+        return pick
 
     deficit = {s: target[s] - actual.get(s, 0.0) for s in states}
     worst = max(deficit, key=deficit.get)
-    return worst if deficit[worst] > target[worst] * 0.2 else None
+    if deficit[worst] <= target[worst] * 0.2:
+        rec.update(branch="balanced", state=None)
+        return None
+    ranked = [s for s in sorted(states, key=lambda s: -deficit[s]) if deficit[s] > target[s] * 0.2]
+    pick = next((s for s in ranked if s not in held), worst)
+    rec.update(branch="deficit", qualifying=ranked, passed_over=ranked[:ranked.index(pick)],
+               state=pick)
+    return pick
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ import os
 import subprocess
 import sys
 import argparse
+import collections
 import json
 import shutil
 import time
@@ -898,7 +899,13 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     fi = (LAST_COVERAGE.get(tag) or {}).get("initial_state_forced") if MATRIX_RULE == "coverage" else None
     # t53 2026-10-19 (levi; supervisor): the balance start state counts the trio's sessions of record too (00265), as the
     # pick and the coverage rule do; at c1f9181 it read the single root (disclosed in the FROZEN log)
-    init = fi["state"] if fi else most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record)
+    # t83 (5) / (7): the balance draw is seeded per session (it replays) and passes over a start state a running sibling
+    # of the platform already holds (its net_labels.txt, which the history reads, is written only at its end)
+    held = dict(collections.Counter(r["init"] for t2, r in running.items()
+                                    if t2 != tag and T.SLOTS[t2].platform == p and r.get("init")))
+    balance_rec = {}
+    init = fi["state"] if fi else most_needed_state(p, troot, yt_matrix=mid, matrix_id=mid, select=record.is_record,
+                                                    seed=seed, held=held, record=balance_rec)
     init_source = "coverage" if fi else "balance"
     tt_room = None
     pin = TRIO_PINS.get(tag) or TRIO_PINS.get(p)        # a tag's own pin, else its platform's
@@ -969,6 +976,10 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     env.pop("LVDC_TRIO_YT_FULLSCREEN", None)
     if yt_fs:
         env["LVDC_TRIO_YT_FULLSCREEN"] = "1"
+    # t83 (4): the start state and the rule that chose it, recorded in every session (steering's block has it only when
+    # a table steers); the balance draw's inputs with it
+    env["LVDC_START_PICK"] = json.dumps({"initial_state": init, "source": init_source, "held": held,
+                                         **({"balance": balance_rec} if balance_rec else {})})
     if pin:
         env["LVDC_PICK_PINNED"] = json.dumps({**pin, "initial_state": init, "geometry_used": geom,
                                               "category_used": (category or {}).get("name")})
@@ -984,7 +995,7 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
           + (f"; geometry {geom}" if geom else "") + (f"; {slen['minutes']:.1f} min" if slen else "")
           + f"\n  Running: {' '.join(cmd)}\n  log: {log}")
     running[tag] = {"proc": spawn(cmd, env, log), "before": before, "channel": channel, "category": category,
-                    "now": now, "t": time.time(), "log": str(log), "geom": geom,
+                    "now": now, "t": time.time(), "log": str(log), "geom": geom, "init": init,
                     "target": ((LAST_COVERAGE.get(tag) or {}).get("target") or {}).get("key")}
     return True
 

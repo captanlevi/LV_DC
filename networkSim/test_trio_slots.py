@@ -406,7 +406,7 @@ class FakeProc:
 
 def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=True, polls=None, layout="cdp",
           xrandr=None, trio_pf=None, disk_gb=1000.0, offloads=None, slots=None, coupled=None, n_draw=None,
-          window_min=None, matrix="A"):
+          window_min=None, matrix="A", mns=None):
     calls = []
     saved = {k: getattr(O, k) for k in ("_RUNS_DIR", "_pick", "session_matrix", "accepted_sessions", "report_flags",
                                         "_summary", "preclean", "most_needed_state", "coupled_geometry", "free_gb")}
@@ -424,7 +424,7 @@ def _trio(tmp: Path, targets, spawn, max_per_slot=1, drain_after=None, pf_ok=Tru
     O.report_flags = lambda p, t, root=None, only=None: []
     O._summary = lambda: None
     O.preclean = lambda: calls.append(("preclean",))
-    O.most_needed_state = lambda *a, **k: None
+    O.most_needed_state = mns or (lambda *a, **k: None)
     O.coupled_geometry = coupled or (lambda p, g: g)
     O.preflight.run = lambda *a, **k: {"ok": pf_ok, "problems": [] if pf_ok else ["rootfs"],
                                        "checks": {"rootfs": {"ok": pf_ok}}, "kw": k}
@@ -495,6 +495,30 @@ def test_run_trio_records_the_n_draw_and_session_lengths():
                       lambda cmd, env, log: spawned.append((cmd, env)) or FakeProc(1, 0, []))
         ev = json.loads((Path(t) / T.TRIO_DIR / T.SLOTS_LOG).read_text().splitlines()[0])
         assert "n_draw" not in ev and all("LVDC_N_DRAW" not in e for _, e in spawned)
+
+
+def test_the_balance_start_is_seeded_sees_running_siblings_and_is_recorded():
+    """t83 (4) / (5) / (7): run_trio passes the session's draw seed and its running siblings' start states (same
+    platform) to the balance pick, and records the start, its rule and the pick's inputs (LVDC_START_PICK -> meta
+    start_pick) in every session."""
+    seen = []
+
+    def mns(p, root, yt_matrix=None, matrix_id=None, select=None, seed=None, held=None, record=None):
+        seen.append((p, seed, dict(held or {})))
+        record.update(branch="deficit", state="7")
+        return "7"
+    with tempfile.TemporaryDirectory() as t:
+        spawned = []
+        rc, _ = _trio(Path(t), {"youtube": 5, "twitch": 5}, lambda cmd, env, log: spawned.append((cmd, env)) or
+                      FakeProc(50, 0, []), slots={"youtube": 1, "twitch": 2}, mns=mns)
+        assert rc == 0 and len(spawned) == 3, spawned
+        tw = [x for x in seen if x[0] == "twitch"]
+        assert [h for _, _, h in tw] == [{}, {"7": 1}] and len({sd for _, sd, _ in seen}) == 3, seen
+        for cmd, env in spawned:
+            sp = json.loads(env["LVDC_START_PICK"])
+            assert sp["initial_state"] == "7" and sp["source"] == "balance" and sp["balance"]["state"] == "7", sp
+            assert cmd[cmd.index("--initial-state") + 1] == "7"
+        assert [json.loads(e["LVDC_START_PICK"])["held"] for c, e in spawned if "twitch" in c] == [{}, {"7": 1}]
 
 
 def test_fast_episode_length_drawn_per_session():

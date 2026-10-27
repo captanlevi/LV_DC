@@ -1137,6 +1137,15 @@ if __name__ == "__main__":
                 session_meta.write(session_dir, **{meta_key: json.loads(os.environ[env_key])})
             except Exception as e:
                 session_meta.write(session_dir, **{meta_key: {"error": repr(e)}})
+    # t83 (4): the start state's rule in every session, not only in a steered one's steering block (exp.py STEERING);
+    # orchestrate's trio adds the balance draw's inputs (LVDC_START_PICK), single mode records the argv's pair
+    start_pick = {"initial_state": args.initial_state, "source": args.initial_state_source}
+    if os.environ.get("LVDC_START_PICK"):
+        try:
+            start_pick = {**json.loads(os.environ["LVDC_START_PICK"]), "argv": start_pick}
+        except Exception as e:
+            start_pick = {**start_pick, "error": repr(e)}
+    session_meta.write(session_dir, start_pick=start_pick)
     if os.environ.get("LVDC_PICK_PINNED"):   # a recorded t53 round pin (levi 00261: allowed steering if recorded)
         try:
             session_meta.write(session_dir, pick_pinned=json.loads(os.environ["LVDC_PICK_PINNED"]))
