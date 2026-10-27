@@ -289,6 +289,28 @@ def test_press_log_every_reason_and_the_stop():
     assert stop_src.index("self.resumer.stop()") < stop_src.index("_final_flush(")
 
 
+def test_press_followed_by_reload_and_playback():
+    """t83 (1), peter's re-pause read (39 tw presses, halo4 _archive/peter_t83_row1_repause/): the button cycle reloads
+    Twitch's source (playhead to ~0, readyState 1) and playback follows seconds later, after resume_press's +2.5 s
+    check reads still_paused. Each press row records the reload and the first playing poll at readyState >= 3; a row
+    with no playback after it keeps no resumed_at."""
+    assert B.RELOAD_CT_DROP_S == 5.0
+    r = B.SelfPauseResumer()
+    T = lambda t, **k: (t, {**S(buf=0.4), "ct": 342.8, **k})
+    seq = [T(t) for t in range(100, 131)]                                         # deadlock press at 130
+    seq += [T(131, ct=0.2, rs=1), T(132, paused=False, ct=0.3, rs=1)]             # reload; not playing at rs 1
+    seq += [T(138, paused=False, ct=1.0, rs=4)]                                   # playback
+    got = [(t, x["reason"]) for t, st in seq if (x := r.step(st, t))]
+    assert got == [(130, "paused_no_buffer_growth")], got
+    row = r.record()["press_log"][0]
+    assert (row["reload_at"], row["reload_ct"], row["resumed_at"], row["resumed_after_s"]) == (131, 0.2, 138, 8), row
+    r = B.SelfPauseResumer()                                                      # no reload, never plays again
+    for t, st in [T(t) for t in range(100, 131)] + [T(t, ct=340.0) for t in range(131, 200)]:
+        r.step(st, t)
+    row = r.record()["press_log"][0]
+    assert "resumed_at" not in row and "reload_at" not in row, row
+
+
 def test_js():
     st = js(B._PLAYER_STATE_JS, stall=True, ad=True, paused=True, rs=3)
     assert json.loads(st["r"]) == {"paused": True, "rs": 3, "ended": False, "ad": True, "tf": None, "stall": True, "buf": 2.0, "ct": 100}, st
@@ -416,6 +438,7 @@ def main() -> int:
     test_under_floor_flat()
     test_decision()
     test_press_log_every_reason_and_the_stop()
+    test_press_followed_by_reload_and_playback()
     test_tw_100010_replay_no_press_in_the_loops()
     test_twitch_resume_through_the_button()
     test_button_js_on_the_fixture()

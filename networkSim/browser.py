@@ -2238,6 +2238,10 @@ _TW_BUTTON_JS = """
 TW_BUTTON_CYCLE_GAP_S = 0.5     # the controller says playing over a paused element: pause, then play, through it
 
 
+RELOAD_CT_DROP_S = 5.0     # t83 (1): a playhead this far behind the press's is the source reloaded (Twitch's live-edge
+# reload sets it to ~0; a seek back of a live player does not happen in the collector)
+
+
 class SelfPauseResumer:
     """When to press play (RESUME_RULE, the comment above). A press that does not take is retried only after another
     SELF_PAUSE_HOLD_S of eligibility. Each press returns a log record with its reason, buffer and paused_s (the time
@@ -2268,6 +2272,7 @@ class SelfPauseResumer:
         self._dfa_ref = (None, None)
         self.press_log: list[dict] = []   # t83 (2): every press, any reason (deadlocks keeps the _deadlock ones), capped
         self._open_press = None       # press_log's row awaiting resume_press's outcome
+        self._unresolved: list[dict] = []   # press_log rows not yet followed by playback (t83 (1))
         self.stopped_at = None        # t83 (3): no press once the session's teardown begins (stop())
 
     def record(self) -> dict:
@@ -2289,7 +2294,23 @@ class SelfPauseResumer:
                                    "buffer_s": press.get("buffer_s"), "rs": state.get("rs"), "ct": state.get("ct"),
                                    "stall_label": bool(state.get("stall"))})
             self._open_press = self.press_log[-1]
+            self._unresolved.append(self.press_log[-1])
         return press
+
+    def _follow_presses(self, state: dict, now: float) -> None:
+        """t83 (1) (peter's re-pause read, 39 tw presses): Twitch undoes video.play(), the button cycle reloads the
+        source at the live edge (playhead to ~0, readyState 1) and playback follows seconds later, after resume_press's
+        +2.5 s check. Each press row gets the first later poll with the playhead back by > RELOAD_CT_DROP_S (reload_at,
+        reload_ct) and the first poll playing at readyState >= 3 (resumed_at, resumed_after_s); a row without
+        resumed_at at the end was not followed by playback."""
+        ct, playing = state.get("ct"), not state.get("paused") and (state.get("rs") or 0) >= 3
+        for row in list(self._unresolved):
+            if ("reload_at" not in row and ct is not None and row.get("ct") is not None
+                    and ct < row["ct"] - RELOAD_CT_DROP_S):
+                row["reload_at"], row["reload_ct"] = now, ct
+            if playing and now > row["t"]:
+                row["resumed_at"], row["resumed_after_s"] = now, round(now - row["t"], 3)
+                self._unresolved.remove(row)
 
     def note_outcome(self, rec: dict | None) -> None:
         """resume_press's outcome on the last press's press_log row (None: video.play() found no element to press)."""
@@ -2374,6 +2395,7 @@ class SelfPauseResumer:
     def step(self, state: dict | None, now: float) -> dict | None:
         paused = bool(state and state.get("paused"))
         if state is not None:
+            self._follow_presses(state, now)
             self.last_poll = (now, state)
             self._track_data_flat(state, now)
             if self.was_paused and not paused:
