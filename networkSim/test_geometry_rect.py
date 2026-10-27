@@ -212,6 +212,50 @@ def test_fullscreen():
     B._browser_call = real_bc
 
 
+def test_fullscreen_held_retries_the_chat_and_reenters_once():
+    """t83 (8), W1-W4 yt_100116 / yt_100121: the hide-chat ran once before ytd-live-chat-frame existed ("no-chat") and
+    the player stayed beside the chat. yt_fullscreen_held: a settled entry that covers the screen is kept as is;
+    otherwise the hide-chat each second until the frame is there (clicked / already) or YT_CHAT_WAIT_S, then one
+    re-entry, the first outcome and the retry recorded."""
+    assert B.YT_CHAT_WAIT_S == 30
+
+    class Page:
+        def __init__(self, chat_after):
+            self.n, self.chat_after = 0, chat_after
+
+        def eval(self, js, await_promise=False):
+            assert js is B._YT_HIDE_CHAT_JS
+            self.n += 1
+            return json.dumps({"action": "clicked" if self.chat_after is not None and self.n > self.chat_after
+                               else "no-chat"})
+    entries, sleeps = [], []
+
+    def enter(states):
+        def f(page, target_id=None):
+            entries.append(target_id)
+            return dict(states[len(entries) - 1])
+        return f
+    held = {"action": "key_f", "on": True, "player_is_screen": True}
+    beside = {"action": "key_f", "on": True, "player": [1348, 758], "player_is_screen": False,
+              "chat_hidden": {"action": "no-chat", "collapsed": None}}
+    r = B.yt_fullscreen_held(Page(0), "t1", sleep=sleeps.append, enter=enter([held]))
+    assert r == held and entries == ["t1"] and sleeps == []                        # held: no retry
+    entries.clear()
+    r = B.yt_fullscreen_held(Page(3), "t1", sleep=sleeps.append, enter=enter([beside, held]))
+    assert r["player_is_screen"] and r["retry"] == {"polls": 4, "chat": "clicked", "reentered": True}, r
+    assert r["first"]["player"] == [1348, 758] and entries == ["t1", "t1"] and sleeps == [1.0, 1.0, 1.0, 2.0], sleeps
+    entries.clear()
+    sleeps.clear()
+    r = B.yt_fullscreen_held(Page(None), None, chat_wait_s=5, sleep=sleeps.append, enter=enter([beside, beside]))
+    assert not r["player_is_screen"] and r["retry"] == {"polls": 5, "chat": "no-chat", "reentered": True}, r
+    assert len(entries) == 2 and sleeps == [1.0] * 5                              # never a second re-entry
+    entries.clear()
+    r = B.yt_fullscreen_held(Page(0), None, sleep=sleeps.append, enter=enter([{"action": "error", "error": "x"}]))
+    assert r == {"action": "error", "error": "x"} and len(entries) == 1
+    src = (Path(__file__).resolve().parent / "browser.py").read_text()
+    assert src.count("yt_fullscreen_held(self._page, target_id=tid)") == 2 and "= yt_fullscreen(self._page" not in src
+
+
 def test_fullscreen_window_and_screen_checks():
     """t37 hot-fix (shagun on yt_44: the player's fullscreen stayed inside a windowed Chrome, viewport 1818x868 on a
     1920x1080 screen): the Chrome window is set fullscreen over CDP and verified (window state + viewport covering the
@@ -299,6 +343,7 @@ def main() -> int:
     test_trio_window_origin()
     test_yt_top_quality()
     test_fullscreen_window_and_screen_checks()
+    test_fullscreen_held_retries_the_chat_and_reenters_once()
     test_device_scale_variant()
     test_fullscreen()
     if not shutil.which("node"):

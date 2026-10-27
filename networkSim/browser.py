@@ -1340,6 +1340,37 @@ def yt_fullscreen(page: "CDPPage", settle_s: float = 4.0, target_id: str | None 
         return {"action": "error", "error": repr(exc)}
 
 
+YT_CHAT_WAIT_S = 30     # t83 (8): the bounded wait for yt's live chat frame before the one re-entry
+
+
+def yt_fullscreen_held(page: "CDPPage", target_id: str | None = None, chat_wait_s: float = YT_CHAT_WAIT_S,
+                       sleep=time.sleep, enter=None) -> dict:
+    """yt_fullscreen, then (t83 (8), W1-W4 yt_100116 1348x758 / yt_100121 1400x788: the hide-chat ran once, before
+    ytd-live-chat-frame existed, "no-chat", and the player stayed beside the chat; "clicked" on all 4 that held) when
+    its settled player does not cover the screen: the hide-chat each second until the frame is there (clicked /
+    already) or chat_wait_s passes, then one re-entry. The first entry's outcome and the retry are recorded with the
+    final state (retry: polls, chat, reentered; first). Never raises."""
+    enter = enter or yt_fullscreen
+    rec = enter(page, target_id=target_id)
+    if rec.get("player_is_screen") or rec.get("action") == "error":
+        return rec
+    retry = {"polls": 0, "chat": None, "reentered": False}
+    try:
+        for _ in range(int(chat_wait_s)):
+            retry["polls"] += 1
+            retry["chat"] = json.loads(page.eval(_YT_HIDE_CHAT_JS) or "{}").get("action")
+            if retry["chat"] in ("clicked", "already"):
+                sleep(2.0)                                   # the panel's collapse before the player is re-measured
+                break
+            sleep(1.0)
+    except Exception as exc:
+        retry["error"] = repr(exc)[:200]
+    first = {k: rec.get(k) for k in ("action", "on", "player", "player_is_screen", "chat_hidden")}
+    rec = enter(page, target_id=target_id)
+    retry["reentered"] = True
+    return {**rec, "retry": retry, "first": first}
+
+
 # Window / viewport / player geometry (meta.json): the player size decides the top of yt's ladder. player_rect is the
 # largest visible <video>'s bounding rect in viewport CSS px [x, y, w, h] (supervisor 2026-10-17, brad's R-O audit: the
 # motion crop is derived per session from it, without detection); control_band is the player's own control bar where
@@ -4826,8 +4857,8 @@ class BrowserSession:
                 if mode == "theater":
                     self.player_pin["theater"] = yt_theater(self._page) if self.platform == "youtube" else "not yt"
                 if mode == "fullscreen":
-                    self.player_pin["fullscreen"] = (yt_fullscreen(self._page, target_id=tid) if self.platform == "youtube"
-                                                     else "not yt")
+                    self.player_pin["fullscreen"] = (yt_fullscreen_held(self._page, target_id=tid)
+                                                     if self.platform == "youtube" else "not yt")
             self.player_pin["geometry_target"] = self.geometry_target
             from geometry import device_scale   # a `@D` launch scale: requested beside the page's own devicePixelRatio
             self.player_pin["device_scale_requested"] = device_scale(self.geometry_target)
@@ -5675,7 +5706,7 @@ class BrowserSession:
                         tid = next((t.get("id") for t in _targets() if t.get("webSocketDebuggerUrl") == self._ws_url), None)
                     except Exception:
                         tid = None
-                    out["fullscreen"] = yt_fullscreen(self._page, target_id=tid)
+                    out["fullscreen"] = yt_fullscreen_held(self._page, target_id=tid)
             if self.platform == "twitch":
                 out["video_stats"] = self._page.eval(_TWITCH_VIDEO_STATS_JS, await_promise=True)
             if (self.entry_quality or {}).get("t_auto"):   # Q am. 10: a failed restore persists in the profile
