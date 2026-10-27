@@ -699,11 +699,26 @@ function observeVideo(v) {
   }
 }
 
+// t83 (6), W1 tw_100113 +1615.5: Twitch's 340x191 channel preview played beside the self-paused main player; the
+// playing-first pick attached it, and its video_start cleared the page's stall label. A rendered element whose box is
+// under PICK_SMALL_FRAC of the largest rendered one's is never picked while that one exists; each pick it changed is a
+// player_events record (lvqoe_pick_small_skipped, once per element).
+const PICK_SMALL_FRAC = 0.25;
+const pickSkipLogged = new WeakSet();
 function pickBestVideo() {
   // Prefer the element that is actually playing over the first one in DOM
   // order — after an element swap the dead one often remains in the DOM.
   const candidates = [...document.querySelectorAll("video")];
-  return candidates.find((x) => !x.paused && !x.ended) ?? candidates[0] ?? null;
+  const area = (x) => (x.clientWidth || 0) * (x.clientHeight || 0);
+  const maxArea = Math.max(0, ...candidates.map(area));
+  const ok = candidates.filter((x) => !(area(x) > 0 && area(x) < PICK_SMALL_FRAC * maxArea));
+  const pick = ok.find((x) => !x.paused && !x.ended) ?? ok[0] ?? null;
+  const old = candidates.find((x) => !x.paused && !x.ended) ?? candidates[0] ?? null;
+  if (old && old !== pick && !pickSkipLogged.has(old)) {
+    pickSkipLogged.add(old);
+    playerEvent(old, "lvqoe_pick_small_skipped", { area: area(old), max_area: maxArea, picked_el: elId(pick) });
+  }
+  return pick;
 }
 
 function attachVideo(v, reason = "unknown") {
