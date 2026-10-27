@@ -162,8 +162,15 @@ _SKIP_AD_JS: dict[str, str] = {
             // a skip button can be visible while its countdown runs (clicks do nothing): after 2 clicks with the ad still
             // showing, fall through to fast-forward (laptop probe 2026-10-16)
             const tries = mp ? Number(mp.dataset.lvqoeSkipTries || 0) : 0;
-            const canFF = v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d && v.currentTime < v.duration - 0.25;
+            // t83 (11), W7 yt_100138 (levi 03:14): a fast-forward at readyState 1, 0.8 s after the ad's loadedmetadata,
+            // left the element paused at its own end with yt never leaving the ad; never below readyState 2, and each
+            // fast-forward's element state stashed for the log (dataset.lvqoeFf)
+            const ffStash = () => { document.documentElement.dataset.lvqoeFf = JSON.stringify(
+                {rs: v.readyState, ct: v.currentTime, dur: v.duration, paused: v.paused}); };
+            const canFF = v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d && v.currentTime < v.duration - 0.25
+                          && v.readyState >= 2;
             if (tries >= 2 && canFF) {
+                ffStash();
                 v.currentTime = v.duration; v.play().catch(() => {});
                 if (mp) mp.dataset.lvqoeSkipTries = '0';
                 return 'fast-forwarded-after-skip' + tag;
@@ -183,8 +190,9 @@ _SKIP_AD_JS: dict[str, str] = {
                 if (label.includes('skip')) { b.click(); if (mp) { mp.dataset.lvqoeSkipTries = String(tries + 1); mp.dataset.lvqoeFutile = String(futile + 1); } return 'text-skipped' + tag; }
             }
             // 2. fast-forward a finite ad to its end
-            if (v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d) {
+            if (v && isFinite(v.duration) && v.duration > 0 && v.duration < %(max_dur)d && v.readyState >= 2) {
                 if (v.currentTime < v.duration - 0.25) {
+                    ffStash();
                     v.currentTime = v.duration;
                     v.play().catch(() => {});
                     return 'fast-forwarded' + tag;
@@ -3306,6 +3314,12 @@ AD_NO_PLAYER_MAX_S = 60.0
 AD_FROZEN_MAX_S = 60.0
 AD_FROZEN_TOL_S = 0.05
 SKIP_FUTILE_CLICKS = 10      # levi 00176 (2b): yt's skip loop stops after this many clicks with the ad unchanged
+# t83 (11), W7 yt_100138 (levi 03:14): the ad element paused at its own end (ct = dur, ended false, readyState 1) and yt
+# never left the ad: 393 s of skip_futile to the session's end, the ad_frozen clock held by the low state all along. An
+# ad state with skip_futile for AD_END_STUCK_S over a paused element at its end (ct >= dur - AD_END_TOL_S) is a fourth
+# trigger, ad_stuck_at_end, never held (levi: recover as the stuck-player re-entry does); the hold's state is recorded.
+AD_END_STUCK_S = 30.0
+AD_END_TOL_S = 0.25
 PLAYER_ERROR_PLATFORMS = ("youtube", "twitch")
 LOWSTATE_FREE_MAX = 3      # levi 11:48: at most this many low-state error_page re-entries skip the one recovery
 _PLAYER_ERROR_JS = """
@@ -3352,7 +3366,8 @@ _AD_PLAYER_JS = """
         cd = m ? m[1] : null;
     }
     return JSON.stringify({ad: document.documentElement.dataset.lvqoeAd === '1', video: !!v, rs: v ? v.readyState : null,
-                           ct: v ? v.currentTime : null, paused: v ? v.paused : null, cd: cd});
+                           ct: v ? v.currentTime : null, paused: v ? v.paused : null, cd: cd,
+                           dur: v && isFinite(v.duration) ? v.duration : null});
 })()
 """
 
@@ -3420,6 +3435,14 @@ class PlayerErrorWatch:
                 self.stk_since, self.stk_ct, self.stk_cd, self.stk_st = now, ct, cd, dict(st or {})
         else:
             self._close_stuck(now)
+        dur = (st or {}).get("dur")
+        if (ad and self.skip_futile_since is not None and now - self.skip_futile_since >= AD_END_STUCK_S
+                and (st or {}).get("paused") and isinstance(ct, (int, float)) and isinstance(dur, (int, float))
+                and ct >= dur - AD_END_TOL_S):
+            trig = {"reason": "ad_stuck_at_end", "since": self.skip_futile_since, "t_trigger": now, "error": err,
+                    "player": st, "skip_futile": True, "held": bool(self.held_fn and self.held_fn(now))}
+            self._close_stuck(now)
+            return trig
         if ad and not no_player and isinstance(ct, (int, float)):     # an unread playhead is no evidence of a freeze
             held = bool(self.held_fn and self.held_fn(now))       # levi 10:27: the ad_frozen clock holds in low states
             moved = (held or self.fz_since is None or cd != self.fz_cd or self.fz_ct is None
@@ -3726,9 +3749,16 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
             result = page.eval(skip_js)
             if result:
                 print(f"[browser] Ad action: {result}", flush=True)
+                ff = None
+                if str(result).startswith("fast-forwarded"):     # t83 (11): the element's state at the fast-forward
+                    try:
+                        ff = json.loads(page.eval("document.documentElement.dataset.lvqoeFf || 'null'") or "null")
+                    except Exception as exc:
+                        ff = {"error": repr(exc)[:120]}
                 if log_path is not None:
                     with open(log_path, "a") as fh:
-                        fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": result}) + "\n")
+                        fh.write(json.dumps({"ts": time.time(), "platform": platform, "action": result,
+                                             **({"ff": ff} if ff is not None else {})}) + "\n")
                 if str(result).startswith("skip_futile") and error_watch is not None \
                         and error_watch.skip_futile_since is None:    # levi 14:35: the re-entry is tagged with it
                     error_watch.skip_futile_since = time.time()

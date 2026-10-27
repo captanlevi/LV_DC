@@ -34,11 +34,14 @@ const cfg = JSON.parse(process.argv[2]);
 const ds = {};
 const mp = {classList: {contains: c => cfg.showing && c === 'ad-showing'}, dataset: ds,
             querySelectorAll: () => []};
-const v = {duration: cfg.duration, currentTime: 10, muted: false, dataset: {}, play() { return Promise.resolve(); }};
+const v = {duration: cfg.duration, currentTime: 10, muted: false, dataset: {}, readyState: cfg.rs, paused: false,
+           play() { return Promise.resolve(); }};
+const root = {dataset: {}};
 let clicks = 0, n = 0;
 const btn = {offsetParent: {}, disabled: false, click() { clicks++; }};
 const cdEl = {get textContent() { return cfg.cd_changes ? ('0:' + (30 - n)) : '0:21'; }};
 global.document = {
+  documentElement: root,
   getElementById: id => id === 'movie_player' ? mp : null,
   querySelector: s => {
     if (s === '#movie_player video' || s === 'video') return v;
@@ -50,12 +53,12 @@ global.document = {
 };
 const out = [];
 for (n = 0; n < cfg.calls; n++) out.push(eval(process.argv[1]));
-console.log(JSON.stringify({out, clicks}));
+console.log(JSON.stringify({out, clicks, ff: root.dataset.lvqoeFf ? JSON.parse(root.dataset.lvqoeFf) : null}));
 """
 
 
 def skip_js(**cfg):
-    cfg = {"showing": True, "duration": 3600, "button": True, "cd_changes": False, "calls": 15, **cfg}
+    cfg = {"showing": True, "duration": 3600, "button": True, "cd_changes": False, "calls": 15, "rs": 4, **cfg}
     r = subprocess.run([shutil.which("node"), "-e", SKIP_STUB, B._SKIP_AD_JS["youtube"], json.dumps(cfg)],
                        capture_output=True, text=True, check=True)
     return json.loads(r.stdout)
@@ -171,10 +174,56 @@ def test_a_held_clock_still_records_the_stuck_span_and_a_moving_ad_records_none(
     assert w2.ad_stuck_runs == []
 
 
+def test_no_fast_forward_below_readystate_2_and_its_state_logged():
+    """t83 (11), W7 yt_100138 (levi 03:14): the second fast-forward came 0.8 s after the ad's loadedmetadata at
+    readyState 1 and left the element paused at its end. Neither fast-forward (after two skip clicks; a finite ad) runs
+    below readyState 2; each one stashes the element's state (dataset.lvqoeFf) for the ad log's ff field."""
+    for rs in (0, 1):
+        r = skip_js(duration=18.881, button=False, rs=rs, calls=3)
+        assert not any(str(x).startswith("fast-forwarded") for x in r["out"]) and r["ff"] is None, r
+        r = skip_js(duration=18.881, button=True, rs=rs, calls=5)
+        assert not any(str(x).startswith("fast-forwarded") for x in r["out"]) and r["ff"] is None, r
+    r = skip_js(duration=18.881, button=False, rs=2, calls=1)
+    assert r["out"][0].startswith("fast-forwarded [") and r["ff"] == {"rs": 2, "ct": 10, "dur": 18.881, "paused": False}, r
+    r = skip_js(duration=18.881, button=True, rs=4, calls=3)
+    assert r["out"][2].startswith("fast-forwarded-after-skip") and r["ff"]["rs"] == 4, r
+
+
+def test_an_ad_stuck_at_its_end_re_enters_30_s_into_skip_futile():
+    """t83 (11), W7 yt_100138: the element paused at its own end (ct = dur 18.881, ended false, readyState 1), 393 s of
+    skip_futile to the session's end, the ad_frozen clock held by the low state. ad_stuck_at_end fires AD_END_STUCK_S
+    after skip_futile began over a paused element at its end, held or not (the hold recorded); never on a playing
+    element, one short of its end, or without skip_futile."""
+    assert (B.AD_END_STUCK_S, B.AD_END_TOL_S) == (30.0, 0.25)
+    st = {"ad": True, "video": True, "rs": 1, "ct": 18.881, "paused": True, "cd": None, "dur": 18.881}
+    for held in (True, False):
+        w = B.PlayerErrorWatch()
+        w.held_fn = lambda t, h=held: h
+        trig = None
+        for t in range(0, 60):
+            if t == 5:
+                w.skip_futile_since = 1000.0 + t
+            trig = w.step(None, dict(st), 1000.0 + t)
+            if trig:
+                break
+        assert trig and trig["reason"] == "ad_stuck_at_end" and trig["t_trigger"] == 1035.0, trig
+        assert trig["since"] == 1005.0 and trig["held"] is held and trig["player"]["dur"] == 18.881, trig
+    for other in ({"paused": False}, {"ct": 18.5}, {"dur": None}):
+        w = B.PlayerErrorWatch()
+        w.held_fn = lambda t: True
+        w.skip_futile_since = 1000.0
+        assert all(w.step(None, {**st, **other}, 1000.0 + t) is None for t in range(0, 120)), other
+    w = B.PlayerErrorWatch()
+    w.held_fn = lambda t: True
+    assert all(w.step(None, dict(st), 1000.0 + t) is None for t in range(0, 120))      # no skip_futile: none
+
+
 def test_wiring():
     src = (HERE / "browser.py").read_text()
     assert "self.error_watch.held_fn = self._ad_frozen_held" in src
     assert 'str(result).startswith("skip_futile")' in src
+    assert 'str(result).startswith("fast-forwarded")' in src and "dataset.lvqoeFf" in src
+    assert "dur: v && isFinite(v.duration) ? v.duration : null" in B._AD_PLAYER_JS
 
 
 def main() -> int:
@@ -186,6 +235,8 @@ def main() -> int:
     test_the_ad_frozen_hold_lifts_while_paused_with_data()
     test_yt_100003_re_enters_about_a_minute_after_the_lift_and_records_the_stuck_span()
     test_a_held_clock_still_records_the_stuck_span_and_a_moving_ad_records_none()
+    test_no_fast_forward_below_readystate_2_and_its_state_logged()
+    test_an_ad_stuck_at_its_end_re_enters_30_s_into_skip_futile()
     test_wiring()
     print("test_ad_set: ok")
     return 0

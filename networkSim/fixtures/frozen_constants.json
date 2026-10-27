@@ -1527,6 +1527,8 @@
   ]
  },
  "player_error": {
+  "AD_END_STUCK_S": 30.0,
+  "AD_END_TOL_S": 0.25,
   "AD_FROZEN_MAX_S": 60.0,
   "AD_FROZEN_TOL_S": 0.05,
   "AD_NO_PLAYER_MAX_S": 60.0,

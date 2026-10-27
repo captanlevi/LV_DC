@@ -103,6 +103,7 @@ def current() -> dict:
                     "LADDER_PROBE_ATTEMPTS": B.LADDER_PROBE_ATTEMPTS, "MENU_OVERLAY_S": CS.MENU_OVERLAY_S},
         "player_error": {"ERROR_PAGE_CONFIRM_S": B.ERROR_PAGE_CONFIRM_S, "AD_NO_PLAYER_MAX_S": B.AD_NO_PLAYER_MAX_S,
                          "AD_FROZEN_MAX_S": B.AD_FROZEN_MAX_S, "AD_FROZEN_TOL_S": B.AD_FROZEN_TOL_S,
+                         "AD_END_STUCK_S": B.AD_END_STUCK_S, "AD_END_TOL_S": B.AD_END_TOL_S,     # t83 (11)
                          "PLAYER_ERROR_PLATFORMS": B.PLAYER_ERROR_PLATFORMS},
         "join": {"JOIN_BASE_S": B.JOIN_BASE_S, "JOIN_CAP_S": B.JOIN_CAP_S, "JOIN_BYTES": B.JOIN_BYTES,     # B9
                  "JOIN_RX_MIN_BYTES": B.JOIN_RX_MIN_BYTES,
