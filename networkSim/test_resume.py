@@ -252,6 +252,43 @@ def test_decision():
     assert rec["presses"] == len(p) and rec["held_polls"]["backoff"] == 9 and rec["rule"] == B.RESUME_RULE, rec
 
 
+def test_press_log_every_reason_and_the_stop():
+    """t83 (2): every press, the self_pause branch included (deadlocks holds the _deadlock presses only), is one
+    press_log row with its poll and resume_press's outcome. t83 (3), s1 tw_100001: after stop() (exp.py, before
+    meta.json's snapshot; browser.stop) no press, the paused polls held as "stopping"."""
+    r = B.SelfPauseResumer()
+    seq = [(t, S()) for t in range(10, 13)]                                       # self_pause at 12
+    seq += [(13, S(paused=False))] + [(t, {**S(buf=0.4), "ct": 105.0}) for t in range(30, 61)]   # deadlock at 60
+    got = []
+    for t, st in seq:
+        x = r.step(st, t)
+        if x:
+            got.append((t, x["reason"]))
+            r.note_outcome({**x, "via": "video_play", "outcome": "re_paused", "button_outcome": "still_paused",
+                            "gave_up": False} if t == 12 else None)
+    assert got == [(12, "self_pause"), (60, "paused_no_buffer_growth")], got
+    log = r.record()["press_log"]
+    assert [(x["t"], x["reason"], x["paused_since"], x["rs"]) for x in log] == \
+        [(12, "self_pause", 10, 4), (60, "paused_no_buffer_growth", 30, 4)], log
+    assert log[0]["outcome"] == "re_paused" and log[0]["button_outcome"] == "still_paused" and log[0]["via"] == "video_play"
+    assert log[1]["outcome"] == "not_pressed" and log[1]["ct"] == 105.0 and log[1]["buffer_s"] == 0.4, log
+    assert len(r.record()["deadlocks"]) == 1 and r.record()["presses"] == 2 and r.record()["stopped_at"] is None
+    r.note_outcome({"outcome": "playing"})                                         # no open press: nothing written
+    assert "playing" not in [x.get("outcome") for x in r.record()["press_log"]]
+    r = B.SelfPauseResumer()
+    r.stop(11.5)
+    r.stop(20)                                                                     # the first stop's time is kept
+    assert presses([(t, S()) for t in range(10, 40)], r) == []
+    rec = r.record()
+    assert rec["stopped_at"] == 11.5 and rec["held_polls"]["stopping"] == 30 and rec["press_log"] == [], rec
+    src = (HERE / "exp.py").read_text()
+    i, j = src.index("browser.resumer.stop()"), src.index("self_pause_resume=browser.resumer.record()")
+    assert i < j < src.index("browser.stop()"), (i, j)
+    bsrc = (HERE / "browser.py").read_text()
+    stop_src = bsrc[bsrc.index("    def stop(self) -> None:\n        self.resumer.stop()"):]
+    assert stop_src.index("self.resumer.stop()") < stop_src.index("_final_flush(")
+
+
 def test_js():
     st = js(B._PLAYER_STATE_JS, stall=True, ad=True, paused=True, rs=3)
     assert json.loads(st["r"]) == {"paused": True, "rs": 3, "ended": False, "ad": True, "tf": None, "stall": True, "buf": 2.0, "ct": 100}, st
@@ -378,6 +415,7 @@ def main() -> int:
     test_t79_tt_dry_pause()
     test_under_floor_flat()
     test_decision()
+    test_press_log_every_reason_and_the_stop()
     test_tw_100010_replay_no_press_in_the_loops()
     test_twitch_resume_through_the_button()
     test_button_js_on_the_fixture()

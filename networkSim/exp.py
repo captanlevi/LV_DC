@@ -1394,6 +1394,7 @@ if __name__ == "__main__":
         channel_url = None
         meta_extra = {"window_size_flag": WINDOW_SIZES.get(platform)}
         if browser is not None:
+            browser.resumer.stop()             # t83 (3): the press record below is final (s1 tw_100001's teardown press)
             channel_url = browser.channel_url
             meta_extra.update(chat_action=browser.chat_action, caption_action=browser.caption_action,
                               geometry=browser.geometry, player_pin=browser.player_pin,

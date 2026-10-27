@@ -2266,11 +2266,40 @@ class SelfPauseResumer:
         # over a paused, buffered element); the press trigger's run above keeps excluding ads
         self.data_flat_any_since = None
         self._dfa_ref = (None, None)
+        self.press_log: list[dict] = []   # t83 (2): every press, any reason (deadlocks keeps the _deadlock ones), capped
+        self._open_press = None       # press_log's row awaiting resume_press's outcome
+        self.stopped_at = None        # t83 (3): no press once the session's teardown begins (stop())
 
     def record(self) -> dict:
         return {"rule": RESUME_RULE, "hold_s": self.hold_s, "min_buffer_s": self.min_buffer_s,
                 "backoff_s": self.backoff_s, "presses": self.presses, "held_polls": dict(sorted(self.held.items())),
-                "deadlock_s": PAUSE_DEADLOCK_S, "deadlocks": self.deadlocks[:WATCH_LOG_MAX]}
+                "deadlock_s": PAUSE_DEADLOCK_S, "deadlocks": self.deadlocks[:WATCH_LOG_MAX],
+                "press_log": [dict(r) for r in self.press_log[:WATCH_LOG_MAX]], "stopped_at": self.stopped_at}
+
+    def stop(self, now: float | None = None) -> None:
+        """t83 (3), s1 tw_100001: the teardown pressed after meta.json's snapshot. From here step() presses nothing
+        (its paused polls are held as "stopping"); the first call's time is kept."""
+        if self.stopped_at is None:
+            self.stopped_at = time.time() if now is None else now
+
+    def _logged(self, press: dict, state: dict, now: float) -> dict:
+        """t83 (2): the press into press_log with its poll (resume_press adds the outcome); the press returned."""
+        if len(self.press_log) < WATCH_LOG_MAX:
+            self.press_log.append({"t": now, "reason": press["reason"], "paused_since": self.paused_since,
+                                   "buffer_s": press.get("buffer_s"), "rs": state.get("rs"), "ct": state.get("ct"),
+                                   "stall_label": bool(state.get("stall"))})
+            self._open_press = self.press_log[-1]
+        return press
+
+    def note_outcome(self, rec: dict | None) -> None:
+        """resume_press's outcome on the last press's press_log row (None: video.play() found no element to press)."""
+        row, self._open_press = self._open_press, None
+        if row is None:
+            return
+        if rec is None:
+            row["outcome"] = "not_pressed"
+            return
+        row.update({k: rec[k] for k in ("via", "outcome", "button_outcome", "gave_up") if k in rec})
 
     def stuck_frozen_s(self, now: float) -> float:
         """The pause as a frozen run for the stuck-player rule once the deadlock press has not taken within
@@ -2359,9 +2388,12 @@ class SelfPauseResumer:
             return None
         if self.paused_since is None:
             self.paused_since = now
+        if self.stopped_at is not None:
+            self.held["stopping"] += 1
+            return None
         dl = self._deadlock(state, now)
         if dl is not None:
-            return dl
+            return self._logged(dl, state, now)
         if self.gave_up:
             return None
         buf = state.get("buf")
@@ -2379,8 +2411,8 @@ class SelfPauseResumer:
             return None
         self.eligible_since = now                        # retry only after another hold
         self.presses += 1
-        return {"action": "resume_after_self_pause", "reason": "self_pause", "buffer_s": buf,
-                "paused_s": round(now - self.paused_since, 3)}
+        return self._logged({"action": "resume_after_self_pause", "reason": "self_pause", "buffer_s": buf,
+                             "paused_s": round(now - self.paused_since, 3)}, state, now)
 
 
 def resume_press(page, platform: str, resumer: "SelfPauseResumer", press: dict, wait) -> dict | None:
@@ -3631,6 +3663,7 @@ def _ad_watcher_loop(page: CDPPage, platform: str, stop: threading.Event, log_pa
             press = resumer.step(json.loads(page.eval(_PLAYER_STATE_JS) or "null"), now)
             if press:
                 rec = resume_press(page, platform, resumer, press, stop.wait)
+                resumer.note_outcome(rec)
                 if rec is not None and log_path is not None:
                     with open(log_path, "a") as fh:
                         fh.write(json.dumps({"ts": now, "platform": platform, **rec}) + "\n")
@@ -5704,6 +5737,7 @@ class BrowserSession:
         return True
 
     def stop(self) -> None:
+        self.resumer.stop()                        # t83 (3): no press in the teardown (exp.py stops it before meta too)
         k = FS_KEEP.pop("keeper", None)                 # t53 (a): the keeper ends with the session, its record kept
         if k is not None:
             k.stop()
