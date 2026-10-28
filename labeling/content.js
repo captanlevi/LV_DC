@@ -322,6 +322,8 @@ function frameLogArm() {
 let ltN = 0;
 let ltMax = 0;
 let ltOk = false;
+let tickPn0 = null;
+let ltTOver = 0;
 const ltT = [];                            // SCRATCH t91: long-task start / duration (ms, performance.now), <= 50 per tick
 let mseOver = null;
 let mseInst = null;
@@ -340,6 +342,7 @@ function frameLogListen() {
         for (const e of list.getEntries()) {   // SCRATCH t91: every tick, with start times
           ltN += 1; if (e.duration > ltMax) ltMax = e.duration;
           if (ltT.length < 100) ltT.push(Math.round(e.startTime * 10) / 10, Math.round(e.duration * 10) / 10);
+          else ltTOver += 1;
         }
       }).observe({ type: "longtask" });
       ltOk = true;
@@ -447,7 +450,13 @@ function frameLogBuild(md, q, v) {
     }
   }
   if (!frameLogOn && ltOk) fl.lt_off = { n: ltN, max_ms: Math.round(ltMax * 10) / 10 };   // SCRATCH t91 G7 (dev only, never frozen)
-  if (ltOk) { fl.lt_t = ltT.splice(0, ltT.length); fl.tick_pn = Math.round(performance.now() * 10) / 10; }   // SCRATCH: [start, dur] pairs, tick dispatch
+  if (ltOk) {                               // SCRATCH: flat [start, dur, ...] pairs; tick_pn0 handler entry, tick_pn at fl build
+    fl.lt_t = ltT.splice(0, ltT.length);
+    fl.lt_t_over = ltTOver;
+    ltTOver = 0;
+    fl.tick_pn0 = tickPn0 === null ? null : Math.round(tickPn0 * 10) / 10;
+    fl.tick_pn = Math.round(performance.now() * 10) / 10;
+  }
   ltN = 0;
   ltMax = 0;
   framePushErr = 0;
@@ -1016,6 +1025,7 @@ setInterval(flushSide, FLUSH_INTERVAL_MS);                 // v3: the side strea
 
 // Resolution polling — records current dimensions once per second
 setInterval(() => {
+  tickPn0 = performance.now();              // SCRATCH t91 (levi 09:20): the tick handler's entry
   // Detachment recovery: if our element left the DOM (platform swapped the
   // player), re-attach to the live one instead of polling a dead reference.
   if (video && !video.isConnected) {
