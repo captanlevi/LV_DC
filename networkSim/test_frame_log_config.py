@@ -188,10 +188,12 @@ def test_tcp_state_sampler():
         rows = [json.loads(x) for x in (Path(t) / "tcp_state.jsonl").read_text().splitlines()]
         assert len(rows) == 1 and rows[0]["flows"][1].endswith("retrans:0/2")
         arm["on"] = True
+        smp.run = lambda cmd, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        assert smp.sample()["n"] == 0                                           # absent path: no TCP flow (QUIC only)
         smp.run = lambda cmd, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr="unknown filter cgroup")
         assert smp.sample() is None and smp._stop.is_set()                      # recorded once, the sampler stops
         st = smp.stop()
-        assert (st["samples"], st["off_samples"], st["error"]) == (1, 1, "rc 1: unknown filter cgroup")
+        assert (st["samples"], st["off_samples"], st["error"]) == (2, 1, "rc 1: unknown filter cgroup")
         assert st["scope"].startswith("TCP only")
     src = (HERE / "exp.py").read_text()
     assert "trio_slots.TcpStateSampler(session_dir, SLOT," in src and 'browser.frame_log["tcp_state"] = tcp_state.stop()' in src

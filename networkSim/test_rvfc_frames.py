@@ -40,7 +40,9 @@ const cfgFor = { off: { lvqoe_config: { instruments: false } },     // t91: fram
                  flalt: { lvqoe_config: { frame_log: { block_s: 1, t0: 5e11 } } },
                  flcap: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
                  flfull: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
-                 flthrow: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } } };
+                 flthrow: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
+                 flbare: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } } };
+const bare = mode === "flbare";             // t93 absent paths: a browser without longtask / connection, no page event
 const timers = [], side = [], sent = [];
 let now = 1000;
 class MediaStream {}
@@ -68,8 +70,9 @@ const ctx = {
               cb && cb({ ok: true }); } } },
   addEventListener(t, f) { (winL[t] = winL[t] || []).push(f); },
   getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
-  navigator: { connection: { downlink: 9.5, rtt: 50, effectiveType: "4g", saveData: false } },
-  PerformanceObserver: class { constructor(f) { ltCb.push(f); } observe() {} static get supportedEntryTypes() { return ["longtask"]; } },
+  navigator: bare ? {} : { connection: { downlink: 9.5, rtt: 50, effectiveType: "4g", saveData: false } },
+  PerformanceObserver: bare ? undefined
+    : class { constructor(f) { ltCb.push(f); } observe() {} static get supportedEntryTypes() { return ["longtask"]; } },
 };
 const winL = {}, docL = {}, ltCb = [];
 ctx.window = ctx; ctx.window.top = ctx;
@@ -116,7 +119,7 @@ const present = (n, w, h) => { for (let i = 0; i < n; i++) {
   try { f(now, md); } catch (e) { thrown.push(String(e)); } } };
 const tick = () => { now += 1; for (const t of timers) t(); };
 present(30, 720, 1280);
-if (mode.startsWith("fl")) {                // t93: a long task and two page events inside the first (ON) tick
+if (mode.startsWith("fl") && !bare) {      // t93: a long task and two page events inside the first (ON) tick
   for (const f of ltCb) f({ getEntries: () => [{ duration: 72.5 }, { duration: 51 }] });
   ctx.document.hidden = true; ctx.document.visibilityState = "hidden"; for (const f of docL.visibilitychange || []) f();
   for (const f of winL.blur || []) f();
@@ -249,6 +252,20 @@ def test_frame_log():
     assert not any("fl" in x for x in off)
 
 
+def test_frame_log_absent_paths():
+    """t93 rows' absent paths (levi 23:22 (2)): no longtask support -> lt null; no navigator.connection -> conn {}; no
+    getVideoPlaybackQuality extras / webkit counters -> q / wk {}; no page event -> no lvqoe_page; no MSE message (tw,
+    tt, an unwrapped yt document) -> no mse_inst / mse_over; no metadata field -> its column absent. Never 0, never err."""
+    r = run("flbare")
+    fl = [x["fl"] for x in _frames(r) if x["k"] == "tick"]
+    assert [f["n"] for f in fl] == [30, 15, 0, 3]
+    for f in fl:
+        assert f["lt"] is None and f["conn"] == {} and f["q"] == {} and f["wk"] == {}, f
+        assert not any(k in f for k in ("mse_inst", "mse_over", "err", "push_err")), f
+        assert set(f["c"]) <= {"el", "pt", "edt", "mt", "pf", "w", "h", "now"}
+    assert not [x for m in r["side"] if m["stream"] == "player_events" for x in m["payload"] if x["ev"] == "lvqoe_page"]
+
+
 def test_frame_log_cb_throw():
     """levi 23:51 (1): a throw in the rVFC callback never ends the chain (the re-request is in finally); a fault inside
     frameLogPush is contained: that frame's row is not kept, fl.push_err counts it, fl.err names it."""
@@ -273,6 +290,7 @@ def test_frame_log_exact_over_length():
 
 def main() -> int:
     test_rvfc_frames()
+    test_frame_log_absent_paths()
     test_frame_log_cb_throw()
     test_frame_log_exact_over_length()
     test_frame_log()

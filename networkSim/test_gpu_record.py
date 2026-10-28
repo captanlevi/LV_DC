@@ -239,6 +239,11 @@ def test_host_state_on_blocks_only():
             (p / "temp").write_text(f"{mc}\n")
         hs = G.host_state(str(Path(d) / "cpu/cpu*/cpufreq/scaling_cur_freq"), str(Path(d) / "thermal/thermal_zone*"))
         assert hs == {"cpu_khz": [2400000, 800000, 3100000], "thermal_mc": {"zone0:acpitz": 45000, "zone1:x86_pkg_temp": 61000}}
+        (Path(d) / "cpu/cpu1/cpufreq/scaling_cur_freq").write_text("")          # absent paths: unreadable -> null
+        (Path(d) / "thermal/thermal_zone1/temp").unlink()
+        hs = G.host_state(str(Path(d) / "cpu/cpu*/cpufreq/scaling_cur_freq"), str(Path(d) / "thermal/thermal_zone*"))
+        assert hs["cpu_khz"] == [2400000, None, 3100000] and hs["thermal_mc"]["zone1:x86_pkg_temp"] is None
+        assert G.host_state(str(Path(d) / "none/*"), str(Path(d) / "none/*")) == {"cpu_khz": [], "thermal_mc": {}}
     assert (G.frame_log_block("1"), G.frame_log_block("alt60"), G.frame_log_block(None), G.frame_log_block("alt0")) == (0, 60, None, None)
     assert G.frame_log_on(0, 5.0) and G.frame_log_on(60, 65.0) and not G.frame_log_on(60, 125.0) and not G.frame_log_on(None, 65.0)
     slots = lambda types=None: {}
