@@ -1671,6 +1671,36 @@ def _set_download_dir(page: CDPPage, download_path: str) -> None:
     })
 
 
+# t91 (rushi 2026-10-28; levi 17:4x, boundary 3): content.js's per-frame rVFC log (the tick row's field fl), dry only
+# until its instrumentation check passes. LVQOE_FRAME_LOG: unset or "0" off (no config, no meta key: the session as
+# without it); "1" on; "alt<N>" alternating OFF / ON blocks of N s (levi's check: the OFF blocks are the control spread).
+# Never on a counted run or under a marked record root, whatever the env says (recorded as refused).
+FRAME_LOG_ENV = "LVQOE_FRAME_LOG"
+
+
+def frame_log_config(raw: str | None, session_dir: Path | None, of_record: bool, instruments: bool,
+                     now_ms: int | None = None) -> dict | None:
+    """meta.json frame_log: None when off; else what was asked and whether it runs ({enabled, block_s, t0} or a reason)."""
+    raw = (raw or "").strip()
+    if raw in ("", "0"):
+        return None
+    out: dict = {"requested": raw, "enabled": False}
+    if raw == "1":
+        block_s = 0
+    elif raw.startswith("alt") and raw[3:].isdigit() and int(raw[3:]) > 0:
+        block_s = int(raw[3:])
+    else:
+        return {**out, "reason": "unparsed (1 or alt<N>)"}
+    import data_root
+    marked = session_dir is not None and any((a / data_root.RECORD_MARKER).is_file()
+                                             for a in (Path(session_dir).resolve(), *Path(session_dir).resolve().parents))
+    if of_record or marked:
+        return {**out, "reason": "of record" if of_record else "under a record root"}
+    if not instruments:
+        return {**out, "reason": "instruments off"}
+    return {**out, "enabled": True, "block_s": block_s, "t0": int(now_ms if now_ms is not None else time.time() * 1000)}
+
+
 def _side_streams(store: dict) -> dict[str, list]:
     """v3 (t67 A2): the extension's side-stream batches (chrome.storage.local keys side:<stream>:<ms>:<seq>, one per
     batch) joined per stream in key order, i.e. arrival order."""
@@ -4555,6 +4585,8 @@ class BrowserSession:
         # v3 (t67; levi 18:33): content.js's whole v3 instrument set (A1 / A2 / A3 / A7), on unless LVQOE_INSTRUMENTS=0
         # (the gate's instrumentation A/B off arm); meta.json instruments
         self.instruments = {"enabled": os.environ.get("LVQOE_INSTRUMENTS", "1") != "0", "config_set": False}
+        self.frame_log = frame_log_config(os.environ.get(FRAME_LOG_ENV), session_dir,      # t91: meta.json frame_log
+                                          os.environ.get("LVDC_TRIO_RECORD") == "1", self.instruments["enabled"])
         self.screen: dict | None = None             # v3 A8: meta.json screen
         self.clock_offsets: list = []               # v3 A11: meta.json clock_offsets (time.time vs the page clock)
         self.player_errors: list[dict] = []         # its triggers and their outcome (meta.json)
@@ -4734,7 +4766,9 @@ class BrowserSession:
                 sw.eval("new Promise(r => chrome.storage.local.get(null, d => chrome.storage.local.remove("
                         "Object.keys(d).filter(k => k.startsWith('side:')), r)))", await_promise=True)
                 sw.eval("new Promise(r => chrome.storage.local.set({lvqoe_config: %s}, r))"
-                        % json.dumps({"instruments": self.instruments["enabled"]}), await_promise=True)
+                        % json.dumps({"instruments": self.instruments["enabled"],
+                                      **({"frame_log": {k: self.frame_log[k] for k in ("block_s", "t0")}}
+                                         if self.frame_log and self.frame_log["enabled"] else {})}), await_promise=True)
                 self.instruments["config_set"] = True
                 sw.close()
                 _close_target(tmp_tab)

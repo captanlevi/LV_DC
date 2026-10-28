@@ -284,6 +284,35 @@ function observePlayerEvents(v) {
 // last frame's mediaTime / presentationTime and the callbacks since the last tick; (c) the first presented frame after
 // an attach or a src_key change (tt's per-stream anchor: a MediaStream's mediaTime restarts per stream). The callback
 // only reads metadata.
+// t91 (rushi 2026-10-28; levi 17:4x, boundary 3): the per-frame log, dry only until its instrumentation check passes.
+// lvqoe_config.frame_log ({block_s, t0}, browser.py from LVQOE_FRAME_LOG; absent: off and no field, the tick row as
+// before) turns it on: the rVFC callback appends each presented frame [el, pt, mt, pf, edt] (+ w, h when the element's
+// dims change) to one array and does nothing else; each tick row carries the rows since the last tick in its field fl
+// {seq, on, rows, over} and the array is cleared there (no message per frame). block_s > 0 alternates OFF / ON blocks
+// of block_s s from t0 (even blocks OFF): the instrumentation check's arms, fixed per tick. Past FRAME_LOG_MAX rows in
+// one tick a frame is counted (over, cumulative), never kept; each row's pf shows a frame skipped between callbacks.
+const FRAME_LOG_MAX = 1200;
+let frameLogCfg = null;
+let frameLogOn = false;
+let frameRows = [];
+let frameOver = 0;
+let frameSeq = 0;
+function frameLogArm() {
+  const b = frameLogCfg.block_s;
+  return !(b > 0) || Math.floor((Date.now() - frameLogCfg.t0) / (b * 1000)) % 2 === 1;
+}
+function frameLogConfigure(c) {
+  if (!c || typeof c !== "object") return;
+  frameLogCfg = { block_s: Number(c.block_s) || 0, t0: Number(c.t0) || Date.now() };
+  frameLogOn = frameLogArm();
+}
+function frameLogField() {                  // the tick row's fl, then the next tick's arm
+  if (!frameLogCfg) return {};
+  const fl = { seq: frameSeq++, on: frameLogOn, rows: frameRows, over: frameOver };
+  frameRows = [];
+  frameLogOn = frameLogArm();
+  return { fl };
+}
 // levi 18:33: ONE flag for the whole v3 JS instrument set (A1 callbacks, A2 listeners, A3 observer, A7 box): the gate's
 // instrumentation A/B. lvqoe_config.instruments === false (written by browser.py, LVQOE_INSTRUMENTS=0) starts none of
 // them; nothing starts before the config is read (brad 18:17), and when it says on, the current element is started then.
@@ -315,7 +344,9 @@ try {
   if (chrome.storage && chrome.storage.local) {
     chrome.storage.local.get({ lvqoe_config: {} }, (d) => {
       const cfg = (d && d.lvqoe_config) || {};
-      v3Configured(!(cfg.instruments === false || cfg.rvfc === false));
+      const on = !(cfg.instruments === false || cfg.rvfc === false);
+      frameLogConfigure(on ? cfg.frame_log : null);   // t91: before the callbacks start
+      v3Configured(on);
     });
   } else {
     v3Ready = true;
@@ -343,6 +374,11 @@ function rvfcStart(v) {
     const base = { ts: performance.timeOrigin + now, el: elId(v), src, pt: md.presentationTime ?? null,
                    edt: md.expectedDisplayTime ?? null, mt: md.mediaTime ?? null, pf: md.presentedFrames ?? null,
                    w: md.width ?? null, h: md.height ?? null };
+    if (frameLogOn) {
+      if (frameRows.length >= FRAME_LOG_MAX) frameOver += 1;
+      else if (md.width !== st.w || md.height !== st.h) frameRows.push([base.el, base.pt, base.mt, base.pf, base.edt, base.w, base.h]);
+      else frameRows.push([base.el, base.pt, base.mt, base.pf, base.edt]);
+    }
     if (src !== st.src) {
       side("frames", { k: "first_frame", ...base, prev_src: st.src });
       st.src = src;
@@ -378,7 +414,7 @@ function rvfcTick() {
                    instruments: v3On && v3Ready, rvfc: v3On && !!st, off_arm_cb: offArmCb,
                    ad_cb: adStats.cb, ad_checks: adStats.runs, ad_ms: Math.round(adStats.ms * 1000) / 1000,
                    src3_polls: src3Polls,
-                   side_dropped: { ...sideDropped }, side_failed: { ...sideFailed } });
+                   side_dropped: { ...sideDropped }, side_failed: { ...sideFailed }, ...frameLogField() });
   if (st) st.n = 0;
   adStats.cb = adStats.runs = adStats.ms = 0;
   src3Polls = 0;

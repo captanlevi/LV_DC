@@ -65,6 +65,9 @@
   "element_pick": {
    "PICK_SMALL_FRAC": 0.25
   },
+  "frame_log": {
+   "FRAME_LOG_MAX": 1200
+  },
   "resume": {
    "DRY_PAUSE_MIN_PLAYHEAD_S": 1.0,
    "FROZEN_HOLD_POLL_MAX_AGE_S": 5.0,

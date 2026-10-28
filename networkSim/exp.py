@@ -1453,6 +1453,8 @@ if __name__ == "__main__":
                               # t58 L-1: the bytes tt's room-end rule (b) reads (a slot's own IFB, or every interface)
                               **({"room_rx_source": _room_rx_source()} if platform == "tiktok" else {}),
                               entry_quality=browser.entry_quality)
+            if browser.frame_log:                       # t91: only when asked (dry); absent otherwise
+                meta_extra["frame_log"] = browser.frame_log
             try:                                        # v3 A4: one offer schema for every platform (meta.json offer)
                 import offer as _offer
                 meta_extra["offer"] = _offer.offer_record(platform, {k: meta_extra.get(k)

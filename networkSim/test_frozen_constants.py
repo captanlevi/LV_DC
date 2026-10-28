@@ -186,7 +186,8 @@ def current() -> dict:
                                   "DRY_PAUSE_MIN_PLAYHEAD_S": B.DRY_PAUSE_MIN_PLAYHEAD_S,   # t79 (levi 16:56)
                                   "FROZEN_HOLD_POLL_MAX_AGE_S": B.FROZEN_HOLD_POLL_MAX_AGE_S,
                                   "FROZEN_HOLD_RULE": B.FROZEN_HOLD_RULE},
-                       "element_pick": _js_consts(["PICK_SMALL_FRAC"])},    # t83 (6): content.js's labelled element
+                       "element_pick": _js_consts(["PICK_SMALL_FRAC"]),     # t83 (6): content.js's labelled element
+                       "frame_log": _js_consts(["FRAME_LOG_MAX"])},          # t91: the per-frame log's cap per tick
         "capture_offloads": {"OFF": OFF.OFF}, "record_era": REC.ERA, "record_eras": list(REC.RECORD_ERAS), "record_lines": dict(REC.RECORD_LINES), "record_boundary": REC.RECORD_BOUNDARY, "stated_eras": list(REC.STATED_ERAS),
         "shot_origin": {"SHOT_CALIB_MARGIN_PX": B.SHOT_CALIB_MARGIN_PX, "SHOT_CALIB_SCALE": B.SHOT_CALIB_SCALE,
                         "SHOT_CALIB_MAX_RESIDUAL": B.SHOT_CALIB_MAX_RESIDUAL, "SHOT_CALIB_MIN_GAP": B.SHOT_CALIB_MIN_GAP},

@@ -6,7 +6,10 @@ element whose requestVideoFrameCallback stores the callback and the harness pres
   - a first_frame row at the first frame after an attach and after a src_key change (tt's MediaStream anchor);
   - one tick row per 1 s res_meta tick, joined to its event_id, with presented / decoded / dropped side by side and the
     callbacks since the last tick, also while nothing is presented (cb 0, the last frame's values kept);
-  - lvqoe_config.rvfc === false registers no callback and the tick rows say rvfc false (the gate's off arm).
+  - lvqoe_config.rvfc === false registers no callback and the tick rows say rvfc false (the gate's off arm);
+  - t91: lvqoe_config.frame_log adds the tick row's field fl (every presented frame since the last tick, w / h on a dims
+    change, seq per tick, the cap's overflow counted); with the field stripped the frames stream is the one without it;
+    alternating blocks log only in the ON blocks; no config, no field.
 
     python3 test_rvfc_frames.py        (needs node; exit 0 = pass)
 """
@@ -27,7 +30,11 @@ const off = mode.startsWith("off");
 const asyncCfg = mode.endsWith("async");
 const pendingCfg = [];
 const stored = {};
-let failNextSide = mode === "on";        // the first side write fails once (re-queued, counted)
+let failNextSide = mode === "on" || mode === "fl1";   // the first side write fails once (re-queued, counted)
+const cfgFor = { off: { lvqoe_config: { instruments: false } },     // t91: frame_log on, or in 1 s OFF / ON blocks from 0
+                 fl1: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
+                 flalt: { lvqoe_config: { frame_log: { block_s: 1, t0: 5e11 } } },
+                 flcap: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } } };
 const timers = [], side = [], sent = [];
 let now = 1000;
 class MediaStream {}
@@ -44,7 +51,7 @@ const ctx = {
   MutationObserver: class { observe() {} disconnect() {} },
   XPathResult: { ORDERED_NODE_SNAPSHOT_TYPE: 7 },
   location: { href: "https://www.tiktok.com/@r/live", hostname: "www.tiktok.com" },
-  chrome: { storage: { local: { get: (d, cb) => { const r = () => cb(off ? { lvqoe_config: { instruments: false } } : d);
+  chrome: { storage: { local: { get: (d, cb) => { const r = () => cb(cfgFor[mode.replace("_async", "")] || d);
                                                     if (asyncCfg) pendingCfg.push(r); else r(); },
                                 set: (o) => Object.assign(stored, o) } },
             runtime: { lastError: null, sendMessage: (m, cb) => {
@@ -70,6 +77,7 @@ present(10, 720, 1280); present(5, 540, 960); tick();   // a rendition switch in
 tick();                                     // nothing presented in this second
 v.srcObject = new MediaStream(); mt = 0;   // a new stream (tt re-entry): mediaTime restarts
 present(3, 540, 960); tick();
+if (mode === "flcap") { present(1300, 540, 960); tick(); }   // over FRAME_LOG_MAX in one tick
 vm.runInContext("flushSide()", ctx);        // the last tick's rows
 fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length, registeredBeforeCfg, stored }));
 """
@@ -122,8 +130,35 @@ def test_rvfc_frames():
     assert late["registeredBeforeCfg"] == 0 and late["pending"] == 1 and [x["k"] for x in fl][:2] == ["first_frame", "dims"]
 
 
+def _frames(r: dict) -> list[dict]:
+    return [x for m in r["side"] if m["stream"] == "frames" for x in m["payload"]]
+
+
+def test_frame_log():
+    base, fl1 = _frames(run("on")), _frames(run("fl1"))
+    assert not any("fl" in x for x in base)                                    # no config: the tick rows as before
+    # reader neutrality at the source: with fl stripped the stream is the one without the per-frame log
+    assert [{k: v for k, v in x.items() if k != "fl"} for x in fl1] == base
+    fl = [x["fl"] for x in fl1 if x["k"] == "tick"]
+    assert [f["seq"] for f in fl] == [0, 1, 2, 3] and all(f["on"] and f["over"] == 0 for f in fl)
+    rows = [row for f in fl for row in f["rows"]]
+    assert [row[3] for row in rows] == list(range(1, 49))                     # every presented frame, pf by pf
+    assert [len(f["rows"]) for f in fl] == [30, 15, 0, 3]                     # = the tick's delta pf
+    assert {len(row) for i, row in enumerate(rows) if i not in (0, 40)} == {5}
+    assert rows[0][5:] == [720, 1280] and rows[40][5:] == [540, 960]          # w / h on the first frame and the switch
+    el, pt, mt, pf, edt = rows[40][:5]
+    assert el == 1 and edt == pt + 17 and abs(mt - 41 / 30) < 1e-9
+    alt = [x["fl"] for x in _frames(run("flalt")) if x["k"] == "tick"]         # block 1 ON (frames to 2.49 s), block 2 OFF
+    assert [(f["on"], len(f["rows"])) for f in alt] == [(True, 30), (True, 15), (False, 0), (False, 0)], alt
+    cap = [x["fl"] for x in _frames(run("flcap")) if x["k"] == "tick"]
+    assert len(cap[-1]["rows"]) == 1200 and cap[-1]["over"] == 100 and cap[-1]["rows"][-1][3] == 48 + 1200
+    off = _frames(run("off"))                                                   # instruments off: no field
+    assert not any("fl" in x for x in off)
+
+
 def main() -> int:
     test_rvfc_frames()
+    test_frame_log()
     print("test_rvfc_frames: ok")
     return 0
 
