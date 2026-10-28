@@ -116,7 +116,9 @@ def test_exp_wraps_chain_sessions_only_and_flags_the_seam_row():
     i = src.index("def _schedule(")
     body = src[i:src.index("\n\n\n", i)]
     assert "SHAPER_GEN not in (net_episode_generator, family_episode_generator)" in body       # replay never wrapped
-    assert 'WRAP_SEED = session_dir.name if args.hold_state is None and not args.replay_schedule else None' in src
+    flat = " ".join(src.split())                                  # the dry hold (levi 03:19) never wraps either
+    assert ('WRAP_SEED = (session_dir.name if args.hold_state is None and not args.replay_schedule and not DRY_HOLD '
+            'else None)') in flat
     assert "seam=seam, apply_rc=rc)" in src and '"shaper", schedule_wrap=' in src
 
 
