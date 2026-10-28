@@ -1751,6 +1751,7 @@ def mse_wrap_settle(page, rec: dict) -> dict:
     """After the join: live = the wrap's flag on the joined document; then the script is removed and Page disabled (the
     connection's usual state). Never an abort: a failure is recorded."""
     rec = dict(rec)
+    rec["page_disabled"] = False
     try:
         rec["live"] = page.eval("window.__lvqoeMse === true") is True
     except Exception as exc:
@@ -1759,7 +1760,11 @@ def mse_wrap_settle(page, rec: dict) -> dict:
     try:
         if rec.get("id"):
             page.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": rec["id"]})
+    except Exception as exc:
+        rec["remove_error"] = repr(exc)[:200]
+    try:                                         # its own try: a failed remove never skips the disable
         page.call("Page.disable")
+        rec["page_disabled"] = True
         rec["page_disabled_at"] = round(time.time(), 3)
     except Exception as exc:
         rec["disable_error"] = repr(exc)[:200]
@@ -4715,7 +4720,10 @@ class BrowserSession:
         if not self._prepared:
             self._prepare(cdp_ready_timeout)
             self._reset_for_session()
-        self._join_nav()
+        try:
+            self._join_nav()
+        finally:
+            self._mse_wrap_settle_once("join_exit")       # levi 00:06 (b): an exception or a timeout still disables Page
 
     def discover(self, cdp_ready_timeout: float = 30.0) -> dict:
         """levi 07:48 (supervisor 07:48; WC3b r1 ti_100001: the /live list loaded on the shaped link at 1.3-1.6 Mbit, 0
@@ -4878,15 +4886,32 @@ class BrowserSession:
                                     if self._session_dir else None).start()
         if self.platform == "tiktok":            # item #9: before any room navigation, so the first room/enter is read
             self._tt_room = TtRoomListener(self._ws_url).start()
-        if self.frame_log and self.frame_log["enabled"] and self.platform == "youtube":   # t93 rows 9 / 20, before the join
-            try:
-                self._page.call("Page.enable")
-                r = self._page.call("Page.addScriptToEvaluateOnNewDocument", {
-                    "source": MSE_WRAP_JS % {"block_s": self.frame_log["block_s"], "max": FRAME_LOG_MSE_MAX}})
-                self.frame_log["mse_wrap"] = {"installed": bool(r.get("identifier")), "id": r.get("identifier"),
-                                              "installed_at": round(time.time(), 3)}
-            except Exception as exc:
-                self.frame_log["mse_wrap"] = {"installed": False, "error": repr(exc)[:200]}
+        self._mse_wrap_install()                 # t93 rows 9 / 20, before the join (yt, frame log enabled only)
+
+    def _mse_wrap_install(self) -> None:
+        """t93 rows 9 / 20: Page enabled and MSE_WRAP_JS registered on the session page, only when the frame log is
+        enabled on yt; otherwise no CDP call at all (levi 00:06 (a): unset / 0 send what 79d4f7d8 sent)."""
+        if not (self.frame_log and self.frame_log.get("enabled") and self.platform == "youtube"):
+            return
+        self.frame_log["mse_wrap"] = {"installed": False}    # from here on, every exit settles (Page.disable)
+        try:
+            self._page.call("Page.enable")
+            r = self._page.call("Page.addScriptToEvaluateOnNewDocument", {
+                "source": MSE_WRAP_JS % {"block_s": self.frame_log["block_s"], "max": FRAME_LOG_MSE_MAX}})
+            self.frame_log["mse_wrap"].update({"installed": bool(r.get("identifier")), "id": r.get("identifier"),
+                                               "installed_at": round(time.time(), 3)})
+        except Exception as exc:
+            self.frame_log["mse_wrap"]["error"] = repr(exc)[:200]
+
+    def _mse_wrap_settle_once(self, where: str) -> None:
+        """levi 00:06 (b): Page is disabled on every exit of the join (its end, an exception, a timeout: start()'s
+        finally) and, if the join never ran (a failure between discover() and start()), at stop(); once. settled = where
+        it ran; a failed Page.disable is recorded (disable_error), never silent. No wrap: no call."""
+        rec = self.frame_log.get("mse_wrap") if self.frame_log else None
+        if rec is None or "settled" in rec:
+            return
+        rec.update(mse_wrap_settle(self._page, rec))
+        rec["settled"] = where
 
     def _join_nav(self) -> None:
         """The stream join on the session page: a discovered tt room list tried by direct URL (else the old shaped
@@ -5012,8 +5037,7 @@ class BrowserSession:
                     self.tw_latency = {**self.tw_latency, "ok": None, "read_back_error": repr(exc)[:200]}
                 print(f"[browser] Twitch low latency read back: {self.tw_latency.get('read_back')} "
                       f"(ok {self.tw_latency.get('ok')})", flush=True)
-        if self.frame_log and self.frame_log.get("mse_wrap"):
-            self.frame_log["mse_wrap"] = mse_wrap_settle(self._page, self.frame_log["mse_wrap"])
+        self._mse_wrap_settle_once("join")
         if self.geometry_target:
             tid = None
             try:
@@ -5968,6 +5992,7 @@ class BrowserSession:
             k.stop()
             self.fs_keeper = {**(self.fs_keeper or {}), **k.record()}
         self._clock_sample("stop")                 # v3 A11: the last offset, before the tab closes
+        self._mse_wrap_settle_once("stop")        # levi 00:06 (b): the join never ran (no-op when it settled)
         # Read QoE events from the extension service worker before closing the tab
         if self._session_dir:
             _final_flush(self._page)

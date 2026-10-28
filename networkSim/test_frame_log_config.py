@@ -80,26 +80,92 @@ def test_decode_malformed():
         raise AssertionError(bad)
 
 
+class _Page:
+    def __init__(self, flag=True, fail=()):
+        self.flag, self.fail, self.calls = flag, fail, []
+
+    def eval(self, js):
+        self.calls.append("eval")
+        return self.flag
+
+    def call(self, m, params=None):
+        self.calls.append(m)
+        if m in self.fail:
+            raise RuntimeError(m)
+        return {"identifier": "3"} if m == "Page.addScriptToEvaluateOnNewDocument" else {}
+
+
+def _session(frame_log, platform="youtube", join_raises=False):
+    bs = B.BrowserSession.__new__(B.BrowserSession)          # no browser: only the wrap's attributes
+    bs.frame_log, bs.platform, bs._page, bs._prepared = frame_log, platform, _Page(), True
+
+    def join():
+        bs._mse_wrap_install()                               # as _reset_for_session would have, before the join
+        if join_raises:
+            raise TimeoutError("join timeout")
+        bs._mse_wrap_settle_once("join")
+    bs._join_nav = join
+    return bs
+
+
+ON = {"requested": "1", "enabled": True, "block_s": 0, "t0": 0, "clock": "epoch"}
+FULL = ["Page.enable", "Page.addScriptToEvaluateOnNewDocument", "eval", "Page.removeScriptToEvaluateOnNewDocument",
+        "Page.disable"]
+
+
 def test_mse_wrap_settle():
-    class Page:
-        def __init__(self, flag):
-            self.flag, self.calls = flag, []
-
-        def eval(self, js):
-            self.calls.append(("eval", js))
-            return self.flag
-
-        def call(self, m, params=None):
-            self.calls.append((m, params))
-            return {}
-    pg = Page(True)
+    pg = _Page()
     r = B.mse_wrap_settle(pg, {"installed": True, "id": "3", "installed_at": 1.0})
-    assert r["live"] is True and r["installed_at"] == 1.0 and "page_disabled_at" in r
-    assert pg.calls[1:] == [("Page.removeScriptToEvaluateOnNewDocument", {"identifier": "3"}), ("Page.disable", None)]
-    assert B.mse_wrap_settle(Page(None), {"installed": True, "id": "3"})["live"] is False
-    src = (HERE / "browser.py").read_text()                                    # Page enabled before the registration
-    i = src.index('self._page.call("Page.enable")')
-    assert 0 < src.index('"Page.addScriptToEvaluateOnNewDocument", {\n                    "source": MSE_WRAP_JS', i) - i < 200
+    assert r["live"] is True and r["installed_at"] == 1.0 and r["page_disabled"] and "page_disabled_at" in r
+    assert pg.calls == FULL[2:]
+    assert B.mse_wrap_settle(_Page(None), {"installed": True, "id": "3"})["live"] is False
+    r = B.mse_wrap_settle(_Page(fail=("Page.removeScriptToEvaluateOnNewDocument",)), {"id": "3"})
+    assert r["page_disabled"] and "remove_error" in r                         # a failed remove never skips the disable
+    r = B.mse_wrap_settle(_Page(fail=("Page.disable",)), {"id": "3"})
+    assert r["page_disabled"] is False and "disable_error" in r               # recorded, never silent
+
+
+def test_mse_wrap_unset_no_cdp():
+    """levi 00:06 (a): unset / 0 / refused / not yt: the join sends no Page call, registers nothing, settles nothing."""
+    for fl, plat in ((None, "youtube"), ({"requested": "0", "enabled": False}, "youtube"),
+                     ({"requested": "alt60", "enabled": False, "reason": "x"}, "youtube"), (ON, "twitch"), (ON, "tiktok")):
+        bs = _session(None if fl is None else dict(fl), plat)
+        bs.start()
+        bs._mse_wrap_settle_once("stop")
+        assert bs._page.calls == [] and not (bs.frame_log or {}).get("mse_wrap"), (fl, plat)
+    src = (HERE / "browser.py").read_text()                 # the only Page domain calls are the wrap's
+    for m in ('"Page.enable"', '"Page.disable"', '"Page.removeScriptToEvaluateOnNewDocument"'):
+        assert src.count(m) == 1, m
+    i = src.index("def _mse_wrap_install(self)")
+    assert i < src.index('"Page.enable"') < src.index("def _mse_wrap_settle_once(self")
+
+
+def test_mse_wrap_disabled_on_every_exit():
+    """levi 00:06 (b): Page.disable on the join's normal end, on an exception / timeout (start()'s finally), and at stop()
+    when the join never ran; once."""
+    bs = _session(dict(ON))
+    bs.start()
+    bs._mse_wrap_settle_once("stop")
+    assert bs._page.calls == FULL and bs.frame_log["mse_wrap"]["settled"] == "join"
+    bs = _session(dict(ON), join_raises=True)
+    try:
+        bs.start()
+        raise AssertionError("the join's exception must reach the caller")
+    except TimeoutError:
+        pass
+    w = bs.frame_log["mse_wrap"]
+    assert bs._page.calls == FULL and w["settled"] == "join_exit" and w["page_disabled"] is True
+    bs = _session(dict(ON))                                     # discover() installed it, start() never ran
+    bs._mse_wrap_install()
+    bs._mse_wrap_settle_once("stop")
+    bs._mse_wrap_settle_once("stop")
+    assert bs._page.calls == FULL and bs.frame_log["mse_wrap"]["settled"] == "stop"
+    bs = _session(dict(ON))                                     # Page.enable itself failed: still disabled after
+    bs._page.fail = ("Page.enable",)
+    bs._mse_wrap_install()
+    bs._mse_wrap_settle_once("stop")
+    w = bs.frame_log["mse_wrap"]
+    assert w["installed"] is False and "error" in w and w["page_disabled"] is True and bs._page.calls[-1] == "Page.disable"
 
 
 def test_tcp_state_sampler():
@@ -136,6 +202,8 @@ def main() -> int:
     test_frame_log_wiring()
     test_decode_malformed()
     test_mse_wrap_settle()
+    test_mse_wrap_unset_no_cdp()
+    test_mse_wrap_disabled_on_every_exit()
     test_tcp_state_sampler()
     print("test_frame_log_config: ok")
     return 0
