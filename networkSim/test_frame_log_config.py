@@ -31,13 +31,13 @@ def test_frame_log_config():
         dry.mkdir(parents=True)
         rec.mkdir(parents=True)
         (Path(t) / "rec" / data_root.RECORD_MARKER).write_text(json.dumps({"uuid": "x"}))
-        cfg = lambda raw, d=dry, rec_=False, ins=True: B.frame_log_config(raw, d, rec_, ins, now_ms=123)
+        cfg = lambda raw, d=dry, rec_=False, ins=True: B.frame_log_config(raw, d, rec_, ins)
         assert cfg(None) is None and cfg("") is None and cfg("0") is None
-        assert cfg("1") == {"requested": "1", "enabled": True, "block_s": 0, "t0": 123}
-        assert cfg(" alt60 ") == {"requested": "alt60", "enabled": True, "block_s": 60, "t0": 123}
+        assert cfg("1") == {"requested": "1", "enabled": True, "block_s": 0, "t0": 0, "clock": "epoch"}
+        assert cfg(" alt60 ") == {"requested": "alt60", "enabled": True, "block_s": 60, "t0": 0, "clock": "epoch"}
         for bad in ("alt0", "alt", "on", "2"):
             assert cfg(bad) == {"requested": bad, "enabled": False, "reason": "unparsed (1 or alt<N>)"}, bad
-        on_rec = {"requested": "1", "enabled": True, "record": True, "block_s": 0, "t0": 123}
+        on_rec = {"requested": "1", "enabled": True, "record": True, "block_s": 0, "t0": 0, "clock": "epoch"}
         assert cfg("1", rec_=True) == on_rec and cfg("1", d=rec) == on_rec      # the counted mode: "1" only
         assert cfg("alt60", rec_=True) == {"requested": "alt60", "enabled": False,
                                            "reason": "of record: alt<N> is dry only"}

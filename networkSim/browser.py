@@ -1676,12 +1676,67 @@ def _set_download_dir(page: CDPPage, download_path: str) -> None:
 # OFF / ON blocks of N s (levi's instrumentation check: the OFF blocks are the control spread). levi 18:11: the counted
 # mode is in this sha, so the record runs the code the dry check validated: a counted run (LVDC_TRIO_RECORD=1) or a
 # session under a marked record root takes "1" only (the deployed window config's, named in its manifest); alt<N> there
-# is refused, as everywhere with the instruments off or a value that does not parse (recorded, off).
+# is refused, as everywhere with the instruments off or a value that does not parse (recorded, off). levi 21:0x (t93): the
+# blocks run on the epoch clock (t0 0: arm = floor(unix s / N) odd), so every slot's page side and the host samplers
+# (TcpStateSampler, gpu_record) switch together; frame_log_arm is that rule on the host.
 FRAME_LOG_ENV = "LVQOE_FRAME_LOG"
+FRAME_LOG_MSE_MAX = 2000      # t93 rows 9 / 20: the page-world MSE wrap's records per 1 s batch (past it counted, over)
+# t93 rows 9 / 20 (levi 00124; brad W3): yt's MSE calls in the page world, added before any page script by
+# Page.addScriptToEvaluateOnNewDocument, only when the frame log is enabled on yt (tw's MSE runs in a worker, tt's live is
+# a MediaStream: out by construction). Each wrapped call runs the original with the same this and arguments and returns
+# its value, synchronously; the record is one push in a try (a recording fault never reaches the page). Records, ON blocks
+# only: add (the mime / codec, the buffer's id), changeType, app (bytes), rm (start, end), end (updateend: the buffered end,
+# the range count); every 1 s one postMessage batch to content.js (frames k:"mse"), over counted past FRAME_LOG_MSE_MAX.
+MSE_WRAP_JS = r"""(() => {
+  if (window.__lvqoeMse) return;
+  window.__lvqoeMse = true;
+  const BLOCK_S = %(block_s)d, MAX = %(max)d;
+  const on = () => !(BLOCK_S > 0) || Math.floor(Date.now() / (BLOCK_S * 1000)) %% 2 === 1;
+  let recs = [], over = 0, next = 0;
+  const ids = new WeakMap();
+  const id = (sb) => { let i = ids.get(sb); if (i === undefined) { i = ++next; ids.set(sb, i); } return i; };
+  const push = (r) => { if (!on()) return; if (recs.length >= MAX) { over += 1; return; } r.t = performance.now(); recs.push(r); };
+  const wrap = (proto, name, before, after) => {
+    const orig = proto && proto[name];
+    if (typeof orig !== "function") return;
+    proto[name] = function (...a) {
+      if (before) { try { before(this, a); } catch (e) {} }
+      const ret = orig.apply(this, a);
+      if (after) { try { after(this, a, ret); } catch (e) {} }
+      return ret;
+    };
+  };
+  const ended = (sb) => () => { try { const b = sb.buffered, n = b.length;
+    push({ op: "end", sb: id(sb), bend: n ? b.end(n - 1) : null, nr: n }); } catch (e) {} };
+  if (typeof MediaSource !== "undefined") {
+    wrap(MediaSource.prototype, "addSourceBuffer", null, (ms, a, sb) => {
+      push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) });
+      sb.addEventListener("updateend", ended(sb));
+    });
+  }
+  if (typeof SourceBuffer !== "undefined") {
+    const p = SourceBuffer.prototype;
+    wrap(p, "appendBuffer", (sb, a) => push({ op: "app", sb: id(sb), bytes: a[0] ? a[0].byteLength : null }));
+    wrap(p, "remove", (sb, a) => push({ op: "rm", sb: id(sb), s: a[0], e: a[1] }));
+    wrap(p, "changeType", (sb, a) => push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) }));
+  }
+  setInterval(() => {
+    if (!recs.length) return;
+    const batch = recs; recs = [];
+    try { window.postMessage({ source: "lvqoe-mse", recs: batch, over }, "*"); } catch (e) {}
+  }, 1000);
+})();"""
 
 
-def frame_log_config(raw: str | None, session_dir: Path | None, of_record: bool, instruments: bool,
-                     now_ms: int | None = None) -> dict | None:
+def frame_log_arm(block_s: int, now_s: float | None = None) -> bool:
+    """The epoch block clock's arm (content.js frameLogArm, MSE_WRAP_JS on()): always ON for block_s 0 ("1"), else ON in
+    odd blocks of block_s s since the epoch."""
+    if not block_s:
+        return True
+    return int((time.time() if now_s is None else now_s) // block_s) % 2 == 1
+
+
+def frame_log_config(raw: str | None, session_dir: Path | None, of_record: bool, instruments: bool) -> dict | None:
     """meta.json frame_log: None when off; else what was asked and whether it runs ({enabled, block_s, t0} or a reason)."""
     raw = (raw or "").strip()
     if raw in ("", "0"):
@@ -1702,7 +1757,7 @@ def frame_log_config(raw: str | None, session_dir: Path | None, of_record: bool,
         out["record"] = True
     if not instruments:
         return {**out, "reason": "instruments off"}
-    return {**out, "enabled": True, "block_s": block_s, "t0": int(now_ms if now_ms is not None else time.time() * 1000)}
+    return {**out, "enabled": True, "block_s": block_s, "t0": 0, "clock": "epoch"}
 
 
 def _side_streams(store: dict) -> dict[str, list]:
@@ -4785,6 +4840,13 @@ class BrowserSession:
                                     if self._session_dir else None).start()
         if self.platform == "tiktok":            # item #9: before any room navigation, so the first room/enter is read
             self._tt_room = TtRoomListener(self._ws_url).start()
+        if self.frame_log and self.frame_log["enabled"] and self.platform == "youtube":   # t93 rows 9 / 20, before the join
+            try:
+                r = self._page.call("Page.addScriptToEvaluateOnNewDocument", {
+                    "source": MSE_WRAP_JS % {"block_s": self.frame_log["block_s"], "max": FRAME_LOG_MSE_MAX}})
+                self.frame_log["mse_wrap"] = {"installed": bool(r.get("identifier")), "id": r.get("identifier")}
+            except Exception as exc:
+                self.frame_log["mse_wrap"] = {"installed": False, "error": repr(exc)[:200]}
 
     def _join_nav(self) -> None:
         """The stream join on the session page: a discovered tt room list tried by direct URL (else the old shaped
