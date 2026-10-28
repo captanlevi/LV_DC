@@ -1300,6 +1300,7 @@ if __name__ == "__main__":
                 print(f"[join] meta write failed: {e!r}", flush=True)
 
     browser = None
+    tcp_state = None                             # t93 row 13: the slot's TCP state sampler (frame log only)
     abort_reason = None
     _join_t = None                       # B9: the join thread (auto mode)
     _display_start = None                 # set just before browser.start(); display_change reads it at the end
@@ -1328,6 +1329,10 @@ if __name__ == "__main__":
                                      entry_quality=eq_cfg,
                                      tw_low_latency=args.tw_low_latency if platform == "twitch" else None)
             browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)
+            if SLOT is not None and browser.frame_log and browser.frame_log.get("enabled"):   # t93 row 13, ON blocks
+                _fl_block = browser.frame_log["block_s"]
+                tcp_state = trio_slots.TcpStateSampler(session_dir, SLOT,
+                                                       lambda: _browser_mod.frame_log_arm(_fl_block)).start()
             if args.lever:                       # v3 B4: the plan is fixed now, before playback and before the shaper starts
                 import lever as _lever
                 _horizon = (args.episodes or coverage_report.SESSION_EPISODES.get(platform) or 1) * SCHEDULE["episode_s"]
@@ -1454,6 +1459,8 @@ if __name__ == "__main__":
                               **({"room_rx_source": _room_rx_source()} if platform == "tiktok" else {}),
                               entry_quality=browser.entry_quality)
             if browser.frame_log:                       # t91: only when asked (dry); absent otherwise
+                if tcp_state is not None:
+                    browser.frame_log["tcp_state"] = tcp_state.stop()
                 meta_extra["frame_log"] = browser.frame_log
             try:                                        # v3 A4: one offer schema for every platform (meta.json offer)
                 import offer as _offer

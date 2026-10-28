@@ -26,6 +26,7 @@ COLLECTOR_FILES: frozenset[str] = frozenset({
     # recorders
     "media_events.jsonl", "ad_actions.jsonl", "tc_stats.jsonl", "tc_fast.jsonl", "compute_load.jsonl",
     "box_record.jsonl", "tt_room_dom.jsonl", "motion.jsonl", "dns_answers.json",
+    "tcp_state.jsonl",                               # t93 row 13 (frame log only): the slot's TCP sockets, 1 Hz
     # capture and its post-processing (Makefile process_http_logs -> unit_extractor.py: the collector's own; LVQoE only
     # reads them). The collector's network_core run writes merged*.csv under check_nc/ only (NESTED_FILES); the
     # top-level merged*.csv are LVQoE's (ingest.ensure_csvs; brad 23:21)

@@ -4,7 +4,9 @@
   - "1" on, "alt<N>" OFF / ON blocks of N s from t0; anything else recorded as unparsed, off;
   - levi 18:11: a counted run or a session under a marked record root takes "1" only (recorded record: true); alt<N>
     there, the instruments off or an unparsed value are refused (recorded, off);
-  - browser.py writes the extension config only when enabled, and exp.py the meta key only when asked.
+  - browser.py writes the extension config only when enabled, and exp.py the meta key only when asked;
+  - t93 row 13: trio_slots.TcpStateSampler keeps each socket of `ss -tinH cgroup /<slot>` as printed, ON blocks only,
+    capped per sample, and stops on an ss failure, recorded once (never a retry loop).
 
     python3 test_frame_log_config.py        (exit 0 = pass)
 """
@@ -22,6 +24,12 @@ except ImportError:
     sys.modules["websocket"] = types.ModuleType("websocket")
 import browser as B  # noqa: E402
 import data_root  # noqa: E402
+import trio_slots as T  # noqa: E402
+
+SS_OUT = ("ESTAB 0      0      192.168.1.5:50122 142.250.1.1:443\n"
+          "\t cubic wscale:7,7 rto:204 rtt:3.1/1.2 cwnd:10 bytes_acked:1200 delivery_rate:9.1Mbps\n"
+          "ESTAB 0      0      192.168.1.5:50124 151.101.1.1:443\n"
+          "\t cubic rtt:20.5/3 cwnd:44 retrans:0/2\n")
 
 
 def test_frame_log_config():
@@ -58,9 +66,39 @@ def test_frame_log_wiring():
     assert "if browser.frame_log:" in (HERE / "exp.py").read_text()             # the meta key only when asked
 
 
+def test_tcp_state_sampler():
+    assert T.parse_ss_flows(SS_OUT) == [
+        "ESTAB 0      0      192.168.1.5:50122 142.250.1.1:443 cubic wscale:7,7 rto:204 rtt:3.1/1.2 cwnd:10 "
+        "bytes_acked:1200 delivery_rate:9.1Mbps",
+        "ESTAB 0      0      192.168.1.5:50124 151.101.1.1:443 cubic rtt:20.5/3 cwnd:44 retrans:0/2"]
+    calls, arm = [], {"on": True}
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return types.SimpleNamespace(returncode=0, stdout=SS_OUT, stderr="")
+    with tempfile.TemporaryDirectory() as t:
+        slot = T.slot_of("youtube")
+        smp = T.TcpStateSampler(Path(t), slot, lambda: arm["on"], run=run)
+        assert smp.cmd == ["ss", "-tinH", "cgroup", "/" + slot.cgroup]
+        assert smp.sample()["n"] == 2
+        arm["on"] = False
+        assert smp.sample() is None and len(calls) == 1                         # OFF block: no ss at all
+        rows = [json.loads(x) for x in (Path(t) / "tcp_state.jsonl").read_text().splitlines()]
+        assert len(rows) == 1 and rows[0]["flows"][1].endswith("retrans:0/2")
+        arm["on"] = True
+        smp.run = lambda cmd, **kw: types.SimpleNamespace(returncode=1, stdout="", stderr="unknown filter cgroup")
+        assert smp.sample() is None and smp._stop.is_set()                      # recorded once, the sampler stops
+        st = smp.stop()
+        assert (st["samples"], st["off_samples"], st["error"]) == (1, 1, "rc 1: unknown filter cgroup")
+        assert st["scope"].startswith("TCP only")
+    src = (HERE / "exp.py").read_text()
+    assert "trio_slots.TcpStateSampler(session_dir, SLOT," in src and 'browser.frame_log["tcp_state"] = tcp_state.stop()' in src
+
+
 def main() -> int:
     test_frame_log_config()
     test_frame_log_wiring()
+    test_tcp_state_sampler()
     print("test_frame_log_config: ok")
     return 0
 

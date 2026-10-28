@@ -872,6 +872,83 @@ class TcSampler:
                 "qa_flag": flagged / len(r) > FLAGGED_SHARE_QA, "file": self.path.name, **extra}
 
 
+TCP_STATE_S = 1.0           # t93 row 13 (levi 00124): the slot's TCP sockets' kernel state, 1 Hz
+TCP_STATE_MAX_FLOWS = 64    # flows kept per sample (past it counted, over)
+
+
+def parse_ss_flows(text: str) -> list[str]:
+    """`ss -tinH` output -> one string per socket: its address line plus its indented tcp_info line(s), as printed."""
+    flows: list[str] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if line[:1].isspace() and flows:
+            flows[-1] += " " + line.strip()
+        else:
+            flows.append(line.strip())
+    return flows
+
+
+class TcpStateSampler:
+    """t93 row 13 (levi 00124, host side; frame log only): every TCP_STATE_S, in ON blocks only (`arm`, the epoch block
+    clock), the slot's own TCP sockets as the kernel reports them (`ss -tinH cgroup /<slot cgroup>`: cwnd, rtt, rttvar,
+    retrans, delivery_rate, pacing_rate, bytes_acked, ...), each socket's line kept as printed (parsed post hoc), to
+    <session>/tcp_state.jsonl. TCP only: QUIC's state is in Chrome's userspace (stated in the summary). An ss that fails
+    (rc != 0, e.g. no cgroup filter) is recorded once and the sampler stops, never retried in a loop."""
+
+    def __init__(self, session_dir: Path, slot: Slot, arm, sample_s: float = TCP_STATE_S, run=subprocess.run):
+        self.path = Path(session_dir) / "tcp_state.jsonl"
+        self.slot, self.arm, self.sample_s, self.run = slot, arm, sample_s, run
+        self.cmd = ["ss", "-tinH", "cgroup", "/" + slot.cgroup]
+        self.samples = self.off_samples = self.over = self.max_flows = 0
+        self.error: str | None = None
+        self._stop = threading.Event()
+        self._t: threading.Thread | None = None
+
+    def sample(self) -> dict | None:
+        if not self.arm():
+            self.off_samples += 1
+            return None
+        t = time.time()
+        r = self.run(self.cmd, capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            self.error = f"rc {r.returncode}: {(r.stderr or '').strip()[:200]}"
+            self._stop.set()
+            return None
+        flows = parse_ss_flows(r.stdout)
+        self.max_flows = max(self.max_flows, len(flows))
+        if len(flows) > TCP_STATE_MAX_FLOWS:
+            self.over += len(flows) - TCP_STATE_MAX_FLOWS
+            flows = flows[:TCP_STATE_MAX_FLOWS]
+        row = {"t": round(t, 3), "n": len(flows), "flows": flows}
+        with open(self.path, "a") as fh:
+            fh.write(json.dumps(row) + "\n")
+        self.samples += 1
+        return row
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                self.sample()
+            except Exception as e:  # noqa: BLE001 -- recorded once, the sampler stops
+                self.error = f"{type(e).__name__}: {e}"[:200]
+                return
+            self._stop.wait(self.sample_s)
+
+    def start(self) -> "TcpStateSampler":
+        self._t = threading.Thread(target=self._run, name="tcp_state", daemon=True)
+        self._t.start()
+        return self
+
+    def stop(self) -> dict:
+        self._stop.set()
+        if self._t is not None:
+            self._t.join(timeout=5)
+        return {"file": self.path.name, "cmd": " ".join(self.cmd), "sample_s": self.sample_s, "samples": self.samples,
+                "off_samples": self.off_samples, "max_flows": self.max_flows, "over": self.over, "error": self.error,
+                "scope": "TCP only (QUIC state is in Chrome's userspace)"}
+
+
 FAST_TC_S = 0.1                                      # v3 A18: the shaped classes every 100 ms (base truth, both A/B arms)
 FAST_TC_FIELDS = ("bytes", "packets", "drops", "overlimits", "backlog", "qlen")
 
