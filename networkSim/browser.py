@@ -1671,10 +1671,12 @@ def _set_download_dir(page: CDPPage, download_path: str) -> None:
     })
 
 
-# t91 (rushi 2026-10-28; levi 17:4x, boundary 3): content.js's per-frame rVFC log (the tick row's field fl), dry only
-# until its instrumentation check passes. LVQOE_FRAME_LOG: unset or "0" off (no config, no meta key: the session as
-# without it); "1" on; "alt<N>" alternating OFF / ON blocks of N s (levi's check: the OFF blocks are the control spread).
-# Never on a counted run or under a marked record root, whatever the env says (recorded as refused).
+# t91 (rushi 2026-10-28; levi 17:4x, boundary 3): content.js's per-frame rVFC log (the tick row's field fl).
+# LVQOE_FRAME_LOG: unset or "0" off (no config, no meta key: the session as without it); "1" on; "alt<N>" alternating
+# OFF / ON blocks of N s (levi's instrumentation check: the OFF blocks are the control spread). levi 18:11: the counted
+# mode is in this sha, so the record runs the code the dry check validated: a counted run (LVDC_TRIO_RECORD=1) or a
+# session under a marked record root takes "1" only (the deployed window config's, named in its manifest); alt<N> there
+# is refused, as everywhere with the instruments off or a value that does not parse (recorded, off).
 FRAME_LOG_ENV = "LVQOE_FRAME_LOG"
 
 
@@ -1694,8 +1696,10 @@ def frame_log_config(raw: str | None, session_dir: Path | None, of_record: bool,
     import data_root
     marked = session_dir is not None and any((a / data_root.RECORD_MARKER).is_file()
                                              for a in (Path(session_dir).resolve(), *Path(session_dir).resolve().parents))
+    if (of_record or marked) and block_s:
+        return {**out, "reason": ("of record" if of_record else "under a record root") + ": alt<N> is dry only"}
     if of_record or marked:
-        return {**out, "reason": "of record" if of_record else "under a record root"}
+        out["record"] = True
     if not instruments:
         return {**out, "reason": "instruments off"}
     return {**out, "enabled": True, "block_s": block_s, "t0": int(now_ms if now_ms is not None else time.time() * 1000)}

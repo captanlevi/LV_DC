@@ -284,7 +284,7 @@ function observePlayerEvents(v) {
 // last frame's mediaTime / presentationTime and the callbacks since the last tick; (c) the first presented frame after
 // an attach or a src_key change (tt's per-stream anchor: a MediaStream's mediaTime restarts per stream). The callback
 // only reads metadata.
-// t91 (rushi 2026-10-28; levi 17:4x, boundary 3): the per-frame log, dry only until its instrumentation check passes.
+// t91 (rushi 2026-10-28; levi 17:4x / 18:11, boundary 3): the per-frame log (alternating blocks dry only, browser.py).
 // lvqoe_config.frame_log ({block_s, t0}, browser.py from LVQOE_FRAME_LOG; absent: off and no field, the tick row as
 // before) turns it on: the rVFC callback appends each presented frame [el, pt, mt, pf, edt] (+ w, h when the element's
 // dims change) to one array and does nothing else; each tick row carries the rows since the last tick in its field fl

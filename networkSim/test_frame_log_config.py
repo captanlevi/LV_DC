@@ -2,7 +2,8 @@
 """t91 (levi 17:4x, boundary 3): browser.frame_log_config, the per-frame rVFC log's switch (LVQOE_FRAME_LOG):
   - unset / "0": None (no extension config, no meta key: the session as without it);
   - "1" on, "alt<N>" OFF / ON blocks of N s from t0; anything else recorded as unparsed, off;
-  - never on a counted run, under a marked record root, or with the instruments off (recorded, off);
+  - levi 18:11: a counted run or a session under a marked record root takes "1" only (recorded record: true); alt<N>
+    there, the instruments off or an unparsed value are refused (recorded, off);
   - browser.py writes the extension config only when enabled, and exp.py the meta key only when asked.
 
     python3 test_frame_log_config.py        (exit 0 = pass)
@@ -36,9 +37,17 @@ def test_frame_log_config():
         assert cfg(" alt60 ") == {"requested": "alt60", "enabled": True, "block_s": 60, "t0": 123}
         for bad in ("alt0", "alt", "on", "2"):
             assert cfg(bad) == {"requested": bad, "enabled": False, "reason": "unparsed (1 or alt<N>)"}, bad
-        assert cfg("1", rec_=True)["reason"] == "of record" and not cfg("1", rec_=True)["enabled"]
-        assert cfg("alt60", d=rec) == {"requested": "alt60", "enabled": False, "reason": "under a record root"}
+        on_rec = {"requested": "1", "enabled": True, "record": True, "block_s": 0, "t0": 123}
+        assert cfg("1", rec_=True) == on_rec and cfg("1", d=rec) == on_rec      # the counted mode: "1" only
+        assert cfg("alt60", rec_=True) == {"requested": "alt60", "enabled": False,
+                                           "reason": "of record: alt<N> is dry only"}
+        assert cfg("alt60", d=rec) == {"requested": "alt60", "enabled": False,
+                                       "reason": "under a record root: alt<N> is dry only"}
+        assert cfg("alt60", d=rec, rec_=True)["reason"] == "of record: alt<N> is dry only"
         assert cfg("1", ins=False) == {"requested": "1", "enabled": False, "reason": "instruments off"}
+        assert cfg("1", d=rec, rec_=True, ins=False) == {"requested": "1", "enabled": False, "record": True,
+                                                         "reason": "instruments off"}
+        assert cfg("x", rec_=True)["reason"] == "unparsed (1 or alt<N>)"
         assert cfg("1", d=None)["enabled"]
 
 
