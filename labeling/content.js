@@ -322,6 +322,7 @@ function frameLogArm() {
 let ltN = 0;
 let ltMax = 0;
 let ltOk = false;
+const ltT = [];                            // SCRATCH t91: long-task start / duration (ms, performance.now), <= 50 per tick
 let mseOver = null;
 let mseInst = null;
 let framePushErr = 0;                      // frames whose push faulted in this tick (fl.push_err)
@@ -336,7 +337,10 @@ function frameLogListen() {
   try {                                     // t93 row 8: long tasks, counted in ON ticks only
     if (typeof PerformanceObserver === "function" && (PerformanceObserver.supportedEntryTypes || []).includes("longtask")) {
       new PerformanceObserver((list) => {
-        for (const e of list.getEntries()) { ltN += 1; if (e.duration > ltMax) ltMax = e.duration; }   // SCRATCH t91 G7: every tick
+        for (const e of list.getEntries()) {   // SCRATCH t91: every tick, with start times
+          ltN += 1; if (e.duration > ltMax) ltMax = e.duration;
+          if (ltT.length < 100) ltT.push(Math.round(e.startTime * 10) / 10, Math.round(e.duration * 10) / 10);
+        }
       }).observe({ type: "longtask" });
       ltOk = true;
     }
@@ -443,6 +447,7 @@ function frameLogBuild(md, q, v) {
     }
   }
   if (!frameLogOn && ltOk) fl.lt_off = { n: ltN, max_ms: Math.round(ltMax * 10) / 10 };   // SCRATCH t91 G7 (dev only, never frozen)
+  if (ltOk) { fl.lt_t = ltT.splice(0, ltT.length); fl.tick_pn = Math.round(performance.now() * 10) / 10; }   // SCRATCH: [start, dur] pairs, tick dispatch
   ltN = 0;
   ltMax = 0;
   framePushErr = 0;
