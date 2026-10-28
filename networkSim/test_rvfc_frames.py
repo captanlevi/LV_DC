@@ -39,7 +39,8 @@ const cfgFor = { off: { lvqoe_config: { instruments: false } },     // t91: fram
                  fl1: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
                  flalt: { lvqoe_config: { frame_log: { block_s: 1, t0: 5e11 } } },
                  flcap: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
-                 flfull: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } } };
+                 flfull: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
+                 flthrow: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } } };
 const timers = [], side = [], sent = [];
 let now = 1000;
 class MediaStream {}
@@ -100,14 +101,19 @@ if (mode === "exact") {                     // levi 22:44 (2): 100 batches of 10
   process.exit(0);
 }
 let pf = 0, mt = 0;
+const thrown = [];
 const presented = [];
 const present = (n, w, h) => { for (let i = 0; i < n; i++) {
   const f = cbs.shift(); if (!f) return; now += 33; pf += 1; mt += 1 / 30; decoded += 1;
   const md = { presentationTime: now - 1, expectedDisplayTime: now + 16, mediaTime: mt, presentedFrames: pf, width: w, height: h };
   if (mode === "flfull" && pf % 2) Object.assign(md, { processingDuration: (pf * 7) / 1e6, captureTime: now - 40,
                                                        receiveTime: now - 20.5, rtpTimestamp: pf * 3000 });   // t91: every field
-  presented.push(md);
-  f(now, md); } };
+  presented.push(mode === "flthrow" ? { ...md } : md);   // the record before any faulting getter
+  if (mode === "flthrow" && pf === 10)      // levi 23:51 (1): a fault inside frameLogPush (contained, counted)
+    Object.defineProperty(md, "processingDuration", { get() { throw new Error("pd fault"); } });
+  if (mode === "flthrow" && pf === 20)      // and a throw in the callback body outside it (reaches the caller)
+    Object.defineProperty(md, "width", { get() { throw new Error("body fault"); } });
+  try { f(now, md); } catch (e) { thrown.push(String(e)); } } };
 const tick = () => { now += 1; for (const t of timers) t(); };
 present(30, 720, 1280);
 if (mode.startsWith("fl")) {                // t93: a long task and two page events inside the first (ON) tick
@@ -126,7 +132,7 @@ present(3, 540, 960); tick();
 if (mode === "flcap") { present(1300, 540, 960); tick(); }   // over FRAME_LOG_MAX in one tick
 vm.runInContext("flushSide()", ctx);        // the last tick's rows
 const flCode = vm.runInContext("JSON.stringify(FL_CODE)", ctx);
-fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length, registeredBeforeCfg, stored, presented,
+fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length, registeredBeforeCfg, stored, presented, thrown,
                                                    flCode: JSON.parse(flCode) }));
 """
 
@@ -243,6 +249,18 @@ def test_frame_log():
     assert not any("fl" in x for x in off)
 
 
+def test_frame_log_cb_throw():
+    """levi 23:51 (1): a throw in the rVFC callback never ends the chain (the re-request is in finally); a fault inside
+    frameLogPush is contained: that frame's row is not kept, fl.push_err counts it, fl.err names it."""
+    r = run("flthrow")
+    assert r["thrown"] == ["Error: body fault"], r["thrown"]                   # only the body throw reaches the caller
+    assert r["pending"] == 1                                                    # the chain is still armed at the end
+    fl = [x["fl"] for x in _frames(r) if x["k"] == "tick"]
+    assert fl[0]["n"] == 28 and fl[0]["push_err"] == 1 and fl[0]["err"] == "push: Error: pd fault"
+    assert [f["n"] for f in fl[1:]] == [15, 0, 3] and not any("push_err" in f for f in fl[1:])
+    assert [row["pf"] for row in FL.decode(fl[0])] == [p for p in range(1, 31) if p not in (10, 20)]
+
+
 def test_frame_log_exact_over_length():
     """levi 22:44 (2): deltas are between the rounded integers, so decode gives back every rounded absolute with no
     drift: 100 000 frames (mt at 1/30 s, pt at 60 Hz, edt / now offsets, two elements), decoded = rounded exactly."""
@@ -255,6 +273,7 @@ def test_frame_log_exact_over_length():
 
 def main() -> int:
     test_rvfc_frames()
+    test_frame_log_cb_throw()
     test_frame_log_exact_over_length()
     test_frame_log()
     print("test_rvfc_frames: ok")

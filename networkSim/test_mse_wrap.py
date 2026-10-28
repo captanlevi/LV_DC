@@ -7,6 +7,7 @@ push; a test asserts it"): browser.MSE_WRAP_JS under node with stub MediaSource 
   - records: add (mime, id), app (bytes), rm (start, end), ct (mime), end (updateend: buffered end, range count), batched
     once per 1 s as one postMessage {source: "lvqoe-mse", recs, over}; past the cap counted (over);
   - OFF blocks (epoch clock, even block) record nothing while the wrap stays installed; a second injection is a no-op;
+  - levi 23:51 (2): a document that never calls addSourceBuffer still posts its install once (the per-document marker);
   - levi 22:44 (1): a SourceBuffer the page creates at document start, right after the injected script ran, is wrapped;
     the install time (inst) and the first addSourceBuffer (first: t, mime) are posted whatever the arm, once in OFF.
 
@@ -50,6 +51,10 @@ ctx.window = ctx;
 vm.createContext(ctx);
 vm.runInContext(src, ctx);
 vm.runInContext(src, ctx);                     // a second injection (a re-run on the same document): no double wrap
+if (process.argv[5] === "noadd") {           // levi 23:51 (2): a document that never uses MSE still posts its install
+  for (const f of timers) f(); for (const f of timers) f();
+  fs.writeFileSync(outPath, JSON.stringify({ posted })); process.exit(0);
+}
 const res = {};
 const ms = new MediaSource();
 const sb = ms.addSourceBuffer('video/mp4; codecs="vp09.00.40.08"');
@@ -76,14 +81,14 @@ fs.writeFileSync(outPath, JSON.stringify(res));
 """
 
 
-def run(now_ms: int, block_s: int, max_recs: int = 2000) -> dict:
+def run(now_ms: int, block_s: int, max_recs: int = 2000, noadd: bool = False) -> dict:
     node = shutil.which("node")
     assert node, "node not found: the MSE wrap test cannot run (install node)"
     with tempfile.TemporaryDirectory() as t:
         h, js, out = Path(t) / "h.js", Path(t) / "w.js", Path(t) / "out.json"
         h.write_text(HARNESS)
         js.write_text(B.MSE_WRAP_JS % {"block_s": block_s, "max": max_recs})
-        subprocess.run([node, str(h), str(js), str(out), str(now_ms)], check=True)
+        subprocess.run([node, str(h), str(js), str(out), str(now_ms)] + (["noadd"] if noadd else []), check=True)
         return json.loads(out.read_text())
 
 
@@ -106,6 +111,9 @@ def test_mse_wrap_transparent_and_recorded():
     assert [(p["recs"], p["first"]["mime"][:9]) for p in off["posted"]] == [([], "video/mp4")]   # first only, no records
     on = run(now_ms=60_000 + 5_000, block_s=60)                                 # block 1 (odd): ON
     assert len(on["posted"][0]["recs"]) == 6
+    for bs, t in ((0, 1_000_000), (60, 125_000)):                              # no MSE use, ON or OFF: one install post
+        na = run(now_ms=t, block_s=bs, noadd=True)["posted"]
+        assert [(p["recs"], p["inst"], p["first"]) for p in na] == [([], 7, None)], na
 
 
 def test_frame_log_arm_epoch():

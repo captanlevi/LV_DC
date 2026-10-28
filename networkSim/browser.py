@@ -1695,12 +1695,17 @@ FRAME_LOG_MSE_MAX = 2000      # t93 rows 9 / 20: the page-world MSE wrap's recor
 # tw_latency.py found), so the join enables Page, and after the join (mse_wrap_settle) the wrap's flag is read on the
 # joined document (live), the script is removed and Page disabled again: the wrap stays in that document (laptop: batches
 # went on after Page.disable) and the page connection is back to its usual state. A later document (a reload) has no
-# wrap; its MSE batches simply stop.
+# wrap (laptop: a script left registered did not run on a reload after Page.disable; Page kept enabled all session is
+# not taken: with Page enabled a JS dialog may wait on this connection (javascriptDialogOpening), which never answers
+# one). levi 23:51 (2):
+# so the wrap's presence is recorded per document: its first post goes out at install (1 s after document start) whatever
+# the page does, content.js carries it as fl.mse_inst on every later ON tick of that document (cs); a yt document whose ON
+# ticks carry no mse_inst had no wrap (absent, never an empty MSE record).
 MSE_WRAP_JS = r"""(() => {
   if (window.__lvqoeMse) return;
   window.__lvqoeMse = true;
   const inst = performance.now();
-  let first = null, firstSent = false;
+  let first = null, firstSent = false, instSent = false;
   const BLOCK_S = %(block_s)d, MAX = %(max)d;
   const on = () => !(BLOCK_S > 0) || Math.floor(Date.now() / (BLOCK_S * 1000)) %% 2 === 1;
   let recs = [], over = 0, next = 0;
@@ -1733,8 +1738,9 @@ MSE_WRAP_JS = r"""(() => {
     wrap(p, "changeType", (sb, a) => push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) }));
   }
   setInterval(() => {
-    if (!recs.length && (first === null || firstSent)) return;
+    if (!recs.length && instSent && (first === null || firstSent)) return;
     const batch = recs; recs = [];
+    instSent = true;
     firstSent = first !== null;
     try { window.postMessage({ source: "lvqoe-mse", recs: batch, over, inst, first }, "*"); } catch (e) {}
   }, 1000);

@@ -324,6 +324,7 @@ let ltMax = 0;
 let ltOk = false;
 let mseOver = null;
 let mseInst = null;
+let framePushErr = 0;                      // frames whose push faulted in this tick (fl.push_err)
 let frameLogErr = null;                     // a frame-log fault: recorded in fl, never thrown into the tick or the config
 function frameLogConfigure(c) {
   if (!c || typeof c !== "object") return;
@@ -366,19 +367,25 @@ function presentKeys(o, keys) {               // only the keys the object has: a
 }
 function frameLogPush(el, now, md) {      // the callback's only work: numbers into the preallocated buffer
   if (frameN >= FRAME_LOG_MAX) { frameOver += 1; return; }
-  const o = frameN++ * FL_N;
-  frameBuf[o] = el;
-  frameBuf[o + 1] = md.presentationTime;
-  frameBuf[o + 2] = md.expectedDisplayTime;
-  frameBuf[o + 3] = md.mediaTime;
-  frameBuf[o + 4] = md.presentedFrames;
-  frameBuf[o + 5] = md.width;
-  frameBuf[o + 6] = md.height;
-  frameBuf[o + 7] = md.processingDuration;
-  frameBuf[o + 8] = md.captureTime;
-  frameBuf[o + 9] = md.receiveTime;
-  frameBuf[o + 10] = md.rtpTimestamp;
-  frameBuf[o + 11] = now;
+  const o = frameN * FL_N;
+  try {                                     // levi 23:51: a fault is counted (fl.push_err, fl.err), the row not kept
+    frameBuf[o] = el;
+    frameBuf[o + 1] = md.presentationTime;
+    frameBuf[o + 2] = md.expectedDisplayTime;
+    frameBuf[o + 3] = md.mediaTime;
+    frameBuf[o + 4] = md.presentedFrames;
+    frameBuf[o + 5] = md.width;
+    frameBuf[o + 6] = md.height;
+    frameBuf[o + 7] = md.processingDuration;
+    frameBuf[o + 8] = md.captureTime;
+    frameBuf[o + 9] = md.receiveTime;
+    frameBuf[o + 10] = md.rtpTimestamp;
+    frameBuf[o + 11] = now;
+    frameN += 1;
+  } catch (e) {
+    framePushErr += 1;
+    frameLogErr = "push: " + String(e).slice(0, 160);
+  }
 }
 function frameLogEncode(n) {              // {cols, inexact}: the columnar integer batch of the tick's n rows
   const cols = {};
@@ -430,6 +437,7 @@ function frameLogBuild(md, q, v) {
     if (mseOver !== null) fl.mse_over = mseOver;
     if (mseInst !== null) fl.mse_inst = mseInst;
     if (frameLogErr !== null) fl.err = frameLogErr;
+    if (framePushErr) fl.push_err = framePushErr;
     if (md) {
       const keys = Object.keys(md).sort().join(",");
       if (keys !== frameKeys) { fl.keys = keys; frameKeys = keys; }
@@ -437,6 +445,7 @@ function frameLogBuild(md, q, v) {
   }
   ltN = 0;
   ltMax = 0;
+  framePushErr = 0;
   frameN = 0;
   frameLogOn = frameLogArm();
   return { fl };
@@ -495,33 +504,36 @@ function rvfcStart(v) {
       return;
     }
     if (!collecting) return;
-    st.n += 1;
-    st.last = md;
-    st.lastAt = now;                         // A14: the res_meta trigger stands down only while frames are fresh
-    const src = srcKey(v);
-    const base = { ts: performance.timeOrigin + now, el: elId(v), src, pt: md.presentationTime ?? null,
-                   edt: md.expectedDisplayTime ?? null, mt: md.mediaTime ?? null, pf: md.presentedFrames ?? null,
-                   w: md.width ?? null, h: md.height ?? null };
-    if (frameLogOn) frameLogPush(base.el, now, md);
-    if (src !== st.src) {
-      side("frames", { k: "first_frame", ...base, prev_src: st.src });
-      st.src = src;
-    }
-    if (md.width !== st.w || md.height !== st.h) {
-      side("frames", { k: "dims", ...base, prev_w: st.w, prev_h: st.h });
-      // v3 A14 (t67): the tier-change shot fires on the presented frame whose height changed (A1), not on the next
-      // res_meta tick; the request carries the tick it follows (A5) and that frame's presentedFrames
-      // brad 21:19: a new element's first frame compares against the last tick's height (shotLastH), so a tier change
-      // carried by an element swap (tt per-stream elements, a yt / tw replace) still gets its shot
-      const prevH = st.h !== null ? st.h : shotLastH;
-      if (v === video && prevH !== null && (md.height || 0) > 0 && md.height !== prevH && window === window.top) {
-        requestShot("tier_change", lastTick ? lastTick.id : null, md.presentedFrames ?? null);
+    try {                                   // levi 23:51: a throw in the body never ends the chain (re-request in finally)
+      st.n += 1;
+      st.last = md;
+      st.lastAt = now;                         // A14: the res_meta trigger stands down only while frames are fresh
+      const src = srcKey(v);
+      const base = { ts: performance.timeOrigin + now, el: elId(v), src, pt: md.presentationTime ?? null,
+                     edt: md.expectedDisplayTime ?? null, mt: md.mediaTime ?? null, pf: md.presentedFrames ?? null,
+                     w: md.width ?? null, h: md.height ?? null };
+      if (frameLogOn) frameLogPush(base.el, now, md);
+      if (src !== st.src) {
+        side("frames", { k: "first_frame", ...base, prev_src: st.src });
+        st.src = src;
       }
-      st.w = md.width;
-      st.h = md.height;
+      if (md.width !== st.w || md.height !== st.h) {
+        side("frames", { k: "dims", ...base, prev_w: st.w, prev_h: st.h });
+        // v3 A14 (t67): the tier-change shot fires on the presented frame whose height changed (A1), not on the next
+        // res_meta tick; the request carries the tick it follows (A5) and that frame's presentedFrames
+        // brad 21:19: a new element's first frame compares against the last tick's height (shotLastH), so a tier change
+        // carried by an element swap (tt per-stream elements, a yt / tw replace) still gets its shot
+        const prevH = st.h !== null ? st.h : shotLastH;
+        if (v === video && prevH !== null && (md.height || 0) > 0 && md.height !== prevH && window === window.top) {
+          requestShot("tier_change", lastTick ? lastTick.id : null, md.presentedFrames ?? null);
+        }
+        st.w = md.width;
+        st.h = md.height;
+      }
+    } finally {
+      if (v === video || v.isConnected) v.requestVideoFrameCallback(cb);
+      else rvfcState.delete(v);
     }
-    if (v === video || v.isConnected) v.requestVideoFrameCallback(cb);
-    else rvfcState.delete(v);
   };
   v.requestVideoFrameCallback(cb);
 }
