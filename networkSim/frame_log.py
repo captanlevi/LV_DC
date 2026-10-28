@@ -3,6 +3,9 @@
 fl = {cs, seq, on, n, over, inexact, c, keys?}: n rows, the columns in c (FL_CODE: a column with no value in the tick is
 left out; a null is a frame that lacked the field). Integers: times in us (pt / edt / ct / rt / now were ms, mt / pd were s).
 Codes: "d" delta from the column's previous non-null value (the first absolute), "p" offset from the row's pt, "r" raw.
+Deltas restart every tick (each tick's first non-null value is absolute), so a tick decodes alone. A frame without pt has
+every "p" column null (the encoder's offset is NaN, sent as null); a non-null "p" value against a null pt, or a column
+whose length is not n, is malformed and raises FrameLogError.
 decode() gives one dict per frame in the browser's units (ms / s), exact to the us. The reader (LVQoE) owns its own copy;
 this one is the collector's statement of the format, checked against content.js's FL_CODE by test_rvfc_frames.
 """
@@ -18,6 +21,10 @@ FL_CODE: dict[str, tuple[str | None, float, str]] = {
 }
 
 
+class FrameLogError(ValueError):
+    """A malformed fl: a column's length is not n, or a "p" value whose row has no pt."""
+
+
 def decode(fl: dict) -> list[dict]:
     """The tick's frames, one dict per row: el plus each present field under its column name, in ms / s / counts."""
     n = int(fl.get("n") or 0)
@@ -27,7 +34,8 @@ def decode(fl: dict) -> list[dict]:
         raw = cols.get(name)
         if raw is None:
             continue
-        assert len(raw) == n, (name, len(raw), n)
+        if len(raw) != n:
+            raise FrameLogError(f"column {name}: {len(raw)} values for n {n}")
         if code == "d":
             out, acc = [], 0
             for x in raw:
@@ -48,6 +56,8 @@ def decode(fl: dict) -> list[dict]:
             if v is None:
                 continue
             if code == "p":
+                if pt_us is None:
+                    raise FrameLogError(f"column {name} row {i}: an offset from pt, but the row has no pt")
                 v = v + pt_us
             row[name] = v / scale if scale != 1 else v
         rows.append(row)

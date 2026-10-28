@@ -66,6 +66,42 @@ def test_frame_log_wiring():
     assert "if browser.frame_log:" in (HERE / "exp.py").read_text()             # the meta key only when asked
 
 
+def test_decode_malformed():
+    import frame_log as FL
+    ok = {"n": 2, "c": {"pt": [1000, 500], "edt": [None, 250]}}               # row 0 no edt; row 1 pt 1.5 ms
+    assert FL.decode(ok) == [{"pt": 1.0}, {"pt": 1.5, "edt": 1.75}]
+    for bad in ({"n": 2, "c": {"pt": [None, 500], "edt": [7, None]}},          # a "p" value on a row with no pt
+                {"n": 1, "c": {"edt": [7]}},                                   # no pt column at all
+                {"n": 2, "c": {"pt": [1000]}}):                                # a column shorter than n
+        try:
+            FL.decode(bad)
+        except FL.FrameLogError:
+            continue
+        raise AssertionError(bad)
+
+
+def test_mse_wrap_settle():
+    class Page:
+        def __init__(self, flag):
+            self.flag, self.calls = flag, []
+
+        def eval(self, js):
+            self.calls.append(("eval", js))
+            return self.flag
+
+        def call(self, m, params=None):
+            self.calls.append((m, params))
+            return {}
+    pg = Page(True)
+    r = B.mse_wrap_settle(pg, {"installed": True, "id": "3", "installed_at": 1.0})
+    assert r["live"] is True and r["installed_at"] == 1.0 and "page_disabled_at" in r
+    assert pg.calls[1:] == [("Page.removeScriptToEvaluateOnNewDocument", {"identifier": "3"}), ("Page.disable", None)]
+    assert B.mse_wrap_settle(Page(None), {"installed": True, "id": "3"})["live"] is False
+    src = (HERE / "browser.py").read_text()                                    # Page enabled before the registration
+    i = src.index('self._page.call("Page.enable")')
+    assert 0 < src.index('"Page.addScriptToEvaluateOnNewDocument", {\n                    "source": MSE_WRAP_JS', i) - i < 200
+
+
 def test_tcp_state_sampler():
     assert T.parse_ss_flows(SS_OUT) == [
         "ESTAB 0      0      192.168.1.5:50122 142.250.1.1:443 cubic wscale:7,7 rto:204 rtt:3.1/1.2 cwnd:10 "
@@ -98,6 +134,8 @@ def test_tcp_state_sampler():
 def main() -> int:
     test_frame_log_config()
     test_frame_log_wiring()
+    test_decode_malformed()
+    test_mse_wrap_settle()
     test_tcp_state_sampler()
     print("test_frame_log_config: ok")
     return 0

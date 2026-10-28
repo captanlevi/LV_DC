@@ -1687,10 +1687,15 @@ FRAME_LOG_MSE_MAX = 2000      # t93 rows 9 / 20: the page-world MSE wrap's recor
 # its value, synchronously; the record is one push in a try (a recording fault never reaches the page). Records, ON blocks
 # only: add (the mime / codec, the buffer's id), changeType, app (bytes), rm (start, end), end (updateend: the buffered end,
 # the range count); every 1 s one postMessage batch to content.js (frames k:"mse"), over counted past FRAME_LOG_MSE_MAX.
-# levi 22:44 (1): the wrap is in place before any page script (the CDP call precedes the join navigation and applies to
-# every later navigation of the page); its install time on the page (inst: performance.now() at the script's run) and the
-# page's first addSourceBuffer (first: its perf time and mime), recorded whatever the arm, ride every batch and an
-# arm-independent first post; meta frame_log.mse_wrap.installed_at is the CDP call's epoch time.
+# levi 22:44 (1): the wrap is in place before any page script (the CDP call precedes the join navigation); its install
+# time on the page (inst: performance.now() at the script's run) and the page's first addSourceBuffer (first: its perf
+# time and mime), recorded whatever the arm, ride every batch and an arm-independent first post; meta
+# frame_log.mse_wrap.installed_at is the CDP call's epoch time. The script runs only while the Page domain is enabled on
+# the registering connection (laptop 2026-10-28, a dash.js page: without Page.enable no batch, with it every batch; as
+# tw_latency.py found), so the join enables Page, and after the join (mse_wrap_settle) the wrap's flag is read on the
+# joined document (live), the script is removed and Page disabled again: the wrap stays in that document (laptop: batches
+# went on after Page.disable) and the page connection is back to its usual state. A later document (a reload) has no
+# wrap; its MSE batches simply stop.
 MSE_WRAP_JS = r"""(() => {
   if (window.__lvqoeMse) return;
   window.__lvqoeMse = true;
@@ -1734,6 +1739,25 @@ MSE_WRAP_JS = r"""(() => {
     try { window.postMessage({ source: "lvqoe-mse", recs: batch, over, inst, first }, "*"); } catch (e) {}
   }, 1000);
 })();"""
+
+
+def mse_wrap_settle(page, rec: dict) -> dict:
+    """After the join: live = the wrap's flag on the joined document; then the script is removed and Page disabled (the
+    connection's usual state). Never an abort: a failure is recorded."""
+    rec = dict(rec)
+    try:
+        rec["live"] = page.eval("window.__lvqoeMse === true") is True
+    except Exception as exc:
+        rec["live"] = None
+        rec["live_error"] = repr(exc)[:200]
+    try:
+        if rec.get("id"):
+            page.call("Page.removeScriptToEvaluateOnNewDocument", {"identifier": rec["id"]})
+        page.call("Page.disable")
+        rec["page_disabled_at"] = round(time.time(), 3)
+    except Exception as exc:
+        rec["disable_error"] = repr(exc)[:200]
+    return rec
 
 
 def frame_log_arm(block_s: int, now_s: float | None = None) -> bool:
@@ -4850,6 +4874,7 @@ class BrowserSession:
             self._tt_room = TtRoomListener(self._ws_url).start()
         if self.frame_log and self.frame_log["enabled"] and self.platform == "youtube":   # t93 rows 9 / 20, before the join
             try:
+                self._page.call("Page.enable")
                 r = self._page.call("Page.addScriptToEvaluateOnNewDocument", {
                     "source": MSE_WRAP_JS % {"block_s": self.frame_log["block_s"], "max": FRAME_LOG_MSE_MAX}})
                 self.frame_log["mse_wrap"] = {"installed": bool(r.get("identifier")), "id": r.get("identifier"),
@@ -4981,6 +5006,8 @@ class BrowserSession:
                     self.tw_latency = {**self.tw_latency, "ok": None, "read_back_error": repr(exc)[:200]}
                 print(f"[browser] Twitch low latency read back: {self.tw_latency.get('read_back')} "
                       f"(ok {self.tw_latency.get('ok')})", flush=True)
+        if self.frame_log and self.frame_log.get("mse_wrap"):
+            self.frame_log["mse_wrap"] = mse_wrap_settle(self._page, self.frame_log["mse_wrap"])
         if self.geometry_target:
             tid = None
             try:
