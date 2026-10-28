@@ -1779,6 +1779,27 @@ def frame_log_arm(block_s: int, now_s: float | None = None) -> bool:
     return int((time.time() if now_s is None else now_s) // block_s) % 2 == 1
 
 
+# levi 02:52 (era v4 backstop): the eras whose counted sessions need the per-frame log (their label path), as LITERAL
+# strings like check_session.PICTURE_RUN_ERAS; an era bump decides in the same commit whether it joins
+FRAME_LOG_REQUIRED_ERAS = frozenset({"v4-collector-2026-10-29"})
+
+
+def frame_log_record_refusal(env, counted: bool, era: str) -> str | None:
+    """levi 02:52: a counted v4 session without the per-frame log has no label of record, a loss no later fix recovers.
+    On a counted run (LVDC_TRIO_RECORD=1 or a record-marker root) of an era in FRAME_LOG_REQUIRED_ERAS, the session is
+    refused unless the log would run: LVQOE_FRAME_LOG exactly "1" (unset, "0", alt<N>, anything else: refused) with the
+    instruments on. A refusal, never a default. Dry / pilot runs (counted False) are unchanged: unset is OFF, as before."""
+    if not counted or era not in FRAME_LOG_REQUIRED_ERAS:
+        return None
+    raw = env.get(FRAME_LOG_ENV)
+    if raw != "1":
+        return (f"{FRAME_LOG_ENV}={raw!r} on a counted {era} run: the per-frame log is its label path, only \"1\" "
+                f"is accepted (unset / 0 / alt<N> refused)")
+    if env.get("LVQOE_INSTRUMENTS", "1") == "0":
+        return f"LVQOE_INSTRUMENTS=0 on a counted {era} run: the per-frame log needs the instruments on"
+    return None
+
+
 def frame_log_config(raw: str | None, session_dir: Path | None, of_record: bool, instruments: bool) -> dict | None:
     """meta.json frame_log: None when off; else what was asked and whether it runs ({enabled, block_s, t0} or a reason)."""
     raw = (raw or "").strip()

@@ -168,6 +168,28 @@ def test_mse_wrap_disabled_on_every_exit():
     assert w["installed"] is False and "error" in w and w["page_disabled"] is True and bs._page.calls[-1] == "Page.disable"
 
 
+def test_counted_v4_refuses_without_the_frame_log():
+    """levi 02:52 (era v4 backstop): a counted run of a frame-log era refuses unless LVQOE_FRAME_LOG is exactly "1" (with
+    the instruments on); dry / pilot runs and other eras are unchanged (unset = OFF, no refusal)."""
+    import record
+    v4 = record.ERA
+    assert v4 == "v4-collector-2026-10-29" and v4 in B.FRAME_LOG_REQUIRED_ERAS
+    ref = lambda env, counted=True, era=v4: B.frame_log_record_refusal(env, counted, era)
+    for raw in (None, "", "0", "alt60", "alt1", "yes", " 1"):                    # unset, 0, alt<N>, anything not "1"
+        env = {} if raw is None else {B.FRAME_LOG_ENV: raw}
+        assert ref(env) and "only \"1\" is accepted" in ref(env), raw
+    assert ref({B.FRAME_LOG_ENV: "1"}) is None                                   # "1": runs
+    assert "LVQOE_INSTRUMENTS=0" in ref({B.FRAME_LOG_ENV: "1", "LVQOE_INSTRUMENTS": "0"})
+    for raw in (None, "0", "alt60"):                                             # dry / pilot: unchanged
+        assert ref({} if raw is None else {B.FRAME_LOG_ENV: raw}, counted=False) is None
+    assert ref({}, era="v3-collector-2026-10-24") is None                        # another era: no requirement
+    src = (HERE / "exp.py").read_text()                                          # wired before any dir and the browser
+    i = src.index("_flr = frame_log_record_refusal(os.environ, os.environ.get(\"LVDC_TRIO_RECORD\") == \"1\"")
+    assert src.index("C8 REFUSED") < i < src.index("session_dir.mkdir(parents=True, exist_ok=True)") < src.index("browser = BrowserSession(")
+    assert 'or _dr_fl.record_root_check(_dr_fl.DATA_ROOT)["marker"], _rec_fl.ERA)' in src
+    assert "sys.exit(EXIT_FRAME_LOG_REFUSED)" in src and "EXIT_FRAME_LOG_REFUSED = 14" in src
+
+
 def test_tcp_state_sampler():
     assert T.parse_ss_flows(SS_OUT) == [
         "ESTAB 0      0      192.168.1.5:50122 142.250.1.1:443 cubic wscale:7,7 rto:204 rtt:3.1/1.2 cwnd:10 "
@@ -206,6 +228,7 @@ def main() -> int:
     test_mse_wrap_settle()
     test_mse_wrap_unset_no_cdp()
     test_mse_wrap_disabled_on_every_exit()
+    test_counted_v4_refuses_without_the_frame_log()
     test_tcp_state_sampler()
     print("test_frame_log_config: ok")
     return 0

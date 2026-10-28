@@ -209,6 +209,7 @@ EXIT_ROOM_ENDED = 6      # tt: the room died mid-session (browser.py TTRoomWatch
 EXIT_PLAYER_DEAD = 7     # tt: readyState 0 with no media for PLAYER_DEAD_MAX_S (TTRoomWatch); not a failure, room re-picked
 EXIT_STREAM_ENDED = 12   # yt / twitch: the tab left its live stream (browser.StreamEndedWatch); not a failure, re-picked
 EXIT_PLAYER_ERROR_HELD = 13   # yt / twitch (levi 02:57): a player error begun in the low-state hold; not a failure, re-picked
+EXIT_FRAME_LOG_REFUSED = 14   # levi 02:52: a counted v4 run without LVQOE_FRAME_LOG=1, refused before any session dir
 
 
 # v2 (LVQoE t37, rushi 2026-10-16): each session's profile is a CLONE of a per-platform template (a Chrome user-data-dir,
@@ -1024,6 +1025,17 @@ if __name__ == "__main__":
     if _c8:
         print(f"C8 REFUSED: {_c8}")
         sys.exit(2)
+    # levi 02:52 (era v4 backstop; the ops pin is the first gate): a counted run (LVDC_TRIO_RECORD=1 or a record-marker
+    # root, as the allow-era refusal above) of a frame-log era refuses here, before any session dir and before the
+    # browser, unless LVQOE_FRAME_LOG is exactly "1": non-zero rc (the slots log's exit event), the reason in the exp log
+    import data_root as _dr_fl
+    import record as _rec_fl
+    from browser import frame_log_record_refusal
+    _flr = frame_log_record_refusal(os.environ, os.environ.get("LVDC_TRIO_RECORD") == "1"
+                                    or _dr_fl.record_root_check(_dr_fl.DATA_ROOT)["marker"], _rec_fl.ERA)
+    if _flr:
+        print(f"FRAME_LOG REFUSED: {_flr}", flush=True)
+        sys.exit(EXIT_FRAME_LOG_REFUSED)
     if args.save_dir:
         session_dir = args.save_dir
         session_dir.mkdir(parents=True, exist_ok=True)
