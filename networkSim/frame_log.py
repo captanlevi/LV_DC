@@ -1,7 +1,7 @@
 """t91 (boundary 3): the reference decoder of content.js's per-frame log, the frames tick row's field fl.
 
 fl = {cs, seq, on, n, over, inexact, c, keys?}: n rows, the columns in c (FL_CODE: a column with no value in the tick is
-left out; a null is a frame that lacked the field). Integers: times in us (pt / edt / ct / rt were ms, mt / pd were s).
+left out; a null is a frame that lacked the field). Integers: times in us (pt / edt / ct / rt / now were ms, mt / pd were s).
 Codes: "d" delta from the column's previous non-null value (the first absolute), "p" offset from the row's pt, "r" raw.
 decode() gives one dict per frame in the browser's units (ms / s), exact to the us. The reader (LVQoE) owns its own copy;
 this one is the collector's statement of the format, checked against content.js's FL_CODE by test_rvfc_frames.
@@ -14,6 +14,7 @@ FL_CODE: dict[str, tuple[str | None, float, str]] = {
     "mt": ("mediaTime", 1e6, "d"), "pf": ("presentedFrames", 1, "d"), "w": ("width", 1, "d"), "h": ("height", 1, "d"),
     "pd": ("processingDuration", 1e6, "r"), "ct": ("captureTime", 1e3, "p"), "rt": ("receiveTime", 1e3, "p"),
     "rtp": ("rtpTimestamp", 1, "d"),
+    "now": (None, 1e3, "p"),        # brad W1: the callback's own now (its first argument), not a metadata field
 }
 
 

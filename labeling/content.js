@@ -292,14 +292,20 @@ function observePlayerEvents(v) {
 // integers: times in us (pt / edt / ct / rt from ms, mt / pd from s), each column delta-coded or offset from pt
 // (FL_CODE), a column with no value in the tick left out, a value null where that frame lacked it. inexact counts values
 // that are not whole us (rounded); keys is Object.keys of the last frame's metadata when it differs from the last one
-// sent, so a field the browser adds shows. block_s > 0 alternates OFF / ON blocks of block_s s from t0 (even blocks OFF):
-// the instrumentation check's arms, fixed per tick. pf per row shows a frame skipped between callbacks.
+// sent, so a field the browser adds shows. block_s > 0 alternates OFF / ON blocks of block_s s on the epoch clock (t0 0:
+// arm = floor(unix s / block_s) odd; levi 21:0x, so page and host samplers switch together), fixed per tick. pf per row
+// shows a frame skipped between callbacks. t93 (levi 00124; brad W1 / W2 / W5 / W6), the sweep's page rows, every one ON
+// ticks only: the callback's own now (column now); per tick to / wall / hid, q (getVideoPlaybackQuality's
+// corruptedVideoFrames / creationTime / totalFrameDelay where the browser has them), wk (the webkit decode counters where
+// present), lt (long tasks since the last tick: count, max ms; null where unsupported), conn (navigator.connection), mse
+// (the page-world MSE wrap's overflow, browser.py MSE_WRAP_JS, yt); page events (visibility, focus / blur, fullscreen,
+// freeze / resume, pagehide / pageshow) into player_events as lvqoe_page. Absent stays absent, never 0.
 const FRAME_LOG_MAX = 1200;
 // column: [metadata field, scale to an integer, code: "d" delta from the previous value, "p" offset from the row's pt, "r" raw]
 const FL_CODE = { el: [null, 1, "d"], pt: ["presentationTime", 1e3, "d"], edt: ["expectedDisplayTime", 1e3, "p"],
                   mt: ["mediaTime", 1e6, "d"], pf: ["presentedFrames", 1, "d"], w: ["width", 1, "d"], h: ["height", 1, "d"],
                   pd: ["processingDuration", 1e6, "r"], ct: ["captureTime", 1e3, "p"], rt: ["receiveTime", 1e3, "p"],
-                  rtp: ["rtpTimestamp", 1, "d"] };
+                  rtp: ["rtpTimestamp", 1, "d"], now: [null, 1e3, "p"] };
 const FL_COLS = Object.keys(FL_CODE);
 const FL_N = FL_COLS.length;
 const frameBuf = new Float64Array(FRAME_LOG_MAX * FL_N);
@@ -313,12 +319,51 @@ function frameLogArm() {
   const b = frameLogCfg.block_s;
   return !(b > 0) || Math.floor((Date.now() - frameLogCfg.t0) / (b * 1000)) % 2 === 1;
 }
+let ltN = 0;
+let ltMax = 0;
+let ltOk = false;
+let mseOver = null;
+let frameLogErr = null;                     // a frame-log fault: recorded in fl, never thrown into the tick or the config
 function frameLogConfigure(c) {
   if (!c || typeof c !== "object") return;
-  frameLogCfg = { block_s: Number(c.block_s) || 0, t0: Number(c.t0) || Date.now() };
+  frameLogCfg = { block_s: Number(c.block_s) || 0, t0: Number.isFinite(Number(c.t0)) ? Number(c.t0) : 0 };
   frameLogOn = frameLogArm();
+  try { frameLogListen(); } catch (e) { frameLogErr = "listen: " + String(e).slice(0, 160); }
 }
-function frameLogPush(el, md) {           // the callback's only work: numbers into the preallocated buffer
+function frameLogListen() {
+  try {                                     // t93 row 8: long tasks, counted in ON ticks only
+    if (typeof PerformanceObserver === "function" && (PerformanceObserver.supportedEntryTypes || []).includes("longtask")) {
+      new PerformanceObserver((list) => {
+        if (!frameLogOn) return;
+        for (const e of list.getEntries()) { ltN += 1; if (e.duration > ltMax) ltMax = e.duration; }
+      }).observe({ type: "longtask" });
+      ltOk = true;
+    }
+  } catch (e) { ltOk = false; }
+  const pageEvent = (kind, extra) => {      // t93 rows 7 / 23 (brad W6): the page's state at its change, ON ticks only
+    if (!frameLogOn || !collecting) return;
+    const pn = performance.now();
+    side("player_events", { ev: "lvqoe_page", kind, ts: performance.timeOrigin + pn, pn, wall: Date.now(),
+                            hid: document.hidden, vis: document.visibilityState, top: window === window.top, ...(extra || {}) });
+  };
+  document.addEventListener("visibilitychange", () => pageEvent("visibilitychange"));
+  window.addEventListener("focus", () => pageEvent("focus"));
+  window.addEventListener("blur", () => pageEvent("blur"));
+  document.addEventListener("fullscreenchange", () => {
+    const fe = document.fullscreenElement;
+    pageEvent("fullscreenchange", { fs: !!fe, fs_video: !!(fe && video && (fe === video || (fe.contains && fe.contains(video)))) });
+  });
+  document.addEventListener("freeze", () => pageEvent("freeze"));
+  document.addEventListener("resume", () => pageEvent("resume"));
+  window.addEventListener("pagehide", (e) => pageEvent("pagehide", { persisted: !!e.persisted }));
+  window.addEventListener("pageshow", (e) => pageEvent("pageshow", { persisted: !!e.persisted }));
+}
+function presentKeys(o, keys) {               // only the keys the object has: absent stays absent, never 0
+  const r = {};
+  if (o) for (const [k, src] of keys) if (src in o && o[src] !== undefined) r[k] = o[src];
+  return r;
+}
+function frameLogPush(el, now, md) {      // the callback's only work: numbers into the preallocated buffer
   if (frameN >= FRAME_LOG_MAX) { frameOver += 1; return; }
   const o = frameN++ * FL_N;
   frameBuf[o] = el;
@@ -332,6 +377,7 @@ function frameLogPush(el, md) {           // the callback's only work: numbers i
   frameBuf[o + 8] = md.captureTime;
   frameBuf[o + 9] = md.receiveTime;
   frameBuf[o + 10] = md.rtpTimestamp;
+  frameBuf[o + 11] = now;
 }
 function frameLogEncode(n) {              // {cols, inexact}: the columnar integer batch of the tick's n rows
   const cols = {};
@@ -351,22 +397,44 @@ function frameLogEncode(n) {              // {cols, inexact}: the columnar integ
       any = true;
       const x = q(v, scale);
       if (code === "d") { out[i] = x - prev; prev = x; }
-      else if (code === "p") out[i] = x - Math.round(frameBuf[i * FL_N + 1] * 1e3);
+      else if (code === "p") out[i] = x - Math.round(frameBuf[i * FL_N + 1] * 1e3);   // pt in us
       else out[i] = x;
     }
     if (any) cols[FL_COLS[j]] = out;
   }
   return { cols, inexact };
 }
-function frameLogField(md) {              // the tick row's fl, then the next tick's arm
+function frameLogField(md, q, v) {        // the tick row's fl, then the next tick's arm; a fault is fl.err, never a throw
   if (!frameLogCfg) return {};
+  try {
+    return frameLogBuild(md, q, v);
+  } catch (e) {
+    frameN = 0;
+    return { fl: { cs: CS_ID, seq: frameSeq++, err: String(e).slice(0, 200) } };
+  }
+}
+function frameLogBuild(md, q, v) {
   const n = frameN;
   const { cols, inexact } = frameLogEncode(n);
   const fl = { cs: CS_ID, seq: frameSeq++, on: frameLogOn, n, over: frameOver, inexact, c: cols };
-  if (md) {
-    const keys = Object.keys(md).sort().join(",");
-    if (keys !== frameKeys) { fl.keys = keys; frameKeys = keys; }
+  if (frameLogOn) {                         // t93: the tick's page readings, ON ticks only
+    fl.to = performance.timeOrigin;
+    fl.wall = Date.now();
+    fl.hid = document.hidden;
+    fl.q = presentKeys(q, [["corrupted", "corruptedVideoFrames"], ["creation", "creationTime"], ["tfd", "totalFrameDelay"]]);
+    fl.wk = presentKeys(v, [["dfc", "webkitDecodedFrameCount"], ["drc", "webkitDroppedFrameCount"],
+                        ["vb", "webkitVideoDecodedByteCount"], ["ab", "webkitAudioDecodedByteCount"]]);
+    fl.lt = ltOk ? { n: ltN, max_ms: Math.round(ltMax * 10) / 10 } : null;
+    fl.conn = presentKeys(typeof navigator !== "undefined" ? navigator.connection : null, [["dl", "downlink"], ["rtt", "rtt"], ["et", "effectiveType"], ["sd", "saveData"]]);
+    if (mseOver !== null) fl.mse_over = mseOver;
+    if (frameLogErr !== null) fl.err = frameLogErr;
+    if (md) {
+      const keys = Object.keys(md).sort().join(",");
+      if (keys !== frameKeys) { fl.keys = keys; frameKeys = keys; }
+    }
   }
+  ltN = 0;
+  ltMax = 0;
   frameN = 0;
   frameLogOn = frameLogArm();
   return { fl };
@@ -432,7 +500,7 @@ function rvfcStart(v) {
     const base = { ts: performance.timeOrigin + now, el: elId(v), src, pt: md.presentationTime ?? null,
                    edt: md.expectedDisplayTime ?? null, mt: md.mediaTime ?? null, pf: md.presentedFrames ?? null,
                    w: md.width ?? null, h: md.height ?? null };
-    if (frameLogOn) frameLogPush(base.el, md);
+    if (frameLogOn) frameLogPush(base.el, now, md);
     if (src !== st.src) {
       side("frames", { k: "first_frame", ...base, prev_src: st.src });
       st.src = src;
@@ -468,7 +536,7 @@ function rvfcTick() {
                    instruments: v3On && v3Ready, rvfc: v3On && !!st, off_arm_cb: offArmCb,
                    ad_cb: adStats.cb, ad_checks: adStats.runs, ad_ms: Math.round(adStats.ms * 1000) / 1000,
                    src3_polls: src3Polls,
-                   side_dropped: { ...sideDropped }, side_failed: { ...sideFailed }, ...frameLogField(md) });
+                   side_dropped: { ...sideDropped }, side_failed: { ...sideFailed }, ...frameLogField(md, q, video) });
   if (st) st.n = 0;
   adStats.cb = adStats.runs = adStats.ms = 0;
   src3Polls = 0;
@@ -877,6 +945,13 @@ window.addEventListener("message", (e) => {
   }
   if (e.source === window && e.data && e.data.source === "lvqoe-flush") {   // browser.py's final flush before export
     tryFlush(); flushSide(); flushStats();
+    return;
+  }
+  if (e.source === window && e.data && e.data.source === "lvqoe-mse") {   // t93 rows 9 / 20 (yt): browser.py MSE_WRAP_JS
+    if (collecting && frameLogCfg && Array.isArray(e.data.recs)) {
+      for (const r of e.data.recs) side("frames", { k: "mse", ...r });
+      mseOver = Number(e.data.over) || 0;
+    }
     return;
   }
   if (e.source === window && e.data && e.data.source === "lvqoe-ad-src-polls") {

@@ -48,7 +48,9 @@ let decoded = 0;
 const v = { paused: false, ended: false, readyState: 4, networkState: 2, currentTime: 0, videoWidth: 1280,
   videoHeight: 720, clientWidth: 853, clientHeight: 480, playbackRate: 1, duration: Infinity, isConnected: true,
   currentSrc: "", srcObject: new MediaStream(), buffered: { length: 0 },
-  getVideoPlaybackQuality: () => ({ droppedVideoFrames: 2, totalVideoFrames: decoded }),
+  getVideoPlaybackQuality: () => ({ droppedVideoFrames: 2, totalVideoFrames: decoded,
+                                    ...(mode === "flfull" ? { corruptedVideoFrames: 0, creationTime: now } : {}) }),
+  ...(mode === "flfull" ? { webkitDecodedFrameCount: 5, webkitVideoDecodedByteCount: 1234 } : {}),
   addEventListener() {}, requestVideoFrameCallback(f) { cbs.push(f); return cbs.length; } };
 const ctx = {
   console: { log() {} }, performance: { timeOrigin: 5e11, now: () => now },
@@ -63,10 +65,15 @@ const ctx = {
               if (m.kind === "side-batch" && failNextSide) { failNextSide = false; cb && cb({ ok: false, err: "quota" }); return; }
               if (m.kind === "side-batch") side.push(m); if (m.kind === "video-events-batch") sent.push(...m.payload);
               cb && cb({ ok: true }); } } },
-  addEventListener() {}, getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+  addEventListener(t, f) { (winL[t] = winL[t] || []).push(f); },
+  getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+  navigator: { connection: { downlink: 9.5, rtt: 50, effectiveType: "4g", saveData: false } },
+  PerformanceObserver: class { constructor(f) { ltCb.push(f); } observe() {} static get supportedEntryTypes() { return ["longtask"]; } },
 };
+const winL = {}, docL = {}, ltCb = [];
 ctx.window = ctx; ctx.window.top = ctx;
-ctx.document = { documentElement: { dataset: {} }, body: {}, visibilityState: "visible",
+ctx.document = { documentElement: { dataset: {} }, body: {}, visibilityState: "visible", hidden: false,
+  addEventListener(t, f) { (docL[t] = docL[t] || []).push(f); },
   querySelectorAll: (q) => (q === "video" ? [v] : []), querySelector: () => null, evaluate: () => ({ snapshotLength: 0 }) };
 vm.createContext(ctx);
 vm.runInContext(src, ctx);
@@ -82,7 +89,17 @@ const present = (n, w, h) => { for (let i = 0; i < n; i++) {
   presented.push(md);
   f(now, md); } };
 const tick = () => { now += 1; for (const t of timers) t(); };
-present(30, 720, 1280); tick();            // 30 frames, one tick
+present(30, 720, 1280);
+if (mode.startsWith("fl")) {                // t93: a long task and two page events inside the first (ON) tick
+  for (const f of ltCb) f({ getEntries: () => [{ duration: 72.5 }, { duration: 51 }] });
+  ctx.document.hidden = true; ctx.document.visibilityState = "hidden"; for (const f of docL.visibilitychange || []) f();
+  for (const f of winL.blur || []) f();
+  ctx.document.hidden = false; ctx.document.visibilityState = "visible";
+  ctx.postMessage = null;
+  for (const f of winL.message || []) f({ source: ctx, data: { source: "lvqoe-mse", over: 0,
+    recs: [{ op: "add", t: 5, sb: 1, mime: 'video/mp4; codecs="avc1.4d401f"' }, { op: "app", t: 6, sb: 1, bytes: 1000 }] } });
+}
+tick();                                     // 30 frames, one tick
 present(10, 720, 1280); present(5, 540, 960); tick();   // a rendition switch inside the second
 tick();                                     // nothing presented in this second
 v.srcObject = new MediaStream(); mt = 0;   // a new stream (tt re-entry): mediaTime restarts
@@ -165,9 +182,10 @@ def test_frame_log():
     rows = [row for f in fl for row in FL.decode(f)]
     assert [row["pf"] for row in rows] == list(range(1, 49))                  # every presented frame, pf by pf
     assert [(row["w"], row["h"]) for row in rows] == [(720, 1280)] * 40 + [(540, 960)] * 8
-    assert all(set(row) == {"el", "pt", "edt", "mt", "pf", "w", "h"} for row in rows)   # absent fields stay absent
+    assert all(set(row) == {"el", "pt", "edt", "mt", "pf", "w", "h", "now"} for row in rows)   # absent fields stay absent
     for row, md in zip(rows, r1["presented"]):                                # exact to the us, both clocks and mt
         assert row["el"] == 1 and row["pt"] == md["presentationTime"] and row["edt"] == md["expectedDisplayTime"]
+        assert row["now"] == row["pt"] + 1                                      # brad W1: the callback's now (harness: pt + 1)
         assert abs(row["mt"] - md["mediaTime"]) <= 0.5e-6
     assert sum(f["inexact"] for f in fl) == sum(not _exact(md["mediaTime"], 1e6) for md in r1["presented"])
     assert fl[0]["keys"] == "expectedDisplayTime,height,mediaTime,presentationTime,presentedFrames,width"
@@ -178,7 +196,7 @@ def test_frame_log():
     rows = [row for f in ff for row in FL.decode(f)]
     for row, md in zip(rows, full["presented"]):
         for col, (field, _, _) in FL.FL_CODE.items():
-            if field in ("mediaTime", None):
+            if field in ("mediaTime", None):          # mt: the us rounding above; el / now: not metadata
                 continue
             assert row.get(col) == md.get(field), (col, row, md)              # present or absent, as the browser gave it
     assert sum(1 for row in rows if "pd" in row) == 24 and all(row["rtp"] == row["pf"] * 3000 for row in rows if "rtp" in row)
