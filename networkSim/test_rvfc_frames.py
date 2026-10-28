@@ -95,8 +95,7 @@ if (mode.startsWith("fl")) {                // t93: a long task and two page eve
   ctx.document.hidden = true; ctx.document.visibilityState = "hidden"; for (const f of docL.visibilitychange || []) f();
   for (const f of winL.blur || []) f();
   ctx.document.hidden = false; ctx.document.visibilityState = "visible";
-  ctx.postMessage = null;
-  for (const f of winL.message || []) f({ source: ctx, data: { source: "lvqoe-mse", over: 0,
+  for (const f of winL.message || []) f({ source: vm.runInContext("window", ctx), data: { source: "lvqoe-mse", over: 0,
     recs: [{ op: "add", t: 5, sb: 1, mime: 'video/mp4; codecs="avc1.4d401f"' }, { op: "app", t: 6, sb: 1, bytes: 1000 }] } });
 }
 tick();                                     // 30 frames, one tick
@@ -172,7 +171,7 @@ def test_frame_log():
     base, fl1 = _frames(run("on")), _frames(r1)
     assert not any("fl" in x for x in base)                                    # no config: the tick rows as before
     # reader neutrality at the source: with fl stripped the stream is the one without the per-frame log
-    assert [{k: v for k, v in x.items() if k != "fl"} for x in fl1] == base
+    assert [{k: v for k, v in x.items() if k != "fl"} for x in fl1 if x["k"] != "mse"] == base
     fl = [x["fl"] for x in fl1 if x["k"] == "tick"]
     assert [f["seq"] for f in fl] == [0, 1, 2, 3] and all(f["on"] and f["over"] == 0 for f in fl)
     assert {f["cs"] for f in fl} == {e["cs"] for e in r1["sent"]} and len({f["cs"] for f in fl}) == 1   # the instance's CS_ID
@@ -201,8 +200,22 @@ def test_frame_log():
             assert row.get(col) == md.get(field), (col, row, md)              # present or absent, as the browser gave it
     assert sum(1 for row in rows if "pd" in row) == 24 and all(row["rtp"] == row["pf"] * 3000 for row in rows if "rtp" in row)
     assert ff[0]["c"]["pd"][:2] == [7, None] and ff[0]["c"]["ct"][0] == -39000 and ff[0]["c"]["rt"][0] == -19500
+    # t93 page rows (levi 00124), ON ticks: to / wall / hid, q / wk only with what the browser has, long tasks, connection
+    f0 = fl[0]
+    assert f0["to"] == 5e11 and f0["wall"] == 5e11 + 1991 and f0["hid"] is False
+    assert f0["q"] == {} and f0["wk"] == {}                                    # absent stays absent, never 0
+    assert f0["lt"] == {"n": 2, "max_ms": 72.5} and fl[1]["lt"] == {"n": 0, "max_ms": 0}
+    assert f0["conn"] == {"dl": 9.5, "rtt": 50, "et": "4g", "sd": False} and "err" not in f0
+    pe = [x for m in r1["side"] if m["stream"] == "player_events" for x in m["payload"] if x["ev"] == "lvqoe_page"]
+    assert [(x["kind"], x["hid"], x["vis"]) for x in pe] == [("visibilitychange", True, "hidden"), ("blur", True, "hidden")]
+    mse = [x for x in fl1 if x["k"] == "mse"]                                  # the page-world wrap's batch, forwarded
+    assert [(x["op"], x["sb"]) for x in mse] == [("add", 1), ("app", 1)] and mse[1]["bytes"] == 1000
+    assert all(t["fl"]["mse_over"] == 0 for t in fl1 if t["k"] == "tick")
+    full_f0 = [x["fl"] for x in _frames(run("flfull")) if x["k"] == "tick"][0]
+    assert full_f0["q"] == {"corrupted": 0, "creation": 1991} and full_f0["wk"] == {"dfc": 5, "vb": 1234}
     alt = [x["fl"] for x in _frames(run("flalt")) if x["k"] == "tick"]         # block 1 ON (frames to 2.49 s), block 2 OFF
     assert [(f["on"], f["n"]) for f in alt] == [(True, 30), (True, 15), (False, 0), (False, 0)], alt
+    assert all(k not in f for f in alt[2:] for k in ("to", "q", "wk", "lt", "conn"))   # OFF ticks: no new reading
     cap = [x["fl"] for x in _frames(run("flcap")) if x["k"] == "tick"]
     assert cap[-1]["n"] == 1200 and cap[-1]["over"] == 100 and FL.decode(cap[-1])[-1]["pf"] == 48 + 1200
     off = _frames(run("off"))                                                   # instruments off: no field
