@@ -223,6 +223,37 @@ def test_cli_without_pmu():
         assert lines[0]["error"].startswith("restart: RuntimeError") and lines[1]["header"] and len(calls) == 2, lines
 
 
+
+def test_host_state_on_blocks_only():
+    """t93 row 14 (levi 00124): cpufreq per core and thermal per zone, only on data lines inside an ON block of the
+    epoch clock; no --frame-log, no host key (the record as before)."""
+    with tempfile.TemporaryDirectory() as d:
+        for c, khz in ((0, 2400000), (1, 800000), (10, 3100000)):
+            p = Path(d) / f"cpu/cpu{c}/cpufreq"
+            p.mkdir(parents=True)
+            (p / "scaling_cur_freq").write_text(f"{khz}\n")
+        for z, typ, mc in ((0, "acpitz", 45000), (1, "x86_pkg_temp", 61000)):
+            p = Path(d) / f"thermal/thermal_zone{z}"
+            p.mkdir(parents=True)
+            (p / "type").write_text(typ + "\n")
+            (p / "temp").write_text(f"{mc}\n")
+        hs = G.host_state(str(Path(d) / "cpu/cpu*/cpufreq/scaling_cur_freq"), str(Path(d) / "thermal/thermal_zone*"))
+        assert hs == {"cpu_khz": [2400000, 800000, 3100000], "thermal_mc": {"zone0:acpitz": 45000, "zone1:x86_pkg_temp": 61000}}
+    assert (G.frame_log_block("1"), G.frame_log_block("alt60"), G.frame_log_block(None), G.frame_log_block("alt0")) == (0, 60, None, None)
+    assert G.frame_log_on(0, 5.0) and G.frame_log_on(60, 65.0) and not G.frame_log_on(60, 125.0) and not G.frame_log_on(None, 65.0)
+    slots = lambda types=None: {}
+    for fl, want in ((None, [False] * 3), (60, [True, True, False])):     # lines at 60, 61 (block 1 ON), 120 (block 2 OFF)
+        ticks = iter([58.0, 60.0, 61.0, 120.0, 121.0])
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "box.jsonl"
+            G.record(out, 1.0, duration=62.0, reader=Fake(), clock=lambda: next(ticks), sleep=lambda s: None,
+                     slots_fn=slots, fl_block=fl, host_fn=lambda: {"cpu_khz": [1], "thermal_mc": {}})
+            lines = [json.loads(x) for x in out.read_text().splitlines()]
+            data = [x for x in lines if "gpu_busy_pct" in x]
+            assert ["host" in x for x in data] == want, (fl, data)
+            assert ("frame_log_block_s" in lines[0]) == (fl is not None)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

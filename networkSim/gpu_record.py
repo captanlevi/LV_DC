@@ -10,6 +10,8 @@ for every session of record, joinable to the labels). One JSON line per second, 
     process's /proc stat and its --type), procs, mem_mb (memory.current; when the memory controller is not delegated to the
     slot cgroups, the slot's VmRSS sum from /proc, a trend: mem_source names which).
   - cpu_pct (box, 0-100 over all cores, /proc/stat), mem_available_mb, swap_used_kb, oom_kill (/proc/vmstat).
+  - t93 row 14 (levi 00124), only with --frame-log (the window's LVQOE_FRAME_LOG) and only on lines inside an ON block of
+    the epoch clock: host = {cpu_khz per core (cpufreq), thermal_mc per zone}. Without it, no host key.
 A second whose sample failed is a line with "error"; a pause longer than 1.5 intervals is a "gap" line, so coverage
 is never silently lost; a pass that raises is logged ("restart: ...") and started again with a new header. The header line carries the recorder's code sha256 and commit. Ops only: the collector does
 not change (its sha does not move).
@@ -303,6 +305,49 @@ def mem_state(meminfo: str = "/proc/meminfo", vmstat: str = "/proc/vmstat") -> d
     return out
 
 
+CPUFREQ_GLOB = "/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq"
+THERMAL_GLOB = "/sys/class/thermal/thermal_zone*"
+
+
+def host_state(cpufreq_glob: str = CPUFREQ_GLOB, thermal_glob: str = THERMAL_GLOB) -> dict:
+    """t93 row 14 (levi 00124; frame log only, ON blocks): each core's current frequency (kHz, cpufreq, in cpu number
+    order; null where unreadable) and each thermal zone's temperature (milli-degC) by its type (zone<n>:<type>)."""
+    import glob
+    import re as _re
+
+    def num(p):
+        try:
+            return int(Path(p).read_text().split()[0])
+        except (OSError, ValueError, IndexError):
+            return None
+    cores = sorted(glob.glob(cpufreq_glob), key=lambda p: int((_re.search(r"cpu(\d+)/", p) or [0, 0])[1]))
+    therm = {}
+    for z in sorted(glob.glob(thermal_glob), key=lambda p: int((_re.search(r"(\d+)$", p) or [0, 0])[1])):
+        try:
+            typ = (Path(z) / "type").read_text().strip()
+        except OSError:
+            typ = "?"
+        therm[f"{Path(z).name.replace('thermal_zone', 'zone')}:{typ}"] = num(Path(z) / "temp")
+    return {"cpu_khz": [num(p) for p in cores], "thermal_mc": therm}
+
+
+def frame_log_block(raw: str | None) -> int | None:
+    """--frame-log as browser.frame_log_config reads LVQOE_FRAME_LOG: "1" -> 0 (always ON), "alt<N>" -> N; else None."""
+    raw = (raw or "").strip()
+    if raw == "1":
+        return 0
+    if raw.startswith("alt") and raw[3:].isdigit() and int(raw[3:]) > 0:
+        return int(raw[3:])
+    return None
+
+
+def frame_log_on(block_s: int | None, now_s: float) -> bool:
+    """The epoch block clock (browser.frame_log_arm): None never, 0 always, else odd blocks of block_s s."""
+    if block_s is None:
+        return False
+    return block_s == 0 or int(now_s // block_s) % 2 == 1
+
+
 def busy_line(t: float, dt: float, gpu0: dict, gpu1: dict, source: str, capacity: dict, cpu0, cpu1, mem: dict) -> dict:
     """One record line from two reads dt seconds apart: busy % per engine (the PMU: per instance; fdinfo: per class
     over its capacity), box CPU busy %, memory, swap, OOM count."""
@@ -319,7 +364,8 @@ def busy_line(t: float, dt: float, gpu0: dict, gpu1: dict, source: str, capacity
 # ---- the recorder ---------------------------------------------------------------------------------------------------
 
 def record(out: Path, interval: float = 1.0, duration: float | None = None, stop: threading.Event | None = None,
-           reader=None, clock=time.time, sleep=None, slots_fn=slot_read, reopen=open_reader) -> int:
+           reader=None, clock=time.time, sleep=None, slots_fn=slot_read, reopen=open_reader,
+           fl_block: int | None = None, host_fn=host_state) -> int:
     """Header, then one line per interval to `out` (flushed per line) until duration / stop. A failed sample writes an
     "error" line and the GPU reader is reopened; a pause beyond GAP_FACTOR intervals writes a "gap" line. Returns the
     data lines written."""
@@ -328,7 +374,8 @@ def record(out: Path, interval: float = 1.0, duration: float | None = None, stop
     rd, why = (reader, None) if reader is not None else reopen()
     hdr = {"header": True, "what": "device record (Addendum T): i915 engine busy, slot Chrome-tree CPU, box CPU / memory",
            "gpu_source": rd.source, "fallback_why": why, "interval_s": interval, "pid": os.getpid(),
-           "clk_tck": CLK_TCK, "ncpu": os.cpu_count(), **code_sha()}
+           "clk_tck": CLK_TCK, "ncpu": os.cpu_count(), **code_sha(),
+           **({"frame_log_block_s": fl_block} if fl_block is not None else {})}   # t93 row 14: host in ON blocks
     if isinstance(rd, PmuReader):
         hdr["pmu"] = rd.info
     n, types = 0, {}
@@ -348,7 +395,8 @@ def record(out: Path, interval: float = 1.0, duration: float | None = None, stop
                     if t1 - t0 > GAP_FACTOR * interval:
                         put({"t": round(t1, 3), "gap": True, "from": round(t0, 3), "to": round(t1, 3)})
                     put({**busy_line(t1, t1 - t0, g0, g1, rd.source, rd.capacity, c0, c1, mem_state()),
-                         "slots": slot_line(s0, s1, t1 - t0)})
+                         "slots": slot_line(s0, s1, t1 - t0),
+                         **({"host": host_fn()} if frame_log_on(fl_block, t1) else {})})
                     n += 1
                     g0, c0, s0 = g1, c1, s1
                 except Exception as exc:                 # never stop recording: log it, reopen the GPU reader
@@ -447,8 +495,11 @@ def main(argv=None) -> int:
     ap.add_argument("--interval", type=float, default=1.0)
     ap.add_argument("--duration", type=float, default=None)
     ap.add_argument("--stamp", type=Path, help="a record: split it into the sessions given and stamp their meta")
+    ap.add_argument("--frame-log", default=None, help="t93 row 14: the window's LVQOE_FRAME_LOG (1 / alt<N>): each data "
+                                                       "line in an ON block adds host (cpufreq, thermal); unset: none")
     ap.add_argument("sessions", nargs="*", type=Path)
     a = ap.parse_args(argv)
+    fl_block = frame_log_block(a.frame_log)
     if a.stamp:
         res = stamp(a.stamp, a.sessions)
         print(json.dumps(res, indent=1))
@@ -461,7 +512,7 @@ def main(argv=None) -> int:
     n, t_end = 0, None if a.duration is None else time.time() + a.duration
     while not ev.is_set() and (t_end is None or time.time() < t_end):   # restart on failure (supervisor): a pass that
         try:                                                             # raises is logged and started again
-            n += record(a.out, a.interval, None if t_end is None else max(t_end - time.time(), 0), ev)
+            n += record(a.out, a.interval, None if t_end is None else max(t_end - time.time(), 0), ev, fl_block=fl_block)
         except Exception as exc:
             with open(a.out, "a") as fh:
                 fh.write(json.dumps({"t": round(time.time(), 3), "error": "restart: " + repr(exc)[:300]}) + "\n")
