@@ -6,7 +6,9 @@ push; a test asserts it"): browser.MSE_WRAP_JS under node with stub MediaSource 
   - a recording fault (a buffer whose byteLength throws) never reaches the page: the original still runs and returns;
   - records: add (mime, id), app (bytes), rm (start, end), ct (mime), end (updateend: buffered end, range count), batched
     once per 1 s as one postMessage {source: "lvqoe-mse", recs, over}; past the cap counted (over);
-  - OFF blocks (epoch clock, even block) record nothing while the wrap stays installed; a second injection is a no-op.
+  - OFF blocks (epoch clock, even block) record nothing while the wrap stays installed; a second injection is a no-op;
+  - levi 22:44 (1): a SourceBuffer the page creates at document start, right after the injected script ran, is wrapped;
+    the install time (inst) and the first addSourceBuffer (first: t, mime) are posted whatever the arm, once in OFF.
 
     python3 test_mse_wrap.py        (needs node; exit 0 = pass)
 """
@@ -90,6 +92,8 @@ def test_mse_wrap_transparent_and_recorded():
     assert r["add_same"] and r["append_same"] and r["throw_same"] and r["fault_contained"], r
     assert r["n_calls"] == 6                                                    # each call reached its original once
     assert len(r["posted"]) == 1 and r["posted"][0]["source"] == "lvqoe-mse" and r["posted"][0]["over"] == 0
+    p0 = r["posted"][0]                                                         # document start: wrapped from the first add
+    assert p0["inst"] == 7 and p0["first"] == {"t": 7, "mime": 'video/mp4; codecs="vp09.00.40.08"'}
     recs = r["posted"][0]["recs"]
     assert [x["op"] for x in recs] == ["add", "app", "rm", "ct", "rm", "end"], recs
     assert recs[0]["mime"] == 'video/mp4; codecs="vp09.00.40.08"' and recs[1]["bytes"] == 1000 and recs[1]["sb"] == 1
@@ -98,7 +102,8 @@ def test_mse_wrap_transparent_and_recorded():
     capped = run(now_ms=1_000_000, block_s=0, max_recs=2)
     assert len(capped["posted"][0]["recs"]) == 2 and capped["posted"][0]["over"] == 4
     off = run(now_ms=120_000 + 5_000, block_s=60)                               # block 2 (even): OFF, wrap still in place
-    assert off["add_same"] and off["append_same"] and off["throw_same"] and off["posted"] == []
+    assert off["add_same"] and off["append_same"] and off["throw_same"]
+    assert [(p["recs"], p["first"]["mime"][:9]) for p in off["posted"]] == [([], "video/mp4")]   # first only, no records
     on = run(now_ms=60_000 + 5_000, block_s=60)                                 # block 1 (odd): ON
     assert len(on["posted"][0]["recs"]) == 6
 

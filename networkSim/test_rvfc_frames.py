@@ -79,6 +79,26 @@ vm.createContext(ctx);
 vm.runInContext(src, ctx);
 const registeredBeforeCfg = cbs.length;    // async config: nothing may register before the config is read
 for (const r of pendingCfg.splice(0)) r();
+if (mode === "exact") {                     // levi 22:44 (2): 100 batches of 1000 frames through the encoder itself
+  const batches = [], want = [];
+  const R = (v, sc) => Math.round(v * sc) / sc;
+  for (let b = 0; b < 100; b++) {
+    for (let i = 0; i < 1000; i++) {
+      const k = b * 1000 + i;
+      const md = { presentationTime: 1000 + k * 1000 / 60, expectedDisplayTime: 1000 + (k + 1) * 1000 / 60,
+                   mediaTime: 7.25 + k / 30, presentedFrames: k + 1, width: 1280, height: 720 };
+      const cbNow = md.presentationTime + 0.3;
+      ctx.__push = [k % 3 ? 1 : 2, cbNow, md];
+      vm.runInContext("frameLogPush(__push[0], __push[1], __push[2])", ctx);
+      want.push({ el: k % 3 ? 1 : 2, pt: R(md.presentationTime, 1e3), edt: R(md.expectedDisplayTime, 1e3), mt: R(md.mediaTime, 1e6),
+                  pf: k + 1, w: 1280, h: 720, now: R(cbNow, 1e3) });
+    }
+    batches.push(JSON.parse(vm.runInContext("JSON.stringify({ n: frameN, ...frameLogEncode(frameN) })", ctx)));
+    vm.runInContext("frameN = 0", ctx);
+  }
+  fs.writeFileSync(process.argv[3], JSON.stringify({ batches, want }));
+  process.exit(0);
+}
 let pf = 0, mt = 0;
 const presented = [];
 const present = (n, w, h) => { for (let i = 0; i < n; i++) {
@@ -211,6 +231,7 @@ def test_frame_log():
     mse = [x for x in fl1 if x["k"] == "mse"]                                  # the page-world wrap's batch, forwarded
     assert [(x["op"], x["sb"]) for x in mse] == [("add", 1), ("app", 1)] and mse[1]["bytes"] == 1000
     assert all(t["fl"]["mse_over"] == 0 for t in fl1 if t["k"] == "tick")
+    assert f0["mse_inst"] == {"inst": None, "first": None}                    # the harness's batch carries neither
     full_f0 = [x["fl"] for x in _frames(run("flfull")) if x["k"] == "tick"][0]
     assert full_f0["q"] == {"corrupted": 0, "creation": 1991} and full_f0["wk"] == {"dfc": 5, "vb": 1234}
     alt = [x["fl"] for x in _frames(run("flalt")) if x["k"] == "tick"]         # block 1 ON (frames to 2.49 s), block 2 OFF
@@ -222,8 +243,19 @@ def test_frame_log():
     assert not any("fl" in x for x in off)
 
 
+def test_frame_log_exact_over_length():
+    """levi 22:44 (2): deltas are between the rounded integers, so decode gives back every rounded absolute with no
+    drift: 100 000 frames (mt at 1/30 s, pt at 60 Hz, edt / now offsets, two elements), decoded = rounded exactly."""
+    r = run("exact")
+    rows = [row for b in r["batches"] for row in FL.decode({"n": b["n"], "c": b["cols"]})]
+    assert len(rows) == len(r["want"]) == 100_000
+    assert rows == r["want"], next((i, a, b) for i, (a, b) in enumerate(zip(rows, r["want"])) if a != b)
+    assert sum(b["inexact"] for b in r["batches"]) > 0                         # the 1/30 s and 60 Hz values were rounded
+
+
 def main() -> int:
     test_rvfc_frames()
+    test_frame_log_exact_over_length()
     test_frame_log()
     print("test_rvfc_frames: ok")
     return 0

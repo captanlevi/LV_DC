@@ -1687,9 +1687,15 @@ FRAME_LOG_MSE_MAX = 2000      # t93 rows 9 / 20: the page-world MSE wrap's recor
 # its value, synchronously; the record is one push in a try (a recording fault never reaches the page). Records, ON blocks
 # only: add (the mime / codec, the buffer's id), changeType, app (bytes), rm (start, end), end (updateend: the buffered end,
 # the range count); every 1 s one postMessage batch to content.js (frames k:"mse"), over counted past FRAME_LOG_MSE_MAX.
+# levi 22:44 (1): the wrap is in place before any page script (the CDP call precedes the join navigation and applies to
+# every later navigation of the page); its install time on the page (inst: performance.now() at the script's run) and the
+# page's first addSourceBuffer (first: its perf time and mime), recorded whatever the arm, ride every batch and an
+# arm-independent first post; meta frame_log.mse_wrap.installed_at is the CDP call's epoch time.
 MSE_WRAP_JS = r"""(() => {
   if (window.__lvqoeMse) return;
   window.__lvqoeMse = true;
+  const inst = performance.now();
+  let first = null, firstSent = false;
   const BLOCK_S = %(block_s)d, MAX = %(max)d;
   const on = () => !(BLOCK_S > 0) || Math.floor(Date.now() / (BLOCK_S * 1000)) %% 2 === 1;
   let recs = [], over = 0, next = 0;
@@ -1710,6 +1716,7 @@ MSE_WRAP_JS = r"""(() => {
     push({ op: "end", sb: id(sb), bend: n ? b.end(n - 1) : null, nr: n }); } catch (e) {} };
   if (typeof MediaSource !== "undefined") {
     wrap(MediaSource.prototype, "addSourceBuffer", null, (ms, a, sb) => {
+      if (first === null) first = { t: performance.now(), mime: String(a[0]).slice(0, 160) };
       push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) });
       sb.addEventListener("updateend", ended(sb));
     });
@@ -1721,9 +1728,10 @@ MSE_WRAP_JS = r"""(() => {
     wrap(p, "changeType", (sb, a) => push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) }));
   }
   setInterval(() => {
-    if (!recs.length) return;
+    if (!recs.length && (first === null || firstSent)) return;
     const batch = recs; recs = [];
-    try { window.postMessage({ source: "lvqoe-mse", recs: batch, over }, "*"); } catch (e) {}
+    firstSent = first !== null;
+    try { window.postMessage({ source: "lvqoe-mse", recs: batch, over, inst, first }, "*"); } catch (e) {}
   }, 1000);
 })();"""
 
@@ -4844,7 +4852,8 @@ class BrowserSession:
             try:
                 r = self._page.call("Page.addScriptToEvaluateOnNewDocument", {
                     "source": MSE_WRAP_JS % {"block_s": self.frame_log["block_s"], "max": FRAME_LOG_MSE_MAX}})
-                self.frame_log["mse_wrap"] = {"installed": bool(r.get("identifier")), "id": r.get("identifier")}
+                self.frame_log["mse_wrap"] = {"installed": bool(r.get("identifier")), "id": r.get("identifier"),
+                                              "installed_at": round(time.time(), 3)}
             except Exception as exc:
                 self.frame_log["mse_wrap"] = {"installed": False, "error": repr(exc)[:200]}
 

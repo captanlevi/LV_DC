@@ -323,6 +323,7 @@ let ltN = 0;
 let ltMax = 0;
 let ltOk = false;
 let mseOver = null;
+let mseInst = null;
 let frameLogErr = null;                     // a frame-log fault: recorded in fl, never thrown into the tick or the config
 function frameLogConfigure(c) {
   if (!c || typeof c !== "object") return;
@@ -427,6 +428,7 @@ function frameLogBuild(md, q, v) {
     fl.lt = ltOk ? { n: ltN, max_ms: Math.round(ltMax * 10) / 10 } : null;
     fl.conn = presentKeys(typeof navigator !== "undefined" ? navigator.connection : null, [["dl", "downlink"], ["rtt", "rtt"], ["et", "effectiveType"], ["sd", "saveData"]]);
     if (mseOver !== null) fl.mse_over = mseOver;
+    if (mseInst !== null) fl.mse_inst = mseInst;
     if (frameLogErr !== null) fl.err = frameLogErr;
     if (md) {
       const keys = Object.keys(md).sort().join(",");
@@ -951,6 +953,7 @@ window.addEventListener("message", (e) => {
     if (collecting && frameLogCfg && Array.isArray(e.data.recs)) {
       for (const r of e.data.recs) side("frames", { k: "mse", ...r });
       mseOver = Number(e.data.over) || 0;
+      mseInst = { inst: e.data.inst ?? null, first: e.data.first ?? null };   // levi 22:44 (1): install vs first add
     }
     return;
   }
