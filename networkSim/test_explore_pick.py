@@ -240,22 +240,29 @@ def test_the_restart_record_definition():
     and its descendants in this checkout (git ancestry), nothing while the boundary is unset (fail closed); t55 / t57
     are stated references; identity (counted_any_era) spans every era."""
     import record
-    # collector v3 (levi 16:49): the era is v3's; its counted line starts fail-closed (no boundary: nothing of record)
-    # window 1 (20:4x): the boundary is counted window 1's sha b06b82f4; it and its descendants are of record
-    assert record.ERA == "v3-collector-2026-10-24" and record.RECORD_BOUNDARY == "b06b82f4a05906f44698627ca6ec6afa2eabb2f8"
+    # era v4 (levi docs/v3/era_v4_levi_2026-10-29.md §1): the boundary is boundary 3's frozen 3bf05879 (the era commit's
+    # parent; not fail-closed None, v3 W1's lesson); RECORD_LINES is v4 only
+    assert record.ERA == "v4-collector-2026-10-29" and record.RECORD_BOUNDARY == "3bf05879fbf690d741c97c1fb9ae64acadf60ad1"
     assert record.RECORD_ERAS == (record.ERA,) and record.STATED_ERAS == ("t56-nslot-2026-10-19",)
-    assert record.RECORD_LINES == {record.ERA: "b06b82f4a05906f44698627ca6ec6afa2eabb2f8"}
-    v3 = lambda sha: {"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": sha}}
-    assert not record.is_record(v3("975a493f7959ce39ce4977f2b91b8b7c9e7e231e"))   # t58's tip: not on the v3 line
-    assert record.is_record(v3("b06b82f4a05906f44698627ca6ec6afa2eabb2f8"))                                             # window 1's own sessions
-    assert record.is_record(v3("5be08cbe6c642c0f6734a18a5afcfa9b94007059"))           # the bundle on top of it
-    assert not record.is_record(v3("e465b7eff1da876bb4b47fa81078b7d7c5198a5a"))                                 # J's parent: before the line
+    assert record.RECORD_LINES == {record.ERA: "3bf05879fbf690d741c97c1fb9ae64acadf60ad1"}
+    v4 = lambda sha: {"concurrency": {"record": True, "era": record.ERA}, "lvdc_commit": {"sha": sha}}
+    assert record.is_record(v4("3bf05879fbf690d741c97c1fb9ae64acadf60ad1"))                  # the boundary itself
+    assert not record.is_record(v4("e827182aa45f18259f9ddbf24e89622396178972"))              # its parent: before the line
+    assert not record.is_record(v4("b06b82f4a05906f44698627ca6ec6afa2eabb2f8"))              # v3's window 1 sha
+    # v3 is archived (rushi 2026-10-29, kb era.v4.dataset_of_record): its sessions are no longer of record, even on v3's
+    # own counted line; identity and rotation hygiene carry over
+    assert record.V3_ERA == "v3-collector-2026-10-24"
+    assert record.V3_RECORD_BOUNDARY == "b06b82f4a05906f44698627ca6ec6afa2eabb2f8"
+    v3 = lambda sha: {"concurrency": {"record": True, "era": record.V3_ERA}, "lvdc_commit": {"sha": sha}}
+    for sha in ("b06b82f4a05906f44698627ca6ec6afa2eabb2f8", "5be08cbe6c642c0f6734a18a5afcfa9b94007059",
+                "3bf05879fbf690d741c97c1fb9ae64acadf60ad1"):
+        assert not record.is_record(v3(sha)) and record.counted_any_era(v3(sha)) and record.of_record_any_era(v3(sha))
     # t58 is archived (levi 16:45): its sessions are no longer of record under v3, even on its own counted line
     assert record.T58_ERA == "t58-restart-2026-10-21"
     assert record.T58_RECORD_BOUNDARY == "975a493f7959ce39ce4977f2b91b8b7c9e7e231e"
     t58_old = {"concurrency": {"record": True, "era": record.T58_ERA}, "lvdc_commit": {"sha": record.T58_RECORD_BOUNDARY}}
     assert not record.is_record(t58_old) and record.counted_any_era(t58_old) and record.of_record_any_era(t58_old)
-    t58 = v3                                                   # the ancestry rule below, on the current era
+    t58 = v4                                                   # the ancestry rule below, on the current era
     stated = {"concurrency": {"record": True, "era": "t56-nslot-2026-10-19"}}
     assert not record.is_record(stated) and not record.of_record_any_era(stated)          # never, not even not_usable
     assert record.counted_any_era(stated)                     # channel identity spans every era (restart §0)

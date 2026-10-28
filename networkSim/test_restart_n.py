@@ -225,7 +225,7 @@ def test_wiring():
         d = N.simulate(1, record.ERA)[0]
         os.environ["LVDC_N_DRAW"] = json.dumps(d)
         rec = T.concurrency_record(T.SLOTS["yt1"])
-        assert rec["n_draw"] == d and rec["era"] == record.ERA == "v3-collector-2026-10-24"     # levi 16:49
+        assert rec["n_draw"] == d and rec["era"] == record.ERA == "v4-collector-2026-10-29"     # levi era v4 §1
         os.environ.pop("LVDC_N_DRAW")
         assert "n_draw" not in T.concurrency_record(T.SLOTS["yt1"])
     finally:

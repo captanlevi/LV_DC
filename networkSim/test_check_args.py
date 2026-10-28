@@ -16,6 +16,7 @@ sys.path.insert(0, str(HERE))
 
 import data_root as DR  # noqa: E402
 import orchestrate as O  # noqa: E402
+import record  # noqa: E402
 O.network_core_installed = O.network_core_pin   # the record lines' venv is at the pin (test_nc_guard tests it)
 
 ORCH = str(HERE / "orchestrate.py")
@@ -72,9 +73,10 @@ def test_in_process():
             summ = Path(rec) / "_trio" / "_summaries"
             summ.mkdir(parents=True)
             pp = {"tiers": {"Q_480p": 600.0}, "stall_s": 60.0, "by_state": {}}
-            (summ / "coverage_joint.json").write_text(json.dumps({"era": "v3-collector-2026-10-24", "per_platform": {
-                p: pp for p in ("youtube", "twitch", "tiktok")}}))
-            assert O.check_args(RECORD, renv) is None
+            for era, ok in (("v3-collector-2026-10-24", False), (record.ERA, True)):   # levi era v4 §1: v3's table
+                (summ / "coverage_joint.json").write_text(json.dumps({"era": era, "per_platform": {   # no longer steers
+                    p: pp for p in ("youtube", "twitch", "tiktok")}}))
+                assert (O.check_args(RECORD, renv) is None) == ok, era
             assert "not of record on a marked record root" in O.check_args(DRY, {"LVDC_DATA_ROOT": rec})
             assert "not the verified record root" in O.check_args(RECORD, {**renv, "LVDC_DATA_ROOT": dry})
         finally:

@@ -47,6 +47,25 @@ def _log(path: Path, draws: list[tuple[str, bool]]):
             f.write(json.dumps({"event": "start", "run": f"r{i}", "slot": "yt1"}) + "\n")
 
 
+def test_v4_starts_at_k0_on_a_v3_only_log():
+    """levi era v4 §1: the era bump restarts the stratum k and the n_draw round at 0; a slots log holding only v3 record
+    windows (their trio_ups) counts nothing for v4, while it still counts for v3."""
+    import n_draw as N
+    import record
+    assert record.ERA == "v4-collector-2026-10-29" and record.V3_ERA == "v3-collector-2026-10-24"
+    v3 = N.simulate(5, record.V3_ERA)
+    with tempfile.TemporaryDirectory() as t:
+        log = Path(t) / "trio_slots.jsonl"
+        with open(log, "w") as f:
+            for i, d in enumerate(v3):
+                f.write(json.dumps({"event": "trio_up", "run": f"w{i}", "n_draw": d}) + "\n")
+                f.write(json.dumps({"event": "start", "run": f"w{i}", "slot": "yt1"}) + "\n")
+        assert S.draw(log, record.ERA, True)["k"] == 0 and S.draw(log, record.V3_ERA, True)["k"] == 5
+        assert N.draw(log, record.ERA, True)["round"] == 0 and N.draw(log, record.V3_ERA, True)["round"] == 5
+        assert N.draw(log, record.ERA, True) == N.simulate(1, record.ERA)[0]          # v4's own round 0
+        assert S.SEED_PREFIX == "v3-stratum" and S.draw(log, record.ERA, True)["seed"].startswith("v3-stratum|v4-collector")
+
+
 def test_a_void_window_that_started_no_session_keeps_k():
     """levi 18:57: a void run that wrote trio_up / trio_down but started nothing (the w11 07:54 drain) does not advance k"""
     with tempfile.TemporaryDirectory() as t:

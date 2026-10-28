@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The frozen measure is era-gated (levi 00:51 known gap: "T*-era check_session re-runs at >= 6f4ce4d6 may include
 picture runs; era-gated in the post-W-B batch"). A session whose meta.json concurrency.era is record.ERA (v3) reads
-frozen_runs_all (stall-only + frozen-picture runs); any other era, and a session with no era (fail-safe: unknown = not
+frozen_runs_all (stall-only + frozen-picture runs; v4 too, levi era v4 §1); any other era, and a session with no era (fail-safe: unknown = not
 v3), reads addendum N's stall-only frozen_runs, so an old-era re-run reproduces its old classes. Pinned through every
 reader: label_checks via labels_block (player_frozen, recovered_frozen), the per-re-entry read
 (shared_deadline_reentries) and frozen_clock_of_record (held_frozen_s).
@@ -45,12 +45,13 @@ def _meta(era):
                                                    {"mode": "single"})}
 
 
-ERAS = {"v3": record.ERA, "t58": record.T58_ERA, "t56_stated": "t56-nslot-2026-10-19", "unknown": None}
+ERAS = {"v3": record.V3_ERA, "v4": record.ERA, "t58": record.T58_ERA, "t56_stated": "t56-nslot-2026-10-19", "unknown": None}
 
 
 def test_era_predicate():
-    assert record.ERA == "v3-collector-2026-10-24" and record.T58_ERA == "t58-restart-2026-10-21"
-    assert CS.picture_runs_era(_meta(record.ERA))
+    assert record.ERA == "v4-collector-2026-10-29" and record.T58_ERA == "t58-restart-2026-10-21"
+    assert record.V3_ERA == "v3-collector-2026-10-24"
+    assert CS.picture_runs_era(_meta(record.ERA)) and CS.picture_runs_era(_meta(record.V3_ERA))   # levi era v4 §1
     for era in (record.T58_ERA, "t56-nslot-2026-10-19", "t55-gro-off-2026-10-19", "", None):
         assert not CS.picture_runs_era(_meta(era)), era
     for m in (None, {}, {"concurrency": None}, {"concurrency": {"record": True}}):
@@ -63,6 +64,7 @@ def test_current_era_reads_the_union():
     assert record.ERA in CS.PICTURE_RUN_ERAS, (record.ERA, sorted(CS.PICTURE_RUN_ERAS))
     assert CS.picture_runs_era(_meta(record.ERA))
     assert record.T58_ERA not in CS.PICTURE_RUN_ERAS
+    assert CS.PICTURE_RUN_ERAS == {"v3-collector-2026-10-24", "v4-collector-2026-10-29"}   # v4 bump: v3 kept (replays)
 
 
 def test_measure_selector():
@@ -92,10 +94,10 @@ def test_labels_block_classes_by_era():
         for name, era in ERAS.items():
             sd = _session(Path(td), era)
             _, _, lab = CS.labels_block(sd, json.loads((sd / "meta.json").read_text()), "youtube")
-            want = 300.0 if name == "v3" else 0.0
+            want = 300.0 if name in ("v3", "v4") else 0.0
             assert lab["frozen_playhead_max_s"] == want and lab["frozen_playhead_max_all_s"] == want, (name, lab)
             assert lab["frozen_playhead_class_s"] == want, (name, lab)
-            assert CS.E.frozen_over_t(lab["frozen_playhead_class_s"], T) == (name == "v3"), name
+            assert CS.E.frozen_over_t(lab["frozen_playhead_class_s"], T) == (name in ("v3", "v4")), name
 
 
 def test_recovery_reads_the_same_measure():
@@ -117,7 +119,7 @@ def test_frozen_clock_of_record_by_era():
         meta = {**_meta(era), "lvdc_commit": {"sha": held}}
         lab = CS.label_checks(rows, "youtube", None, [], picture_runs=CS.picture_runs_era(meta))
         CS.frozen_clock_of_record(lab, rows, "youtube", nl, meta)
-        want = 300.0 if name == "v3" else 0.0
+        want = 300.0 if name in ("v3", "v4") else 0.0
         assert lab["frozen_clock_of_record"]["held_s"] == want and lab["frozen_playhead_class_s"] == want, (name, lab)
 
 
@@ -130,7 +132,7 @@ def test_reentry_read_by_era():
             CS.shared_deadline_reentries({**_meta(era), "platform": "tiktok"}, _picture_only_rows(), [])
     finally:
         CS.frozen_runs_of = real
-    assert seen == [True, False, False, False], seen
+    assert seen == [True, True, False, False, False], seen
 
 
 def main() -> int:

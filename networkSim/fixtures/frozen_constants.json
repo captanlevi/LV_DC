@@ -1568,13 +1568,13 @@
  "qualification": {
   "EXPECTED_SESSION_MINUTES": 25.0
  },
- "record_boundary": "b06b82f4a05906f44698627ca6ec6afa2eabb2f8",
- "record_era": "v3-collector-2026-10-24",
+ "record_boundary": "3bf05879fbf690d741c97c1fb9ae64acadf60ad1",
+ "record_era": "v4-collector-2026-10-29",
  "record_eras": [
-  "v3-collector-2026-10-24"
+  "v4-collector-2026-10-29"
  ],
  "record_lines": {
-  "v3-collector-2026-10-24": "b06b82f4a05906f44698627ca6ec6afa2eabb2f8"
+  "v4-collector-2026-10-29": "3bf05879fbf690d741c97c1fb9ae64acadf60ad1"
  },
  "schedules": {
   "CHANNEL_CAP_MULT": 2,

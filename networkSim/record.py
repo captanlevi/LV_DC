@@ -25,10 +25,18 @@ from pathlib import Path
 # sha in its own commit after the v3 tip's gate, as at the restart.
 T58_ERA = "t58-restart-2026-10-21"
 T58_RECORD_BOUNDARY = "975a493f7959ce39ce4977f2b91b8b7c9e7e231e"   # t58's day-1 tip T (stated reference)
-ERA = "v3-collector-2026-10-24"   # the era this collector writes
-# levi / supervisor 20:4x (window 1, run 20261026_185406): the boundary was never set, so a counted run's orchestrator saw
-# no session of record (accepted 0/N, each slot's failure streak paused its platform); b06b82f4 is counted window 1's sha
-RECORD_BOUNDARY: str | None = "b06b82f4a05906f44698627ca6ec6afa2eabb2f8"   # v3: counted window 1's collector and every descendant
+# levi / supervisor 20:4x (window 1, run 20261026_185406): the v3 boundary was never set, so a counted run's orchestrator
+# saw no session of record (accepted 0/N, each slot's failure streak paused its platform); b06b82f4 is counted window 1's sha
+V3_ERA = "v3-collector-2026-10-24"
+V3_RECORD_BOUNDARY = "b06b82f4a05906f44698627ca6ec6afa2eabb2f8"   # v3's counted line (stated reference: archived, not pooled)
+# era v4 (rushi 2026-10-29, kb era.v4.dataset_of_record; levi docs/v3/era_v4_levi_2026-10-29.md §1, a label, not a date):
+# boundary 3's collector (the per-frame log) starts the dataset of record. RECORD_BOUNDARY is the era commit's parent
+# (boundary 3's frozen 3bf05879): the v4 string exists only from the era commit on, so "v4 AND a descendant of
+# 3bf05879" is the era commit's line. Deliberately not fail-closed None (v3 W1's lesson above). RECORD_LINES is v4 only:
+# v3 sessions stop counting for steering, n_draw and the stratum k (all restart at 0); rotation hygiene
+# (of_record_any_era) and channel identity (counted_any_era) carry over, as at the v3 bump.
+ERA = "v4-collector-2026-10-29"   # the era this collector writes
+RECORD_BOUNDARY: str | None = "3bf05879fbf690d741c97c1fb9ae64acadf60ad1"   # v4: boundary 3's frozen sha and every descendant
 RECORD_LINES = {ERA: RECORD_BOUNDARY}          # era -> its counted line's boundary sha (None: nothing counts yet)
 RECORD_ERAS = tuple(RECORD_LINES)
 REPO = Path(__file__).resolve().parent.parent

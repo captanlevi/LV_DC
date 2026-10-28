@@ -212,7 +212,8 @@ def frozen_runs_all(rows: list[dict]) -> list[tuple[float, float]]:
 
 # levi 9048534c: the eras whose sessions read the union frozen measure, as LITERAL strings (not record.ERA), so an ERA
 # bump fails test_frozen_era's pin (record.ERA in PICTURE_RUN_ERAS) until this set is widened in the same commit
-PICTURE_RUN_ERAS = frozenset({"v3-collector-2026-10-24"})
+# levi era v4 §1: widened with the v4 bump; v3 kept, so replays of v3 sessions are unchanged
+PICTURE_RUN_ERAS = frozenset({"v3-collector-2026-10-24", "v4-collector-2026-10-29"})
 
 
 def picture_runs_era(meta: dict | None) -> bool:
