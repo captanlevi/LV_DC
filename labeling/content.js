@@ -336,8 +336,7 @@ function frameLogListen() {
   try {                                     // t93 row 8: long tasks, counted in ON ticks only
     if (typeof PerformanceObserver === "function" && (PerformanceObserver.supportedEntryTypes || []).includes("longtask")) {
       new PerformanceObserver((list) => {
-        if (!frameLogOn) return;
-        for (const e of list.getEntries()) { ltN += 1; if (e.duration > ltMax) ltMax = e.duration; }
+        for (const e of list.getEntries()) { ltN += 1; if (e.duration > ltMax) ltMax = e.duration; }   // SCRATCH t91 G7: every tick
       }).observe({ type: "longtask" });
       ltOk = true;
     }
@@ -443,6 +442,7 @@ function frameLogBuild(md, q, v) {
       if (keys !== frameKeys) { fl.keys = keys; frameKeys = keys; }
     }
   }
+  if (!frameLogOn && ltOk) fl.lt_off = { n: ltN, max_ms: Math.round(ltMax * 10) / 10 };   // SCRATCH t91 G7 (dev only, never frozen)
   ltN = 0;
   ltMax = 0;
   framePushErr = 0;
