@@ -61,7 +61,7 @@ class _Lever:
         return None
 
 
-def _ns(settle_s=0.3, playing_preset=False, first_preset=False, J="8"):
+def _ns(settle_s=0.3, playing_preset=False, first_preset=False, J="8", hold=False):
     applied, lever = [], _Lever()
     playing, first = threading.Event(), threading.Event()
     if playing_preset:
@@ -71,10 +71,11 @@ def _ns(settle_s=0.3, playing_preset=False, first_preset=False, J="8"):
     ns = {"asyncio": asyncio, "time": time, "dc_replace": dc_replace, "NetLabel": NetLabel, "NetStat": NetStat,
           "SCENARIOS": SCENARIOS, "SYSTEM_TICK": 0.005, "SHAPER_OPTS": {}, "WRAP_SEED": None, "SCHEDULE_WRAP": {},
           "net_episode_generator": None, "family_episode_generator": None, "JOIN_FIRST": first, "JOIN_PLAYING": playing,
-          "JOIN": {}, "JOIN_J": J, "JOIN_SETTLE_S": settle_s, "JOIN_CAP_S": 600.0, "LEVER": lever,
+          "JOIN": {}, "JOIN_J": J, "JOIN_SETTLE_S": settle_s, "JOIN_CAP_S": 600.0, "LEVER": lever, "DRY_HOLD": hold,
           "SHAPER_GEN": lambda **kw: iter([NS(300, "2", 0.05), NS(900, "4", 0.05)]),
           "_apply_net_stat": lambda net_stat: applied.append((time.time(), net_stat))}
-    exec(compile(ast.Module(_fns("_ossilate", "_schedule", "_join_phase", "join_phase_stat", "check_apply"), []), "exp", "exec"), ns)
+    exec(compile(ast.Module(_fns("_ossilate", "_schedule", "_join_phase", "join_phase_stat", "check_apply", "_hold_j"), []),
+                 "exp", "exec"), ns)
     return ns, applied, lever
 
 
@@ -220,6 +221,62 @@ def test_the_label_window_and_coverage_start_at_the_settle_end():
         assert sum(coverage_report.session_classes(sd)["minutes"].values()) == round(119 / 60, 3)
         (sd / "meta.json").write_text(json.dumps(stopped))                              # J, stopped in the settle: 0
         assert coverage_report.session_classes(sd)["minutes"] == {}
+
+
+def test_dry_hold_keeps_j_the_whole_session_with_one_apply():
+    """levi / shagun 03:19 (LVDC_DRY_HOLD_J): after the settle the schedule never plays; J (its join tc) stays on the
+    link for the schedule's length: one tc apply, no walk step; one hold row (phase None, apply "hold", J's tc)."""
+    ns, applied, lever = _ns(settle_s=0.1, hold=True)
+    labels = []
+    t0 = time.time()
+    assert _run(ns, labels, play_after=0.05, episodes=1) is True                     # hold = 1 episode x 1 s
+    assert [a[1].state for a in applied] == ["8"] and len(applied) == 1               # the join's apply only
+    assert [(l.phase, l.apply, l.state, l.speed, l.delay_ms, l.loss_pct) for l in labels] == [
+        ("join", "slow", "8", 3250, 20, 0.075), (None, "hold", "8", 3250, 20, 0.075)]
+    assert all(not l.walk_step for l in labels) and not lever.calls                   # no walk, no lever
+    assert labels[1].timestamp >= ns["JOIN"]["t_settle_end"] - 0.01
+    assert 1.0 <= time.time() - t0 < 3.0                                               # the schedule's length still ends it
+    ns, applied, _ = _ns(settle_s=0.05, hold=True)                                    # a stop during the hold: False
+    stop = asyncio.Event()
+
+    async def go():
+        task = asyncio.create_task(ns["_ossilate"](episode_time_in_seconds=60, net_labels=[], stop_event=stop,
+                                                   transition_dct={}, max_episodes=1))
+        while not ns["JOIN_FIRST"].is_set():
+            await asyncio.sleep(0.005)
+        ns["JOIN"]["t_playing"] = round(time.time(), 3)
+        ns["JOIN_PLAYING"].set()
+        await asyncio.sleep(0.2)
+        stop.set()
+        return await asyncio.wait_for(task, 5)
+    assert asyncio.run(go()) is False and len(applied) == 1
+
+
+def test_dry_hold_refusals_and_wiring():
+    """LVDC_DRY_HOLD_J: only "1", dry pilots only (a counted run / record-marker root refuses), --auto only, never with
+    another schedule; refused right after C8 / the frame-log refusal, before any session dir and the browser."""
+    import types
+    ns = {"DRY_HOLD_ENV": _const("DRY_HOLD_ENV")}
+    exec(compile(ast.Module(_fns("dry_hold_refusal"), []), "exp", "exec"), ns)
+    ref = ns["dry_hold_refusal"]
+    A = lambda **kw: types.SimpleNamespace(**{"auto": True, "hold_state": None, "lever": False, "replay_schedule": None, **kw})
+    E = "LVDC_DRY_HOLD_J"
+    assert ns["DRY_HOLD_ENV"] == E
+    assert ref({}, False, A()) is None and ref({E: ""}, True, A()) is None              # unset: unchanged
+    assert ref({E: "1"}, False, A()) is None                                           # honoured on a dry pilot
+    assert "dry pilots only" in ref({E: "1"}, True, A())                               # counted / record root
+    for bad in ("0", "yes", "J"):
+        assert "only" in ref({E: bad}, False, A()), bad
+    assert "--auto" in ref({E: "1"}, False, A(auto=False))
+    for kw in ({"hold_state": "3"}, {"lever": True}, {"replay_schedule": "s"}):
+        assert "excludes" in ref({E: "1"}, False, A(**kw)), kw
+    assert "excludes" in ref({E: "1", "LVDC_STEER_TABLE": "/t"}, False, A())
+    i = SRC.index("_dhr = dry_hold_refusal(os.environ,")
+    assert SRC.index("FRAME_LOG REFUSED") < i < SRC.index("session_dir.mkdir(parents=True, exist_ok=True)") \
+        < SRC.index("browser = BrowserSession(")
+    assert "sys.exit(EXIT_DRY_HOLD_REFUSED)" in SRC and "EXIT_DRY_HOLD_REFUSED = 15" in SRC
+    assert "not args.replay_schedule and not DRY_HOLD" in SRC                         # no W rotation on a hold
+    assert 'session_meta.merge(session_dir, "shaper", hold={' in SRC
 
 
 def test_join_meta_names_the_j_rule():

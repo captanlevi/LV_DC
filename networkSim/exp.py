@@ -68,6 +68,13 @@ JOIN_FIRST_WAIT_S = 120.0
 # unshaped), then settles JOIN_SETTLE_S at J from join.t_playing; the schedule (W, steering, forced start) starts after
 # (t_settle_end). The J row in net_labels carries phase "join": never labelled, never coverage (readers skip it).
 JOIN_J = "8"                 # JOIN_SETTLE_S: utils/shaping.py (orchestrate's window allowance reads it too)
+# levi / shagun 03:19 (the boundary-3 dry gap's constant net state): LVDC_DRY_HOLD_J=1 holds J for the whole session,
+# exactly as the join applies it (join_phase_stat: band midpoints, fixed tc, no walk, no delay / loss factor): the join's
+# one tc apply stays on the link, the schedule is never played (its length still ends the session). Dry pilots only:
+# refused on a counted run (LVDC_TRIO_RECORD=1) or under a record-marker root, before any session dir. meta.json
+# shaper.hold; net_labels: the join row, then one row at t_settle_end (phase None, apply "hold": no tc call, same tc).
+DRY_HOLD_ENV = "LVDC_DRY_HOLD_J"
+DRY_HOLD = False
 
 
 JOIN_STOP_WAIT_S = 30.0
@@ -209,6 +216,7 @@ EXIT_ROOM_ENDED = 6      # tt: the room died mid-session (browser.py TTRoomWatch
 EXIT_PLAYER_DEAD = 7     # tt: readyState 0 with no media for PLAYER_DEAD_MAX_S (TTRoomWatch); not a failure, room re-picked
 EXIT_STREAM_ENDED = 12   # yt / twitch: the tab left its live stream (browser.StreamEndedWatch); not a failure, re-picked
 EXIT_PLAYER_ERROR_HELD = 13   # yt / twitch (levi 02:57): a player error begun in the low-state hold; not a failure, re-picked
+EXIT_DRY_HOLD_REFUSED = 15    # levi 03:19: LVDC_DRY_HOLD_J outside a dry pilot, refused before any session dir
 EXIT_FRAME_LOG_REFUSED = 14   # levi 02:52: a counted v4 run without LVQOE_FRAME_LOG=1, refused before any session dir
 
 
@@ -517,6 +525,40 @@ async def _join_phase(net_labels: list[NetLabel], stop_event: asyncio.Event, cap
     return True
 
 
+def dry_hold_refusal(env, counted: bool, args) -> str | None:
+    """LVDC_DRY_HOLD_J (levi 03:19): None when unset or honoured; else why the session is refused. Only "1"; never on a
+    counted run or a record-marker root; an auto session only (the J join is auto's); never with --hold-state, --lever,
+    --replay-schedule or steering (each sets its own schedule)."""
+    raw = env.get(DRY_HOLD_ENV)
+    if raw is None or raw == "":
+        return None
+    if raw != "1":
+        return f"{DRY_HOLD_ENV}={raw!r}: only \"1\" (hold J the whole session)"
+    if counted:
+        return f"{DRY_HOLD_ENV}=1 on a counted run (LVDC_TRIO_RECORD=1 or a record-marker root): dry pilots only"
+    if not getattr(args, "auto", False):
+        return f"{DRY_HOLD_ENV}=1 needs --auto (the J join is the auto session's)"
+    if getattr(args, "hold_state", None) is not None or getattr(args, "lever", False) or \
+            getattr(args, "replay_schedule", None) or env.get("LVDC_STEER_TABLE") is not None:
+        return f"{DRY_HOLD_ENV}=1 excludes --hold-state, --lever, --replay-schedule and steering"
+    return None
+
+
+async def _hold_j(net_labels: list[NetLabel], stop_event: asyncio.Event, hold_s: float | None) -> bool:
+    """LVDC_DRY_HOLD_J (levi 03:19): J stays applied after the settle for the schedule's length (None: until a stop); no
+    tc call. One net_labels row at t_settle_end (phase None, apply "hold") carries J's tc, so the held seconds are the
+    session's labelled ones. True when the length ran out, False on a stop."""
+    js = join_phase_stat(JOIN_J)
+    t0 = time.time()
+    net_labels.append(NetLabel(timestamp=t0, speed=js.rate, state=js.state, delay_ms=js.delay_ms, loss_pct=js.loss_pct,
+                               apply="hold"))
+    while hold_s is None or time.time() < t0 + hold_s:
+        if stop_event.is_set():
+            return False
+        await asyncio.sleep(SYSTEM_TICK)
+    return True
+
+
 async def _ossilate(
     episode_time_in_seconds: int,
     net_labels: list[NetLabel],
@@ -531,6 +573,8 @@ async def _ossilate(
         if not await _join_phase(net_labels, stop_event,
                                  cap_s=episode_time_in_seconds * max_episodes if max_episodes else JOIN_CAP_S):
             return False
+        if DRY_HOLD:
+            return await _hold_j(net_labels, stop_event, episode_time_in_seconds * max_episodes if max_episodes else None)
     deadline = None
     for i_change, net_stat in enumerate(_schedule(dict(
         episode_length=episode_time_in_seconds,
@@ -1036,6 +1080,12 @@ if __name__ == "__main__":
     if _flr:
         print(f"FRAME_LOG REFUSED: {_flr}", flush=True)
         sys.exit(EXIT_FRAME_LOG_REFUSED)
+    _dhr = dry_hold_refusal(os.environ, os.environ.get("LVDC_TRIO_RECORD") == "1"
+                            or _dr_fl.record_root_check(_dr_fl.DATA_ROOT)["marker"], args)
+    if _dhr:
+        print(f"DRY HOLD REFUSED: {_dhr}", flush=True)
+        sys.exit(EXIT_DRY_HOLD_REFUSED)
+    DRY_HOLD = os.environ.get(DRY_HOLD_ENV) == "1"
     if args.save_dir:
         session_dir = args.save_dir
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -1050,7 +1100,8 @@ if __name__ == "__main__":
     # record (rules, sigma per state, factor, seeds) goes to meta.json shaper
     WALK_RNG, SHAPING_REC = session_shaping(session_dir.name)
     SHAPER_OPTS.update(walk_rng=WALK_RNG, dl_factor=SHAPING_REC["dl_factor"]["value"])
-    WRAP_SEED = session_dir.name if args.hold_state is None and not args.replay_schedule else None   # W: chain sessions
+    WRAP_SEED = (session_dir.name if args.hold_state is None and not args.replay_schedule and not DRY_HOLD
+                 else None)   # W: chain sessions
     if args.replay_schedule:              # v3 W-A: one fixed schedule for every round; the session-name draws are unused
         if args.hold_state is not None or args.lever or os.environ.get("LVDC_STEER_TABLE") is not None:
             sys.exit("--replay-schedule excludes --hold-state, --lever and steering (W-A's arms differ only in the flag)")
@@ -1099,6 +1150,11 @@ if __name__ == "__main__":
                        profile_template=profile_template, shaping=SHAPING_REC)
     if args.hold_state is not None:
         session_meta.write(session_dir, hold_state=args.hold_state)
+    if DRY_HOLD:                          # levi 03:19: the dry gap's constant net state
+        _js = join_phase_stat(JOIN_J)
+        session_meta.merge(session_dir, "shaper", hold={
+            "state": JOIN_J, "tc": {"rate_kbit": _js.rate, "delay_ms": _js.delay_ms, "loss_pct": _js.loss_pct},
+            "env": DRY_HOLD_ENV, "rule": "J held from the join to the session's end, one tc apply (levi 03:19)"})
     if args.geometry_name:              # t67 B1: the realised name (geometry_target stays the launch instruction)
         session_meta.write(session_dir, geometry_name=args.geometry_name)
     if STEERING is not None:
