@@ -22,6 +22,27 @@ def remove_profile_clone(clones_root: Path, prof: Path) -> bool:
     return not p.exists()
 
 
+# levi 09:23 (F1, boundary 3): the extension's chrome.storage.local (labels' events, the side streams incl. the frame log,
+# player_stats) lives only in the clone until the export reads it. When the export failed or never ran (the browser
+# died, or CDP was unreachable at stop), this directory is copied into the session dir before the clone is removed, so
+# halo4 reads the LevelDB post hoc. Only the extension storage: no cookies.
+EXT_STORAGE = ("Default", "Local Extension Settings")
+EXT_STORAGE_COPY = "ext_storage_raw"
+
+
+def keep_ext_storage(prof: Path, session_dir: Path) -> dict:
+    """Copy the clone's extension storage into session_dir/ext_storage_raw; the record for meta.ext_export.raw."""
+    src, dst = Path(prof).joinpath(*EXT_STORAGE), Path(session_dir) / EXT_STORAGE_COPY
+    if not src.is_dir():
+        return {"copied": False, "reason": "absent"}
+    try:
+        shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
+    except Exception as exc:
+        return {"copied": False, "error": repr(exc)[:200]}
+    files = [f for f in dst.rglob("*") if f.is_file()]
+    return {"copied": True, "dir": EXT_STORAGE_COPY, "files": len(files), "bytes": sum(f.stat().st_size for f in files)}
+
+
 TEMPLATE_NOTE = "TEMPLATE_NOTE.txt"
 
 

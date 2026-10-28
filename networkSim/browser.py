@@ -1860,6 +1860,16 @@ def _write_durable(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+def _ext_export_record(session_dir: Path, **rec) -> None:
+    """levi 09:23 (F1): meta.ext_export on every exit of the export, success too, so an absent value never means
+    unknown; exp.py copies the raw extension storage before the clone goes when ok is not true."""
+    try:
+        import session_meta
+        session_meta.write(session_dir, ext_export=rec)
+    except Exception as exc:
+        print(f"[browser] ext_export not recorded: {exc!r} {rec}", flush=True)
+
+
 def _export_via_service_worker(session_dir: Path) -> bool:
     """
     Read QoE events from the extension's chrome.storage.local via CDP,
@@ -1877,6 +1887,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         sw, tmp_tab = _ext_page()
         if sw is None:
             print("[browser] No extension context found (service worker idle and no extension page)", flush=True)
+            _ext_export_record(session_dir, ok=False, reason="no_ext_context")
             return False
 
         events_json = sw.eval(
@@ -1940,6 +1951,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         if not events:
             print("[browser] Extension storage empty — no QoE events collected", flush=True)
             clear_storage()
+            _ext_export_record(session_dir, ok=True, events=0)
             return False
 
         # v2 (LVQoE t35): new columns appended after the v1 ones (additive; v1 readers keep working)
@@ -1964,10 +1976,12 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         print("[browser] labels.csv written before storage clear", flush=True)
         clear_storage()
         print("[browser] Extension storage cleared after export", flush=True)
+        _ext_export_record(session_dir, ok=True, events=len(events))
         return True
 
     except Exception as exc:
         print(f"[browser] Extension CSV export error: {exc}", flush=True)
+        _ext_export_record(session_dir, ok=False, error=repr(exc)[:200])
         return False
 
 

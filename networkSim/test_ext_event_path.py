@@ -245,3 +245,55 @@ def test_stop_posts_the_final_flush_before_the_export():
     assert stop.index("_final_flush(self._page)") < stop.index("_export_via_service_worker(self._session_dir)")
     assert B.FINAL_FLUSH_WAIT_S > 1.0                 # > content.js FLUSH_INTERVAL_MS: the iframes' timers land too
     assert "lvqoe-flush" in (LAB / "content.js").read_text()
+
+
+# levi 09:23 (F1, boundary 3): meta.ext_export on every export exit, success too; when it is not ok, exp.py copies the
+# clone's extension storage into the session dir before the clone is removed (a dead browser lost every record)
+def _ext_export(sd):
+    return json.loads((sd / "meta.json").read_text())["ext_export"]
+
+
+def test_ext_export_is_recorded_on_success(export_env):
+    sw, sd = export_env
+    assert B._export_via_service_worker(sd) is True
+    assert _ext_export(sd) == {"ok": True, "events": 1}
+
+
+def test_ext_export_is_recorded_when_the_export_fails(export_env, monkeypatch):
+    sw, sd = export_env
+    monkeypatch.setattr(B, "_write_durable", lambda path, text: (_ for _ in ()).throw(OSError(28, "No space left")))
+    assert B._export_via_service_worker(sd) is False
+    rec = _ext_export(sd)
+    assert rec["ok"] is False and "No space left" in rec["error"] and sw.cleared_with is None
+
+
+def test_ext_export_is_recorded_when_no_extension_context(export_env, monkeypatch):
+    sw, sd = export_env
+    monkeypatch.setattr(B, "_ext_page", lambda: (None, None))
+    assert B._export_via_service_worker(sd) is False
+    assert _ext_export(sd) == {"ok": False, "reason": "no_ext_context"}
+
+
+def test_keep_ext_storage_copies_only_the_extension_storage(tmp_path):
+    from profile_clone import EXT_STORAGE_COPY, keep_ext_storage
+    prof, sd = tmp_path / "clone", tmp_path / "session"
+    sd.mkdir()
+    assert keep_ext_storage(prof, sd) == {"copied": False, "reason": "absent"}
+    db = prof / "Default" / "Local Extension Settings" / "abcdefghijklmnopabcdefghijklmnop"
+    db.mkdir(parents=True)
+    (db / "000003.log").write_bytes(b"side:frames:...")
+    (db / "MANIFEST-000001").write_bytes(b"m")
+    (prof / "Default" / "Cookies").write_text("session cookies")
+    rec = keep_ext_storage(prof, sd)
+    assert rec == {"copied": True, "dir": EXT_STORAGE_COPY, "files": 2, "bytes": 16}
+    assert (sd / EXT_STORAGE_COPY / db.name / "000003.log").read_bytes() == b"side:frames:..."
+    assert not any(p.name == "Cookies" for p in sd.rglob("*"))
+
+
+def test_exp_keeps_the_raw_storage_after_chrome_is_killed_and_before_the_clone_goes():
+    src = (HERE / "exp.py").read_text()
+    fin = src[src.index("    finally:\n        # finalising"):]
+    kill, keep = fin.index("kill_chrome(chrome_profile)"), fin.index("keep_ext_storage(chrome_profile")
+    remove = fin.index("remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)", keep)
+    assert kill < keep < remove
+    assert 'ext_export.get("ok") is not True' in fin and '"reason": "not_run"' in fin

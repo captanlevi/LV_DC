@@ -1659,6 +1659,17 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"entries failed: {e!r}")
         check_session(session_dir)
+        # levi 09:23 (F1): an export that failed or never ran leaves the extension's records only in the clone; they are
+        # copied into the session dir before the clone goes (profile_clone.keep_ext_storage); never fatal
+        try:
+            ext_export = json.loads((session_dir / "meta.json").read_text()).get("ext_export") or {"ok": False,
+                                                                                                  "reason": "not_run"}
+            if ext_export.get("ok") is not True:
+                from profile_clone import keep_ext_storage
+                session_meta.write(session_dir, ext_export={**ext_export, "raw": keep_ext_storage(chrome_profile,
+                                                                                                    session_dir)})
+        except Exception as e:
+            print(f"ext storage not kept: {e!r}")
         # the profile clone is ephemeral runtime state with login cookies: removed after check_session (supervisor
         # 2026-10-18; profile_clone.py); the template stays the reproducible state
         from profile_clone import remove_profile_clone
