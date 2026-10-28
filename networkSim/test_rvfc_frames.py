@@ -135,12 +135,14 @@ def _frames(r: dict) -> list[dict]:
 
 
 def test_frame_log():
-    base, fl1 = _frames(run("on")), _frames(run("fl1"))
+    r1 = run("fl1")
+    base, fl1 = _frames(run("on")), _frames(r1)
     assert not any("fl" in x for x in base)                                    # no config: the tick rows as before
     # reader neutrality at the source: with fl stripped the stream is the one without the per-frame log
     assert [{k: v for k, v in x.items() if k != "fl"} for x in fl1] == base
     fl = [x["fl"] for x in fl1 if x["k"] == "tick"]
     assert [f["seq"] for f in fl] == [0, 1, 2, 3] and all(f["on"] and f["over"] == 0 for f in fl)
+    assert {f["cs"] for f in fl} == {e["cs"] for e in r1["sent"]} and len({f["cs"] for f in fl}) == 1   # the instance's CS_ID
     rows = [row for f in fl for row in f["rows"]]
     assert [row[3] for row in rows] == list(range(1, 49))                     # every presented frame, pf by pf
     assert [len(f["rows"]) for f in fl] == [30, 15, 0, 3]                     # = the tick's delta pf

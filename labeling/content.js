@@ -288,7 +288,7 @@ function observePlayerEvents(v) {
 // lvqoe_config.frame_log ({block_s, t0}, browser.py from LVQOE_FRAME_LOG; absent: off and no field, the tick row as
 // before) turns it on: the rVFC callback appends each presented frame [el, pt, mt, pf, edt] (+ w, h when the element's
 // dims change) to one array and does nothing else; each tick row carries the rows since the last tick in its field fl
-// {seq, on, rows, over} and the array is cleared there (no message per frame). block_s > 0 alternates OFF / ON blocks
+// {cs, seq, on, rows, over} (seq counts per content-script instance, cs) and the array is cleared there (no message per frame). block_s > 0 alternates OFF / ON blocks
 // of block_s s from t0 (even blocks OFF): the instrumentation check's arms, fixed per tick. Past FRAME_LOG_MAX rows in
 // one tick a frame is counted (over, cumulative), never kept; each row's pf shows a frame skipped between callbacks.
 const FRAME_LOG_MAX = 1200;
@@ -308,7 +308,7 @@ function frameLogConfigure(c) {
 }
 function frameLogField() {                  // the tick row's fl, then the next tick's arm
   if (!frameLogCfg) return {};
-  const fl = { seq: frameSeq++, on: frameLogOn, rows: frameRows, over: frameOver };
+  const fl = { cs: CS_ID, seq: frameSeq++, on: frameLogOn, rows: frameRows, over: frameOver };
   frameRows = [];
   frameLogOn = frameLogArm();
   return { fl };
