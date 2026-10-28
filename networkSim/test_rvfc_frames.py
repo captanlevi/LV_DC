@@ -7,9 +7,11 @@ element whose requestVideoFrameCallback stores the callback and the harness pres
   - one tick row per 1 s res_meta tick, joined to its event_id, with presented / decoded / dropped side by side and the
     callbacks since the last tick, also while nothing is presented (cb 0, the last frame's values kept);
   - lvqoe_config.rvfc === false registers no callback and the tick rows say rvfc false (the gate's off arm);
-  - t91: lvqoe_config.frame_log adds the tick row's field fl (every presented frame since the last tick, w / h on a dims
-    change, seq per tick, the cap's overflow counted); with the field stripped the frames stream is the one without it;
-    alternating blocks log only in the ON blocks; no config, no field.
+  - t91: lvqoe_config.frame_log adds the tick row's field fl, one columnar integer batch per tick of every presented
+    frame since the last tick with every metadata field the browser gave (absent stays absent), decoded exactly by
+    frame_log.decode (content.js's FL_CODE is the decoder's); seq per tick, keys when they change, values not whole us
+    counted, the cap's overflow counted; with the field stripped the frames stream is the one without it; alternating
+    blocks log only in the ON blocks; no config, no field.
 
     python3 test_rvfc_frames.py        (needs node; exit 0 = pass)
 """
@@ -21,6 +23,8 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import frame_log as FL  # noqa: E402
 
 HARNESS = r"""
 const fs = require("fs"), vm = require("vm");
@@ -34,7 +38,8 @@ let failNextSide = mode === "on" || mode === "fl1";   // the first side write fa
 const cfgFor = { off: { lvqoe_config: { instruments: false } },     // t91: frame_log on, or in 1 s OFF / ON blocks from 0
                  fl1: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
                  flalt: { lvqoe_config: { frame_log: { block_s: 1, t0: 5e11 } } },
-                 flcap: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } } };
+                 flcap: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } },
+                 flfull: { lvqoe_config: { frame_log: { block_s: 0, t0: 5e11 } } } };
 const timers = [], side = [], sent = [];
 let now = 1000;
 class MediaStream {}
@@ -68,9 +73,14 @@ vm.runInContext(src, ctx);
 const registeredBeforeCfg = cbs.length;    // async config: nothing may register before the config is read
 for (const r of pendingCfg.splice(0)) r();
 let pf = 0, mt = 0;
+const presented = [];
 const present = (n, w, h) => { for (let i = 0; i < n; i++) {
   const f = cbs.shift(); if (!f) return; now += 33; pf += 1; mt += 1 / 30; decoded += 1;
-  f(now, { presentationTime: now - 1, expectedDisplayTime: now + 16, mediaTime: mt, presentedFrames: pf, width: w, height: h }); } };
+  const md = { presentationTime: now - 1, expectedDisplayTime: now + 16, mediaTime: mt, presentedFrames: pf, width: w, height: h };
+  if (mode === "flfull" && pf % 2) Object.assign(md, { processingDuration: (pf * 7) / 1e6, captureTime: now - 40,
+                                                       receiveTime: now - 20.5, rtpTimestamp: pf * 3000 });   // t91: every field
+  presented.push(md);
+  f(now, md); } };
 const tick = () => { now += 1; for (const t of timers) t(); };
 present(30, 720, 1280); tick();            // 30 frames, one tick
 present(10, 720, 1280); present(5, 540, 960); tick();   // a rendition switch inside the second
@@ -79,7 +89,9 @@ v.srcObject = new MediaStream(); mt = 0;   // a new stream (tt re-entry): mediaT
 present(3, 540, 960); tick();
 if (mode === "flcap") { present(1300, 540, 960); tick(); }   // over FRAME_LOG_MAX in one tick
 vm.runInContext("flushSide()", ctx);        // the last tick's rows
-fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length, registeredBeforeCfg, stored }));
+const flCode = vm.runInContext("JSON.stringify(FL_CODE)", ctx);
+fs.writeFileSync(process.argv[3], JSON.stringify({ side, sent, pending: cbs.length, registeredBeforeCfg, stored, presented,
+                                                   flCode: JSON.parse(flCode) }));
 """
 
 
@@ -134,6 +146,10 @@ def _frames(r: dict) -> list[dict]:
     return [x for m in r["side"] if m["stream"] == "frames" for x in m["payload"]]
 
 
+def _exact(v: float, scale: float) -> bool:
+    return round(v * scale) / scale == v
+
+
 def test_frame_log():
     r1 = run("fl1")
     base, fl1 = _frames(run("on")), _frames(r1)
@@ -143,17 +159,34 @@ def test_frame_log():
     fl = [x["fl"] for x in fl1 if x["k"] == "tick"]
     assert [f["seq"] for f in fl] == [0, 1, 2, 3] and all(f["on"] and f["over"] == 0 for f in fl)
     assert {f["cs"] for f in fl} == {e["cs"] for e in r1["sent"]} and len({f["cs"] for f in fl}) == 1   # the instance's CS_ID
-    rows = [row for f in fl for row in f["rows"]]
-    assert [row[3] for row in rows] == list(range(1, 49))                     # every presented frame, pf by pf
-    assert [len(f["rows"]) for f in fl] == [30, 15, 0, 3]                     # = the tick's delta pf
-    assert {len(row) for i, row in enumerate(rows) if i not in (0, 40)} == {5}
-    assert rows[0][5:] == [720, 1280] and rows[40][5:] == [540, 960]          # w / h on the first frame and the switch
-    el, pt, mt, pf, edt = rows[40][:5]
-    assert el == 1 and edt == pt + 17 and abs(mt - 41 / 30) < 1e-9
+    assert [f["n"] for f in fl] == [30, 15, 0, 3]                              # = the tick's delta pf
+    # the collector's decoder is content.js's format: the same columns, scales and codes in the same order
+    assert {k: list(v) for k, v in r1["flCode"].items()} == {k: list(v) for k, v in FL.FL_CODE.items()}
+    rows = [row for f in fl for row in FL.decode(f)]
+    assert [row["pf"] for row in rows] == list(range(1, 49))                  # every presented frame, pf by pf
+    assert [(row["w"], row["h"]) for row in rows] == [(720, 1280)] * 40 + [(540, 960)] * 8
+    assert all(set(row) == {"el", "pt", "edt", "mt", "pf", "w", "h"} for row in rows)   # absent fields stay absent
+    for row, md in zip(rows, r1["presented"]):                                # exact to the us, both clocks and mt
+        assert row["el"] == 1 and row["pt"] == md["presentationTime"] and row["edt"] == md["expectedDisplayTime"]
+        assert abs(row["mt"] - md["mediaTime"]) <= 0.5e-6
+    assert sum(f["inexact"] for f in fl) == sum(not _exact(md["mediaTime"], 1e6) for md in r1["presented"])
+    assert fl[0]["keys"] == "expectedDisplayTime,height,mediaTime,presentationTime,presentedFrames,width"
+    assert all("keys" not in f for f in fl[1:])                               # sent again only when it changes
+    assert fl[0]["c"]["pf"] == [1] * 30 and set(fl[0]["c"]["edt"]) == {17000} and fl[2]["c"] == {}   # ints, delta / pt offset
+    full = run("flfull")                                                        # every metadata field, some frames only
+    ff = [x["fl"] for x in _frames(full) if x["k"] == "tick"]
+    rows = [row for f in ff for row in FL.decode(f)]
+    for row, md in zip(rows, full["presented"]):
+        for col, (field, _, _) in FL.FL_CODE.items():
+            if field in ("mediaTime", None):
+                continue
+            assert row.get(col) == md.get(field), (col, row, md)              # present or absent, as the browser gave it
+    assert sum(1 for row in rows if "pd" in row) == 24 and all(row["rtp"] == row["pf"] * 3000 for row in rows if "rtp" in row)
+    assert ff[0]["c"]["pd"][:2] == [7, None] and ff[0]["c"]["ct"][0] == -39000 and ff[0]["c"]["rt"][0] == -19500
     alt = [x["fl"] for x in _frames(run("flalt")) if x["k"] == "tick"]         # block 1 ON (frames to 2.49 s), block 2 OFF
-    assert [(f["on"], len(f["rows"])) for f in alt] == [(True, 30), (True, 15), (False, 0), (False, 0)], alt
+    assert [(f["on"], f["n"]) for f in alt] == [(True, 30), (True, 15), (False, 0), (False, 0)], alt
     cap = [x["fl"] for x in _frames(run("flcap")) if x["k"] == "tick"]
-    assert len(cap[-1]["rows"]) == 1200 and cap[-1]["over"] == 100 and cap[-1]["rows"][-1][3] == 48 + 1200
+    assert cap[-1]["n"] == 1200 and cap[-1]["over"] == 100 and FL.decode(cap[-1])[-1]["pf"] == 48 + 1200
     off = _frames(run("off"))                                                   # instruments off: no field
     assert not any("fl" in x for x in off)
 

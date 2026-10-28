@@ -284,19 +284,31 @@ function observePlayerEvents(v) {
 // last frame's mediaTime / presentationTime and the callbacks since the last tick; (c) the first presented frame after
 // an attach or a src_key change (tt's per-stream anchor: a MediaStream's mediaTime restarts per stream). The callback
 // only reads metadata.
-// t91 (rushi 2026-10-28; levi 17:4x / 18:11, boundary 3): the per-frame log (alternating blocks dry only, browser.py).
-// lvqoe_config.frame_log ({block_s, t0}, browser.py from LVQOE_FRAME_LOG; absent: off and no field, the tick row as
-// before) turns it on: the rVFC callback appends each presented frame [el, pt, mt, pf, edt] (+ w, h when the element's
-// dims change) to one array and does nothing else; each tick row carries the rows since the last tick in its field fl
-// {cs, seq, on, rows, over} (seq counts per content-script instance, cs) and the array is cleared there (no message per frame). block_s > 0 alternates OFF / ON blocks
-// of block_s s from t0 (even blocks OFF): the instrumentation check's arms, fixed per tick. Past FRAME_LOG_MAX rows in
-// one tick a frame is counted (over, cumulative), never kept; each row's pf shows a frame skipped between callbacks.
+// t91 (rushi 2026-10-28 17:40 / 20:27; levi 17:4x / 18:11, boundary 3): the per-frame log, every presented frame with
+// every VideoFrameCallbackMetadata field. lvqoe_config.frame_log ({block_s, t0}, browser.py from LVQOE_FRAME_LOG; absent:
+// off, no field, the tick row as before) turns it on. The rVFC callback only stores the frame's numbers into a
+// preallocated Float64Array (FL_COLS per row, an absent field NaN; past FRAME_LOG_MAX rows in one tick a frame is counted,
+// over, never kept). Once per tick, off the callback, the rows go into the tick row's field fl as one columnar batch of
+// integers: times in us (pt / edt / ct / rt from ms, mt / pd from s), each column delta-coded or offset from pt
+// (FL_CODE), a column with no value in the tick left out, a value null where that frame lacked it. inexact counts values
+// that are not whole us (rounded); keys is Object.keys of the last frame's metadata when it differs from the last one
+// sent, so a field the browser adds shows. block_s > 0 alternates OFF / ON blocks of block_s s from t0 (even blocks OFF):
+// the instrumentation check's arms, fixed per tick. pf per row shows a frame skipped between callbacks.
 const FRAME_LOG_MAX = 1200;
+// column: [metadata field, scale to an integer, code: "d" delta from the previous value, "p" offset from the row's pt, "r" raw]
+const FL_CODE = { el: [null, 1, "d"], pt: ["presentationTime", 1e3, "d"], edt: ["expectedDisplayTime", 1e3, "p"],
+                  mt: ["mediaTime", 1e6, "d"], pf: ["presentedFrames", 1, "d"], w: ["width", 1, "d"], h: ["height", 1, "d"],
+                  pd: ["processingDuration", 1e6, "r"], ct: ["captureTime", 1e3, "p"], rt: ["receiveTime", 1e3, "p"],
+                  rtp: ["rtpTimestamp", 1, "d"] };
+const FL_COLS = Object.keys(FL_CODE);
+const FL_N = FL_COLS.length;
+const frameBuf = new Float64Array(FRAME_LOG_MAX * FL_N);
 let frameLogCfg = null;
 let frameLogOn = false;
-let frameRows = [];
+let frameN = 0;
 let frameOver = 0;
 let frameSeq = 0;
+let frameKeys = null;
 function frameLogArm() {
   const b = frameLogCfg.block_s;
   return !(b > 0) || Math.floor((Date.now() - frameLogCfg.t0) / (b * 1000)) % 2 === 1;
@@ -306,10 +318,56 @@ function frameLogConfigure(c) {
   frameLogCfg = { block_s: Number(c.block_s) || 0, t0: Number(c.t0) || Date.now() };
   frameLogOn = frameLogArm();
 }
-function frameLogField() {                  // the tick row's fl, then the next tick's arm
+function frameLogPush(el, md) {           // the callback's only work: numbers into the preallocated buffer
+  if (frameN >= FRAME_LOG_MAX) { frameOver += 1; return; }
+  const o = frameN++ * FL_N;
+  frameBuf[o] = el;
+  frameBuf[o + 1] = md.presentationTime;
+  frameBuf[o + 2] = md.expectedDisplayTime;
+  frameBuf[o + 3] = md.mediaTime;
+  frameBuf[o + 4] = md.presentedFrames;
+  frameBuf[o + 5] = md.width;
+  frameBuf[o + 6] = md.height;
+  frameBuf[o + 7] = md.processingDuration;
+  frameBuf[o + 8] = md.captureTime;
+  frameBuf[o + 9] = md.receiveTime;
+  frameBuf[o + 10] = md.rtpTimestamp;
+}
+function frameLogEncode(n) {              // {cols, inexact}: the columnar integer batch of the tick's n rows
+  const cols = {};
+  let inexact = 0;
+  const q = (v, scale) => {
+    const x = Math.round(v * scale);
+    if (x / scale !== v) inexact += 1;
+    return x;
+  };
+  for (let j = 0; j < FL_N; j++) {
+    const [, scale, code] = FL_CODE[FL_COLS[j]];
+    const out = new Array(n);
+    let any = false, prev = 0;
+    for (let i = 0; i < n; i++) {
+      const v = frameBuf[i * FL_N + j];
+      if (v !== v) { out[i] = null; continue; }          // NaN: the frame lacked the field
+      any = true;
+      const x = q(v, scale);
+      if (code === "d") { out[i] = x - prev; prev = x; }
+      else if (code === "p") out[i] = x - Math.round(frameBuf[i * FL_N + 1] * 1e3);
+      else out[i] = x;
+    }
+    if (any) cols[FL_COLS[j]] = out;
+  }
+  return { cols, inexact };
+}
+function frameLogField(md) {              // the tick row's fl, then the next tick's arm
   if (!frameLogCfg) return {};
-  const fl = { cs: CS_ID, seq: frameSeq++, on: frameLogOn, rows: frameRows, over: frameOver };
-  frameRows = [];
+  const n = frameN;
+  const { cols, inexact } = frameLogEncode(n);
+  const fl = { cs: CS_ID, seq: frameSeq++, on: frameLogOn, n, over: frameOver, inexact, c: cols };
+  if (md) {
+    const keys = Object.keys(md).sort().join(",");
+    if (keys !== frameKeys) { fl.keys = keys; frameKeys = keys; }
+  }
+  frameN = 0;
   frameLogOn = frameLogArm();
   return { fl };
 }
@@ -374,11 +432,7 @@ function rvfcStart(v) {
     const base = { ts: performance.timeOrigin + now, el: elId(v), src, pt: md.presentationTime ?? null,
                    edt: md.expectedDisplayTime ?? null, mt: md.mediaTime ?? null, pf: md.presentedFrames ?? null,
                    w: md.width ?? null, h: md.height ?? null };
-    if (frameLogOn) {
-      if (frameRows.length >= FRAME_LOG_MAX) frameOver += 1;
-      else if (md.width !== st.w || md.height !== st.h) frameRows.push([base.el, base.pt, base.mt, base.pf, base.edt, base.w, base.h]);
-      else frameRows.push([base.el, base.pt, base.mt, base.pf, base.edt]);
-    }
+    if (frameLogOn) frameLogPush(base.el, md);
     if (src !== st.src) {
       side("frames", { k: "first_frame", ...base, prev_src: st.src });
       st.src = src;
@@ -414,7 +468,7 @@ function rvfcTick() {
                    instruments: v3On && v3Ready, rvfc: v3On && !!st, off_arm_cb: offArmCb,
                    ad_cb: adStats.cb, ad_checks: adStats.runs, ad_ms: Math.round(adStats.ms * 1000) / 1000,
                    src3_polls: src3Polls,
-                   side_dropped: { ...sideDropped }, side_failed: { ...sideFailed }, ...frameLogField() });
+                   side_dropped: { ...sideDropped }, side_failed: { ...sideFailed }, ...frameLogField(md) });
   if (st) st.n = 0;
   adStats.cb = adStats.runs = adStats.ms = 0;
   src3Polls = 0;
