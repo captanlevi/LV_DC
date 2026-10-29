@@ -61,7 +61,8 @@ def test_each_refusal():
         (RECORD + ["--slots", "yt,tw,tt"], "--n-draw needs --concurrent and no --slots"),
         (without(RECORD, "--n-draw", "--trio-record") + ["--n-support", "1"], "need --n-draw"),
         (without(RECORD, "--window-min") + ["--window-min", "0"], "positive length"),
-        (without(RECORD, "--window-min") + ["--window-min", "60"], "--trio-record needs --window-min 120"),
+        (without(RECORD, "--window-min") + ["--window-min", "60"], "--trio-record needs --window-min >= 120"),
+        (without(RECORD, "--window-min") + ["--window-min", "119.9"], "--trio-record needs --window-min >= 120"),
         (without(RECORD, "--trio-yt-fullscreen"), "--trio-record needs --trio-yt-fullscreen"),
         (RECORD + ["--max-per-slot", "1"], "--max-per-slot does not apply inside a window"),
         (without(RECORD, "--expect-stratum"), "--trio-record needs --expect-stratum"),                 # collector v3 B5

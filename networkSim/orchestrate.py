@@ -783,9 +783,11 @@ def run_batch(targets: dict[str, int], auto: bool, yt_matrix: str, rotate_geomet
 # ---------------------------------------------------------------------------
 
 TRIO_STAGGER_S = 30.0     # at least this long between two slot starts (Chrome launches and profile clones not at once)
-# restart prereg §10 (levi 00138): the record's window is RECORD_WINDOW_MIN minutes (--trio-record refuses any other);
+# restart prereg §10 (levi 00138): the record's window is RECORD_WINDOW_MIN minutes; amended (levi / supervisor 17:13,
+# 2026-10-29, before any counted data, disclosed): at least RECORD_WINDOW_MIN (--trio-record refuses a shorter one);
 # a slot's next session fits when now + its drawn length + WINDOW_ALLOWANCE_S (startup + teardown) <= the deadline
 RECORD_WINDOW_MIN = 120.0
+RECORD_WINDOW_RULE = "window_min >= RECORD_WINDOW_MIN"
 STARTUP_TEARDOWN_S = 180.0
 # J (levi 15:55): a session runs its join and the settle at J before its drawn schedule; the join allowance covers the
 # longest accepted join seen (tt, under 2 min)
@@ -1541,8 +1543,8 @@ def arg_refusal(args, environ) -> str | None:
         return "--n-support / --n-exclude / --n-change-sign need --n-draw"
     if args.window_min is not None and (not args.concurrent or args.window_min <= 0):
         return "--window-min needs --concurrent and a positive length"
-    if args.trio_record and args.window_min != RECORD_WINDOW_MIN:     # §10 (levi 00138): the record's window
-        return f"--trio-record needs --window-min {RECORD_WINDOW_MIN:g} (restart prereg §10)"
+    if args.trio_record and (args.window_min is None or args.window_min < RECORD_WINDOW_MIN):   # §10 (amended 17:13)
+        return f"--trio-record needs --window-min >= {RECORD_WINDOW_MIN:g} (restart prereg §10)"
     if args.trio_record and not args.trio_yt_fullscreen:      # §7 (levi on 2e666b0): yt's support has fullscreen
         return ("--trio-record needs --trio-yt-fullscreen (restart prereg §7: yt's geometry support includes "
                 "fullscreen)")

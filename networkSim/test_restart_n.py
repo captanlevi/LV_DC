@@ -182,11 +182,12 @@ def test_cli_guards():
                               capture_output=True, text=True, timeout=60, env={**env, **(env_add or {})})
     r = run("--concurrent", "--trio-record")
     assert r.returncode != 0 and "--trio-record needs --n-draw" in r.stderr, r.stderr
-    for w in ((), ("--window-min", "90")):                       # levi 00138: the record's window is 120 min
-        r = run("--concurrent", "--trio-record", "--n-draw", *w)
-        assert r.returncode != 0 and "--trio-record needs --window-min 120" in r.stderr, r.stderr
-    r = run("--concurrent", "--trio-record", "--n-draw", "--window-min", "120")     # levi on 2e666b0: §7 fullscreen
-    assert r.returncode != 0 and "--trio-record needs --trio-yt-fullscreen" in r.stderr, r.stderr
+    for w in ((), ("--window-min", "90")):                       # levi 00138: the record's window is >= 120 min (§10
+        r = run("--concurrent", "--trio-record", "--n-draw", *w)  # amended 2026-10-29 17:13: was exactly 120)
+        assert r.returncode != 0 and "--trio-record needs --window-min >= 120" in r.stderr, r.stderr
+    for w in ("120", "180"):                                     # levi on 2e666b0: §7 fullscreen is the next refusal
+        r = run("--concurrent", "--trio-record", "--n-draw", "--window-min", w)
+        assert r.returncode != 0 and "--trio-record needs --trio-yt-fullscreen" in r.stderr, r.stderr
     r = run("--concurrent", "--window-min", "120", "--max-per-slot", "1")
     assert r.returncode != 0 and "--max-per-slot does not apply inside a window" in r.stderr, r.stderr
     r = run("--concurrent", "--window-min", "0")
