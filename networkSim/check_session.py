@@ -864,6 +864,20 @@ def http_media_flows(sd: Path) -> set:
     return keys
 
 
+def tw_identity_mismatch(meta: dict) -> str | None:
+    """levi 11:54: a twitch session whose meta.tw_channel (the league channel it was launched for, exp.py argv) is not the
+    channel it played (meta.channel_url, the page at entry) is a FAIL: its tw_category / tw_channel would feed the
+    category rotation and floors with a stream it never played (G7f tw_100014: launched eslcs, walked to hitch). None
+    when they agree, or when either is absent (a missing channel_url is META_REQUIRED's FAIL)."""
+    want, url = meta.get("tw_channel"), meta.get("channel_url")
+    if not want or not url:
+        return None
+    played = str(url).split("?")[0].rstrip("/").rsplit("/", 1)[-1].lower()
+    if played == str(want).lower():
+        return None
+    return f"identity_mismatch: meta.tw_channel {want!r} but channel_url {url!r} (played {played!r})"
+
+
 def join_order_violation(jo: dict | None) -> str | None:
     """levi 08:15: the order is enforced, not only reported: a media request that STARTED after the discovery ended
     (its tab already closed) and before the shaper's first apply means the stream began unshaped; levi 08:18: so does
@@ -1600,6 +1614,9 @@ def main() -> int:
     jo_why = join_order_violation(jo)
     if jo_why:
         v, why = "FAIL", why + [jo_why]
+    tw_why = tw_identity_mismatch(meta) if platform == "twitch" else None
+    if tw_why:
+        v, why = "FAIL", why + [tw_why]
     # levi 2026-10-17: one session class by the fixed precedence (entries above); only `normal` counts toward quotas
     s_class = E.session_class(platform, v, meta.get("abort_reason"), ents, lab.get("dead_player_class_s", lab.get("dead_player_max_s")),
                               lab.get("dead_player_T_s"), lab.get("frozen_playhead_class_s", lab.get("frozen_playhead_max_s")),

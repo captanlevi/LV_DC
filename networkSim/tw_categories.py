@@ -120,11 +120,14 @@ def draw_seed(data_dir: Path) -> int:
 
 
 def next_category(data_dir: Path, exclude: set[str] | None = None, live_check=twitch_live,
-                  select=None, capped: set[str] | frozenset = frozenset()) -> tuple[dict, dict | None]:
+                  select=None, capped: set[str] | frozenset = frozenset(),
+                  sibling_held: set[str] | frozenset = frozenset()) -> tuple[dict, dict | None]:
     """(category, esports skip record or None) by CATEGORY_RULE (the module docstring). `exclude`: categories or
     channels with no playable stream just now; `capped`: channel keys at the twitch channel cap (channel_cap), never
-    an esports league channel. esports is taken only with a live league channel (category["channel"]); otherwise it is
-    skipped and the next one drawn. The pick's state goes to LAST_PICK."""
+    an esports league channel; `sibling_held` (levi 11:54 (a)): league channels a sibling slot holds now (lower-case names), never
+    drawn, since the slot would drop a sibling's channel and walk another category while its meta named this one. esports
+    is taken only with a live league channel (category["channel"]); otherwise it is skipped and the next one drawn. The
+    pick's state goes to LAST_PICK."""
     import channel_cap
     exclude = set(exclude or ())
     counts = collected_counts(data_dir, select)
@@ -149,11 +152,13 @@ def next_category(data_dir: Path, exclude: set[str] | None = None, live_check=tw
                 drawn, tier = c, t
                 break
             free = [ch for ch in c["channels"] if channel_cap.channel_key(channel_url(ch)) not in set(capped)]
-            live = next((ch for ch in free if ch not in exclude and live_check(ch)), None)
+            live = next((ch for ch in free if ch not in exclude and ch.lower() not in sibling_held and live_check(ch)), None)
             if live:
                 drawn, tier = {**c, "channel": live}, t
                 break
             skipped = {"ts": time.time(), "reason": "esports_unavailable", "checked": free,
+                       **({"sibling_held": sorted(ch for ch in free if ch.lower() in sibling_held)}
+                          if any(ch.lower() in sibling_held for ch in free) else {}),
                        **({"capped": sorted(set(c["channels"]) - set(free))} if len(free) < len(c["channels"]) else {})}
         if drawn is not None:
             break
@@ -164,5 +169,6 @@ def next_category(data_dir: Path, exclude: set[str] | None = None, live_check=tw
     LAST_PICK.update(rule=CATEGORY_RULE, seed=seed, floor=CATEGORY_FLOOR, hold_at=CATEGORY_HOLD_AT, counts=counts,
                      below_floor=below, held=sorted(held), previous=prev, excluded=sorted(exclude & set(counts)),
                      stage=TIERS[tier] if tier is not None else "fallback", tied=sorted(same), drawn=drawn["name"], channel=drawn.get("channel"),
-                     **({"esports_skip": skipped} if skipped else {}), **({"cap_excluded": sorted(capped)} if capped else {}))
+                     **({"esports_skip": skipped} if skipped else {}), **({"cap_excluded": sorted(capped)} if capped else {}),
+                     **({"sibling_excluded": sorted(sibling_held)} if sibling_held else {}))
     return drawn, skipped

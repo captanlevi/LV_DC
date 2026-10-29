@@ -557,6 +557,21 @@ def _summary() -> None:
         print(f"  (daily summary failed: {e!r})")
 
 
+def tw_sibling_channels(tag: str, running: dict, slots_log: Path, run_id: str) -> set[str]:
+    """levi 11:54 (a): the twitch channels (lower-case names) the other running slots hold: each one's drawn league channel,
+    and its latest picked / landed stream in the run's slots log (browser.sibling_streams: a directory pick lands on any
+    channel). next_category never draws one of them."""
+    held = {str((r.get("category") or {}).get("channel") or "").lower() for t2, r in running.items() if t2 != tag} - {""}
+    try:
+        import browser
+        for u in browser.sibling_streams(None, "twitch", log=slots_log, run=run_id, me=tag):
+            if "twitch.tv/" in u:
+                held.add(u.rsplit("/", 1)[-1].lower())
+    except Exception as e:                # the drawn channels above still hold; browser.py's drop is the backstop (b)
+        print(f"  (twitch sibling streams not read: {e!r})")
+    return held
+
+
 def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool, exclude_modes: tuple = (),
           root: Path | None = None, siblings: set | frozenset = frozenset(), probe=None) -> tuple:
     """The session's channel (yt), category (twitch) and geometry draw, and the skip records they leave (run_batch and,
@@ -622,7 +637,8 @@ def _pick(p: str, not_live: dict[str, float], now: float, rotate_geometry: bool,
     if p == "twitch":
         import channel_cap
         capped = set((channel_cap.cap_state(root, "twitch", ident) or {}).get("capped") or ())
-        category, esports_skip = tw_categories.next_category(out, exclude=skip, select=ident, capped=capped)
+        category, esports_skip = tw_categories.next_category(out, exclude=skip, select=ident, capped=capped,
+                                                             sibling_held={str(x).lower() for x in siblings})
         category = {**category, "pick": dict(tw_categories.LAST_PICK)}   # meta.json channel_pick.category (trio)
     else:
         category, esports_skip = None, None
@@ -878,6 +894,8 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     # the pick and the coverage rule count the trio's own sessions (data/_trio: the sessions of record, levi 00265); without
     # --trio-yt-fullscreen no fullscreen geometry is drawn and a class needing one is unreachable (supervisor 2026-10-19)
     sib = {(r.get("channel") or {}).get("handle") for t2, r in running.items() if t2 != tag and r.get("channel")} - {None}
+    if p == "twitch":                    # levi 11:54 (a): the twitch channels the other slots hold (picked or landed)
+        sib = tw_sibling_channels(tag, running, summaries / "trio_slots.jsonl", run_id)
     channel, category, _ = _pick(p, not_live, now, False, T.EXCLUDED_GEOMETRIES, troot, siblings=sib)
     import record
     reserved = _reserved(tag, T, running)

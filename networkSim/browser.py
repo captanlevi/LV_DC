@@ -611,14 +611,16 @@ def publish_stream(session_dir: Path | None, platform: str, url: str | None, eve
         pass
 
 
-def sibling_streams(session_dir: Path | None, platform: str, log: Path | None = None) -> list[str]:
+def sibling_streams(session_dir: Path | None, platform: str, log: Path | None = None, run: str | None = None,
+                    me: str | None = None) -> list[str]:
     """The streams (normalised URLs) of `platform` that this run's other slots hold now: each slot's latest session
     (a start without a later end / exit for that slot) and its latest stream or intent event (a pick claims its stream
-    before the confirm / preroll: t58 N-2)."""
+    before the confirm / preroll: t58 N-2). run / me default to this process's LVDC_TRIO_RUN / LVDC_SLOT_TAG (orchestrate
+    passes them for the slot it is about to fill)."""
     log = log or _slots_log(session_dir)
     if log is None or not log.exists():
         return []
-    run, me = os.environ.get("LVDC_TRIO_RUN"), os.environ.get("LVDC_SLOT_TAG")
+    run, me = run or os.environ.get("LVDC_TRIO_RUN"), me or os.environ.get("LVDC_SLOT_TAG")
     cur: dict = {}                       # slot -> [session, platform, url] while running
     for line in log.read_text().splitlines():
         try:
@@ -4981,8 +4983,12 @@ class BrowserSession:
                     raise RuntimeError(f"Failed to navigate to a live twitch stream (the discovered channel {first} is "
                                        f"held by a sibling at the join, or none; no directory walk on the shaped link)")
             if first and "/directory/" not in first and _norm_room(first) in set(sib):
-                self.tw_pick["first_url_held_by_sibling"] = first     # t58 L-7: never the channel a sibling plays
-                first = None
+                # t58 L-7: never the channel a sibling plays; levi 11:54 (b) / (c): and never a walk to another category
+                # either (its meta named this channel and category): a startup failure, pin_mismatch on a pinned session
+                self.tw_pick["first_url_held_by_sibling"] = first
+                kind = "pin_mismatch: " if self._pinned() else ""
+                raise RuntimeError(f"Failed to navigate to a live twitch stream ({kind}sibling_held: {first} is held by a "
+                                   f"sibling slot; no walk to another category)")
             nav_first = first
             self.list_url = _navigate_to_live(self._page, self.platform, first_url=first,
                                               exclude=sorted(set(recent_tw_channels(self._session_dir)) | set(sib) | set(na)

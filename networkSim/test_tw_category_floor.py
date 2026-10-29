@@ -171,7 +171,8 @@ def test_the_wiring():
         assert cat["pick"]["counts"]["Chess"] == 1 and cat["pick"]["excluded"] == ["esports"], cat["pick"]
     orch, exp = (HERE / "orchestrate.py").read_text(), (HERE / "exp.py").read_text()
     assert 'env["LVDC_CHANNEL_PICK"] = json.dumps({"category": category["pick"]}, default=str)' in orch
-    assert "tw_categories.next_category(out, exclude=skip, select=ident, capped=capped)" in orch
+    assert ("tw_categories.next_category(out, exclude=skip, select=ident, capped=capped,\n"
+            "                                                             sibling_held={str(x).lower() for x in siblings})") in orch
     assert '**({"channel_pick": {**channel_pick_start, **browser.channel_pick}}' in exp
 
 
