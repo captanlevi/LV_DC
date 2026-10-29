@@ -2095,9 +2095,10 @@ def _side_chunks(sizes: list) -> list[list[str]]:
     return out + ([cur] if cur else [])
 
 
-def _read_side_paged(sw) -> tuple[dict, list[str], dict]:
+def _read_side_paged(sw, skip=frozenset()) -> tuple[dict, list[str], dict]:
     """(side {key: batch}, the listed keys, the read's record). A chunk whose reply is missing or short is recorded
-    and its keys read one by one; a key that never comes back is left out, so the caller sees listed != read."""
+    and its keys read one by one; a key that never comes back is left out, so the caller sees listed != read. Keys in
+    skip (already read: the re-list before the clear) are neither listed nor read."""
     t = time.time()
     raw, via = sw.eval(_SIDE_LIST_JS, await_promise=True), "sizes"
     if raw is None:
@@ -2105,7 +2106,7 @@ def _read_side_paged(sw) -> tuple[dict, list[str], dict]:
     rec = {"via": via if raw is not None else None, "list_ms": round((time.time() - t) * 1000, 1)}
     if raw is None:
         return {}, [], rec
-    sizes = json.loads(raw)
+    sizes = [(k, n) for k, n in json.loads(raw) if k not in skip]
     listed = [k for k, _ in sizes]
     side, ms, failed = {}, [], []
 
@@ -2186,19 +2187,26 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         # brad / levi 23:10-23:21: one map of side stream -> session file (A1 is rvfc_frames.jsonl), every name resolved
         # and every record written BEFORE storage is cleared; an unmapped stream goes to side_<stream>.jsonl, flagged
         import session_files
-        unmapped = []
-        for stream, recs in _side_streams(side).items():
-            fname, mapped = session_files.side_file(stream)
-            if not mapped:
-                unmapped.append({"stream": stream, "file": fname, "records": len(recs)})
-            _write_durable(session_dir / fname, "".join(json.dumps(rec) + "\n" for rec in recs))
-            print(f"[browser] {stream} ({len(recs)} records) → {session_dir / fname}", flush=True)
-        if unmapped:
-            try:
-                import session_meta
-                session_meta.write(session_dir, side_streams_unmapped=unmapped)
-            except Exception as exc:
-                print(f"[browser] side_streams_unmapped not recorded: {exc!r} {unmapped}", flush=True)
+        unmapped = {}
+
+        def write_side(keys):
+            """(Re)write the files of the streams these keys belong to, from every key read so far."""
+            streams = {k.split(":")[1] for k in keys}
+            for stream, recs in _side_streams(side).items():
+                if stream not in streams:
+                    continue
+                fname, mapped = session_files.side_file(stream)
+                if not mapped:
+                    unmapped[stream] = {"stream": stream, "file": fname, "records": len(recs)}
+                _write_durable(session_dir / fname, "".join(json.dumps(rec) + "\n" for rec in recs))
+                print(f"[browser] {stream} ({len(recs)} records) → {session_dir / fname}", flush=True)
+            if unmapped:
+                try:
+                    import session_meta
+                    session_meta.write(session_dir, side_streams_unmapped=list(unmapped.values()))
+                except Exception as exc:
+                    print(f"[browser] side_streams_unmapped not recorded: {exc!r} {unmapped}", flush=True)
+        write_side(side)
         stats = json.loads(stats_json) if stats_json else []
         if stats:
             _write_durable(session_dir / "player_stats.jsonl", "".join(json.dumps(rec) + "\n" for rec in stats))
@@ -2212,8 +2220,23 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             _close_target(tmp_tab)
 
         def side_incomplete(n_events):
-            # levi 15:41 (a): every listed side key exported, else ok:false and storage kept (exp.py's F1 raw keep)
-            if side_read["via"] is not None and len(side) == len(listed):
+            # levi 15:58: the store is listed again just before the clear; a key written since the first list (a late
+            # flush) is read the same way and its stream's file rewritten (n_late). levi 15:41 (a): every listed side
+            # key exported, else ok:false and storage kept (exp.py's F1 raw keep)
+            late, late_listed, relist = _read_side_paged(sw, skip=frozenset(listed))
+            side.update(late)
+            listed.extend(late_listed)
+            side_read.update(n_late=len(late_listed), relist={k: relist.get(k) for k in
+                                                              ("via", "list_ms", "chunks", "failed", "missing")})
+            if late:
+                write_side(late)
+            ext.update(side_keys=len(side), side_keys_listed=len(listed))
+            try:
+                import session_meta
+                session_meta.write(session_dir, ext_storage=ext)
+            except Exception as exc:
+                print(f"[browser] ext_storage not recorded: {exc!r}", flush=True)
+            if side_read["via"] is not None and relist["via"] is not None and len(side) == len(listed):
                 return False
             print(f"[browser] side streams incomplete: {len(side)} of {len(listed)} keys read; storage kept", flush=True)
             sw.close()

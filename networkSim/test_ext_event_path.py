@@ -182,6 +182,13 @@ class _FakeSW:
         self.sd = session_dir
         self.store = {"events": events, "player_stats": stats, **(side or {})}
         self.cleared_with, self.removed, self.none, self.drop, self.gets = None, None, set(), None, []
+        self.lists, self.after_list = 0, None         # after_list(n): runs after the n-th key list answered
+
+    def _listed(self, reply):
+        self.lists += 1
+        if self.after_list:
+            self.after_list(self.lists)
+        return reply
 
     def _side(self):
         return {k: v for k, v in sorted(self.store.items()) if k.startswith("side:")}
@@ -198,10 +205,10 @@ class _FakeSW:
         if "{player_stats:[]}" in expr:
             return None if "stats" in self.none else json.dumps(self.store["player_stats"])
         if expr == B._SIDE_LIST_JS:
-            return None if "list" in self.none else json.dumps(
-                [[k, len(json.dumps(v, separators=(",", ":")))] for k, v in self._side().items()])
+            return None if "list" in self.none else self._listed(json.dumps(
+                [[k, len(json.dumps(v, separators=(",", ":")))] for k, v in self._side().items()]))
         if expr == B._SIDE_KEYS_JS:
-            return None if "keys" in self.none else json.dumps([[k, None] for k in self._side()])
+            return None if "keys" in self.none else self._listed(json.dumps([[k, None] for k in self._side()]))
         if expr.startswith(chunk_a) and expr.endswith(chunk_b):
             keys = json.loads(expr[len(chunk_a):-len(chunk_b)])
             self.gets.append(keys)
@@ -426,6 +433,42 @@ def test_an_unreadable_key_list_falls_back_or_fails_closed(export_env):
     assert B._export_via_service_worker(sd2) is False
     assert _ext_export(sd2) == {"ok": False, "reason": "side_incomplete", "n_expected": 0, "n_got": 0, "events": 0}
     assert sw.cleared_with is None and _meta(sd2)["ext_storage"]["side_read"]["via"] is None
+
+
+def _late_keys():
+    return {"side:frames:1793000099000:000000901": [{"k": "tick", "fl": [[99, 99.5, 1280, 720]]}],
+            "side:zz_late:1793000099001:000000902": [{"late": 1}]}
+
+
+def test_a_key_written_after_the_list_is_exported_not_lost(export_env):
+    """levi 15:58: a flush that lands between the first list and the clear (frames, and a stream not seen before)
+    is read by the re-list, written to its stream's file and only then cleared; n_late on record."""
+    sw, sd = export_env
+    side = _side_store()
+    sw.store.update(side)
+    sw.after_list = lambda n: sw.store.update(_late_keys()) if n == 1 else None
+    assert B._export_via_service_worker(sd) is True
+    assert _ext_export(sd) == {"ok": True, "events": 1}
+    assert sw.removed == sorted({**side, **_late_keys()})
+    frames = [json.loads(x) for x in (sd / "rvfc_frames.jsonl").read_text().splitlines()]
+    assert frames[-1] == {"k": "tick", "fl": [[99, 99.5, 1280, 720]]}
+    assert frames[:-1] == [r for k in sorted(side) if k.startswith("side:frames:") for r in side[k]]
+    assert (sd / "side_zz_late.jsonl").read_text() == '{"late": 1}\n'
+    m = _meta(sd)
+    assert m["ext_storage"]["side_read"]["n_late"] == 2 and m["ext_storage"]["side_keys"] == len(side) + 2
+    assert m["ext_storage"]["side_keys_listed"] == len(side) + 2
+    assert {u["stream"] for u in m["side_streams_unmapped"]} == {"zz_new", "zz_late"}
+
+
+def test_a_late_key_that_cannot_be_read_fails_closed(export_env):
+    sw, sd = export_env
+    sw.store.update(_side_store())
+    sw.after_list = lambda n: sw.store.update(_late_keys()) if n == 1 else None
+    sw.drop = lambda keys: "side:zz_late:1793000099001:000000902" in keys
+    assert B._export_via_service_worker(sd) is False
+    rec = _ext_export(sd)
+    assert (rec["reason"], rec["n_expected"] - rec["n_got"]) == ("side_incomplete", 1) and sw.cleared_with is None
+    assert _meta(sd)["ext_storage"]["side_read"]["relist"]["missing"]["n"] == 1
 
 
 @pytest.mark.parametrize("which,reason", [("events", "events_read_failed"), ("stats", "stats_read_failed")])
