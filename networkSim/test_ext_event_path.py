@@ -295,5 +295,79 @@ def test_exp_keeps_the_raw_storage_after_chrome_is_killed_and_before_the_clone_g
     fin = src[src.index("    finally:\n        # finalising"):]
     kill, keep = fin.index("kill_chrome(chrome_profile)"), fin.index("keep_ext_storage(chrome_profile")
     remove = fin.index("remove_profile_clone(CURRENT_DATA / 'chrome_profiles', chrome_profile)", keep)
-    assert kill < keep < remove
+    check = fin.index("check_session(session_dir)")
+    assert kill < keep < check < remove                 # FIN 13:30: the keep before check_session moves a FAIL
     assert 'ext_export.get("ok") is not True' in fin and '"reason": "not_run"' in fin
+
+
+def _f1_block():
+    """exp.py's own F1 block (between its markers), run as exp.py's finally runs it."""
+    import textwrap
+    src = (HERE / "exp.py").read_text()
+    a = src.index("\n", src.index("F1 block begin")) + 1
+    return textwrap.dedent(src[a:src.index("# F1 block end", a)])
+
+
+def _f1_session(root: Path, ok: bool):
+    """A session dir under root/data/youtube with meta.ext_export {ok}, and a profile clone holding extension storage."""
+    sd = root / "data" / "youtube" / "yt_1"
+    sd.mkdir(parents=True)
+    (sd / "meta.json").write_text(json.dumps({"ext_export": {"ok": ok, **({} if ok else {"reason": "error"})}}))
+    prof = root / "clone"
+    db = prof / "Default" / "Local Extension Settings" / "abcdefghijklmnopabcdefghijklmnop"
+    db.mkdir(parents=True)
+    (db / "000003.log").write_bytes(b"side:frames:...")
+    return sd, prof
+
+
+def _run_f1(sd: Path, prof: Path) -> str:
+    import contextlib
+    import io
+    import session_meta
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        exec(_f1_block(), {"json": json, "session_meta": session_meta, "session_dir": sd, "chrome_profile": prof})
+    return out.getvalue()
+
+
+def _check_session_moving(sd: Path) -> Path:
+    """The real check_session.py --move-failed, as exp.check_session runs it; the dir it ends in."""
+    subprocess.run([sys.executable, str(HERE / "check_session.py"), str(sd), "--move-failed"], check=False,
+                   capture_output=True, timeout=300)
+    moved = sd.parent.parent / "_failed" / sd.parent.name / sd.name
+    return moved if moved.is_dir() else sd
+
+
+def test_f1_keeps_the_raw_storage_when_check_session_moves_the_failed_dir(tmp_path):
+    """FIN 13:30 (yt2 killed at 54ed22cd: "ext storage not kept: FileNotFoundError"): with the F1 block before
+    check_session, a failed export's storage is in _failed/<platform>/<session>/ext_storage_raw."""
+    sd, prof = _f1_session(tmp_path, ok=False)
+    assert "not kept" not in _run_f1(sd, prof)
+    final = _check_session_moving(sd)
+    assert final == tmp_path / "data" / "_failed" / "youtube" / "yt_1" and not sd.exists()
+    assert (final / "ext_storage_raw" / "abcdefghijklmnopabcdefghijklmnop" / "000003.log").read_bytes() == b"side:frames:..."
+    rec = json.loads((final / "meta.json").read_text())["ext_export"]
+    assert rec["ok"] is False and rec["raw"]["copied"] is True and rec["raw"]["files"] == 1
+
+
+def test_f1_mutant_54ed22cd_order_loses_the_raw_storage(tmp_path):
+    """The mutant (54ed22cd: check_session first, then the F1 block on the old path) keeps nothing."""
+    sd, prof = _f1_session(tmp_path, ok=False)
+    final = _check_session_moving(sd)
+    assert final != sd
+    log = _run_f1(sd, prof)
+    assert "ext storage not kept: FileNotFoundError" in log, log
+    assert not any(p.name == "ext_storage_raw" for p in tmp_path.rglob("*"))
+
+
+def test_f1_ok_export_and_unmoved_dir_are_unchanged(tmp_path):
+    """An ok export copies nothing and leaves meta as it was; a failed export in a dir nobody moves (the PASS path's
+    place) is kept in place, as at 54ed22cd."""
+    sd, prof = _f1_session(tmp_path / "a", ok=True)
+    before = (sd / "meta.json").read_text()
+    _run_f1(sd, prof)
+    assert not (sd / "ext_storage_raw").exists() and (sd / "meta.json").read_text() == before
+    sd, prof = _f1_session(tmp_path / "b", ok=False)
+    _run_f1(sd, prof)
+    assert (sd / "ext_storage_raw" / "abcdefghijklmnopabcdefghijklmnop" / "000003.log").is_file()
+    assert json.loads((sd / "meta.json").read_text())["ext_export"]["raw"]["copied"] is True

@@ -1658,9 +1658,10 @@ if __name__ == "__main__":
             print(f"entries: {[(x['kind'], x['shaper_at_entry']['state'], x['sustained_60s']) for x in entries.write_entries(session_dir)]}")
         except Exception as e:
             print(f"entries failed: {e!r}")
-        check_session(session_dir)
         # levi 09:23 (F1): an export that failed or never ran leaves the extension's records only in the clone; they are
-        # copied into the session dir before the clone goes (profile_clone.keep_ext_storage); never fatal
+        # copied into the session dir before the clone goes (profile_clone.keep_ext_storage); never fatal. BEFORE
+        # check_session, which moves a FAILed dir to _failed/ (FIN 13:30, 54ed22cd: run after it, the old path was gone,
+        # FileNotFoundError, nothing kept; a failed export always FAILs). F1 block begin
         try:
             ext_export = json.loads((session_dir / "meta.json").read_text()).get("ext_export") or {"ok": False,
                                                                                                   "reason": "not_run"}
@@ -1670,6 +1671,8 @@ if __name__ == "__main__":
                                                                                                     session_dir)})
         except Exception as e:
             print(f"ext storage not kept: {e!r}")
+        # F1 block end
+        check_session(session_dir)
         # the profile clone is ephemeral runtime state with login cookies: removed after check_session (supervisor
         # 2026-10-18; profile_clone.py); the template stays the reproducible state
         from profile_clone import remove_profile_clone
