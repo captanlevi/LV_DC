@@ -175,19 +175,41 @@ def test_content_acks_by_id_and_counts_overflow_drops():
 
 
 class _FakeSW:
-    def __init__(self, session_dir: Path, events, stats):
-        self.sd, self.events, self.stats = session_dir, events, stats
-        self.cleared_with = None
+    """chrome.storage.local behind the export's CDP evals: events, player_stats and side:* keys in one store. levi 15:41
+    (t100 F1): the paged side read (key list with sizes, then chunk gets) and 971e444e's single get(null) both answer
+    from it; `none` names reads that get no answer (a CDP deadline: eval -> None), `drop(keys)` empties a chunk reply."""
+    def __init__(self, session_dir: Path, events, stats, side=None):
+        self.sd = session_dir
+        self.store = {"events": events, "player_stats": stats, **(side or {})}
+        self.cleared_with, self.removed, self.none, self.drop, self.gets = None, None, set(), None, []
+
+    def _side(self):
+        return {k: v for k, v in sorted(self.store.items()) if k.startswith("side:")}
 
     def eval(self, expr, await_promise=False):
+        chunk_a, chunk_b = B._SIDE_CHUNK_JS.split("%s")
         if "remove(" in expr:                        # the files on disk at the FIRST clear
             if self.cleared_with is None:
                 self.cleared_with = sorted(p.name for p in self.sd.iterdir())
+                self.removed = json.loads(expr[expr.index(".concat(") + 8:expr.rindex("), r)")])
             return None
         if "{events:[]}" in expr:
-            return json.dumps(self.events)
+            return None if "events" in self.none else json.dumps(self.store["events"])
         if "{player_stats:[]}" in expr:
-            return json.dumps(self.stats)
+            return None if "stats" in self.none else json.dumps(self.store["player_stats"])
+        if expr == B._SIDE_LIST_JS:
+            return None if "list" in self.none else json.dumps(
+                [[k, len(json.dumps(v, separators=(",", ":")))] for k, v in self._side().items()])
+        if expr == B._SIDE_KEYS_JS:
+            return None if "keys" in self.none else json.dumps([[k, None] for k in self._side()])
+        if expr.startswith(chunk_a) and expr.endswith(chunk_b):
+            keys = json.loads(expr[len(chunk_a):-len(chunk_b)])
+            self.gets.append(keys)
+            if self.drop and self.drop(keys):
+                return "{}"
+            return json.dumps({k: self.store[k] for k in keys if k in self.store})
+        if "Object.fromEntries" in expr:              # 971e444e's one read of every side key
+            return None if "side_all" in self.none else json.dumps(self._side())
         if "getBytesInUse" in expr:
             return 0
         if "side_counters" in expr:
@@ -276,6 +298,150 @@ def test_ext_export_is_recorded_when_no_extension_context(export_env, monkeypatc
     monkeypatch.setattr(B, "_ext_page", lambda: (None, None))
     assert B._export_via_service_worker(sd) is False
     assert _ext_export(sd) == {"ok": False, "reason": "no_ext_context"}
+
+
+# levi 15:41 (t100 F1): a single get(null) of every side key answered nothing past a 64-128 MB store and the export said
+# ok:true with no side file. The paged read (list, then byte-bounded chunks) and the completeness check, against
+# 971e444e's export frozen in fixtures/export_via_sw_971e444e.py (git show 971e444e, the function verbatim).
+def _side_store(n=12):
+    side = {}
+    for s in range(n):
+        side[f"side:frames:{1_793_000_000_000 + s * 1000:015d}:{3 * s:09d}"] = [
+            {"k": "tick", "fl": [[s, s + 0.5, 1280, 720]] * (s % 4 + 1)}, {"k": "mse", "ty": "app", "sb": 0, "t": s}]
+        side[f"side:player_events:{1_793_000_000_000 + s * 1000 + 1:015d}:{3 * s + 1:09d}"] = [{"ev": "playing", "s": s}]
+        if s % 5 == 0:
+            side[f"side:zz_new:{1_793_000_000_000 + s * 1000 + 2:015d}:{3 * s + 2:09d}"] = [{"x": "é ü", "s": s}]
+    return side
+
+
+def _old_export(sd):
+    """971e444e's _export_via_service_worker, run against this module's (monkeypatched) helpers."""
+    ns = dict(vars(B))
+    exec((HERE / "fixtures" / "export_via_sw_971e444e.py").read_text(), ns)
+    return ns["_export_via_service_worker"](sd)
+
+
+def _files(sd):
+    return {p.name: p.read_bytes() for p in sd.iterdir() if p.is_file() and p.name != "meta.json"}
+
+
+def _meta(sd):
+    return json.loads((sd / "meta.json").read_text())
+
+
+def test_fixture_is_971e444e_export():
+    src = (HERE / "fixtures" / "export_via_sw_971e444e.py").read_text()
+    assert src.startswith("def _export_via_service_worker(session_dir: Path) -> bool:")
+    assert "Object.fromEntries(" in src and "_read_side_paged" not in src and "t0" not in src
+
+
+@pytest.mark.parametrize("chunk_bytes", [B.SIDE_CHUNK_BYTES, 300])
+def test_paged_side_files_are_byte_identical_to_971e444e(export_env, monkeypatch, tmp_path, chunk_bytes):
+    sw, sd = export_env
+    monkeypatch.setattr(B, "SIDE_CHUNK_BYTES", chunk_bytes)
+    side = _side_store()
+    sw.store.update(side)
+    old_sd = tmp_path / "old"
+    old_sd.mkdir()
+    old = _FakeSW(old_sd, sw.store["events"], sw.store["player_stats"], side)
+    with monkeypatch.context() as m:
+        m.setattr(B, "_ext_page", lambda: (old, None))
+        assert _old_export(old_sd) is True
+    assert B._export_via_service_worker(sd) is True
+    new_files, old_files = _files(sd), _files(old_sd)
+    assert set(new_files) == set(old_files) >= {"labels.csv", "player_stats.jsonl", "rvfc_frames.jsonl",
+                                                "player_events.jsonl"} and new_files == old_files
+    assert sw.removed == old.removed == sorted(side)
+    rd = _meta(sd)["ext_storage"]["side_read"]
+    assert _meta(sd)["ext_storage"]["side_keys"] == _meta(sd)["ext_storage"]["side_keys_listed"] == len(side)
+    assert rd["via"] == "sizes" and rd["failed"] == [] and "missing" not in rd and rd["chunks"] == len(sw.gets)
+    assert (rd["chunks"] > 1) == (chunk_bytes == 300) and len(rd["chunk_ms"]) == rd["chunks"]
+    assert [k for g in sw.gets for k in g] == sorted(side)       # every key read once, in key order
+
+
+def test_chunks_are_bounded_by_bytes():
+    sizes = [(f"k{i}", n) for i, n in enumerate([700_000, 900_000, 500_000, 2_500_000, 10, 1_999_990, 1])]
+    chunks = B._side_chunks(sizes)
+    assert [k for c in chunks for k in c] == [k for k, _ in sizes]
+    n = dict(sizes)
+    assert all(len(c) == 1 or sum(n[k] for k in c) <= B.SIDE_CHUNK_BYTES for c in chunks)
+    assert chunks == [["k0", "k1"], ["k2"], ["k3"], ["k4", "k5"], ["k6"]]
+    assert {len(c) for c in B._side_chunks([(f"k{i}", None) for i in range(20)])[:2]} == {B.SIDE_FALLBACK_KEYS}
+    assert B._side_chunks([]) == []
+
+
+def test_mutant_a_chunk_that_never_answers_fails_closed(export_env):
+    """levi 15:41 mutant: a forced empty chunk -> ok:false (side_incomplete, n_expected, n_got), storage kept (so exp.py's
+    F1 block keeps the raw store), labels.csv and the keys that did come back still written."""
+    sw, sd = export_env
+    side = _side_store()
+    sw.store.update(side)
+    lost = sorted(side)[3]
+    sw.drop = lambda keys: lost in keys
+    assert B._export_via_service_worker(sd) is False
+    rec = _ext_export(sd)
+    assert rec == {"ok": False, "reason": "side_incomplete", "n_expected": len(side), "n_got": len(side) - 1, "events": 1}
+    assert sw.cleared_with is None and (sd / "labels.csv").is_file() and (sd / "rvfc_frames.jsonl").is_file()
+    rd = _meta(sd)["ext_storage"]["side_read"]
+    assert rd["missing"] == {"n": 1, "first": [lost]} and rd["failed"][0]["got"] == 0
+
+
+def test_null_971e444e_reports_ok_with_no_side_file_when_the_read_gets_no_answer(export_env, monkeypatch):
+    """The defect as 971e444e has it: its one side read answers None (the 128 MB synthetic), the export says ok:true,
+    writes no side file and clears storage. The paged read under the same store answers every key."""
+    sw, sd = export_env
+    sw.store.update(_side_store())
+    sw.none.add("side_all")
+    assert _old_export(sd) is True
+    assert _meta(sd)["ext_export"] == {"ok": True, "events": 1} and sw.cleared_with is not None
+    assert not (sd / "rvfc_frames.jsonl").exists()
+
+
+def test_a_chunk_that_answers_short_once_is_reread_key_by_key(export_env):
+    sw, sd = export_env
+    side = _side_store()
+    sw.store.update(side)
+    calls = []
+    sw.drop = lambda keys: (calls.append(1), len(calls) == 1)[1]          # the first chunk reply only
+    assert B._export_via_service_worker(sd) is True
+    assert _ext_export(sd) == {"ok": True, "events": 1} and sw.removed == sorted(side)
+    rd = _meta(sd)["ext_storage"]["side_read"]
+    assert rd["failed"] == [{"i": 0, "keys": len(side), "got": 0, "ms": rd["chunk_ms"][0]}]
+    assert rd["chunks"] == 1 + len(side) and "missing" not in rd
+
+
+def test_an_unreadable_key_list_falls_back_or_fails_closed(export_env):
+    sw, sd = export_env
+    side = _side_store()
+    sw.store.update(side)
+    sw.store["events"] = []                       # the no-events path checks completeness too
+    sw.none.add("list")
+    assert B._export_via_service_worker(sd) is False
+    assert _ext_export(sd) == {"ok": True, "events": 0} and sw.removed == sorted(side)
+    assert _meta(sd)["ext_storage"]["side_read"]["via"] == "keys"
+    sd2 = sd / "again"
+    sd2.mkdir()
+    sw.sd, sw.cleared_with = sd2, None
+    sw.none.add("keys")
+    assert B._export_via_service_worker(sd2) is False
+    assert _ext_export(sd2) == {"ok": False, "reason": "side_incomplete", "n_expected": 0, "n_got": 0, "events": 0}
+    assert sw.cleared_with is None and _meta(sd2)["ext_storage"]["side_read"]["via"] is None
+
+
+@pytest.mark.parametrize("which,reason", [("events", "events_read_failed"), ("stats", "stats_read_failed")])
+def test_an_events_or_stats_read_with_no_answer_fails_closed(export_env, which, reason, tmp_path):
+    """971e444e read a None events reply as "no events", cleared storage and said ok:true; now ok:false, kept."""
+    sw, sd = export_env
+    sw.none.add(which)
+    if which == "events":
+        old_sd = tmp_path / "old"
+        old_sd.mkdir()
+        sw.sd = old_sd
+        assert _old_export(old_sd) is False
+        assert _meta(old_sd)["ext_export"] == {"ok": True, "events": 0} and sw.cleared_with is not None   # the null
+        sw.sd, sw.cleared_with = sd, None
+    assert B._export_via_service_worker(sd) is False
+    assert _ext_export(sd) == {"ok": False, "reason": reason} and sw.cleared_with is None
 
 
 def test_keep_ext_storage_copies_only_the_extension_storage(tmp_path):

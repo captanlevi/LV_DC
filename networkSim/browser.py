@@ -2069,6 +2069,67 @@ def _ext_export_record(session_dir: Path, t0: float | None = None, **rec) -> Non
         print(f"[browser] ext_export not recorded: {exc!r} {rec}", flush=True)
 
 
+# levi 15:41 (t100 F1): one get(null) of every side key came back empty past a 64-128 MB store (the laptop synthetic:
+# CDPPage.call's deadline runs out while websocket-client validates the reply's UTF-8, eval answers None) and the export
+# said ok:true with no side file. The side keys are listed first (with their in-worker JSON size, nothing crosses CDP
+# but the list), then read in chunks bounded by bytes; the export is ok only if every listed key came back.
+SIDE_CHUNK_BYTES = 2_000_000          # levi 15:41: each chunk call well inside half CDP_CALL_TIMEOUT_S (laptop ~3 MB/s)
+SIDE_FALLBACK_KEYS = 8                # chunk size in keys when the sizes are unreadable (getKeys fallback)
+_SIDE_LIST_JS = ("new Promise(r => chrome.storage.local.get(null, d => r(JSON.stringify(Object.keys(d)"
+                 ".filter(k => k.startsWith('side:')).sort().map(k => [k, JSON.stringify(d[k]).length])))))")
+_SIDE_KEYS_JS = ("new Promise(r => chrome.storage.local.getKeys(ks => r(JSON.stringify(ks.filter(k => "
+                 "k.startsWith('side:')).sort().map(k => [k, null])))))")
+_SIDE_CHUNK_JS = "new Promise(r => chrome.storage.local.get(%s, d => r(JSON.stringify(d))))"
+
+
+def _side_chunks(sizes: list) -> list[list[str]]:
+    """Consecutive key groups of at most SIDE_CHUNK_BYTES (a larger key alone); SIDE_FALLBACK_KEYS keys when unsized."""
+    out, cur, b = [], [], 0
+    for k, n in sizes:
+        n = SIDE_CHUNK_BYTES // SIDE_FALLBACK_KEYS if n is None else n
+        if cur and b + n > SIDE_CHUNK_BYTES:
+            out.append(cur)
+            cur, b = [], 0
+        cur.append(k)
+        b += n
+    return out + ([cur] if cur else [])
+
+
+def _read_side_paged(sw) -> tuple[dict, list[str], dict]:
+    """(side {key: batch}, the listed keys, the read's record). A chunk whose reply is missing or short is recorded
+    and its keys read one by one; a key that never comes back is left out, so the caller sees listed != read."""
+    t = time.time()
+    raw, via = sw.eval(_SIDE_LIST_JS, await_promise=True), "sizes"
+    if raw is None:
+        raw, via = sw.eval(_SIDE_KEYS_JS, await_promise=True), "keys"
+    rec = {"via": via if raw is not None else None, "list_ms": round((time.time() - t) * 1000, 1)}
+    if raw is None:
+        return {}, [], rec
+    sizes = json.loads(raw)
+    listed = [k for k, _ in sizes]
+    side, ms, failed = {}, [], []
+
+    def get(keys):
+        t1 = time.time()
+        got = sw.eval(_SIDE_CHUNK_JS % json.dumps(keys), await_promise=True)
+        ms.append(round((time.time() - t1) * 1000, 1))
+        got = json.loads(got) if got else {}
+        return {k: got[k] for k in keys if k in got}
+    for i, keys in enumerate(_side_chunks(sizes)):
+        got = get(keys)
+        if len(got) < len(keys):
+            failed.append({"i": i, "keys": len(keys), "got": len(got), "ms": ms[-1]})
+            for k in keys:
+                got.update(get([k]) if k not in got else {})
+        side.update(got)
+    rec.update(chunk_bytes=SIDE_CHUNK_BYTES, bytes=sum(n or 0 for _, n in sizes), chunks=len(ms),
+               max_chunk_ms=max(ms, default=None), sum_chunk_ms=round(sum(ms), 1), chunk_ms=ms, failed=failed)
+    missing = [k for k in listed if k not in side]
+    if missing:
+        rec["missing"] = {"n": len(missing), "first": missing[:5]}
+    return side, listed, rec
+
+
 def _export_via_service_worker(session_dir: Path) -> bool:
     """
     Read QoE events from the extension's chrome.storage.local via CDP,
@@ -2099,14 +2160,17 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             "new Promise(r => chrome.storage.local.get({player_stats:[]}, d => r(JSON.stringify(d.player_stats))))",
             await_promise=True,
         )
-        # v3 (t67 A2): the side streams (player_events, ...), one key per batch, each to <stream>.jsonl
-        side_json = sw.eval(
-            "new Promise(r => chrome.storage.local.get(null, d => r(JSON.stringify(Object.fromEntries("
-            "Object.entries(d).filter(([k]) => k.startsWith('side:')))))))",
-            await_promise=True,
-        )
-        side = json.loads(side_json) if side_json else {}
-        ext = {"side_keys": len(side)}             # brad / levi 18:17: the storage use at export (meta.json ext_storage)
+        # levi 15:41 (t100 F1): a read with no answer is a failure, never "empty" (an empty store answers "[]")
+        if events_json is None or stats_json is None:
+            sw.close()
+            _close_target(tmp_tab)
+            _ext_export_record(session_dir, t0, ok=False,
+                               reason="events_read_failed" if events_json is None else "stats_read_failed")
+            return False
+        # v3 (t67 A2): the side streams (player_events, ...), one key per batch, each to <stream>.jsonl; levi 15:41:
+        # listed first, then read in byte-bounded chunks (_read_side_paged)
+        side, listed, side_read = _read_side_paged(sw)
+        ext = {"side_keys": len(side), "side_keys_listed": len(listed), "side_read": side_read}   # brad / levi 18:17
         try:
             ext["bytes_in_use"] = sw.eval("new Promise(r => chrome.storage.local.getBytesInUse(null, r))", await_promise=True)
             # levi 18:26: the content script's final side_dropped / side_failed / off_arm_cb (the gate counters read meta)
@@ -2147,9 +2211,22 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             sw.close()
             _close_target(tmp_tab)
 
+        def side_incomplete(n_events):
+            # levi 15:41 (a): every listed side key exported, else ok:false and storage kept (exp.py's F1 raw keep)
+            if side_read["via"] is not None and len(side) == len(listed):
+                return False
+            print(f"[browser] side streams incomplete: {len(side)} of {len(listed)} keys read; storage kept", flush=True)
+            sw.close()
+            _close_target(tmp_tab)
+            _ext_export_record(session_dir, t0, ok=False, reason="side_incomplete", n_expected=len(listed),
+                               n_got=len(side), events=n_events)
+            return True
+
         events: list[dict] = json.loads(events_json) if events_json else []
         if not events:
             print("[browser] Extension storage empty — no QoE events collected", flush=True)
+            if side_incomplete(0):
+                return False
             clear_storage()
             _ext_export_record(session_dir, t0, ok=True, events=0)
             return False
@@ -2174,6 +2251,8 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         _write_durable(dest, csv_text)
         print(f"[browser] Extension labels ({len(events)} events) → {dest}", flush=True)
         print("[browser] labels.csv written before storage clear", flush=True)
+        if side_incomplete(len(events)):
+            return False
         clear_storage()
         print("[browser] Extension storage cleared after export", flush=True)
         _ext_export_record(session_dir, t0, ok=True, events=len(events))
