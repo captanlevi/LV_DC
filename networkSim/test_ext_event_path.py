@@ -209,6 +209,9 @@ class _FakeSW:
                 [[k, len(json.dumps(v, separators=(",", ":")))] for k, v in self._side().items()]))
         if expr == B._SIDE_KEYS_JS:
             return None if "keys" in self.none else self._listed(json.dumps([[k, None] for k in self._side()]))
+        if expr == B._SIDE_LIST_ALL_JS:
+            return None if "list_all" in self.none else self._listed(json.dumps(
+                [[k, len(json.dumps(v, separators=(",", ":")))] for k, v in self._side().items()]))
         if expr.startswith(chunk_a) and expr.endswith(chunk_b):
             keys = json.loads(expr[len(chunk_a):-len(chunk_b)])
             self.gets.append(keys)
@@ -426,13 +429,19 @@ def test_an_unreadable_key_list_falls_back_or_fails_closed(export_env):
     assert B._export_via_service_worker(sd) is False
     assert _ext_export(sd) == {"ok": True, "events": 0} and sw.removed == sorted(side)
     assert _meta(sd)["ext_storage"]["side_read"]["via"] == "keys"
-    sd2 = sd / "again"
+    sw.none.add("keys")                           # Chrome < 130: no getKeys, the get(null) list
+    sd2 = sd / "nokeys"
     sd2.mkdir()
     sw.sd, sw.cleared_with = sd2, None
-    sw.none.add("keys")
     assert B._export_via_service_worker(sd2) is False
-    assert _ext_export(sd2) == {"ok": False, "reason": "side_incomplete", "n_expected": 0, "n_got": 0, "events": 0}
-    assert sw.cleared_with is None and _meta(sd2)["ext_storage"]["side_read"]["via"] is None
+    assert _ext_export(sd2) == {"ok": True, "events": 0} and _meta(sd2)["ext_storage"]["side_read"]["via"] == "sizes_all"
+    sd3 = sd / "again"
+    sd3.mkdir()
+    sw.sd, sw.cleared_with = sd3, None
+    sw.none.add("list_all")
+    assert B._export_via_service_worker(sd3) is False
+    assert _ext_export(sd3) == {"ok": False, "reason": "side_incomplete", "n_expected": 0, "n_got": 0, "events": 0}
+    assert sw.cleared_with is None and _meta(sd3)["ext_storage"]["side_read"]["via"] is None
 
 
 def _late_keys():

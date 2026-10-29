@@ -63,7 +63,7 @@ def test_side_streams_mapped():
     i_write = src.index("session_files.side_file(stream)")                     # every name resolved and written ...
     i_clear = src.index("chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s)")
     assert i_write < i_clear                                                     # ... before storage is cleared
-    assert "side_streams_unmapped=unmapped" in src
+    assert "side_streams_unmapped=list(unmapped.values())" in src             # t100: unmapped keyed by stream (re-list)
 
 
 def test_every_literal_declared():

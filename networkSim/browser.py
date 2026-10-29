@@ -2071,14 +2071,19 @@ def _ext_export_record(session_dir: Path, t0: float | None = None, **rec) -> Non
 
 # levi 15:41 (t100 F1): one get(null) of every side key came back empty past a 64-128 MB store (the laptop synthetic:
 # CDPPage.call's deadline runs out while websocket-client validates the reply's UTF-8, eval answers None) and the export
-# said ok:true with no side file. The side keys are listed first (with their in-worker JSON size, nothing crosses CDP
-# but the list), then read in chunks bounded by bytes; the export is ok only if every listed key came back.
+# said ok:true with no side file. The side keys are listed first (with their stored size, nothing crosses CDP but the
+# list), then read in chunks bounded by bytes; the export is ok only if every listed key came back. The list never
+# deserialises values: get(null) of a 256 MB store did not answer in 20 s (laptop synthetic at 01b9d1e1), so it is
+# getKeys + per-key getBytesInUse; get(null) only where getKeys is missing (Chrome < 130).
 SIDE_CHUNK_BYTES = 2_000_000          # levi 15:41: each chunk call well inside half CDP_CALL_TIMEOUT_S (laptop ~3 MB/s)
 SIDE_FALLBACK_KEYS = 8                # chunk size in keys when the sizes are unreadable (getKeys fallback)
-_SIDE_LIST_JS = ("new Promise(r => chrome.storage.local.get(null, d => r(JSON.stringify(Object.keys(d)"
-                 ".filter(k => k.startsWith('side:')).sort().map(k => [k, JSON.stringify(d[k]).length])))))")
+_SIDE_LIST_JS = ("new Promise(r => chrome.storage.local.getKeys(ks => { const s = ks.filter(k => k.startsWith('side:'))"
+                 ".sort(); Promise.all(s.map(k => new Promise(q => chrome.storage.local.getBytesInUse(k, q))))"
+                 ".then(n => r(JSON.stringify(s.map((k, i) => [k, n[i]])))); }))")
 _SIDE_KEYS_JS = ("new Promise(r => chrome.storage.local.getKeys(ks => r(JSON.stringify(ks.filter(k => "
                  "k.startsWith('side:')).sort().map(k => [k, null])))))")
+_SIDE_LIST_ALL_JS = ("new Promise(r => chrome.storage.local.get(null, d => r(JSON.stringify(Object.keys(d)"
+                     ".filter(k => k.startsWith('side:')).sort().map(k => [k, JSON.stringify(d[k]).length])))))")
 _SIDE_CHUNK_JS = "new Promise(r => chrome.storage.local.get(%s, d => r(JSON.stringify(d))))"
 
 
@@ -2100,9 +2105,11 @@ def _read_side_paged(sw, skip=frozenset()) -> tuple[dict, list[str], dict]:
     and its keys read one by one; a key that never comes back is left out, so the caller sees listed != read. Keys in
     skip (already read: the re-list before the clear) are neither listed nor read."""
     t = time.time()
-    raw, via = sw.eval(_SIDE_LIST_JS, await_promise=True), "sizes"
-    if raw is None:
-        raw, via = sw.eval(_SIDE_KEYS_JS, await_promise=True), "keys"
+    raw, via = None, None
+    for js, via in ((_SIDE_LIST_JS, "sizes"), (_SIDE_KEYS_JS, "keys"), (_SIDE_LIST_ALL_JS, "sizes_all")):
+        raw = sw.eval(js, await_promise=True)
+        if raw is not None:
+            break
     rec = {"via": via if raw is not None else None, "list_ms": round((time.time() - t) * 1000, 1)}
     if raw is None:
         return {}, [], rec
