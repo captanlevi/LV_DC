@@ -1855,7 +1855,7 @@ WORKER_ANCHOR_JS = r"""(() => {
   let recs = [], over = 0, next = 0, first = null, ms = 0, nv = 0;
   const ids = new WeakMap(), st = new WeakMap();
   const id = (sb) => { let i = ids.get(sb); if (i === undefined) { i = ++next; ids.set(sb, i); } return i; };
-  const S = (sb) => { let s = st.get(sb); if (!s) { s = { vid: false, hevc: false, tr: {}, nxt: {}, pend: true }; st.set(sb, s); } return s; };
+  const S = (sb) => { let s = st.get(sb); if (!s) { s = { vid: false, hevc: false, tr: {}, tx: {}, nxt: {}, pend: true }; st.set(sb, s); } return s; };
   const kind = (s, mime) => { const m = String(mime); s.vid = /avc1|avc3|hev1|hvc1|av01|vp09|vp8|vp9/.test(m); s.hevc = /hev1|hvc1/.test(m); s.pend = true; };
   const push = (r, always) => { if (!always && !on()) return; if (recs.length >= MAX) { over += 1; return; }
     r.t = Math.round(performance.now() * 10) / 10; recs.push(r); };          // 0.1 ms: the bytes of record (levi B1)
@@ -1877,8 +1877,10 @@ WORKER_ANCHOR_JS = r"""(() => {
         for (let x = s0 + a0; x < s0 + a1; x++) { h ^= a[x]; h = Math.imul(h, 0x01000193) >>> 0; } v += n; if (v >= x1) break; } return h; };
     const lo = Math.min(256, L), hi = Math.max(256, L - 256);
     return [L, hr(hr(0x811c9dc5, 0, lo), hi, L) >>> 0, ok]; };
-  const init = (a, dv, b, e) => { const tr = [];
-    boxes(a, dv, b, e, (t2, o2, b2, e2) => { if (t2 !== "trak") return; const x = [null, null, null, null, null, null, null];
+  const init = (a, dv, b, e, tx) => { const tr = [];
+    boxes(a, dv, b, e, (t2, o2, b2, e2) => {
+      if (t2 === "mvex") boxes(a, dv, b2, e2, (t3, o3, b3) => { if (t3 === "trex") tx.push([r32(dv, b3 + 4), r32(dv, b3 + 12), r32(dv, b3 + 16)]); });
+      if (t2 !== "trak") return; const x = [null, null, null, null, null, null, null];
       boxes(a, dv, b2, e2, (t3, o3, b3, e3) => {
         if (t3 === "tkhd") x[0] = r32(dv, b3 + (a[b3] === 1 ? 20 : 12));
         if (t3 === "mdia") boxes(a, dv, b3, e3, (t4, o4, b4, e4) => {
@@ -1895,27 +1897,30 @@ WORKER_ANCHOR_JS = r"""(() => {
   const frag = (a, dv, s, r, video) => {
     boxes(a, dv, 0, a.length, (t, o, b, e) => { if (t !== "moof") return; let ti = 0;
       boxes(a, dv, b, e, (t2, o2, b2, e2) => { if (t2 !== "traf") return;
-        let tid = null, bdt = null, dd = 0, ds = 0, bdo = ti++ > 0, tru = null;   // a later traf's base: moof only if flagged
+        let tid = null, bdt = null, dd = 0, ds = 0, bdo = ti++ > 0; const trs = [];   // a later traf's base: moof only if flagged
         boxes(a, dv, b2, e2, (t3, o3, b3) => {
           if (t3 === "tfhd") { const fl = (a[b3 + 1] << 16) | (a[b3 + 2] << 8) | a[b3 + 3]; tid = r32(dv, b3 + 4); let p = b3 + 8;
+            const x = s.tx[tid]; if (x) { dd = x[0]; ds = x[1]; }                    // trex defaults; tfhd's own win
             if (fl & 0x20000) bdo = false; if (fl & 1) { bdo = true; p += 8; } if (fl & 2) p += 4; if (fl & 8) { dd = r32(dv, p); p += 4; } if (fl & 0x10) { ds = r32(dv, p); p += 4; } }
           if (t3 === "tfdt") bdt = a[b3] === 1 ? r64(dv, b3 + 4) : r32(dv, b3 + 4);
-          if (t3 === "trun") tru = b3; });
+          if (t3 === "trun") trs.push(b3); });
         const h = s.tr[tid];
-        if (tru === null || (h ? (h === "vide") !== video : s.vid !== video)) return;
-        const v = a[tru], fl = (a[tru + 1] << 16) | (a[tru + 2] << 8) | a[tru + 3], n = r32(dv, tru + 4);
-        let p = tru + 8, q = null; if (fl & 1) { q = bdo ? null : o + dv.getInt32(p); p += 4; } if (fl & 4) p += 4;
+        if (!trs.length || (h ? (h === "vide") !== video : s.vid !== video)) return;
         if (video && bdt !== null && s.nxt[tid] !== undefined && s.nxt[tid] !== bdt) s.pend = true;
-        let dt = bdt || 0, sd = 0, c0 = null;
-        for (let k = 0; k < n && k < 1024; k++) { let du = dd, sz = ds, cto = 0;
-          if (fl & 0x100) { du = r32(dv, p); p += 4; } if (fl & 0x200) { sz = r32(dv, p); p += 4; } if (fl & 0x400) p += 4;
-          if (fl & 0x800) { cto = v === 1 ? dv.getInt32(p) : r32(dv, p); p += 4; }
-          if (k === 0) c0 = cto;
-          if (video) nv += 1;
-          if (video && (s.pend || nv % KEY_EVERY === 0)) { s.pend = false;
-            const kk = q !== null && sz ? vclKey(a, dv, q, Math.min(q + sz, a.length), s.hevc) : [null, null, 0];
-            (r.key || (r.key = [])).push([tid, dt, cto, kk[0], kk[1], kk[2]]); }
-          dt += du; sd += du; if (q !== null) q += sz; }
+        let dt = bdt || 0, sd = 0, c0 = null, n = 0, q = null;
+        for (const tru of trs) {                // levi 18:43: every trun, in order; a later one's data follows the last's
+          const v = a[tru], fl = (a[tru + 1] << 16) | (a[tru + 2] << 8) | a[tru + 3], nt = r32(dv, tru + 4);
+          let p = tru + 8; if (fl & 1) { q = bdo ? null : o + dv.getInt32(p); p += 4; } if (fl & 4) p += 4;
+          for (let k = 0; k < nt && n < 1024; k++, n++) { let du = dd, sz = ds, cto = 0;
+            if (fl & 0x100) { du = r32(dv, p); p += 4; } if (fl & 0x200) { sz = r32(dv, p); p += 4; } if (fl & 0x400) p += 4;
+            if (fl & 0x800) { cto = v === 1 ? dv.getInt32(p) : r32(dv, p); p += 4; }
+            if (n === 0) c0 = cto;
+            if (video) nv += 1;
+            if (video && (s.pend || nv % KEY_EVERY === 0)) { s.pend = false;
+              const kk = q !== null && sz ? vclKey(a, dv, q, Math.min(q + sz, a.length), s.hevc) : [null, null, 0];
+              (r.key || (r.key = [])).push([tid, dt, cto, kk[0], kk[1], kk[2]]); }
+            dt += du; sd += du; if (q !== null) q += sz; } }
+        if (trs.length > 1) r.ntr = Math.max(r.ntr || 0, trs.length);
         if (bdt !== null) s.nxt[tid] = bdt + sd;
         r.v.push([tid, bdt, c0, n, sd]); }); }); };
   const wrap = (proto, name, before, after) => {
@@ -1930,18 +1935,22 @@ WORKER_ANCHOR_JS = r"""(() => {
   };
   if (typeof MediaSource !== "undefined") wrap(MediaSource.prototype, "addSourceBuffer", null, (ms_, a, sb) => {
     if (first === null) first = { t: performance.now(), mime: String(a[0]).slice(0, 160) };
-    kind(S(sb), a[0]); push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) }, true);
+    kind(S(sb), a[0]); const ad = { op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) }; try { ad.mode = sb.mode; } catch (e) {}
+    push(ad, true);
     if (K.end) sb.addEventListener("updateend", () => timed(() => { const b = sb.buffered, n = b.length, br = [];
-      for (let i = 0; i < Math.min(n, 8); i++) br.push([b.start(i), b.end(i)]); push({ op: "end", sb: id(sb), br, nr: n }); })); });
+      for (let i = 0; i < Math.min(n, 8); i++) br.push([b.start(i), b.end(i)]); const r = { op: "end", sb: id(sb), br, nr: n };
+      try { r.tso = sb.timestampOffset; r.mode = sb.mode; } catch (e) {} push(r); })); });
   if (typeof SourceBuffer !== "undefined") {
     const P = SourceBuffer.prototype;
     wrap(P, "appendBuffer", (sb, a) => { const b = u8(a[0]); if (!b || b.length < 8) return; const s = S(sb);
       const dv = new DataView(b.buffer, b.byteOffset, b.byteLength); let moov = null, moof = false;
       boxes(b, dv, 0, b.length, (t, o, bb, e) => { if (t === "moov") moov = [bb, e]; if (t === "moof") moof = true; });
-      if (moov) { const tr = init(b, dv, moov[0], moov[1]); for (const x of tr) if (x[0] !== null) s.tr[x[0]] = x[2];
-        s.pend = true; push({ op: "init", sb: id(sb), bytes: b.length, tr }, true); }
+      if (moov) { const tx = [], tr = init(b, dv, moov[0], moov[1], tx); for (const x of tr) if (x[0] !== null) s.tr[x[0]] = x[2];
+        s.tx = {}; for (const x of tx) s.tx[x[0]] = [x[1], x[2]];
+        s.pend = true; const ri = { op: "init", sb: id(sb), bytes: b.length, tr }; if (tx.length) ri.tx = tx; push(ri, true); }
       if (!moof || !on()) return;
-      if (s.vid && K.app) { const r = { op: "app", sb: id(sb), bytes: b.length, tso: sb.timestampOffset, v: [] }; frag(b, dv, s, r, true); push(r); }
+      if (s.vid && K.app) { const r = { op: "app", sb: id(sb), bytes: b.length, tso: sb.timestampOffset, v: [] };
+        try { r.mode = sb.mode; } catch (e) {} frag(b, dv, s, r, true); push(r); }
       if (K.aapp) { const r = { op: "aapp", sb: id(sb), bytes: b.length, tso: sb.timestampOffset, v: [] }; frag(b, dv, s, r, false);
         if (r.v.length) push(r); } });
     wrap(P, "remove", (sb, a) => push({ op: "rm", sb: id(sb), s: a[0], e: a[1] }, true));

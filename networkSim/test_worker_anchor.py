@@ -63,9 +63,11 @@ def hev1(w: int, h: int) -> bytes:
     return box(b"hev1", bytes(6) + struct.pack(">H", 1) + bytes(16) + struct.pack(">HH", w, h) + bytes(50))
 
 
-def init_seg(video_entry: bytes, v_ts: int = 1_000_000, with_audio: bool = True) -> bytes:
+def init_seg(video_entry: bytes, v_ts: int = 1_000_000, with_audio: bool = True, trex: tuple | None = None) -> bytes:
+    """trex = (default duration, default size) for track 1, in moov/mvex (levi 18:43)."""
     traks = trak(1, v_ts, b"vide", video_entry) + (trak(2, 48000, b"soun", box(b"mp4a", bytes(28))) if with_audio else b"")
-    return box(b"ftyp", b"isom" + bytes(4)) + box(b"moov", traks)
+    mvex = box(b"mvex", full(b"trex", 0, 0, struct.pack(">IIIII", 1, 1, trex[0], trex[1], 0))) if trex else b""
+    return box(b"ftyp", b"isom" + bytes(4)) + box(b"moov", traks + mvex)
 
 
 def frag(tid: int, bdt: int, samples: list, dur: int, ctos: list | None = None) -> bytes:
@@ -81,6 +83,25 @@ def frag(tid: int, bdt: int, samples: list, dur: int, ctos: list | None = None) 
         return box(b"moof", full(b"mfhd", 0, 0, struct.pack(">I", 1)) + box(b"traf", tfhd + tfdt + trun))
     size = len(moof(0))
     return moof(size + 8) + box(b"mdat", b"".join(samples))
+
+
+def frag_runs(tid: int, bdt: int, runs: list, durs: bool = True, offset_every: bool = False) -> bytes:
+    """One moof, one traf, several truns (levi 18:43): runs = [(samples, dur)]; durs False = no per-sample duration
+    (the trex default applies); the first trun carries the data offset, later ones only with offset_every."""
+    def moof(data_offset: int) -> bytes:
+        tfhd = full(b"tfhd", 0, 0x20000, struct.pack(">I", tid))
+        tfdt = full(b"tfdt", 1, 0, struct.pack(">Q", bdt))
+        truns, off = b"", data_offset
+        for i, (smp, dur) in enumerate(runs):
+            with_off = i == 0 or offset_every
+            fl = (0x1 if with_off else 0) | (0x100 if durs else 0) | 0x200 | 0x800
+            body = struct.pack(">I", len(smp)) + (struct.pack(">i", off) if with_off else b"")
+            body += b"".join((struct.pack(">I", dur) if durs else b"") + struct.pack(">Ii", len(x), 0) for x in smp)
+            truns += full(b"trun", 1, fl, body)
+            off += sum(len(x) for x in smp)
+        return box(b"moof", full(b"mfhd", 0, 0, struct.pack(">I", 1)) + box(b"traf", tfhd + tfdt + truns))
+    size = len(moof(0))
+    return moof(size + 8) + box(b"mdat", b"".join(x for smp, _ in runs for x in smp))
 
 
 def nal(t: int, n: int, hevc: bool, rnd: random.Random) -> bytes:
@@ -112,7 +133,7 @@ const [srcPath, planPath, outPath] = process.argv.slice(2), src = fs.readFileSyn
 const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
 const calls = [], SENT = { ret: "append-return" };
 class SourceBuffer {
-  constructor() { this.ls = {}; this._tso = 0; this._ranges = [[0, 1.5]]; }
+  constructor() { this.ls = {}; this._tso = 0; this._ranges = [[0, 1.5]]; this.mode = "segments"; }
   addEventListener(t, f) { (this.ls[t] = this.ls[t] || []).push(f); }
   fire(t) { for (const f of this.ls[t] || []) f(); }
   get buffered() { const r = this._ranges; return { length: r.length, start: (i) => r[i][0], end: (i) => r[i][1] }; }
@@ -147,7 +168,9 @@ for (const st of plan.steps) {
   else if (st.op === "ct") sbs[st.sb].changeType(st.mime);
   else if (st.op === "rm") { let th = null; try { sbs[st.sb].remove(st.s, st.e); } catch (e) { th = e; }
     if (st.s < 0) out.checks.throw_same = th instanceof RangeError && th.message === "bad range"; }
-  else if (st.op === "end") { sbs[st.sb]._ranges = st.ranges; sbs[st.sb].fire("updateend"); }
+  else if (st.op === "end") { sbs[st.sb]._ranges = st.ranges; if (st.tso_after !== undefined) sbs[st.sb]._tso = st.tso_after;
+    sbs[st.sb].fire("updateend"); }
+  else if (st.op === "mode") sbs[st.sb].mode = st.v;
 }
 out.n_calls = calls.length;
 out.take = JSON.parse(ctx.__lvqoeAnchorTake());
@@ -250,6 +273,74 @@ def test_worker_key_matches_reference_avc_and_hevc():
     long_ = [nal(1, 5000, False, random.Random(3))]
     vcl = long_[0]
     assert fnv(vcl) != ref_key(long_, False)[1]
+
+
+def _keyed_run(steps_after_init: list, init: bytes, n_keys_every: int = 1) -> dict:
+    steps = [{"op": "add", "mime": 'video/mp4;codecs="avc1.4D401F"'}, {"op": "app", "sb": 0, "hex": init.hex()}]
+    return run_js(steps + steps_after_init)
+
+
+def test_trex_default_duration_when_trun_and_tfhd_carry_none():
+    """levi 18:43: a trun without per-sample durations and a tfhd without a default take the init's trex default (was 0:
+    every sample at tfdt). 3 truns x 20 samples, every sample keyed by count (KEY_EVERY 30 + the first)."""
+    rnd = random.Random(21)
+    nals = [[nal(1 if i else 5, 200 + i, False, rnd)] for i in range(60)]
+    ss = [sample(x) for x in nals]
+    r = _keyed_run([{"op": "app", "sb": 0, "hex": frag_runs(1, 9000, [(ss, 3003)], durs=False).hex()}],
+                   init_seg(avc1(640, 360), v_ts=90000, with_audio=False, trex=(3003, 0)))
+    init = recs_of(r, "init")[0]
+    assert init["tx"] == [[1, 3003, 0]], init
+    app = recs_of(r, "app")[0]
+    assert app["v"] == [[1, 9000, 0, 60, 60 * 3003]], app["v"]
+    assert [k[1] for k in app["key"]] == [9000, 9000 + 29 * 3003, 9000 + 59 * 3003], app["key"]
+    assert [k[3:] for k in app["key"]] == [ref_key(nals[i], False) for i in (0, 29, 59)], app["key"]
+    # the null: the same fragment under an init without trex keeps every sample at tfdt (the da096c31 behaviour)
+    r0 = _keyed_run([{"op": "app", "sb": 0, "hex": frag_runs(1, 9000, [(ss, 3003)], durs=False).hex()}],
+                    init_seg(avc1(640, 360), v_ts=90000, with_audio=False))
+    a0 = recs_of(r0, "app")[0]
+    assert "tx" not in recs_of(r0, "init")[0] and a0["v"] == [[1, 9000, 0, 60, 0]]
+    assert [k[1] for k in a0["key"]] == [9000, 9000, 9000]
+
+
+def test_every_trun_of_a_traf_in_order():
+    """levi 18:43: a traf with several truns: every sample counted, dt continues across truns, the data of a trun without
+    its own offset follows the previous trun's; keys equal the reference on samples of the second and third trun."""
+    rnd = random.Random(23)
+    nals = [[nal(5 if i == 0 else 1, rnd.choice([100, 600, 3000]), False, rnd)] for i in range(70)]
+    ss = [sample(x) for x in nals]
+    runs = [(ss[:25], 1500), (ss[25:50], 1501), (ss[50:], 1502)]
+    for offset_every in (False, True):
+        r = _keyed_run([{"op": "app", "sb": 0, "hex": frag_runs(1, 0, runs, offset_every=offset_every).hex()}],
+                       init_seg(avc1(640, 360), v_ts=90000, with_audio=False))
+        app = recs_of(r, "app")[0]
+        assert app["v"] == [[1, 0, 0, 70, 25 * 1500 + 25 * 1501 + 20 * 1502]] and app["ntr"] == 3, app
+        dts = [0]
+        for _, d in runs:
+            for _ in range(25):
+                dts.append(dts[-1] + d)
+        idx = [0, 29, 59]                                   # the first + every 30th by count
+        assert [k[1] for k in app["key"]] == [dts[i] for i in idx], (app["key"], [dts[i] for i in idx])
+        assert [k[3:] for k in app["key"]] == [ref_key(nals[i], False) for i in idx], app["key"]
+    one = _keyed_run([{"op": "app", "sb": 0, "hex": frag(1, 0, ss[:3], 1500).hex()}],
+                     init_seg(avc1(640, 360), v_ts=90000, with_audio=False))
+    assert "ntr" not in recs_of(one, "app")[0]                # one trun: the row as at da096c31
+
+
+def test_updateend_records_tso_and_mode():
+    """levi 18:43 (c): the timestampOffset after the append and the SourceBuffer's mode, at updateend (end rows), mode on
+    add / app rows: 'sequence' mode moves the offset itself, and the setter wrap never sees that."""
+    rnd = random.Random(29)
+    s1 = sample([nal(5, 300, False, rnd)])
+    r = _keyed_run([{"op": "app", "sb": 0, "hex": frag(1, 0, [s1], 3000).hex()},
+                    {"op": "end", "sb": 0, "ranges": [[0, 0.04]]},
+                    {"op": "mode", "sb": 0, "v": "sequence"},
+                    {"op": "app", "sb": 0, "hex": frag(1, 3000, [s1], 3000).hex()},
+                    {"op": "end", "sb": 0, "ranges": [[0, 0.08]], "tso_after": 0.005333}],
+                   init_seg(avc1(640, 360), v_ts=90000, with_audio=False))
+    assert recs_of(r, "add")[0]["mode"] == "segments"
+    assert [(a["mode"], a["tso"]) for a in recs_of(r, "app")] == [("segments", 0), ("sequence", 0)]
+    assert [(e["tso"], e["mode"], e["nr"]) for e in recs_of(r, "end")] == [(0, "segments", 1), (0.005333, "sequence", 1)]
+    assert recs_of(r, "tso") == []                           # the browser's own move is not a setter call
 
 
 def test_worker_off_block_keeps_state_and_cap_counts():
@@ -399,7 +490,9 @@ def test_ext_export_record_adds_only_dur_and_timeout():
 def main() -> int:
     for f in (test_worker_wrap_transparent_records_and_keys, test_worker_key_matches_reference_avc_and_hevc,
               test_worker_off_block_keeps_state_and_cap_counts, test_attach_filter_and_resume_always,
-              test_relay_detach_and_record, test_install_gating, test_ext_export_record_adds_only_dur_and_timeout):
+              test_relay_detach_and_record, test_install_gating, test_ext_export_record_adds_only_dur_and_timeout,
+              test_trex_default_duration_when_trun_and_tfhd_carry_none, test_every_trun_of_a_traf_in_order,
+              test_updateend_records_tso_and_mode):
         f()
     print("test_worker_anchor: ok")
     return 0
