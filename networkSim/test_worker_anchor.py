@@ -126,7 +126,7 @@ SourceBuffer.prototype.changeType = function (t) { calls.push({ m: "changeType",
 class MediaSource {}
 MediaSource.prototype.addSourceBuffer = function (mime) { const sb = new SourceBuffer(); calls.push({ m: "addSourceBuffer", self: this, ret: sb }); return sb; };
 let now = 5;
-const ctx = { MediaSource, SourceBuffer, performance: { now: () => now }, Date: { now: () => plan.now_ms }, JSON, Math, String,
+const ctx = { MediaSource, SourceBuffer, performance: { now: () => now, timeOrigin: 1761740000123.5 }, Date: { now: () => plan.now_ms }, JSON, Math, String,
   Uint8Array, DataView, ArrayBuffer, WeakMap, Object, RangeError, Error };
 ctx.self = ctx;
 vm.createContext(ctx);
@@ -221,6 +221,8 @@ def test_worker_wrap_transparent_records_and_keys():
     # the faulting buffer, the garbage (updateend is an event, not a call); the garbage made no app record (71 above)
     assert r["n_calls"] == 2 + 2 + 71 + 1 + 1 + 2 + 1 + 1 + 1
     assert r["take"]["over"] == 0 and r["take"]["nv"] == 71 and r["take2"]["recs"] == []
+    # levi 14:59: the worker's clock is named: t + to = epoch ms
+    assert r["take"]["to"] == 1761740000123.5 and abs(apps[0]["t"] + r["take"]["to"] - 1761740000123.5 - apps[0]["t"]) < 1e-6
     assert r["take"]["first"]["mime"].startswith("video/mp4")
 
 
@@ -320,12 +322,13 @@ def test_relay_detach_and_record():
     assert s.sent[-1][1:] == ("Runtime.evaluate", {"expression": "self.__lvqoeAnchorTake ? self.__lvqoeAnchorTake() : null",
                                                    "returnByValue": True}, "S1")
     batch = {"recs": [{"op": "app", "sb": 1, "v": [[1, 0, 0, 1, 33]], "t": 1}, {"op": "tso", "sb": 1, "v": 2, "was": 0, "t": 2}],
-             "over": 0, "inst": 3.5, "first": {"t": 4, "mime": "video/mp4"}, "ms": 0.4, "nv": 1}
+             "over": 0, "inst": 3.5, "first": {"t": 4, "mime": "video/mp4"}, "ms": 0.4, "nv": 1, "to": 1761740000000.25}
     a.handle({"id": tid, "result": {"result": {"type": "string", "value": json.dumps(batch)}}}, s, now=11.0)
     pid, m, prm, sid = s.sent[-1]
     assert m == "Runtime.evaluate" and sid is None and prm["expression"].startswith("window.postMessage(")
     posted = json.loads(prm["expression"][len("window.postMessage("):-len(", '*'); true")])
-    assert posted["source"] == "lvqoe-mse" and posted["inst"] == 3.5 and posted["wi"] == 0
+    assert posted["source"] == "lvqoe-mse" and posted["inst"] == 3.5 and posted["wi"] == 0 and posted["to"] == 1761740000000.25
+    assert a.workers[0]["time_origin"] == 1761740000000.25
     assert [r["wi"] for r in posted["recs"]] == [0, 0] and [r["op"] for r in posted["recs"]] == ["app", "tso"]
     a.handle({"id": pid, "result": {"result": {"value": True}}}, s, now=11.01)
     assert (a.batches, a.recs) == (1, 2) and a.kinds["app"][0] == 1 and a.kinds["tso"][1] > 0
@@ -338,13 +341,22 @@ def test_relay_detach_and_record():
     a.handle({"id": tid, "result": {"result": {"value": json.dumps(batch)}}}, s, now=13.0)
     a.handle({"id": s.sent[-1][0], "error": {"code": -32000, "message": "no context"}}, s, now=13.1)
     assert (a.post_errors, a.post_lost) == (1, 2)
+    a.take(s)                                                    # levi 14:59: a malformed take reply is counted, the anchor lives
+    a.handle({"id": s.sent[-1][0], "result": {"result": {"value": "{not json"}}}, s, now=13.5)
+    assert a.handle_errors == 1 and "JSONDecodeError" in a.handle_last_error
+    a.take(s)
+    a.handle({"id": s.sent[-1][0], "result": {"result": {"value": json.dumps(batch)}}}, s, now=13.6)
+    assert s.sent[-1][1] == "Runtime.evaluate" and s.sent[-1][3] is None              # the next take relays
+    a.handle({"id": s.sent[-1][0], "result": {"result": {"value": True}}}, s, now=13.7)
+    assert (a.batches, a.recs) == (2, 4)
     a.handle({"method": "Target.detachedFromTarget", "params": {"sessionId": "S1"}}, s, now=14.0)
     n = len(s.sent)
     a.take(s)
     assert len(s.sent) == n and a.workers[0]["detached"] == 14.0                    # a detached worker is never asked
     rec = a.record()
     assert rec["workers"][0]["wrap"] == "ok" and rec["workers"][0]["url_kind"] == "blob" and rec["kinds_on"] == ["app", "aapp", "end"]
-    assert rec["kinds"]["app"]["n"] == 2 and rec["recs"] == 2 and rec["key_every"] == 30 and rec["eval_timeout_ms"] == 50
+    assert rec["kinds"]["app"]["n"] == 3 and rec["recs"] == 4      # kinds: every record posted (the refused post's too) and rec["key_every"] == 30 and rec["eval_timeout_ms"] == 50
+    assert rec["handle_errors"] == 1
     assert "posted_inst" not in rec["workers"][0]
 
 

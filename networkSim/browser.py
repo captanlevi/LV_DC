@@ -1833,6 +1833,9 @@ def mse_wrap_settle(page, rec: dict) -> dict:
 #   state, every block (levi 14:30, the OFF-block residue): add (mime), init (per track [tid, timescale, handler, sample
 #     entry, width, height, codec]), ct (mime), tso (value, was), abort (tso), rm (start, end); err (a parse fault).
 # Only the moov / moof boxes at the head of an append and the keyed samples' NAL lengths are read; never the mdat.
+# levi 14:59: t (0.1 ms), inst and first.t are the WORKER's performance.now(), from its own timeOrigin: every batch carries
+# to (performance.timeOrigin, epoch ms) on the relayed message and in meta workers[].time_origin; epoch ms = t + to. The
+# fl.mse_inst / mse_over content.js sets on tw / tt ON ticks from these messages are on that clock too.
 WORKER_ANCHOR_PLATFORMS = ("twitch", "tiktok")
 WORKER_ANCHOR_KEY_EVERY = 30
 # the per-append kinds (rushi 14:35, levi's pre-stated budget B1-B3): "app" (video, the core, never cut), "aapp" (audio per
@@ -1949,7 +1952,7 @@ WORKER_ANCHOR_JS = r"""(() => {
       set(v) { timed(() => { S(this).pend = true; push({ op: "tso", sb: id(this), v, was: d.get.call(this) }, true); }); d.set.call(this, v); } });
   }
   self.__lvqoeAnchorTake = () => { const b = recs; recs = [];
-    return JSON.stringify({ recs: b, over, inst, first, ms: Math.round(ms * 10) / 10, nv }); };
+    return JSON.stringify({ recs: b, over, inst, first, ms: Math.round(ms * 10) / 10, nv, to: performance.timeOrigin }); };
   return "ok";
 })()"""
 
@@ -3292,8 +3295,9 @@ class WorkerAnchor:
     tagged with its worker's index wi. levi's hard requirement: a worker is never left paused. The resume is sent in a
     finally, in the same call as the install and never after a reply (the install itself is cut at
     WORKER_ANCHOR_EVAL_TIMEOUT_MS by Chrome), whatever the install did. record() is meta frame_log.worker_anchor: the
-    coverage per worker (target, url kind, attach time, install result, resume latency, detach), the relay counts, and
-    per record kind its count and JSON bytes (levi 14:35: the cost of record is measured)."""
+    coverage per worker (target, url kind, attach time, install result, resume latency, detach, time origin), the relay
+    counts (recs: delivered; post_lost_recs: posts the page refused), and per record kind its count and JSON bytes as
+    posted (levi 14:35: the cost of record is measured)."""
 
     def __init__(self, ws_url: str, block_s: int):
         self.ws_url, self.block_s = ws_url, block_s
@@ -3308,6 +3312,8 @@ class WorkerAnchor:
         self._by_sid: dict[str, dict] = {}         # every attached worker's record, detached ones too (late replies)
         self.batches = self.recs = self.post_errors = self.post_lost = self.take_errors = 0
         self.kinds: dict[str, list[int]] = {}      # op -> [records, JSON bytes]
+        self.handle_errors, self.handle_last_error = 0, None
+        self._ws = None
         self.error: str | None = None
         self.final_drain: dict | None = None
         self._stop = threading.Event()
@@ -3328,7 +3334,15 @@ class WorkerAnchor:
             self._t.join(timeout=wait_s)
 
     def handle(self, msg: dict, send, now: float | None = None) -> None:
-        """One CDP message; send(method, params, session_id) -> the command id."""
+        """One CDP message; send(method, params, session_id) -> the command id. levi 14:59: a fault in one message is
+        counted (handle_errors) and never ends the anchor."""
+        try:
+            self._handle(msg, send, now)
+        except Exception as exc:
+            self.handle_errors += 1
+            self.handle_last_error = repr(exc)[:200]
+
+    def _handle(self, msg: dict, send, now: float | None) -> None:
         now = time.time() if now is None else now
         m, prm = msg.get("method"), msg.get("params") or {}
         if m == "Target.attachedToTarget":
@@ -3405,11 +3419,12 @@ class WorkerAnchor:
             w["over"] = batch.get("over") or 0
             w["ms"] = batch.get("ms")
             w["video_samples"] = batch.get("nv")
+            w["time_origin"] = batch.get("to")      # levi 14:59: t / inst / first.t are on the worker's clock; + to = epoch ms
             if not recs and w.get("posted_inst"):
                 return
             w["posted_inst"] = True               # the first post goes out even empty: inst / first reach content.js
         msg = {"source": "lvqoe-mse", "recs": recs, "over": batch.get("over") or 0, "inst": batch.get("inst"),
-               "first": batch.get("first"), "wi": wi}
+               "first": batch.get("first"), "wi": wi, "to": batch.get("to")}
         self._pending[send("Runtime.evaluate", {"expression": "window.postMessage(%s, '*'); true"
                                                 % json.dumps(msg, separators=(",", ":"))}, None)] = ("post", None, len(recs))
 
@@ -3428,13 +3443,14 @@ class WorkerAnchor:
                 "post_errors": self.post_errors, "post_lost_recs": self.post_lost, "take_errors": self.take_errors,
                 "kinds": {k: {"n": v[0], "bytes": v[1]} for k, v in sorted(self.kinds.items())},
                 "worker_over": sum(w.get("over") or 0 for w in self.workers), "final_drain": self.final_drain,
-                "error": self.error}
+                "handle_errors": self.handle_errors, "handle_last_error": self.handle_last_error, "error": self.error}
 
     def _run(self) -> None:
         try:
             ws = websocket.WebSocket()
             ws.settimeout(0.2)
             ws.connect(self.ws_url)
+            self._ws = ws
         except Exception as exc:
             self.error = self.armed_error = repr(exc)[:200]
             self._ready.set()
