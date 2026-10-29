@@ -250,7 +250,11 @@ def test_stop_posts_the_final_flush_before_the_export():
 # levi 09:23 (F1, boundary 3): meta.ext_export on every export exit, success too; when it is not ok, exp.py copies the
 # clone's extension storage into the session dir before the clone is removed (a dead browser lost every record)
 def _ext_export(sd):
-    return json.loads((sd / "meta.json").read_text())["ext_export"]
+    """The record as 971e444e wrote it; levi 14:51 (B2): plus exactly dur_ms and timeout_s, checked here."""
+    rec = dict(json.loads((sd / "meta.json").read_text())["ext_export"])
+    dur, to = rec.pop("dur_ms"), rec.pop("timeout_s")
+    assert isinstance(dur, float) and dur >= 0 and to == B.CDP_CALL_TIMEOUT_S == 20
+    return rec
 
 
 def test_ext_export_is_recorded_on_success(export_env):

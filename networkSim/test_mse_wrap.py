@@ -81,13 +81,13 @@ fs.writeFileSync(outPath, JSON.stringify(res));
 """
 
 
-def run(now_ms: int, block_s: int, max_recs: int = 2000, noadd: bool = False) -> dict:
+def run(now_ms: int, block_s: int, max_recs: int = 2000, noadd: bool = False, r2: int = int(B.MSE_WRAP_R2)) -> dict:
     node = shutil.which("node")
     assert node, "node not found: the MSE wrap test cannot run (install node)"
     with tempfile.TemporaryDirectory() as t:
         h, js, out = Path(t) / "h.js", Path(t) / "w.js", Path(t) / "out.json"
         h.write_text(HARNESS)
-        js.write_text(B.MSE_WRAP_JS % {"block_s": block_s, "max": max_recs})
+        js.write_text(B.MSE_WRAP_JS % {"block_s": block_s, "max": max_recs, "r2": r2})
         subprocess.run([node, str(h), str(js), str(out), str(now_ms)] + (["noadd"] if noadd else []), check=True)
         return json.loads(out.read_text())
 
@@ -121,9 +121,87 @@ def test_frame_log_arm_epoch():
     assert B.frame_log_arm(60, 65.0) is True and B.frame_log_arm(60, 125.0) is False and B.frame_log_arm(60, 59.9) is False
 
 
+# t100 R2 (rushi 14:35; levi 14:35: "off" counts only if the off-state records are byte-identical to 971e444e's): a plan
+# harness (appends of real fMP4 / WebM heads, a tso set, garbage) run on the frozen 971e444e wrap (fixtures/) and on the
+# current wrap with R2 off (identical posts) and on (tso, tf / ctc, init / tcs; garbage: tf null or absent, never a throw).
+R2_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const [srcPath, planPath, outPath] = process.argv.slice(2), src = fs.readFileSync(srcPath, "utf8");
+const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+const posted = [], timers = [], calls = [], SENT = { ret: 1 };
+class SourceBuffer { constructor() { this.ls = {}; this._tso = 0; this.buffered = { length: 1, end: () => 3.5 }; }
+  addEventListener(t, f) { (this.ls[t] = this.ls[t] || []).push(f); } fire(t) { for (const f of this.ls[t] || []) f(); } }
+Object.defineProperty(SourceBuffer.prototype, "timestampOffset", { configurable: true, get() { return this._tso; }, set(v) { this._tso = v; } });
+SourceBuffer.prototype.appendBuffer = function (b) { calls.push(b); return SENT; };
+SourceBuffer.prototype.remove = function () {}; SourceBuffer.prototype.changeType = function () {};
+class MediaSource {} MediaSource.prototype.addSourceBuffer = function () { return new SourceBuffer(); };
+const ctx = { MediaSource, SourceBuffer, performance: { now: () => 7 }, Date: { now: () => plan.now_ms }, String, Math,
+  Uint8Array, DataView, ArrayBuffer, setInterval: (f) => timers.push(f), postMessage: (m) => posted.push(JSON.parse(JSON.stringify(m))) };
+ctx.window = ctx; vm.createContext(ctx); vm.runInContext(src, ctx);
+const sb = new MediaSource().addSourceBuffer(plan.mime); let leaks = 0, rets = 0;
+for (const st of plan.steps) { if (st.tso !== undefined) sb.timestampOffset = st.tso;
+  try { rets += sb.appendBuffer(Uint8Array.from(Buffer.from(st.hex, "hex"))) === SENT ? 1 : 0; } catch (e) { leaks += 1; } }
+sb.fire("updateend"); for (const f of timers) f();
+fs.writeFileSync(outPath, JSON.stringify({ posted, leaks, rets, calls: calls.length }));
+"""
+
+
+def run_plan(src: str, steps: list, mime: str, now_ms: int = 1_000_000) -> dict:
+    node = shutil.which("node")
+    assert node, "node not found: the MSE wrap test cannot run (install node)"
+    with tempfile.TemporaryDirectory() as t:
+        h, js, plan, out = (Path(t) / x for x in ("h.js", "w.js", "plan.json", "out.json"))
+        h.write_text(R2_HARNESS)
+        js.write_text(src)
+        plan.write_text(json.dumps({"now_ms": now_ms, "mime": mime, "steps": steps}))
+        subprocess.run([node, str(h), str(js), str(plan), str(out)], check=True)
+        return json.loads(out.read_text())
+
+
+def _ebml(id_: bytes, payload: bytes) -> bytes:
+    n = len(payload)
+    return id_ + (bytes([0x80 | n]) if n < 127 else bytes([0x40 | (n >> 8), n & 0xFF])) + payload
+
+
+def r2_plans():
+    import test_worker_anchor as W
+    mp4 = [{"hex": W.init_seg(W.avc1(1280, 720)).hex()}, {"hex": W.frag(1, 900_000, [bytes(20)], 33000).hex(), "tso": -2.5},
+           {"hex": "00000010ffffffff" + "00" * 40}, {"hex": "0000000c" + "6d6f6f66" + "00000000"},   # garbage, a short moof
+           {"hex": "ff" * 3}]
+    tcs = _ebml(b"\x2a\xd7\xb1", (1_000_000).to_bytes(3, "big"))
+    webm_init = _ebml(b"\x1a\x45\xdf\xa3", b"\x42\x86\x81\x01") + _ebml(b"\x18\x53\x80\x67", _ebml(b"\x15\x49\xa9\x66", tcs))
+    cluster = _ebml(b"\x1f\x43\xb6\x75", _ebml(b"\xe7", (123456).to_bytes(3, "big")) + _ebml(b"\xa3", bytes(30)))
+    webm = [{"hex": webm_init.hex()}, {"hex": cluster.hex()}, {"hex": "1f43b675" + "ff"}]
+    return [('video/mp4; codecs="avc1.4D401F"', mp4), ('video/webm; codecs="vp09.00.40.08"', webm)]
+
+
+def test_r2_off_is_971e444e_and_on_reads_heads():
+    old = (HERE / "fixtures" / "mse_wrap_js_971e444e.js").read_text() % {"block_s": 0, "max": 2000}
+    for mime, steps in r2_plans():
+        o = run_plan(old, steps, mime)
+        off = run_plan(B.MSE_WRAP_JS % {"block_s": 0, "max": 2000, "r2": 0}, steps, mime)
+        assert json.dumps(off, sort_keys=True) == json.dumps(o, sort_keys=True), (mime, off, o)
+        on = run_plan(B.MSE_WRAP_JS % {"block_s": 0, "max": 2000, "r2": 1}, steps, mime)
+        assert on["leaks"] == 0 and on["rets"] == len(steps) and on["calls"] == len(steps)
+        recs = on["posted"][0]["recs"]
+        apps = [r for r in recs if r["op"] == "app"]
+        assert [r["bytes"] for r in apps] == [r["bytes"] for r in o["posted"][0]["recs"] if r["op"] == "app"]
+        if "mp4" in mime:
+            assert [r for r in recs if r["op"] == "init"][0]["tr"] == [[1, 1_000_000, "vide"], [2, 48000, "soun"]]
+            assert apps[1]["tf"] == [1, 900_000] and apps[1]["tso"] == -2.5
+            assert apps[0].get("tf") is None and "r2err" not in apps[0]                       # an init: no moof
+            assert all("tf" not in a or a["tf"] is None for a in apps[2:]), apps[2:]          # garbage: null / absent
+        else:
+            assert [r["v"] for r in recs if r["op"] == "tcs"] == [1_000_000]
+            assert apps[1]["ctc"] == 123456 and "ctc" not in apps[2] and "ctc" not in apps[0]
+    # null: the fixture is 971e444e's wrap, not the current one (the identity above is not a file compared with itself)
+    assert "R2" not in (HERE / "fixtures" / "mse_wrap_js_971e444e.js").read_text() and "R2 = %(r2)d" in B.MSE_WRAP_JS
+
+
 def main() -> int:
     test_mse_wrap_transparent_and_recorded()
     test_frame_log_arm_epoch()
+    test_r2_off_is_971e444e_and_on_reads_heads()
     print("test_mse_wrap: ok")
     return 0
 

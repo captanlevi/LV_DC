@@ -1475,6 +1475,9 @@ _IS_LIVE_PAGE_JS: dict[str, str] = {
 # CDPPage — thread-safe wrapper around a single CDP WebSocket connection
 # ---------------------------------------------------------------------------
 
+CDP_CALL_TIMEOUT_S = 20        # CDPPage: each call's socket wait (the session page and the export's extension page)
+
+
 class CDPPage:
     """
     Wraps a CDP WebSocket target.  All calls are serialised by a lock so the
@@ -1483,7 +1486,7 @@ class CDPPage:
 
     def __init__(self, ws_url: str):
         self._ws = websocket.WebSocket()
-        self._ws.settimeout(20)
+        self._ws.settimeout(CDP_CALL_TIMEOUT_S)
         self._ws.connect(ws_url)
         self._seq = 0
         self._lock = threading.Lock()
@@ -1683,6 +1686,7 @@ def _set_download_dir(page: CDPPage, download_path: str) -> None:
 # (TcpStateSampler, gpu_record) switch together; frame_log_arm is that rule on the host.
 FRAME_LOG_ENV = "LVQOE_FRAME_LOG"
 FRAME_LOG_MSE_MAX = 2000      # t93 rows 9 / 20: the page-world MSE wrap's records per 1 s batch (past it counted, over)
+MSE_WRAP_R2 = True            # t100 R2 (rushi 14:35): yt app tso + head time (tf / ctc), init / tcs; off = 971e444e's records
 # t93 rows 9 / 20 (levi 00124; brad W3): yt's MSE calls in the page world, added before any page script by
 # Page.addScriptToEvaluateOnNewDocument, only when the frame log is enabled on yt (tw's MSE runs in a worker, tt's live is
 # a MediaStream: out by construction). Each wrapped call runs the original with the same this and arguments and returns
@@ -1708,7 +1712,7 @@ MSE_WRAP_JS = r"""(() => {
   window.__lvqoeMse = true;
   const inst = performance.now();
   let first = null, firstSent = false, instSent = false;
-  const BLOCK_S = %(block_s)d, MAX = %(max)d;
+  const BLOCK_S = %(block_s)d, MAX = %(max)d, R2 = %(r2)d;
   const on = () => !(BLOCK_S > 0) || Math.floor(Date.now() / (BLOCK_S * 1000)) %% 2 === 1;
   let recs = [], over = 0, next = 0;
   const ids = new WeakMap();
@@ -1724,6 +1728,39 @@ MSE_WRAP_JS = r"""(() => {
       return ret;
     };
   };
+  // t100 R2 (rushi 14:35, levi's budget; MSE_WRAP_R2): on app, the tso in force and the head's first time: fMP4 the first
+  // traf's [track id, tfdt] (tf), WebM a Cluster's Timecode (ctc); init (fMP4 moov: [tid, timescale, handler]) and tcs
+  // (WebM TimecodeScale, first 4 KB of an EBML header append) are state records, every block. Only the boxes / elements at
+  // the head are read, never the media; a fault leaves tf null (r2err) and never reaches the page.
+  const state = (r) => { if (recs.length >= MAX) { over += 1; return; } r.t = performance.now(); recs.push(r); };
+  const u8 = (b) => b instanceof ArrayBuffer ? new Uint8Array(b) : (b && b.buffer ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : null);
+  const vint = (b, i, keep) => { const x = b[i]; let n = 1; while (n <= 8 && !(x & (0x80 >> (n - 1)))) n++; if (n > 8 || i + n > b.length) return null;
+    let v = keep ? x : x & (0xff >> n); for (let k = 1; k < n; k++) v = v * 256 + b[i + k]; return [v, n]; };
+  const uint = (b, i, n) => { let v = 0; for (let k = 0; k < n && i + k < b.length; k++) v = v * 256 + b[i + k]; return v; };
+  const ebml = (b, i, want, lim) => { let k = 0; while (i < Math.min(b.length, lim) && k++ < 8) { const d = vint(b, i, true); if (!d) return null;
+      const z = vint(b, i + d[1]); if (!z) return null; const at = i + d[1] + z[1]; if (d[0] === want) return uint(b, at, z[0]); i = at + z[0]; } return null; };
+  const r2 = (sb, b0, r) => { try {
+    r.tso = sb.timestampOffset; const b = u8(b0); if (!b || b.length < 8) return;
+    if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) { const lim = Math.min(b.length, 4096);
+      for (let i = 0; i + 3 < lim; i++) if (b[i] === 0x2a && b[i + 1] === 0xd7 && b[i + 2] === 0xb1) { const z = vint(b, i + 3);
+        if (z) state({ op: "tcs", sb: id(sb), v: uint(b, i + 3 + z[1], z[0]) }); break; }
+      return; }
+    if (b[0] === 0x1f && b[1] === 0x43 && b[2] === 0xb6 && b[3] === 0x75) { const z = vint(b, 4); if (z) { const v = ebml(b, 4 + z[1], 0xe7, 4096); if (v !== null) r.ctc = v; } return; }
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength), T = (o) => String.fromCharCode(b[o + 4], b[o + 5], b[o + 6], b[o + 7]);
+    const each = (s, e, f) => { let o = s, n = 0; while (o + 8 <= e && n++ < 64) { const z = dv.getUint32(o); if (z < 8 || o + z > e) return; if (f(T(o), o + 8, o + z) === false) return; o += z; } };
+    each(0, b.length, (t, bb, be) => {
+      if (t === "moov") { const tr = []; each(bb, be, (t2, b2, e2) => { if (t2 !== "trak") return; const x = [null, null, null];
+          each(b2, e2, (t3, b3, e3) => { if (t3 === "tkhd") x[0] = dv.getUint32(b3 + (b[b3] === 1 ? 20 : 12));
+            if (t3 === "mdia") each(b3, e3, (t4, b4) => { if (t4 === "mdhd") x[1] = dv.getUint32(b4 + (b[b4] === 1 ? 20 : 12));
+              if (t4 === "hdlr") x[2] = T(b4 + 4); }); });
+          tr.push(x); });
+        state({ op: "init", sb: id(sb), tr }); }
+      if (t === "moof") { r.tf = null; each(bb, be, (t2, b2, e2) => { if (t2 !== "traf") return; let tid = null, bdt = null;
+          each(b2, e2, (t3, b3) => { if (t3 === "tfhd") tid = dv.getUint32(b3 + 4);
+            if (t3 === "tfdt") bdt = b[b3] === 1 ? dv.getUint32(b3 + 4) * 4294967296 + dv.getUint32(b3 + 8) : dv.getUint32(b3 + 4); });
+          r.tf = [tid, bdt]; return false; });
+        return false; } });
+  } catch (e) { r.tf = null; r.r2err = 1; } };
   const ended = (sb) => () => { try { const b = sb.buffered, n = b.length;
     push({ op: "end", sb: id(sb), bend: n ? b.end(n - 1) : null, nr: n }); } catch (e) {} };
   if (typeof MediaSource !== "undefined") {
@@ -1735,7 +1772,9 @@ MSE_WRAP_JS = r"""(() => {
   }
   if (typeof SourceBuffer !== "undefined") {
     const p = SourceBuffer.prototype;
-    wrap(p, "appendBuffer", (sb, a) => push({ op: "app", sb: id(sb), bytes: a[0] ? a[0].byteLength : null }));
+    wrap(p, "appendBuffer", (sb, a) => { const r = { op: "app", sb: id(sb), bytes: a[0] ? a[0].byteLength : null };
+      if (R2) r2(sb, a[0], r);
+      push(r); });
     wrap(p, "remove", (sb, a) => push({ op: "rm", sb: id(sb), s: a[0], e: a[1] }));
     wrap(p, "changeType", (sb, a) => push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) }));
   }
@@ -1771,6 +1810,154 @@ def mse_wrap_settle(page, rec: dict) -> dict:
     except Exception as exc:
         rec["disable_error"] = repr(exc)[:200]
     return rec
+
+
+# t100 R1 (levi b3_anchor_rows_gates 14:28 + 14:32 amendments; kb collector.boundary3.add_worker_anchor): tw and tt run
+# their MSE in a dedicated Web Worker (laptop t100: tw's IVS worker, tt's player-worker veworker; MediaSourceHandle to the
+# page), where the page-world MSE_WRAP_JS never reaches. WorkerAnchor (below) attaches to the session page's dedicated
+# workers only (Target filter: frames, service and shared workers never attach, so never pause), evaluates
+# WORKER_ANCHOR_JS in each before it runs and always resumes it; about 1 s it drains the worker's batch and posts it into
+# the page as the yt wrap's "lvqoe-mse" message, so content.js carries it unchanged (frames k:"mse", the F1 raw keep
+# covers it). The appended media's own times give c (rVFC mt = (dt + cto) / timescale + tso: laptop tw 904 / 904 and
+# 989 / 989 with tso set, tt 451 / 451; null without tso 0 / 989). Records (each wrapped call runs the original with the
+# same this and arguments, the record in a try, never a fault into the player):
+#   app (ON blocks; video-capable buffers only, every append, none sampled): sb, bytes, tso in force, v = per video traf
+#     [tid, tfdt, first sample's cto, sample count, sum of durations] (timescale units; brad 14:26: tw's phase steps per TS
+#     segment, so per append), key = keyed samples [tid, dt, cto, VCL length, FNV-1a 32 (an integer), NAL walk exact]:
+#     every KEY_EVERY-th video sample by count, and the first sample after an init / abort / changeType / tso set / a tfdt
+#     discontinuity (brad / levi 14:32: count-based, so every TS segment carries a key whatever the append timing). The key
+#     (brad 14:07): the sample's VCL NALs (H.264 types 1-5; HEVC (b0 >> 1) & 0x3f < 32; AVCC 4-byte lengths dropped,
+#     bytes raw) hashed over VCL[0:256] + VCL[max(256, L-256):L]; it pairs the sample to its wire frame (laptop cap4
+#     2606 / 2606).
+#   aapp / end (ON blocks; WORKER_ANCHOR_KINDS): audio per append (no keys); updateend buffered ranges per buffer.
+#   state, every block (levi 14:30, the OFF-block residue): add (mime), init (per track [tid, timescale, handler, sample
+#     entry, width, height, codec]), ct (mime), tso (value, was), abort (tso), rm (start, end); err (a parse fault).
+# Only the moov / moof boxes at the head of an append and the keyed samples' NAL lengths are read; never the mdat.
+WORKER_ANCHOR_PLATFORMS = ("twitch", "tiktok")
+WORKER_ANCHOR_KEY_EVERY = 30
+# the per-append kinds (rushi 14:35, levi's pre-stated budget B1-B3): "app" (video, the core, never cut), "aapp" (audio per
+# append, the same fields, no keys), "end" (updateend: the buffer's ranges, at most 8, and their count); a kind left out
+# here is never recorded. Frozen with the tip and recorded in meta frame_log.worker_anchor.kinds.
+WORKER_ANCHOR_KINDS = ("app", "aapp", "end")
+WORKER_ANCHOR_DRAIN_S = 1.0
+WORKER_ANCHOR_EVAL_TIMEOUT_MS = 50           # levi: the wrap's install is cut at 50 ms; the resume is sent regardless
+WORKER_ANCHOR_ATTACH = {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True,
+                        "filter": [{"type": "worker", "exclude": False}, {"exclude": True}]}
+WORKER_ANCHOR_JS = r"""(() => {
+  if (self.__lvqoeAnchor) return "again";
+  self.__lvqoeAnchor = true;
+  const inst = performance.now();
+  const BLOCK_S = __BLOCK_S__, MAX = __MAX__, KEY_EVERY = __KEY_EVERY__, K = __KINDS__;
+  const on = () => !(BLOCK_S > 0) || Math.floor(Date.now() / (BLOCK_S * 1000)) % 2 === 1;
+  let recs = [], over = 0, next = 0, first = null, ms = 0, nv = 0;
+  const ids = new WeakMap(), st = new WeakMap();
+  const id = (sb) => { let i = ids.get(sb); if (i === undefined) { i = ++next; ids.set(sb, i); } return i; };
+  const S = (sb) => { let s = st.get(sb); if (!s) { s = { vid: false, hevc: false, tr: {}, nxt: {}, pend: true }; st.set(sb, s); } return s; };
+  const kind = (s, mime) => { const m = String(mime); s.vid = /avc1|avc3|hev1|hvc1|av01|vp09|vp8|vp9/.test(m); s.hevc = /hev1|hvc1/.test(m); s.pend = true; };
+  const push = (r, always) => { if (!always && !on()) return; if (recs.length >= MAX) { over += 1; return; }
+    r.t = Math.round(performance.now() * 10) / 10; recs.push(r); };          // 0.1 ms: the bytes of record (levi B1)
+  const timed = (f) => { const q = performance.now(); try { f(); } catch (e) { try { push({ op: "err", m: String(e).slice(0, 120) }, true); } catch (e2) {} } ms += performance.now() - q; };
+  const u8 = (b) => b instanceof ArrayBuffer ? new Uint8Array(b) : (b && b.buffer ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : null);
+  const typ = (a, o) => String.fromCharCode(a[o + 4], a[o + 5], a[o + 6], a[o + 7]);
+  const r32 = (dv, o) => dv.getUint32(o);
+  const r64 = (dv, o) => dv.getUint32(o) * 4294967296 + dv.getUint32(o + 4);
+  const boxes = (a, dv, s, e, f) => { let o = s, n = 0; while (o + 8 <= e && n < 64) { let sz = r32(dv, o); const t = typ(a, o);
+      let h = 8; if (sz === 1) { sz = r64(dv, o + 8); h = 16; } else if (sz === 0) sz = e - o; if (sz < h || o + sz > e) break; f(t, o, o + h, o + sz); o += sz; n++; } };
+  const hx = (v) => (v < 16 ? "0" : "") + v.toString(16).toUpperCase();
+  const vclKey = (a, dv, q, qe, hevc) => { const seg = []; let L = 0, k = 0;
+    while (q + 5 <= qe && k++ < 64) { const n = r32(dv, q), b0 = a[q + 4]; if (q + 4 + n > qe) return [L, null, 0];
+      const vcl = hevc ? ((b0 >> 1) & 0x3f) < 32 : (b0 & 0x1f) >= 1 && (b0 & 0x1f) <= 5;
+      if (vcl) { seg.push([q + 4, q + 4 + n]); L += n; } q += 4 + n; }
+    const ok = q === qe ? 1 : 0;
+    const hr = (h, x0, x1) => { let v = 0; for (const [s0, e0] of seg) { const n = e0 - s0;
+        const a0 = Math.max(x0 - v, 0), a1 = Math.min(x1 - v, n);
+        for (let x = s0 + a0; x < s0 + a1; x++) { h ^= a[x]; h = Math.imul(h, 0x01000193) >>> 0; } v += n; if (v >= x1) break; } return h; };
+    const lo = Math.min(256, L), hi = Math.max(256, L - 256);
+    return [L, hr(hr(0x811c9dc5, 0, lo), hi, L) >>> 0, ok]; };
+  const init = (a, dv, b, e) => { const tr = [];
+    boxes(a, dv, b, e, (t2, o2, b2, e2) => { if (t2 !== "trak") return; const x = [null, null, null, null, null, null, null];
+      boxes(a, dv, b2, e2, (t3, o3, b3, e3) => {
+        if (t3 === "tkhd") x[0] = r32(dv, b3 + (a[b3] === 1 ? 20 : 12));
+        if (t3 === "mdia") boxes(a, dv, b3, e3, (t4, o4, b4, e4) => {
+          if (t4 === "mdhd") x[1] = r32(dv, b4 + (a[b4] === 1 ? 20 : 12));
+          if (t4 === "hdlr") x[2] = typ(a, b4 + 4);
+          if (t4 === "minf") boxes(a, dv, b4, e4, (t5, o5, b5, e5) => { if (t5 === "stbl") boxes(a, dv, b5, e5, (t6, o6, b6, e6) => {
+            if (t6 !== "stsd" || b6 + 16 > e6) return; const en = b6 + 8; x[3] = typ(a, en);
+            if (x[2] === "vide" && en + 36 <= e6) { x[4] = dv.getUint16(en + 32); x[5] = dv.getUint16(en + 34);
+              boxes(a, dv, en + 86, Math.min(en + r32(dv, en), e6), (t7, o7, b7) => { if (t7 === "avcC") x[6] = x[3] + "." + hx(a[b7 + 1]) + hx(a[b7 + 2]) + hx(a[b7 + 3]); }); } }); });
+        });
+      });
+      tr.push(x); });
+    return tr; };
+  const frag = (a, dv, s, r, video) => {
+    boxes(a, dv, 0, a.length, (t, o, b, e) => { if (t !== "moof") return; let ti = 0;
+      boxes(a, dv, b, e, (t2, o2, b2, e2) => { if (t2 !== "traf") return;
+        let tid = null, bdt = null, dd = 0, ds = 0, bdo = ti++ > 0, tru = null;   // a later traf's base: moof only if flagged
+        boxes(a, dv, b2, e2, (t3, o3, b3) => {
+          if (t3 === "tfhd") { const fl = (a[b3 + 1] << 16) | (a[b3 + 2] << 8) | a[b3 + 3]; tid = r32(dv, b3 + 4); let p = b3 + 8;
+            if (fl & 0x20000) bdo = false; if (fl & 1) { bdo = true; p += 8; } if (fl & 2) p += 4; if (fl & 8) { dd = r32(dv, p); p += 4; } if (fl & 0x10) { ds = r32(dv, p); p += 4; } }
+          if (t3 === "tfdt") bdt = a[b3] === 1 ? r64(dv, b3 + 4) : r32(dv, b3 + 4);
+          if (t3 === "trun") tru = b3; });
+        const h = s.tr[tid];
+        if (tru === null || (h ? (h === "vide") !== video : s.vid !== video)) return;
+        const v = a[tru], fl = (a[tru + 1] << 16) | (a[tru + 2] << 8) | a[tru + 3], n = r32(dv, tru + 4);
+        let p = tru + 8, q = null; if (fl & 1) { q = bdo ? null : o + dv.getInt32(p); p += 4; } if (fl & 4) p += 4;
+        if (video && bdt !== null && s.nxt[tid] !== undefined && s.nxt[tid] !== bdt) s.pend = true;
+        let dt = bdt || 0, sd = 0, c0 = null;
+        for (let k = 0; k < n && k < 1024; k++) { let du = dd, sz = ds, cto = 0;
+          if (fl & 0x100) { du = r32(dv, p); p += 4; } if (fl & 0x200) { sz = r32(dv, p); p += 4; } if (fl & 0x400) p += 4;
+          if (fl & 0x800) { cto = v === 1 ? dv.getInt32(p) : r32(dv, p); p += 4; }
+          if (k === 0) c0 = cto;
+          if (video) nv += 1;
+          if (video && (s.pend || nv % KEY_EVERY === 0)) { s.pend = false;
+            const kk = q !== null && sz ? vclKey(a, dv, q, Math.min(q + sz, a.length), s.hevc) : [null, null, 0];
+            (r.key || (r.key = [])).push([tid, dt, cto, kk[0], kk[1], kk[2]]); }
+          dt += du; sd += du; if (q !== null) q += sz; }
+        if (bdt !== null) s.nxt[tid] = bdt + sd;
+        r.v.push([tid, bdt, c0, n, sd]); }); }); };
+  const wrap = (proto, name, before, after) => {
+    const orig = proto && proto[name];
+    if (typeof orig !== "function") return;
+    proto[name] = function (...a) {
+      if (before) timed(() => before(this, a));
+      const ret = orig.apply(this, a);
+      if (after) timed(() => after(this, a, ret));
+      return ret;
+    };
+  };
+  if (typeof MediaSource !== "undefined") wrap(MediaSource.prototype, "addSourceBuffer", null, (ms_, a, sb) => {
+    if (first === null) first = { t: performance.now(), mime: String(a[0]).slice(0, 160) };
+    kind(S(sb), a[0]); push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) }, true);
+    if (K.end) sb.addEventListener("updateend", () => timed(() => { const b = sb.buffered, n = b.length, br = [];
+      for (let i = 0; i < Math.min(n, 8); i++) br.push([b.start(i), b.end(i)]); push({ op: "end", sb: id(sb), br, nr: n }); })); });
+  if (typeof SourceBuffer !== "undefined") {
+    const P = SourceBuffer.prototype;
+    wrap(P, "appendBuffer", (sb, a) => { const b = u8(a[0]); if (!b || b.length < 8) return; const s = S(sb);
+      const dv = new DataView(b.buffer, b.byteOffset, b.byteLength); let moov = null, moof = false;
+      boxes(b, dv, 0, b.length, (t, o, bb, e) => { if (t === "moov") moov = [bb, e]; if (t === "moof") moof = true; });
+      if (moov) { const tr = init(b, dv, moov[0], moov[1]); for (const x of tr) if (x[0] !== null) s.tr[x[0]] = x[2];
+        s.pend = true; push({ op: "init", sb: id(sb), bytes: b.length, tr }, true); }
+      if (!moof || !on()) return;
+      if (s.vid && K.app) { const r = { op: "app", sb: id(sb), bytes: b.length, tso: sb.timestampOffset, v: [] }; frag(b, dv, s, r, true); push(r); }
+      if (K.aapp) { const r = { op: "aapp", sb: id(sb), bytes: b.length, tso: sb.timestampOffset, v: [] }; frag(b, dv, s, r, false);
+        if (r.v.length) push(r); } });
+    wrap(P, "remove", (sb, a) => push({ op: "rm", sb: id(sb), s: a[0], e: a[1] }, true));
+    wrap(P, "abort", (sb) => { S(sb).pend = true; push({ op: "abort", sb: id(sb), tso: sb.timestampOffset }, true); });
+    wrap(P, "changeType", (sb, a) => { kind(S(sb), a[0]); push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) }, true); });
+    const d = Object.getOwnPropertyDescriptor(P, "timestampOffset");
+    if (d && d.set && d.get) Object.defineProperty(P, "timestampOffset", { configurable: true, enumerable: d.enumerable, get: d.get,
+      set(v) { timed(() => { S(this).pend = true; push({ op: "tso", sb: id(this), v, was: d.get.call(this) }, true); }); d.set.call(this, v); } });
+  }
+  self.__lvqoeAnchorTake = () => { const b = recs; recs = [];
+    return JSON.stringify({ recs: b, over, inst, first, ms: Math.round(ms * 10) / 10, nv }); };
+  return "ok";
+})()"""
+
+
+def worker_anchor_js(block_s: int) -> str:
+    return (WORKER_ANCHOR_JS.replace("__BLOCK_S__", str(int(block_s))).replace("__MAX__", str(FRAME_LOG_MSE_MAX))
+            .replace("__KEY_EVERY__", str(WORKER_ANCHOR_KEY_EVERY))
+            .replace("__KINDS__", json.dumps({k: 1 for k in WORKER_ANCHOR_KINDS}, sort_keys=True)))
 
 
 def frame_log_arm(block_s: int, now_s: float | None = None) -> bool:
@@ -1862,9 +2049,16 @@ def _write_durable(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def _ext_export_record(session_dir: Path, **rec) -> None:
+def _ext_export_record(session_dir: Path, t0: float | None = None, **rec) -> None:
     """levi 09:23 (F1): meta.ext_export on every exit of the export, success too, so an absent value never means
-    unknown; exp.py copies the raw extension storage before the clone goes when ok is not true."""
+    unknown; exp.py copies the raw extension storage before the clone goes when ok is not true. levi 14:51 (brad's B2):
+    dur_ms (wall, the export call's start to this record) and timeout_s (CDP_CALL_TIMEOUT_S: the export has no total
+    timeout; each of its CDP calls waits at most this long), record only, in their own try (absent on an error)."""
+    try:                                         # its own try: a timing fault never costs the record itself
+        if t0 is not None:
+            rec = {**rec, "dur_ms": round((time.time() - t0) * 1000, 1), "timeout_s": CDP_CALL_TIMEOUT_S}
+    except Exception:
+        pass
     try:
         import session_meta
         session_meta.write(session_dir, ext_export=rec)
@@ -1882,6 +2076,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
     durably BEFORE the storage clear; an exception or a full disk on the way leaves storage uncleared (the start path
     of the next session clears it, so the record is lost only if nothing reads it first, never by our own clear).
     """
+    t0 = time.time()
     try:
         with urllib.request.urlopen(f"{CDP_BASE}/json", timeout=5) as r:
             targets = json.loads(r.read())
@@ -1889,7 +2084,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         sw, tmp_tab = _ext_page()
         if sw is None:
             print("[browser] No extension context found (service worker idle and no extension page)", flush=True)
-            _ext_export_record(session_dir, ok=False, reason="no_ext_context")
+            _ext_export_record(session_dir, t0, ok=False, reason="no_ext_context")
             return False
 
         events_json = sw.eval(
@@ -1953,7 +2148,7 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         if not events:
             print("[browser] Extension storage empty — no QoE events collected", flush=True)
             clear_storage()
-            _ext_export_record(session_dir, ok=True, events=0)
+            _ext_export_record(session_dir, t0, ok=True, events=0)
             return False
 
         # v2 (LVQoE t35): new columns appended after the v1 ones (additive; v1 readers keep working)
@@ -1978,12 +2173,12 @@ def _export_via_service_worker(session_dir: Path) -> bool:
         print("[browser] labels.csv written before storage clear", flush=True)
         clear_storage()
         print("[browser] Extension storage cleared after export", flush=True)
-        _ext_export_record(session_dir, ok=True, events=len(events))
+        _ext_export_record(session_dir, t0, ok=True, events=len(events))
         return True
 
     except Exception as exc:
         print(f"[browser] Extension CSV export error: {exc}", flush=True)
-        _ext_export_record(session_dir, ok=False, error=repr(exc)[:200])
+        _ext_export_record(session_dir, t0, ok=False, error=repr(exc)[:200])
         return False
 
 
@@ -3083,6 +3278,211 @@ class MasterListener:
         except Exception as exc:
             self.error = repr(exc)
         finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+
+class WorkerAnchor:
+    """t100 R1 (tw, tt; frame log enabled only): a CDP client on the session page that auto-attaches to its dedicated
+    workers only (WORKER_ANCHOR_ATTACH's filter: frames, service and shared workers are never attached, so never paused),
+    installs worker_anchor_js in each before it runs and resumes it, then about every WORKER_ANCHOR_DRAIN_S drains each
+    live worker's batch and posts it into the page as the "lvqoe-mse" message (content.js: frames k:"mse"), every record
+    tagged with its worker's index wi. levi's hard requirement: a worker is never left paused. The resume is sent in a
+    finally, in the same call as the install and never after a reply (the install itself is cut at
+    WORKER_ANCHOR_EVAL_TIMEOUT_MS by Chrome), whatever the install did. record() is meta frame_log.worker_anchor: the
+    coverage per worker (target, url kind, attach time, install result, resume latency, detach), the relay counts, and
+    per record kind its count and JSON bytes (levi 14:35: the cost of record is measured)."""
+
+    def __init__(self, ws_url: str, block_s: int):
+        self.ws_url, self.block_s = ws_url, block_s
+        self.js = worker_anchor_js(block_s)
+        self.workers: list[dict] = []
+        self.workers_overflow = 0
+        self._live: dict[str, dict] = {}           # sessionId -> its worker record
+        self._pending: dict[int, tuple] = {}       # command id -> (kind, sessionId, n)
+        self.armed = threading.Event()               # the auto-attach call answered without error
+        self._ready = threading.Event()              # ... or failed: start() stops waiting either way
+        self.armed_error = None
+        self._by_sid: dict[str, dict] = {}         # every attached worker's record, detached ones too (late replies)
+        self.batches = self.recs = self.post_errors = self.post_lost = self.take_errors = 0
+        self.kinds: dict[str, list[int]] = {}      # op -> [records, JSON bytes]
+        self.error: str | None = None
+        self.final_drain: dict | None = None
+        self._stop = threading.Event()
+        self._t: threading.Thread | None = None
+        self._last_take = 0.0
+
+    def start(self, wait_s: float = 3.0) -> "WorkerAnchor":
+        """The listener thread; returns once the auto-attach is armed (or wait_s passed: recorded, never an abort)."""
+        self._t = threading.Thread(target=self._run, daemon=True, name="worker-anchor")
+        self._t.start()
+        self._ready.wait(wait_s)
+        return self
+
+    def stop(self, wait_s: float = 4.0) -> None:
+        """A last drain of every live worker, posted before the session's final flush; then the thread ends."""
+        self._stop.set()
+        if self._t is not None:
+            self._t.join(timeout=wait_s)
+
+    def handle(self, msg: dict, send, now: float | None = None) -> None:
+        """One CDP message; send(method, params, session_id) -> the command id."""
+        now = time.time() if now is None else now
+        m, prm = msg.get("method"), msg.get("params") or {}
+        if m == "Target.attachedToTarget":
+            self._attached(prm, send, now)
+        elif m == "Target.detachedFromTarget":
+            w = self._live.pop(prm.get("sessionId"), None)
+            if w is not None:
+                w["detached"] = round(now, 3)
+        elif msg.get("id") in self._pending:
+            self._reply(msg, send, now)
+
+    def _attached(self, prm: dict, send, now: float) -> None:
+        sid, info = prm.get("sessionId"), prm.get("targetInfo") or {}
+        url = info.get("url") or ""
+        w = {"wi": len(self.workers) + self.workers_overflow, "target": info.get("targetId"), "type": info.get("type"),
+             "url_kind": url.split(":", 1)[0] if ":" in url else (url or None), "t": round(now, 3),
+             "waiting": prm.get("waitingForDebugger"), "wrap": None, "recs": 0, "over": 0}
+        if len(self.workers) < WATCH_LOG_MAX:
+            self.workers.append(w)
+        else:
+            self.workers_overflow += 1
+        self._by_sid[sid] = w
+        try:
+            if info.get("type") == "worker":       # the filter admits dedicated workers only; anything else just resumes
+                self._live[sid] = w
+                self._pending[send("Runtime.evaluate", {"expression": self.js, "returnByValue": True,
+                                                        "timeout": WORKER_ANCHOR_EVAL_TIMEOUT_MS}, sid)] = ("wrap", sid, 0)
+        except Exception as exc:
+            w["wrap_error"] = repr(exc)[:200]
+        finally:
+            try:
+                self._pending[send("Runtime.runIfWaitingForDebugger", {}, sid)] = ("run", sid, 0)
+                w["resume_sent_ms"] = round((time.time() - now) * 1000, 2)
+            except Exception as exc:
+                w["resume_error"] = repr(exc)[:200]
+
+    def _reply(self, msg: dict, send, now: float) -> None:
+        kind, sid, n = self._pending.pop(msg["id"])
+        res = msg.get("result") or {}
+        val = (res.get("result") or {}).get("value")
+        err = msg.get("error") or res.get("exceptionDetails")
+        w = self._by_sid.get(sid)
+        if kind == "wrap" and w is not None:
+            w["wrap"] = val if not err else None
+            if err:
+                w["wrap_error"] = json.dumps(err, default=str)[:200]
+        elif kind == "run" and w is not None:
+            w["resume_ms"] = round((now - w["t"]) * 1000, 1)
+            if msg.get("error"):
+                w["resume_error"] = json.dumps(msg["error"], default=str)[:200]
+        elif kind == "take":
+            if err or not isinstance(val, str):
+                self.take_errors += int(bool(err))
+                return
+            self._relay(json.loads(val), w, send)
+        elif kind == "post":
+            if err:
+                self.post_errors += 1
+                self.post_lost += n
+            else:
+                self.batches += 1
+                self.recs += n
+
+    def _relay(self, batch: dict, w: dict | None, send) -> None:
+        recs = batch.get("recs") or []
+        wi = w["wi"] if w is not None else None
+        for r in recs:
+            r["wi"] = wi
+            k = self.kinds.setdefault(str(r.get("op")), [0, 0])
+            k[0] += 1
+            k[1] += len(json.dumps(r, separators=(",", ":")))
+        if w is not None:
+            w["recs"] += len(recs)
+            w["over"] = batch.get("over") or 0
+            w["ms"] = batch.get("ms")
+            w["video_samples"] = batch.get("nv")
+            if not recs and w.get("posted_inst"):
+                return
+            w["posted_inst"] = True               # the first post goes out even empty: inst / first reach content.js
+        msg = {"source": "lvqoe-mse", "recs": recs, "over": batch.get("over") or 0, "inst": batch.get("inst"),
+               "first": batch.get("first"), "wi": wi}
+        self._pending[send("Runtime.evaluate", {"expression": "window.postMessage(%s, '*'); true"
+                                                % json.dumps(msg, separators=(",", ":"))}, None)] = ("post", None, len(recs))
+
+    def take(self, send) -> None:
+        """Ask every live worker for its batch (the reply is relayed in _reply)."""
+        for sid in list(self._live):
+            self._pending[send("Runtime.evaluate", {"expression": "self.__lvqoeAnchorTake ? self.__lvqoeAnchorTake() "
+                                                                  ": null", "returnByValue": True}, sid)] = ("take", sid, 0)
+
+    def record(self) -> dict:
+        workers = [{k: v for k, v in w.items() if k != "posted_inst"} for w in self.workers]
+        return {"armed": self.armed.is_set(), "armed_error": self.armed_error, "attach": WORKER_ANCHOR_ATTACH,
+                "kinds_on": list(WORKER_ANCHOR_KINDS), "key_every": WORKER_ANCHOR_KEY_EVERY,
+                "eval_timeout_ms": WORKER_ANCHOR_EVAL_TIMEOUT_MS, "workers": workers,
+                "workers_overflow": self.workers_overflow, "batches": self.batches, "recs": self.recs,
+                "post_errors": self.post_errors, "post_lost_recs": self.post_lost, "take_errors": self.take_errors,
+                "kinds": {k: {"n": v[0], "bytes": v[1]} for k, v in sorted(self.kinds.items())},
+                "worker_over": sum(w.get("over") or 0 for w in self.workers), "final_drain": self.final_drain,
+                "error": self.error}
+
+    def _run(self) -> None:
+        try:
+            ws = websocket.WebSocket()
+            ws.settimeout(0.2)
+            ws.connect(self.ws_url)
+        except Exception as exc:
+            self.error = self.armed_error = repr(exc)[:200]
+            self._ready.set()
+            return
+        seq = 0
+
+        def send(method: str, params: dict, session_id: str | None = None) -> int:
+            nonlocal seq
+            seq += 1
+            ws.send(json.dumps({"id": seq, "method": method, "params": params,
+                                **({"sessionId": session_id} if session_id else {})}))
+            return seq
+
+        def pump(until: float) -> None:
+            while time.time() < until:
+                try:
+                    msg = json.loads(ws.recv())
+                except websocket.WebSocketTimeoutException:
+                    return
+                self.handle(msg, send)
+        try:
+            arm_id = send("Target.setAutoAttach", WORKER_ANCHOR_ATTACH)
+            while not self._stop.is_set():
+                try:
+                    msg = json.loads(ws.recv())
+                except websocket.WebSocketTimeoutException:
+                    msg = None
+                if msg is not None:
+                    if msg.get("id") == arm_id:
+                        if msg.get("error"):
+                            self.armed_error = json.dumps(msg["error"])[:200]
+                        else:
+                            self.armed.set()
+                        self._ready.set()
+                    self.handle(msg, send)
+                if time.time() - self._last_take >= WORKER_ANCHOR_DRAIN_S:
+                    self._last_take = time.time()
+                    self.take(send)
+            t0 = time.time()                       # the last drain: take, relay, the posts' replies (<= 3 s)
+            self.take(send)
+            while time.time() - t0 < 3.0 and any(k in ("take", "post") for k, _, _ in self._pending.values()):
+                pump(time.time() + 0.2)
+            self.final_drain = {"s": round(time.time() - t0, 3),
+                                "pending": sum(1 for k, _, _ in self._pending.values() if k in ("take", "post"))}
+        except Exception as exc:
+            self.error = repr(exc)[:200]
+        finally:
+            self._ready.set()
             try:
                 ws.close()
             except Exception:
@@ -4735,6 +5135,7 @@ class BrowserSession:
         self.decode_page: dict | None = None      # the page's HEVC probe (MSE / WebCodecs hvc1)
         self._master: MasterListener | None = None   # twitch: the master playlist listener
         self._tt_room: TtRoomListener | None = None  # tiktok: the room/enter listener (meta.json tt_room_enter)
+        self._anchor: WorkerAnchor | None = None     # t100 R1: tw / tt worker MSE anchor (frame log enabled only)
         self.t2_skipped: list[dict] = []            # stuck rule: T2_S frozen with only the fallback rung (no T2)
         self.player_ladder: dict | None = None      # twitch: the quality menu's options when the master was not read
         self.shot_origin: dict | None = None        # the X11 shot origin calibration (t37; calibrate_shot_origin)
@@ -4924,6 +5325,7 @@ class BrowserSession:
         if self.platform == "tiktok":            # item #9: before any room navigation, so the first room/enter is read
             self._tt_room = TtRoomListener(self._ws_url).start()
         self._mse_wrap_install()                 # t93 rows 9 / 20, before the join (yt, frame log enabled only)
+        self._worker_anchor_install()            # t100 R1, before the join (tw / tt, frame log enabled only)
 
     def _mse_wrap_install(self) -> None:
         """t93 rows 9 / 20: Page enabled and MSE_WRAP_JS registered on the session page, only when the frame log is
@@ -4934,11 +5336,37 @@ class BrowserSession:
         try:
             self._page.call("Page.enable")
             r = self._page.call("Page.addScriptToEvaluateOnNewDocument", {
-                "source": MSE_WRAP_JS % {"block_s": self.frame_log["block_s"], "max": FRAME_LOG_MSE_MAX}})
+                "source": MSE_WRAP_JS % {"block_s": self.frame_log["block_s"], "max": FRAME_LOG_MSE_MAX,
+                                         "r2": int(MSE_WRAP_R2)}})
             self.frame_log["mse_wrap"].update({"installed": bool(r.get("identifier")), "id": r.get("identifier"),
                                                "installed_at": round(time.time(), 3)})
         except Exception as exc:
             self.frame_log["mse_wrap"]["error"] = repr(exc)[:200]
+
+    def _worker_anchor_install(self) -> None:
+        """t100 R1: WorkerAnchor on the session page, armed before the join navigation, only when the frame log is
+        enabled on tw / tt; otherwise nothing is attached (FRAME_LOG unset: what 971e444e sends). Never an abort: a
+        failure is recorded in meta frame_log.worker_anchor."""
+        if not (self.frame_log and self.frame_log.get("enabled") and self.platform in WORKER_ANCHOR_PLATFORMS):
+            return
+        t0 = time.time()
+        try:
+            self._anchor = WorkerAnchor(self._ws_url, self.frame_log["block_s"]).start()
+            self.frame_log["worker_anchor"] = {"installed_at": round(t0, 3), "armed_s": round(time.time() - t0, 3),
+                                               "armed": self._anchor.armed.is_set(), "armed_error": self._anchor.armed_error}
+        except Exception as exc:
+            self.frame_log["worker_anchor"] = {"installed_at": round(t0, 3), "error": repr(exc)[:200]}
+
+    def _worker_anchor_stop(self) -> None:
+        """The anchor's last drain, posted before the final flush; its record into meta frame_log.worker_anchor."""
+        if self._anchor is None:
+            return
+        a, self._anchor = self._anchor, None
+        try:
+            a.stop()
+            self.frame_log["worker_anchor"] = {**(self.frame_log.get("worker_anchor") or {}), **a.record()}
+        except Exception as exc:
+            (self.frame_log.setdefault("worker_anchor", {}))["stop_error"] = repr(exc)[:200]
 
     def _mse_wrap_settle_once(self, where: str) -> None:
         """levi 00:06 (b): Page is disabled on every exit of the join (its end, an exception, a timeout: start()'s
@@ -6034,6 +6462,7 @@ class BrowserSession:
             self.fs_keeper = {**(self.fs_keeper or {}), **k.record()}
         self._clock_sample("stop")                 # v3 A11: the last offset, before the tab closes
         self._mse_wrap_settle_once("stop")        # levi 00:06 (b): the join never ran (no-op when it settled)
+        self._worker_anchor_stop()                 # t100 R1: its last batch posted before the final flush
         # Read QoE events from the extension service worker before closing the tab
         if self._session_dir:
             _final_flush(self._page)
