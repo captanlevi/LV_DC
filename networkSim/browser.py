@@ -2093,7 +2093,7 @@ def worker_anchor_js(block_s: int, proxy: bool = False) -> str:
 # cycle[the session name's number % its length]; on a counted run exp.py refuses it before any session dir, and
 # anchor_arm() keeps the constant whatever the env says. levi 00144 A4: a freeze flips one constant (frozen: full / proxy /
 # off; b1 is the dry's mechanism arm only), accepted on G0 equality with the dry's override of the same arm.
-TT_WORKER_ANCHOR = "full"
+TT_WORKER_ANCHOR = "proxy"     # frozen (levi 00144 A4): the TTAB pick (dry_copy/v4_final_20261031)
 TW_WORKER_ANCHOR = "full"
 ANCHOR_ARMS = ("full", "off", "b1", "proxy")
 ANCHOR_AB_ENV = {"tiktok": "LVDC_ANCHOR_AB_TT", "twitch": "LVDC_ANCHOR_AB_TW"}

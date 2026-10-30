@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tt anchor A/B (levi 00144 A1-A4; supervisor 00:36 b3): the worker anchor's arm selector and the proxy install.
 
-  - the arm: the constant by default (TT_WORKER_ANCHOR / TW_WORKER_ANCHOR = cbe3ce9d's "full"); the dry cycle
+  - the arm: the constant by default (TT_WORKER_ANCHOR = "proxy", frozen from the TTAB pick; TW_WORKER_ANCHOR = cbe3ce9d's "full"); the dry cycle
     (LVDC_ANCHOR_AB_TT / _TW) gives cycle[session number % length], recorded (meta ab_arm); a counted session keeps the
     constant whatever the env says (mutant: an override honoured in a counted run); anchor_ab_refusal refuses the env on a
     counted run and an unknown arm; exp.py / orchestrate.py call it before any session dir;
@@ -121,7 +121,8 @@ def test_full_is_cbe3ce9d_and_proxy_edits_apply_once():
 def test_arm_selection_and_counted_mutant():
     keep = B.TT_WORKER_ANCHOR
     try:
-        assert B.anchor_arm("tiktok", {}, "ti_100183", False) == {"arm": "full", "source": "constant"}
+        assert B.TT_WORKER_ANCHOR == "proxy"                        # the freeze (levi 00144 A4): one constant
+        assert B.anchor_arm("tiktok", {}, "ti_100183", False) == {"arm": "proxy", "source": "constant"}
         assert B.anchor_arm("twitch", {}, "tw_100183", False) == {"arm": "full", "source": "constant"}
         env = {"LVDC_ANCHOR_AB_TT": "off,proxy,b1,full,off,proxy,b1,full,off,proxy,b1"}
         cyc = env["LVDC_ANCHOR_AB_TT"].split(",")
@@ -131,10 +132,10 @@ def test_arm_selection_and_counted_mutant():
                                                                    "env": env["LVDC_ANCHOR_AB_TT"], "n": 100183}
         assert B.anchor_arm("twitch", env, "tw_100183", False)["source"] == "constant"     # tt's env is tt's only
         # a counted session keeps the constant, the env named; the mutant (the override honoured) fails here
-        assert B.anchor_arm("tiktok", {"LVDC_ANCHOR_AB_TT": "off"}, "ti_7", True) == {"arm": "full", "source": "constant",
+        assert B.anchor_arm("tiktok", {"LVDC_ANCHOR_AB_TT": "off"}, "ti_7", True) == {"arm": "proxy", "source": "constant",
                                                                                       "env_ignored": "off"}
-        B.TT_WORKER_ANCHOR = "proxy"
-        assert B.anchor_arm("tiktok", {}, "ti_7", True) == {"arm": "proxy", "source": "constant"}
+        B.TT_WORKER_ANCHOR = "full"
+        assert B.anchor_arm("tiktok", {}, "ti_7", True) == {"arm": "full", "source": "constant"}
     finally:
         B.TT_WORKER_ANCHOR = keep
     assert B.anchor_ab_refusal({}, True) is None and B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off,full"}, False) is None
