@@ -2126,10 +2126,16 @@ ANCHOR_TAKE_FN = "function () { return this(); }"
 
 
 def anchor_ab_refusal(env, counted: bool) -> str | None:
-    """A dry-only A/B cycle on a counted run, or an arm outside ANCHOR_ARMS: the reason; else None."""
+    """A dry-only A/B cycle on a counted run, an A/B cycle with the frame log off (levi amendment 2: TTAB1 ran every arm
+    as off, the install's gate needs the frame log), or an arm outside ANCHOR_ARMS: the reason; else None."""
     set_ = sorted(v for v in ANCHOR_AB_ENV.values() if env.get(v))
     if counted and set_:
         return f"{', '.join(set_)} on a counted run (LVDC_TRIO_RECORD=1 or a record-marker root): the anchor A/B is dry only"
+    fl = frame_log_config(env.get(FRAME_LOG_ENV), None, False, env.get("LVQOE_INSTRUMENTS", "1") != "0") if set_ else None
+    if set_ and not (fl or {}).get("enabled"):
+        return (f"{', '.join(set_)} with the frame log off ({FRAME_LOG_ENV}={env.get(FRAME_LOG_ENV)!r}"
+                f"{': ' + fl['reason'] if fl and fl.get('reason') else ''}): the anchor installs only with the frame log, "
+                f"so every arm would run as off")
     for v in set_:
         bad = [a for a in env[v].split(",") if a.strip() not in ANCHOR_ARMS]
         if bad:
@@ -5760,6 +5766,9 @@ class BrowserSession:
         enabled on tw / tt; otherwise nothing is attached (FRAME_LOG unset: what 971e444e sends). Never an abort: a
         failure is recorded in meta frame_log.worker_anchor."""
         if not (self.frame_log and self.frame_log.get("enabled") and self.platform in WORKER_ANCHOR_PLATFORMS):
+            if getattr(self, "ab_arm", None) is not None:      # levi amendment 2: never an arm recorded as run, unrun
+                self.ab_arm.update(ran=False, why="frame log off" if not self.frame_log else
+                                   f"frame log not enabled: {self.frame_log.get('reason')}")
             return
         arm = (getattr(self, "ab_arm", None) or {}).get("arm", "full")
         if arm == "off":                          # levi 00144: nothing attached (the v3-equivalent tt path)
