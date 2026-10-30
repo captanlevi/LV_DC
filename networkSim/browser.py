@@ -1946,6 +1946,7 @@ WORKER_ANCHOR_KEY_EVERY = 30
 # here is never recorded. Frozen with the tip and recorded in meta frame_log.worker_anchor.kinds.
 WORKER_ANCHOR_KINDS = ("app", "aapp", "end")
 WORKER_ANCHOR_DRAIN_S = 1.0
+WORKER_ANCHOR_DRAIN_AT = True     # t102 #8 (levi 01:06 / 00402): meta frame_log.worker_anchor.final_drain.at; off = 7809b21c's record
 WORKER_ANCHOR_EVAL_TIMEOUT_MS = 50           # levi: the wrap's install is cut at 50 ms; the resume is sent regardless
 WORKER_ANCHOR_ATTACH = {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True,
                         "filter": [{"type": "worker", "exclude": False}, {"exclude": True}]}
@@ -3716,6 +3717,8 @@ class WorkerAnchor:
                 pump(time.time() + 0.2)
             self.final_drain = {"s": round(time.time() - t0, 3),
                                 "pending": sum(1 for k, _, _ in self._pending.values() if k in ("take", "post"))}
+            if WORKER_ANCHOR_DRAIN_AT:            # t102 #8 (levi 01:06): the drain's end, epoch s (the host clock)
+                self.final_drain["at"] = round(time.time(), 3)
         except Exception as exc:
             self.error = repr(exc)[:200]
         finally:

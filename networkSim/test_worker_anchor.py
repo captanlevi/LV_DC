@@ -25,6 +25,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 
@@ -451,6 +452,34 @@ def test_relay_detach_and_record():
     assert "posted_inst" not in rec["workers"][0]
 
 
+def test_final_drain_at():
+    """t102 #8 (levi 01:06 / 00402): the last drain's record carries at (epoch s at its end) with the constant on, and is
+    7809b21c's {s, pending} with it off."""
+    import websocket as WS
+
+    class FakeWS:
+        def settimeout(self, t): pass
+        def connect(self, url): pass
+        def send(self, m): pass
+        def recv(self): raise WS.WebSocketTimeoutException()
+        def close(self): pass
+    keep = (getattr(WS, "WebSocket", None), B.WORKER_ANCHOR_DRAIN_AT)
+    try:
+        WS.WebSocket = FakeWS
+        for on in (True, False):
+            B.WORKER_ANCHOR_DRAIN_AT = on
+            a = B.WorkerAnchor("ws://x", 0)
+            a._stop.set()
+            t0 = time.time()
+            a._run()
+            fd = a.record()["final_drain"]
+            assert set(fd) == ({"s", "pending", "at"} if on else {"s", "pending"}), fd
+            if on:
+                assert t0 - 1e-3 <= fd["at"] <= time.time() + 1e-3 and fd["pending"] == 0, (t0, fd)
+    finally:
+        WS.WebSocket, B.WORKER_ANCHOR_DRAIN_AT = keep
+
+
 def test_install_gating():
     calls = []
 
@@ -492,7 +521,7 @@ def main() -> int:
               test_worker_off_block_keeps_state_and_cap_counts, test_attach_filter_and_resume_always,
               test_relay_detach_and_record, test_install_gating, test_ext_export_record_adds_only_dur_and_timeout,
               test_trex_default_duration_when_trun_and_tfhd_carry_none, test_every_trun_of_a_traf_in_order,
-              test_updateend_records_tso_and_mode):
+              test_updateend_records_tso_and_mode, test_final_drain_at):
         f()
     print("test_worker_anchor: ok")
     return 0
