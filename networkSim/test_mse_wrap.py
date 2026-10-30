@@ -121,7 +121,8 @@ def test_mse_wrap_transparent_and_recorded():
     assert on_yt["add_same"] and on_yt["append_same"] and on_yt["throw_same"] and on_yt["fault_contained"]
     assert on_yt["n_calls"] == 6
     yrecs = on_yt["posted"][0]["recs"]
-    assert [x for x in yrecs if x["op"] != "ms"] == recs and [x["op"] for x in yrecs][-1] == "ms", yrecs
+    new = lambda x: {k: v for k, v in x.items() if k not in ("mode", "br") and not (x["op"] == "end" and k == "tso")}
+    assert [new(x) for x in yrecs if x["op"] != "ms"] == recs and [x["op"] for x in yrecs][-1] == "ms", yrecs
 
 
 def test_frame_log_arm_epoch():

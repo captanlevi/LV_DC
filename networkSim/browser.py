@@ -1859,6 +1859,7 @@ MSE_WRAP_YT_PARSER = r"""  // t102 rows (3) / (7) + the yt key (levi 22:10; audi
     s.r = null; delete r.p0; };
   const ROW1 = ["cc", "wc", "nb", "b0", "lace", "us"];
   const yt = (sb, a, r) => { const q = performance.now();                 // the parse runs for either row; Row 1's fields
+    try { r.mode = sb.mode; } catch (e) {}                                // t102 #2: the mode in force at the append
     try { feed(sb, a[0], r); if (!WEBM) for (const f of ROW1) delete r[f]; } catch (e) {}   // only with MSE_WRAP_WEBM
     ms += performance.now() - q; };
 """
@@ -1866,7 +1867,8 @@ MSE_WRAP_YT_EDITS = [('  } catch (e) { r.tf = null; r.r2err = 1; } };\n', '  } c
     ('      push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n', '      push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n      W(sb).vid = VWEBM.test(String(a[0]));\n'),
     ('      if (R2) r2(sb, a[0], r);\n', '      if (R2) r2(sb, a[0], r);\n      yt(sb, a, r);\n'),
     ('    wrap(p, "changeType", (sb, a) => push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) }));\n', '    wrap(p, "changeType", (sb, a) => { push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n      const s = W(sb); reset(s, "ct"); s.vid = VWEBM.test(String(a[0])); });\n    wrap(p, "abort", (sb) => reset(W(sb), "abort"));\n'),
-    ('    const batch = recs; recs = [];\n', '    if (recs.length) recs.push({ op: "ms", v: Math.round(ms * 100) / 100, t: performance.now() });   // the wrap\'s own ms so far, as a record (content.js keeps recs only)\n    const batch = recs; recs = [];\n')]
+    ('    const batch = recs; recs = [];\n', '    if (recs.length) recs.push({ op: "ms", v: Math.round(ms * 100) / 100, t: performance.now() });   // the wrap\'s own ms so far, as a record (content.js keeps recs only)\n    const batch = recs; recs = [];\n'),
+    ('  const ended = (sb) => () => { try { const b = sb.buffered, n = b.length;\n    push({ op: "end", sb: id(sb), bend: n ? b.end(n - 1) : null, nr: n }); } catch (e) {} };\n', '  const ended = (sb) => () => { try { const b = sb.buffered, n = b.length;\n    const r = { op: "end", sb: id(sb), bend: n ? b.end(n - 1) : null, nr: n };\n    try { const br = []; for (let i = 0; i < Math.min(n, 8); i++) br.push([b.start(i), b.end(i)]);   // t102 #2: the\n      r.br = br; r.tso = sb.timestampOffset; r.mode = sb.mode; } catch (e) {}    // ranges (<= 8), tso and mode after it\n    push(r); } catch (e) {} };\n')]
 
 
 def _mse_wrap_yt_template() -> str:

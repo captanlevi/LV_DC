@@ -39,8 +39,9 @@ const fs = require("fs"), vm = require("vm");
 const [srcPath, planPath, outPath] = process.argv.slice(2), src = fs.readFileSync(srcPath, "utf8");
 const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
 const posted = [], timers = [], SENT = { ret: 1 };
-class SourceBuffer { constructor() { this.ls = {}; this._tso = 0; this.buffered = { length: 0, end: () => 0 }; }
-  addEventListener(t, f) { (this.ls[t] = this.ls[t] || []).push(f); } }
+class SourceBuffer { constructor() { this.ls = {}; this._tso = 0; this.mode = "segments"; this.n = 0;
+    this.buffered = { get length() { return 0; }, start: () => 0, end: () => 0 }; }
+  addEventListener(t, f) { (this.ls[t] = this.ls[t] || []).push(f); } fire(t) { for (const f of this.ls[t] || []) f(); } }
 Object.defineProperty(SourceBuffer.prototype, "timestampOffset", { configurable: true, get() { return this._tso; }, set(v) { this._tso = v; } });
 let seen = 0;
 SourceBuffer.prototype.appendBuffer = function (b) { seen += b.length; return SENT; };
@@ -59,23 +60,26 @@ for (const ops of plan.runs) {
     else if (op.abort) sb.abort();
     else if (op.ct) sb.changeType(op.ct);
     else if (op.scribble && last) last.fill(0);                       // the page reuses its buffer after the append
+    else if (op.mode) sb.mode = op.mode;                               // t102 #2: a mode change (segments -> sequence)
+    else if (op.tso !== undefined) sb.timestampOffset = op.tso;
+    else if (op.ranges) { const R = op.ranges; sb.buffered = { length: R.length, start: (i) => R[i][0], end: (i) => R[i][1] }; sb.fire("updateend"); }
   }
   const n0 = posted.length; for (const f of timers) f();
   const rs = posted.slice(n0).flatMap((p) => p.recs); msrecs.push(rs.filter((r) => r.op === "ms").length);
-  runs.push(rs.filter((r) => r.op === "app"));
+  runs.push(rs.filter((r) => r.op === "app" || (plan.ends && r.op === "end")));
 }
 fs.writeFileSync(outPath, JSON.stringify({ runs, msrecs, rets, seen, posted_keys: posted.map((p) => Object.keys(p)), ms: posted.map((p) => p.ms) }));
 """
 
 
-def run(src: str, runs: list, now_ms: int = 1_000_000, mime: str = MIME) -> dict:
+def run(src: str, runs: list, now_ms: int = 1_000_000, mime: str = MIME, ends: bool = False) -> dict:
     node = shutil.which("node")
     assert node, "node not found: the WebM wrap test cannot run (install node)"
     with tempfile.TemporaryDirectory() as t:
         h, js, plan, out = (Path(t) / x for x in ("h.js", "w.js", "plan.json", "out.json"))
         h.write_text(HARNESS)
         js.write_text(src)
-        plan.write_text(json.dumps({"now_ms": now_ms, "mime": mime, "runs": runs}))
+        plan.write_text(json.dumps({"now_ms": now_ms, "mime": mime, "runs": runs, "ends": ends}))
         subprocess.run([node, str(h), str(js), str(plan), str(out)], check=True)
         return json.loads(out.read_text())
 
@@ -284,6 +288,24 @@ def test_off_is_7809b21c_and_key_only_and_off_blocks():
         assert B.mse_wrap_js(bs, max_recs=mx, r2=r2, webm=False, ykey=False) == fx % {"block_s": bs, "max": mx, "r2": int(r2)}
 
 
+def test_mode_and_updateend_ranges():
+    """t102 #2 (levi 00141 / 00402): app carries the mode in force; updateend carries the ranges (<= 8), tso and mode in
+    force after the append; a mode change (segments -> sequence) and a tso set are seen on the next records."""
+    s, blocks, tcs = stream(random.Random(7))
+    third = len(s) // 3
+    nine = [[i, i + 0.5] for i in range(9)]
+    plan = [[{"app": s[:third].hex()}, {"ranges": [[0, 1.5]]}, {"mode": "sequence"}, {"tso": -2.5},
+             {"app": s[third:2 * third].hex()}, {"ranges": nine}, {"app": s[2 * third:].hex()}]]
+    rs = run(wrap(), plan, ends=True)["runs"][0]
+    apps, ends = [r for r in rs if r["op"] == "app"], [r for r in rs if r["op"] == "end"]
+    assert [a["mode"] for a in apps] == ["segments", "sequence", "sequence"] and [a["tso"] for a in apps] == [0, -2.5, -2.5]
+    assert ends[0]["br"] == [[0, 1.5]] and ends[0]["mode"] == "segments" and ends[0]["tso"] == 0 and ends[0]["nr"] == 1
+    assert ends[1]["br"] == nine[:8] and ends[1]["nr"] == 9 and ends[1]["mode"] == "sequence" and ends[1]["tso"] == -2.5
+    assert keys_of(apps) == want_keys(blocks)                     # the carry is unaffected by mode / tso changes
+    off = run(B.mse_wrap_js(0, r2=True, webm=False, ykey=False), plan, ends=True)["runs"][0]
+    assert all("mode" not in r and "br" not in r for r in off)    # off: 7809b21c's records
+
+
 def test_mutants_fail():
     """fast gate G1: a dropped carry and a key over the block header (not the payload only) each fail the L1 / twin check."""
     s, blocks, tcs = stream(random.Random(7))
@@ -306,6 +328,7 @@ def main() -> int:
     test_abort_changetype_fault_reset_and_resync_only_at_a_cluster()
     test_a_reused_page_buffer_never_changes_a_carried_key()
     test_off_is_7809b21c_and_key_only_and_off_blocks()
+    test_mode_and_updateend_ranges()
     test_mutants_fail()
     print("test_mse_wrap_webm: ok")
     return 0
