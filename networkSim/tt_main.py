@@ -14,9 +14,10 @@ record() is meta.tt_main_codec; tier_ok() is coverage_report's tt tier rule.
 import json
 from pathlib import Path
 
-# off = 7809b21c (no meta.tt_main_codec; coverage_report's tier_ok reads tt_stream.codec). levi 23:34 (3): ON only with
-# 9 / 9 W1-W3 tt agreeing with the decrypted FLV video-tag codec of the main span's connections.
-TT_MAIN_CODEC = False
+# off = 7809b21c (no meta.tt_main_codec; coverage_report's tier_ok reads tt_stream.codec). levi 23:34 (3): ON with 9 / 9
+# W1-W3 tt agreeing with the decrypted FLV video-tag codec of the main span's connections (halo4 tt_bprime_gt.py
+# 709ca26d2ad6 -> bprime_w1w3_r2.json 731951a41366: 9 / 9 h264, ti_100175's hvc1 -> avc1 changeType at +7.4 s).
+TT_MAIN_CODEC = True
 ENTRY_CODEC = {"hvc1": "hevc", "hev1": "hevc", "avc1": "h264", "avc3": "h264"}
 SWITCHES_KEPT = 50
 
