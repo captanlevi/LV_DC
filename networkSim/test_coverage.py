@@ -176,8 +176,43 @@ def test_select_sessions_of_record():
         assert C.snapshot(d, "twitch", record.is_record)["n_sessions"] == 1 and C.snapshot(d, "twitch")["n_sessions"] == 3
 
 
+def test_tt_tier_off():
+    """levi 06:27 (b): a tt session of the off arm (meta ab_arm) has no on-box codec: tier_ok null (counted in tt_tier,
+    never False / True: its non-STALL minutes count nowhere, its STALL counts), and with TT_TIER_STEERED False (the anchor
+    frozen off) tt's tier classes are unreachable targets, named; STALL stays steered. Mutants: off read as False (the
+    null count drops) or True (its tier minutes count); the tier classes steered under off."""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        allc = STALL3 + [(c, 150) for c in C.CLASSES["tiktok"] if c != "STALL"]
+        session(d, "tiktok", "ti_1", allc, matrix="TT-M", codec="hevc")
+        sd = session(d, "tiktok", "ti_2", allc, matrix="TT-M")
+        m = json.loads((sd / "meta.json").read_text())
+        m["ab_arm"] = {"arm": "off", "source": "constant"}
+        m["tt_main_codec"] = {"codec": None, "why": "no worker video init / changeType rows"}
+        (sd / "meta.json").write_text(json.dumps(m))
+        snap = C.snapshot(d, "tiktok")
+        assert snap["tt_tier"] == {"tier_ok_null": 1, "why": "off: no on-box codec", "steered": C.TT_TIER_STEERED}, snap
+        assert snap["tt_codec_sessions"] == {"hevc": 1, "none (off)": 1}, snap
+        assert snap["classes"]["Q_720p"]["sessions_ge_min"] == 1 and snap["classes"]["STALL"]["sessions_ge_min"] == 2
+        assert snap["per_matrix"]["TT-M"]["tier_sessions"] == 1 and snap["per_matrix"]["TT-M"]["sessions"] == 2
+        assert C.TT_TIER_STEERED is False
+        tiers = [c for c in C.CLASSES["tiktok"] if c != "STALL"]
+        need = dict(snap, classes={c: {"sessions_ge_min": 0, "minutes": 0, "criterion": ""} for c in snap["classes"]})
+        r = C.pick_matrix(need, BASE["tiktok"])
+        assert set(tiers) <= set(r["unreachable_targets"]) and r["target"]["key"] not in tiers, r       # STALL / entry
+        assert sorted(r["tt_tier_unsteered"]["unreachable_tt_tier"]) == sorted(tiers), r
+        assert {d["key"] for d in r["deficits"]} >= {"STALL", *tiers}           # the deficits stay reported
+        keep, C.TT_TIER_STEERED = C.TT_TIER_STEERED, True
+        try:
+            r = C.pick_matrix(need, BASE["tiktok"])
+            assert "tt_tier_unsteered" not in r and not set(tiers) & set(r["unreachable_targets"]), r
+        finally:
+            C.TT_TIER_STEERED = keep
+
+
 def main():
     test_am15_bands()
+    test_tt_tier_off()
     test_select_sessions_of_record()
     test_am15_initial_state_and_low_yield()
     # class rule = LVQoE quality_to_video_state on min(w, h)
@@ -323,7 +358,11 @@ def main():
         assert snap["tt_entries_by_state"][states[0]] == 12 and snap["tt_entries_by_state"][states[1]] == 11, snap
         assert all(snap["tt_entries_by_state"][s] == 10 for s in states[2:]), snap
         assert snap["tt_codec_sessions"] == {"h264": 5}
-        r = C.pick_matrix(snap, BASE["tiktok"])
+        keep, C.TT_TIER_STEERED = C.TT_TIER_STEERED, True     # the steered rule (anchor full / proxy); off: test_tt_tier_off
+        try:
+            r = C.pick_matrix(snap, BASE["tiktok"])
+        finally:
+            C.TT_TIER_STEERED = keep
         # no HEVC sessions on any matrix: the tier classes tie at the top share; the target is the seeded order's first
         # (levi 2026-10-20), recorded
         tie = r["target_tie"]

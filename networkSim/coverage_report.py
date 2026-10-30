@@ -126,6 +126,14 @@ ABR_ONLY = (("youtube", "Q_240p"), ("youtube", "Q_480p"))
 ABR_ONLY_RULE = ("restart prereg §2b: yt Q_240p, yt Q_480p are ABR-only (the top tier of no state, or of one): "
                  "unreachable targets, never steered; a floor not met reads insufficient. tw Q_1080p left the list at "
                  "the 10-22 tip (prereg d32a48ce item 4: TW-H's state 11 reaches it)")
+# levi 06:27 (b), the tt anchor frozen off (browser.TT_WORKER_ANCHOR; test_anchor_ab ties the two): no on-box tt codec
+# (no worker rows; tt_stream deferred to halo4; media_decoders stale, ruling (B)), so an off session's tier_ok is None, never
+# False or True (an assumed codec the picks would consume), its non-STALL minutes count nowhere, and tt's tier classes
+# leave steering (unreachable targets, named); STALL and the entry states stay steered. (c) later: halo4's write-back.
+TT_TIER_STEERED = False
+TT_TIER_NULL_WHY = "off: no on-box codec"
+TT_TIER_RULE = ("levi 06:27 (b): tt anchor off, no on-box codec: tier_ok null, tt tier classes unsteered (tier dims on "
+                "the unsteered draw); STALL and entry states steered")
 GEOMETRY_FOR_CLASS = {("youtube", "Q_1080p"): "fullscreen:1920x1080"}   # am. 15 (3) / am. 2: the only yt geometry for it
 GEOMETRY_UNCOUPLED = "restart §7: geometry drawn per session (geometry.draw_geometry), never forced by the target"
 SUMMARY_FILE = "_summaries/coverage_last.json"
@@ -349,33 +357,37 @@ def snapshot(data_dir: Path, platform: str, select=None) -> dict:
     entries, codecs = collections.Counter(), collections.Counter()
     pm = collections.defaultdict(lambda: {"n": 0, "n_tier": 0, "min": collections.Counter(), "stall": 0.0, "lab": 0.0,
                                           "onsets": 0, "tg_n": collections.Counter(), "tg_min": collections.Counter()})
-    onsets, run_s = 0, []
+    onsets, run_s, tier_null = 0, [], 0
     sessions = accepted_sessions(data_dir, platform, select)
     for sd in sessions:
         meta = _load(sd / "meta.json")
         sc = session_classes(sd)
         tier_ok = True
-        if platform == "tiktok":
+        if platform == "tiktok" and (meta.get("ab_arm") or {}).get("arm") == "off":
+            codecs["none (off)"] += 1
+            tier_ok = None                               # levi 06:27 (b): no on-box codec, never False
+        elif platform == "tiktok":
             codec = ((meta.get("tt_main_codec") if tt_main.TT_MAIN_CODEC else meta.get("tt_stream")) or {}).get("codec") \
                 or "unknown"
             codecs[codec] += 1
             tier_ok = tt_main.tier_ok(meta)              # amendment 2; t102 (B) levi 23:22: the main player's codec
+        tier_null += tier_ok is None
         m = pm[(meta.get("shaper") or {}).get("matrix_id") or "unknown"]
         tot, st = sum(sc["minutes"].values()), sc["minutes"].get("STALL", 0.0)
         st_min, lab_min = st_min + st, lab_min + tot
         m["n"] += 1
-        m["n_tier"] += tier_ok
+        m["n_tier"] += tier_ok is True
         m["stall"] += st
         m["lab"] += tot
         m["onsets"] += sc["stall_onsets"]
         onsets += sc["stall_onsets"]
         run_s += sc["stall_runs_s"]
         tc = targeted_class(meta)
-        if tc and tier_ok:                               # am. 15 (6): a session targeted at the class, band start (5)
+        if tc and tier_ok is True:                       # am. 15 (6): a session targeted at the class, band start (5)
             m["tg_n"][tc] += 1
             m["tg_min"][tc] += sc["minutes"].get(tc, 0.0)
         for c in classes:
-            if c != "STALL" and not tier_ok:
+            if c != "STALL" and tier_ok is not True:
                 continue
             v = sc["minutes"].get(c, 0.0)
             mins[c] += v
@@ -403,7 +415,8 @@ def snapshot(data_dir: Path, platform: str, select=None) -> dict:
         for sd, chk in es:
             entries.update(entry_states({"entries": (_load(sd / "meta.json").get("entries") or chk.get("entries") or [])}))
         out.update(tt_entries_by_state=dict(sorted(entries.items())), tt_entry_sessions=len(es),
-                   tt_codec_sessions=dict(sorted(codecs.items())))
+                   tt_codec_sessions=dict(sorted(codecs.items())),
+                   tt_tier={"tier_ok_null": tier_null, "why": TT_TIER_NULL_WHY, "steered": TT_TIER_STEERED})
     return out
 
 
@@ -541,6 +554,9 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
     unreachable += no_geom
     abr = [d["key"] for d in defs if d["kind"] == "class" and (platform, d["key"]) in ABR_ONLY and d["key"] not in unreachable]
     unreachable += abr                                     # restart §2b: never steered after
+    tt_off = ([d["key"] for d in defs if d["kind"] == "class" and d["key"] != "STALL" and d["key"] not in unreachable]
+              if platform == "tiktok" and not TT_TIER_STEERED else [])
+    unreachable += tt_off                                  # levi 06:27 (b): tt tier classes unsteered under off
     live = [d for d in defs if d["key"] not in unreachable]
     rec = {"platform": platform, "rule": RULE_VERSION, "steering_rule": STEERING_RULE, "deficit_rank": DEFICIT_RANK,
            "allowed": ids, "deficits": defs,
@@ -549,6 +565,8 @@ def pick_matrix(snap: dict, matrices: dict, allowed: list[str] | None = None, ex
         rec["geometry_excluded"] = {"modes": list(excluded_geometries), "unreachable_by_geometry": no_geom}
     if abr:
         rec["abr_only"] = {"rule": ABR_ONLY_RULE, "unreachable_abr_only": abr}
+    if tt_off:
+        rec["tt_tier_unsteered"] = {"rule": TT_TIER_RULE, "unreachable_tt_tier": tt_off}
     if not couple_geometry:
         rec["geometry_coupling"] = GEOMETRY_UNCOUPLED
     if reserved:
