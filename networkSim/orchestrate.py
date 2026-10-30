@@ -58,6 +58,7 @@ EXIT_PLAYER_DEAD = 7     # exp.py's exit code when the tt player sat at readySta
 # aborts that are not failures of the platform: they do not count toward MAX_CONSECUTIVE_FAIL
 EXIT_STREAM_ENDED = 12   # exp.py's exit code when a yt / twitch tab left its live stream (stream_ended; bundle item 3)
 EXIT_PLAYER_ERROR_HELD = 13   # exp.py's code for a yt / twitch player error begun in the low-state hold (levi 02:57)
+EXIT_BROWSER_DEAD = 16   # t102 #4 (levi 00403): exp.py's code when the slot's Chrome died; a failure, never the channel's
 # levi 02:57: a player error our low-state shaping explains is re-picked like tt's player_dead (no failure streak, no
 # not-live mark); one outside the hold (state >= 5, or unshaped past startup) still exits 1: a failure, channel marked
 NOT_A_FAILURE = {EXIT_PLAYER_FROZEN: "player_frozen", EXIT_ROOM_ENDED: "room_ended", EXIT_PLAYER_DEAD: "player_dead",
@@ -227,6 +228,8 @@ def _collect_platform(platform: str, runs: int, episodes_per_run: int, auto: boo
             return
         if rc in NOT_A_FAILURE:
             print(f"  {NOT_A_FAILURE[rc]}: session kept in _failed/, next run re-picks.")
+        elif rc == EXIT_BROWSER_DEAD:
+            print("  browser_dead: the slot's Chrome died; the channel is not marked.")
         elif rc != 0:
             print("  Collection returned non-zero — check logs above.")
             if channel:
@@ -671,6 +674,8 @@ def _account(p: str, rc: int, before: int, channel: dict | None, category: dict 
               f"next session re-picks")
         if frozen[k] >= MAX_CONSECUTIVE_FROZEN:
             paused[p] = f"{frozen[k]} consecutive player_frozen / room_ended / player_dead aborts on {who}"
+    elif rc == EXIT_BROWSER_DEAD:
+        print(f"  browser_dead on {who}: counted as a failure; the channel is not marked, the next session draws as usual")
     elif rc != 0 and channel:
         not_live[channel["handle"]] = now
     elif rc != 0 and category:

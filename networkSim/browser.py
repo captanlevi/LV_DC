@@ -31,6 +31,7 @@ import websocket  # websocket-client
 from yt_channels import YT_CHANNELS, url_of
 from check_session import FROZEN_PLAYHEAD_MAX_S, PLAYER_DEAD_MAX_S, CHECKS as _CS_CHECKS
 import stuck
+from liveness import BROWSER_LIVENESS_ABORT  # t102 #4
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -3260,6 +3261,70 @@ class MediaListener:
                     pass
 
 
+class RendererCrashWatch:
+    """t102 #4 (levi 00403 (2)): the main page's renderer crashed while Chrome lives (a pid check cannot see it). A CDP
+    client of its own on the page target (Inspector.enable); Inspector.targetCrashed with no sessionId is the main
+    page's; a child session's (an OOPIF / ad iframe / worker) never fires. on_crash(t) once. A positive event: no load
+    false-fire risk. Never fatal: errors are recorded."""
+
+    def __init__(self, ws_url: str, on_crash, on_lost=None, ws_factory=None):
+        self.ws_url, self.on_crash, self.on_lost = ws_url, on_crash, on_lost
+        self.ws_factory = ws_factory or (lambda: websocket.WebSocket())
+        self.crashed_t: float | None = None
+        self.child_crashes = 0
+        self.error: str | None = None
+        self._stop = threading.Event()
+        self._t: threading.Thread | None = None
+
+    def handle(self, msg: dict, now: float) -> bool:
+        """True when this message fired."""
+        if msg.get("method") != "Inspector.targetCrashed" or self.crashed_t is not None:
+            return False
+        if msg.get("sessionId"):
+            self.child_crashes += 1
+            return False
+        self.crashed_t = round(now, 3)
+        self.on_crash(self.crashed_t)
+        return True
+
+    def start(self) -> "RendererCrashWatch":
+        self._t = threading.Thread(target=self._run, daemon=True, name="renderer-crash")
+        self._t.start()
+        return self
+
+    def stop(self) -> dict:
+        self._stop.set()
+        return {"crashed_t": self.crashed_t, "child_crashes": self.child_crashes, "error": self.error}
+
+    def _run(self) -> None:
+        try:
+            ws = self.ws_factory()
+            ws.settimeout(1)
+            ws.connect(self.ws_url)
+            ws.send(json.dumps({"id": 1, "method": "Inspector.enable", "params": {}}))
+        except Exception as exc:
+            self.error = repr(exc)[:200]
+            return
+        try:
+            while not self._stop.is_set():
+                try:
+                    msg = json.loads(ws.recv())
+                except websocket.WebSocketTimeoutException:
+                    continue
+                if self.handle(msg, time.time()):
+                    return
+        except Exception as exc:
+            if not self._stop.is_set():
+                self.error = repr(exc)[:200]
+                if self.on_lost is not None:     # the socket broke mid-session: a record only (levi 00402)
+                    self.on_lost(round(time.time(), 3))
+        finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+
 # every <video>'s error (Chromium puts the pipeline status in its message) and state, at a tt dead trigger
 _VIDEO_ERRORS_JS = """(() => [...document.querySelectorAll('video')].map(v => ({
   rs: v.readyState, ns: v.networkState, paused: v.paused, w: v.videoWidth, h: v.videoHeight,
@@ -5386,6 +5451,9 @@ class BrowserSession:
         self.fs_keeper: dict | None = None          # t53 (a): fullscreen in trio, the keeper's start record
         self.rung_probes: list[dict] = []           # twitch: each menu read (open / close times): shots near it are flagged
         self._media: MediaListener | None = None     # the media-internals recorder (media_events.jsonl), every platform
+        self._renderer: RendererCrashWatch | None = None   # t102 #4: the main page's renderer crash
+        self.liveness = None                         # t102 #4: exp.py's LivenessWatch, set before start()
+        self.renderer_crash: dict | None = None      # its stop() record (meta browser_liveness.renderer)
         self.media_decoders: dict | None = None      # its summary() at stop (meta.json media_decoders)
         self._rung_probe_at = 0.0
         self._recovery_lock = threading.Lock()    # one recovery of either kind per session (am. 6)
@@ -5568,6 +5636,9 @@ class BrowserSession:
                                     if self._session_dir else None).start()
         if self.platform == "tiktok":            # item #9: before any room navigation, so the first room/enter is read
             self._tt_room = TtRoomListener(self._ws_url).start()
+        if BROWSER_LIVENESS_ABORT and self.liveness is not None:      # t102 #4, every platform
+            self._renderer = RendererCrashWatch(self._ws_url, self.liveness.renderer_crashed,
+                                                self.liveness.cdp_lost).start()
         self._mse_wrap_install()                 # t93 rows 9 / 20, before the join (yt, frame log enabled only)
         self._worker_anchor_install()            # t100 R1, before the join (tw / tt, frame log enabled only)
 
@@ -6737,6 +6808,8 @@ class BrowserSession:
             self._master.stop()
         if self._tt_room is not None:
             self._tt_room.stop()
+        if self._renderer is not None:
+            self.renderer_crash = self._renderer.stop()
         if self._media is not None:
             self._media.stop()
             self.media_decoders = self._media.summary()

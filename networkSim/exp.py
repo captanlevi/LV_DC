@@ -34,6 +34,7 @@ from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANS
                            get_higher_state, get_lower_state, schedule_of, SCENARIOS, JOIN_SETTLE_S)
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession, FROZEN_HOLD_RULE, JOIN_CAP_S
+from liveness import BROWSER_LIVENESS_ABORT, LivenessWatch
 import session_meta
 import session_names
 import compute_load
@@ -218,6 +219,7 @@ EXIT_STREAM_ENDED = 12   # yt / twitch: the tab left its live stream (browser.St
 EXIT_PLAYER_ERROR_HELD = 13   # yt / twitch (levi 02:57): a player error begun in the low-state hold; not a failure, re-picked
 EXIT_DRY_HOLD_REFUSED = 15    # levi 03:19: LVDC_DRY_HOLD_J outside a dry pilot, refused before any session dir
 EXIT_FRAME_LOG_REFUSED = 14   # levi 02:52: a counted v4 run without LVQOE_FRAME_LOG=1, refused before any session dir
+EXIT_BROWSER_DEAD = 16   # t102 #4 (levi 00403): the slot's Chrome died (pid) or its page's renderer crashed; counted, never the channel's
 
 
 # v2 (LVQoE t37, rushi 2026-10-16): each session's profile is a CLONE of a per-platform template (a Chrome user-data-dir,
@@ -346,6 +348,29 @@ def copy_chrome_log(session_dir: Path, slot=None, since: float | None = None) ->
         return {"copied_from": str(src), "bytes": src.stat().st_size}
     except OSError as e:
         return {"copied_from": str(src), "error": repr(e)[:200]}
+
+
+def _liveness_watch(browser) -> LivenessWatch:
+    """t102 #4: the slot's Chrome by its pid file (start_chrome's $!), its CDP port from CDP_BASE; a fire sets the
+    browser's abort browser_dead unless a watcher set one first. browser.liveness also carries the renderer crash."""
+    suffix = f"_{SLOT.tag}" if SLOT is not None else ""
+    pid_file = Path(__file__).parent.parent / "current_data" / f"chrome{suffix}.pid"
+
+    def pid() -> int | None:
+        try:
+            return int(pid_file.read_text().strip())
+        except (OSError, ValueError):
+            return None
+
+    def fire(t: float) -> None:
+        if browser.abort_reason is None:
+            browser.abort_reason, browser.abort_at = "browser_dead", t
+        print(f"[liveness] browser_dead at {t} ({w.rec.get('miss_kind')})", flush=True)
+
+    import browser as _b
+    w = LivenessWatch(pid, int(_b.CDP_BASE.rsplit(":", 1)[1]), fire)
+    browser.liveness = w
+    return w.start()
 
 
 def kill_chrome(chrome_profile: Path | None = None) -> None:
@@ -1368,6 +1393,7 @@ if __name__ == "__main__":
                 print(f"[join] meta write failed: {e!r}", flush=True)
 
     browser = None
+    liveness = None                              # t102 #4: the LivenessWatch (BROWSER_LIVENESS_ABORT)
     tcp_state = None                             # t93 row 13: the slot's TCP state sampler (frame log only)
     abort_reason = None
     _join_t = None                       # B9: the join thread (auto mode)
@@ -1397,6 +1423,8 @@ if __name__ == "__main__":
                                      entry_quality=eq_cfg,
                                      tw_low_latency=args.tw_low_latency if platform == "twitch" else None)
             browser.net_labels = net_labels      # the room watcher reads the current shaper state (tt)
+            if BROWSER_LIVENESS_ABORT:           # t102 #4 (levi 00403): every platform; armed now, Chrome is up
+                liveness = _liveness_watch(browser)
             if SLOT is not None and browser.frame_log and browser.frame_log.get("enabled"):   # t93 row 13, ON blocks
                 _fl_block = browser.frame_log["block_s"]
                 tcp_state = trio_slots.TcpStateSampler(session_dir, SLOT,
@@ -1466,6 +1494,8 @@ if __name__ == "__main__":
             signal.signal(_sig, lambda *_: print("\n[finalising the session; signal deferred until it is done]"))
         channel_url = None
         meta_extra = {"window_size_flag": WINDOW_SIZES.get(platform)}
+        if liveness is not None:               # t102 #4: before any teardown step, so our own kill never reads as a death
+            meta_extra["browser_liveness"] = liveness.stop()
         if browser is not None:
             browser.resumer.stop()             # t83 (3): the press record below is final (s1 tw_100001's teardown press)
             channel_url = browser.channel_url
@@ -1560,6 +1590,8 @@ if __name__ == "__main__":
                     meta_extra.update(channel_handle=hit["handle"], channel_type=hit["type"])
             browser.stop()
             meta_extra["drain"] = browser.drain       # v3 A12: run inside stop(), after the label export
+            if meta_extra.get("browser_liveness") is not None:   # t102 #4: the renderer watch's record (stopped in stop())
+                meta_extra["browser_liveness"]["renderer"] = browser.renderer_crash
             if browser.fs_keeper is not None:           # t53 (a): fullscreen in trio, the focus keeper's record
                 meta_extra["fullscreen_keeper"] = browser.fs_keeper
             meta_extra["media_decoders"] = browser.media_decoders       # decision A item 3 (every platform)
@@ -1701,6 +1733,8 @@ if __name__ == "__main__":
         sys.exit(EXIT_PLAYER_DEAD)     # likewise: the dead room is now recent, the next session re-picks
     if abort_reason == "stream_ended":
         sys.exit(EXIT_STREAM_ENDED)
+    if abort_reason == "browser_dead":
+        sys.exit(EXIT_BROWSER_DEAD)    # orchestrate.py counts it toward the slot's failures; the channel is not marked
     import stuck as _stuck
     if abort_reason == "player_error" and browser is not None and _stuck.player_error_held(browser.player_errors,
                                                                                             net_labels):
