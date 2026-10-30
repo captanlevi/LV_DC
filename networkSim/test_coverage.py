@@ -49,6 +49,7 @@ def session(root, platform, name, spans, verdict="PASS", s_class="normal", matri
     meta = {"platform": platform, "shaper": {"matrix_id": matrix}, "entries": entries or []}
     if codec:
         meta["tt_stream"] = {"codec": codec}
+        meta["tt_main_codec"] = {"codec": codec}        # t102 (B): the tier codec (tt_main.tier_ok)
     (sd / "meta.json").write_text(json.dumps(meta))
     (sd / "check.json").write_text(json.dumps({"verdict": verdict, "session_class": s_class}))
     return sd

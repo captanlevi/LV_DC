@@ -28,7 +28,8 @@ def _meta(deferred: bool) -> dict:
     return {**m, "http_logs": C.HTTP_LOGS_DEFERRED} if deferred else m
 
 
-def test_join_order_deferred(tmp: Path):
+def test_join_order_deferred(tmp_path: Path):
+    tmp = tmp_path
     jo = C.join_order(tmp, _meta(True), NET)
     assert jo == {"discovery_end": T0 + 20, "first_apply": T0 + 30, "http_v2": "deferred to halo4 (t102 #3)"}
     assert C.join_order_violation(jo) is None

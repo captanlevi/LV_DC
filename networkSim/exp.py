@@ -33,9 +33,11 @@ from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANS
                            YOUTUBE_MATRICES, TIKTOK_MATRICES, TWITCH_MATRICES, initial_state_stationary,
                            get_higher_state, get_lower_state, schedule_of, SCENARIOS, JOIN_SETTLE_S)
 from utils.dataModels import NetLabel, NetStat
-from browser import BrowserSession, FROZEN_HOLD_RULE, JOIN_CAP_S
+from browser import BrowserSession, FROZEN_HOLD_RULE, JOIN_CAP_S, MEDIA_EVENTS_FILE
 from liveness import BROWSER_LIVENESS_ABORT, LivenessWatch
 from check_session import HTTP_LOGS_DEFERRED  # t102 #3
+import session_files
+import tt_main  # t102 (B)
 import session_meta
 import session_names
 import compute_load
@@ -1680,6 +1682,12 @@ if __name__ == "__main__":
                                                                                     "why": "the shaper never started"})
         if STEERING is not None:            # t65: the start the shaper applied (its first row), beside the draw
             session_meta.merge(session_dir, "steering", start_applied=session_meta.steering_start_applied(net_labels))
+        if platform == "tiktok" and tt_main.TT_MAIN_CODEC:   # t102 (B) levi 23:22: the tier codec, before the next pick
+            try:
+                session_meta.write(session_dir, tt_main_codec=tt_main.record(
+                    session_dir, session_files.side_file("frames")[0], MEDIA_EVENTS_FILE))
+            except Exception as e:
+                session_meta.write(session_dir, tt_main_codec={"codec": None, "why": f"error: {e!r}"[:200]})
         if platform == "tiktok" and CHAOS_HTTP_LOGS:   # supervisor 2026-10-18: the stream regime, from http_v2 (t102 #3: halo4)
             try:
                 from tt_stream import tt_stream_regime

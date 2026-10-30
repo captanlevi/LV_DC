@@ -69,6 +69,7 @@ from pathlib import Path
 import numpy as np
 
 from utils.shaping import PLATFORM_MATRICES, SCENARIOS, SESSION_MINUTES, stationary_distribution
+import tt_main  # t102 (B): tt's tier codec
 
 from data_root import DATA_ROOT as DATA_DIR  # noqa: E402  (one setting: data_root.py)
 RULE_VERSION = "coverage-v2 (2026-10-18; Addendum Q am. 5: stall events)"
@@ -355,9 +356,10 @@ def snapshot(data_dir: Path, platform: str, select=None) -> dict:
         sc = session_classes(sd)
         tier_ok = True
         if platform == "tiktok":
-            codec = (meta.get("tt_stream") or {}).get("codec") or "unknown"
+            codec = ((meta.get("tt_main_codec") if tt_main.TT_MAIN_CODEC else meta.get("tt_stream")) or {}).get("codec") \
+                or "unknown"
             codecs[codec] += 1
-            tier_ok = codec == "hevc"                    # amendment 2: tt tier floors count HEVC-ladder sessions only
+            tier_ok = tt_main.tier_ok(meta)              # amendment 2; t102 (B) levi 23:22: the main player's codec
         m = pm[(meta.get("shaper") or {}).get("matrix_id") or "unknown"]
         tot, st = sum(sc["minutes"].values()), sc["minutes"].get("STALL", 0.0)
         st_min, lab_min = st_min + st, lab_min + tot
