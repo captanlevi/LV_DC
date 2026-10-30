@@ -16,10 +16,17 @@
 """
 import sys
 import threading
+import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+try:
+    import websocket  # noqa: F401
+except ImportError:                              # the suite's script python has no websocket-client (as test_worker_anchor)
+    sys.modules["websocket"] = types.ModuleType("websocket")
+if not hasattr(sys.modules["websocket"], "WebSocketTimeoutException"):
+    sys.modules["websocket"].WebSocketTimeoutException = type("WebSocketTimeoutException", (Exception,), {})
 import liveness as L  # noqa: E402
 
 PORT = 9224
