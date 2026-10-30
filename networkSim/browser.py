@@ -31,7 +31,7 @@ import websocket  # websocket-client
 from yt_channels import YT_CHANNELS, url_of
 from check_session import FROZEN_PLAYHEAD_MAX_S, PLAYER_DEAD_MAX_S, CHECKS as _CS_CHECKS
 import stuck
-from liveness import BROWSER_LIVENESS_ABORT  # t102 #4
+from liveness import BROWSER_LIVENESS_ABORT, RENDERER_CRASH_WATCH  # t102 #4
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -5636,7 +5636,7 @@ class BrowserSession:
                                     if self._session_dir else None).start()
         if self.platform == "tiktok":            # item #9: before any room navigation, so the first room/enter is read
             self._tt_room = TtRoomListener(self._ws_url).start()
-        if BROWSER_LIVENESS_ABORT and self.liveness is not None:      # t102 #4, every platform
+        if BROWSER_LIVENESS_ABORT and RENDERER_CRASH_WATCH and self.liveness is not None:   # t102 #4, every platform
             self._renderer = RendererCrashWatch(self._ws_url, self.liveness.renderer_crashed,
                                                 self.liveness.cdp_lost).start()
         self._mse_wrap_install()                 # t93 rows 9 / 20, before the join (yt, frame log enabled only)

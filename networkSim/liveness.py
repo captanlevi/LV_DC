@@ -13,6 +13,9 @@ import time
 from pathlib import Path
 
 BROWSER_LIVENESS_ABORT = True    # t102 #4; off = 7809b21c (no watch, no meta key, no exit 16)
+# levi 23:45: the renderer path (browser.RendererCrashWatch, a second CDP client on the page) is separable; off = the pid
+# path alone (no CDP connection). On: laptop control pair A / B within the S0 spread; the trio dry decides per platform.
+RENDERER_CRASH_WATCH = True
 POLL_S = 5.0
 MISSES_TO_FIRE = 2
 
