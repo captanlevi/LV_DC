@@ -35,6 +35,7 @@ from utils.shaping import (YOUTUBE_TRANSITIONS, TWITCH_TRANSITIONS, TIKTOK_TRANS
 from utils.dataModels import NetLabel, NetStat
 from browser import BrowserSession, FROZEN_HOLD_RULE, JOIN_CAP_S
 from liveness import BROWSER_LIVENESS_ABORT, LivenessWatch
+from check_session import HTTP_LOGS_DEFERRED  # t102 #3
 import session_meta
 import session_names
 import compute_load
@@ -219,6 +220,11 @@ EXIT_STREAM_ENDED = 12   # yt / twitch: the tab left its live stream (browser.St
 EXIT_PLAYER_ERROR_HELD = 13   # yt / twitch (levi 02:57): a player error begun in the low-state hold; not a failure, re-picked
 EXIT_DRY_HOLD_REFUSED = 15    # levi 03:19: LVDC_DRY_HOLD_J outside a dry pilot, refused before any session dir
 EXIT_FRAME_LOG_REFUSED = 14   # levi 02:52: a counted v4 run without LVQOE_FRAME_LOG=1, refused before any session dir
+# t102 #3 (levi 00140 / 00141): the decrypting HTTP passes (make_http_logs: tshark -T json over the keylog; process_http_logs:
+# unit_extractor's h2 / h3 PDML -> http_v2.json) and tt_stream (from http_v2) run on halo4 from the kept pcap + keys, not on
+# chaos at session end. False = 7809b21c (both run here). The field-only tshark reads (dns_answers, check_session's
+# packets) stay: no keylog, no decode.
+CHAOS_HTTP_LOGS = False
 EXIT_BROWSER_DEAD = 16   # t102 #4 (levi 00403): the slot's Chrome died (pid) or its page's renderer crashed; counted, never the channel's
 
 
@@ -1657,12 +1663,15 @@ if __name__ == "__main__":
                 TRIO["staging_error"] = repr(e)
             session_meta.write(session_dir, concurrency=TRIO)
 
-        http_ok = make_http_logs(session_dir)
-        if not http_ok:
-            print("Could not make http logs from the pcap")
-        proc_ok = process_http_logs(session_dir)
-        if not proc_ok:
-            print("Could not process http logs — raw JSON kept for manual inspection")
+        if CHAOS_HTTP_LOGS:
+            http_ok = make_http_logs(session_dir)
+            if not http_ok:
+                print("Could not make http logs from the pcap")
+            proc_ok = process_http_logs(session_dir)
+            if not proc_ok:
+                print("Could not process http logs — raw JSON kept for manual inspection")
+        else:                    # t102 #3: a named deferral, read by check_session (http_v2 / join_order / tt_stream)
+            session_meta.write(session_dir, http_logs=HTTP_LOGS_DEFERRED)
 
         # v2: the TLS keys (<session_dir>/ssl_keys.log) and raw decoder outputs stay in the session dir
 
@@ -1671,7 +1680,7 @@ if __name__ == "__main__":
                                                                                     "why": "the shaper never started"})
         if STEERING is not None:            # t65: the start the shaper applied (its first row), beside the draw
             session_meta.merge(session_dir, "steering", start_applied=session_meta.steering_start_applied(net_labels))
-        if platform == "tiktok":   # supervisor 2026-10-18: the stream regime (codec, ladder) per session, from http_v2
+        if platform == "tiktok" and CHAOS_HTTP_LOGS:   # supervisor 2026-10-18: the stream regime, from http_v2 (t102 #3: halo4)
             try:
                 from tt_stream import tt_stream_regime
                 session_meta.write(session_dir, tt_stream=tt_stream_regime(session_dir))

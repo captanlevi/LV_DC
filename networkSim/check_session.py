@@ -906,6 +906,8 @@ def join_order(sd: Path, meta: dict, net: list[dict]) -> dict | None:
         return None
     if not isinstance(t_disc, (int, float)):
         return None
+    if http_logs_deferred(meta):          # t102 #3: halo4 computes it from its own http_v2 and writes it back
+        return {"discovery_end": t_disc, "first_apply": t_apply, "http_v2": "deferred to halo4 (t102 #3)"}
     p = sd / "http_v2.json"
     try:
         d = json.loads(p.read_text())
@@ -945,6 +947,15 @@ def join_order(sd: Path, meta: dict, net: list[dict]) -> dict | None:
             "room_media_on_discovery_flow": sum(1 for k, t, m in rows if m and t >= t_apply and k in disc_flows),
             "room_media_on_discovery_flow_keys": reused[:5]}          # levi 14:01: for the hand read (pcap headers)
 HTTP_V2_ERROR = "http_v2_error.json"      # unit_extractor.ERROR_MARKER (levi 06:29)
+# t102 #3 (levi 00140): exp.py's meta.http_logs when chaos ran no decrypting HTTP pass; halo4 builds http_v2 / tt_stream from
+# the kept pcap + keys and writes join_order back. Here: named deferrals, never a flag and never a FAIL.
+HTTP_LOGS_DEFERRED = {"deferred": "halo4", "rule": "t102 #3 (levi 00140 / 00141)",
+                      "skipped": ["make_http_logs", "process_http_logs", "tt_stream"]}
+DEFERRED_TO_HALO4 = ["http_v2", "http_v2_missing", "join_order", "tt_stream", "tt_flv_tokens", "background_share_http_v2"]
+
+
+def http_logs_deferred(meta: dict) -> bool:
+    return (meta.get("http_logs") or {}).get("deferred") == "halo4"
 
 
 def http_v2_missing(sd: Path, lab: dict) -> str | None:
@@ -1629,7 +1640,8 @@ def main() -> int:
     for fns in (fullscreen_not_screen(meta), fullscreen_player_lt_screen(meta), chrome_version_missing(meta)):
         if fns:
             sreg["suspicious"] = list(sreg.get("suspicious") or []) + [fns]
-    h2m = http_v2_missing(sd, lab)                  # levi 06:29: reported, never the verdict
+    deferred = http_logs_deferred(meta)
+    h2m = None if deferred else http_v2_missing(sd, lab)   # levi 06:29: reported, never the verdict; t102 #3: deferred
     if h2m:
         sreg["suspicious"] = list(sreg.get("suspicious") or []) + [{"flag": "http_v2_missing", "detail": h2m}]
     import decode_path as DP
@@ -1651,6 +1663,8 @@ def main() -> int:
         out["join_order"] = jo
     if h2m:       # absent unless flagged, as qa_fail_cause (levi 06:29)
         out["http_v2_missing"] = h2m
+    if deferred:  # t102 #3: absent unless deferred; names what halo4 computes for this session
+        out["deferred_to_halo4"] = DEFERRED_TO_HALO4
     (sd / "check.json").write_text(json.dumps(out, indent=1, default=str))
     md = [f"# check: {platform}/{sd.name} — **{v}** ({s_class}{', qa_fail_cause ' + cause if cause else ''})", ""] + [f"- {r}" for r in why] + \
         [f"- SUSPICIOUS (reported; verdict unchanged): {x}" for x in sreg["suspicious"]] + ["",
