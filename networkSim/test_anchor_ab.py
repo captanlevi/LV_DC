@@ -138,10 +138,16 @@ def test_arm_selection_and_counted_mutant():
         assert B.anchor_arm("tiktok", {}, "ti_7", True) == {"arm": "full", "source": "constant"}
     finally:
         B.TT_WORKER_ANCHOR = keep
-    assert B.anchor_ab_refusal({}, True) is None and B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off,full"}, False) is None
-    assert "counted run" in B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off"}, True)
-    assert "counted run" in B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TW": "full"}, True)
-    assert "not in" in B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off,on"}, False)
+    fl1 = {"LVQOE_FRAME_LOG": "1"}
+    assert B.anchor_ab_refusal({}, True) is None and B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off,full", **fl1}, False) is None
+    assert B.anchor_ab_refusal({}, False) is None and B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off", "LVQOE_FRAME_LOG": "alt60"}, False) is None
+    assert "counted run" in B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off", **fl1}, True)
+    assert "counted run" in B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TW": "full", **fl1}, True)
+    assert "not in" in B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off,on", **fl1}, False)
+    # levi amendment 2 (TTAB1: no LVQOE_FRAME_LOG, every arm ran as off): an A/B cycle with the frame log off refuses
+    for fl in ({}, {"LVQOE_FRAME_LOG": "0"}, {"LVQOE_FRAME_LOG": "yes"}, {"LVQOE_FRAME_LOG": "1", "LVQOE_INSTRUMENTS": "0"}):
+        r = B.anchor_ab_refusal({"LVDC_ANCHOR_AB_TT": "off,proxy,full", **fl}, False)
+        assert r and "frame log off" in r and "LVDC_ANCHOR_AB_TT" in r, (fl, r)
     ex, orch = (HERE / "exp.py").read_text(), (HERE / "orchestrate.py").read_text()
     i_ref, i_dir = ex.index("_abr = anchor_ab_refusal(os.environ"), ex.index("    if args.save_dir:\n        session_dir = args.save_dir")
     assert i_ref < i_dir and "sys.exit(EXIT_ANCHOR_AB_REFUSED)" in ex and 'meta_extra["ab_arm"] = browser.ab_arm' in ex
@@ -154,6 +160,22 @@ class _Fake:
     _ws_url = "ws://x"
     _anchor = None
     platform = "tiktok"
+
+
+def test_unrun_arm_recorded_ran_false():
+    """levi amendment 2: the install's gate (no frame log) skips every arm; ab_arm says so (ran false, why), and an arm
+    that ran keeps 66d931fa's record (no ran key: the counted path's meta is unchanged). Mutant: recorded as run."""
+    for fl, why in ((None, "frame log off"), ({"requested": "1", "enabled": False, "reason": "instruments off"},
+                                              "frame log not enabled: instruments off")):
+        f = _Fake()
+        f.frame_log, f.ab_arm = fl, {"arm": "proxy", "source": "env", "env": "off,proxy,full", "n": 100001}
+        B.BrowserSession._worker_anchor_install(f)
+        assert f._anchor is None and f.ab_arm == {"arm": "proxy", "source": "env", "env": "off,proxy,full", "n": 100001,
+                                                  "ran": False, "why": why}, f.ab_arm
+    f = _Fake()
+    f.frame_log, f.ab_arm = {"enabled": True, "block_s": 0}, {"arm": "off", "source": "constant"}
+    B.BrowserSession._worker_anchor_install(f)
+    assert f.ab_arm == {"arm": "off", "source": "constant"}
 
 
 def test_off_attaches_nothing_and_b1_installs_nothing():
@@ -228,7 +250,8 @@ def test_session_range_tt():
 
 def main() -> int:
     for f in (test_proxy_rows_equal_full_and_native_text, test_full_is_cbe3ce9d_and_proxy_edits_apply_once,
-              test_arm_selection_and_counted_mutant, test_off_attaches_nothing_and_b1_installs_nothing,
+              test_arm_selection_and_counted_mutant, test_unrun_arm_recorded_ran_false,
+              test_off_attaches_nothing_and_b1_installs_nothing,
               test_proxy_cdp_take_by_object_id, test_g0_constant_equals_override, test_session_range_tt):
         f()
     print("test_anchor_ab: ok")
