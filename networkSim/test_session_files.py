@@ -27,6 +27,7 @@ NON_SESSION = frozenset({
     "schedule_occupancy.json", "walk_simulation.json", "trio_slots.jsonl", "tw_esports_skips.jsonl",
     "yt_channel_picks.jsonl", "yt_list_leaves.jsonl", "yt_live_checks.jsonl", "yt_precheck_skips.jsonl",
     "setup.sh",                                   # the repo's installer: orchestrate reads its network_core pin
+    "browser.py",                                 # g0_rendered_scripts loads the repo's own module (base and tip)
 })
 
 
