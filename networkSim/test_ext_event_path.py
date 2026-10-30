@@ -245,7 +245,21 @@ def export_env(monkeypatch, tmp_path):
     monkeypatch.setattr(B, "_close_target", lambda *a: None)
     sw = _FakeSW(tmp_path, [{"ts": 1, "type": "res_meta", "event_id": 0, "cs": "A", "frameId": 0}], [{"s": 1}])
     monkeypatch.setattr(B, "_ext_page", lambda: (sw, None))
+    import profile_clone as PC
+    monkeypatch.setattr(PC, "F1_REF_KEEP_EVERY", 0)       # t102 #7 off here (7809b21c's clear); its own test below
     return sw, tmp_path
+
+
+def test_export_leaves_a_reference_keep_session_uncleared(export_env, monkeypatch):
+    """t102 #7: with the keep on, the session the rule selects keeps its storage (no remove call; ok true), and an
+    unselected one is cleared as before."""
+    import profile_clone as PC
+    sw, sd = export_env
+    monkeypatch.setattr(PC, "F1_REF_KEEP_EVERY", 20)
+    monkeypatch.setattr(PC, "f1_ref_keep", lambda sid: {"every": 20, "rule": "test", "selected": True})
+    assert B._export_via_service_worker(sd) is True and sw.cleared_with is None
+    monkeypatch.setattr(PC, "f1_ref_keep", lambda sid: {"every": 20, "rule": "test", "selected": False})
+    assert B._export_via_service_worker(sd) is True and sw.cleared_with is not None
 
 
 def test_export_writes_files_before_the_storage_clear(export_env):
@@ -530,9 +544,9 @@ def _f1_block():
     return textwrap.dedent(src[a:src.index("# F1 block end", a)])
 
 
-def _f1_session(root: Path, ok: bool):
+def _f1_session(root: Path, ok: bool, name: str = "yt_1"):
     """A session dir under root/data/youtube with meta.ext_export {ok}, and a profile clone holding extension storage."""
-    sd = root / "data" / "youtube" / "yt_1"
+    sd = root / "data" / "youtube" / name
     sd.mkdir(parents=True)
     (sd / "meta.json").write_text(json.dumps({"ext_export": {"ok": ok, **({} if ok else {"reason": "error"})}}))
     prof = root / "clone"
@@ -583,13 +597,41 @@ def test_f1_mutant_54ed22cd_order_loses_the_raw_storage(tmp_path):
 
 
 def test_f1_ok_export_and_unmoved_dir_are_unchanged(tmp_path):
-    """An ok export copies nothing and leaves meta as it was; a failed export in a dir nobody moves (the PASS path's
-    place) is kept in place, as at 54ed22cd."""
-    sd, prof = _f1_session(tmp_path / "a", ok=True)
-    before = (sd / "meta.json").read_text()
-    _run_f1(sd, prof)
-    assert not (sd / "ext_storage_raw").exists() and (sd / "meta.json").read_text() == before
+    """An ok export copies nothing and leaves meta as it was (the reference keep off: 7809b21c); a failed export in a dir
+    nobody moves (the PASS path's place) is kept in place, as at 54ed22cd."""
+    import profile_clone as PC
+    keep, PC.F1_REF_KEEP_EVERY = PC.F1_REF_KEEP_EVERY, 0
+    try:
+        sd, prof = _f1_session(tmp_path / "a", ok=True, name="yt_100014")      # selected when on: off keeps nothing
+        before = (sd / "meta.json").read_text()
+        _run_f1(sd, prof)
+        assert not (sd / "ext_storage_raw").exists() and (sd / "meta.json").read_text() == before
+    finally:
+        PC.F1_REF_KEEP_EVERY = keep
     sd, prof = _f1_session(tmp_path / "b", ok=False)
     _run_f1(sd, prof)
     assert (sd / "ext_storage_raw" / "abcdefghijklmnopabcdefghijklmnop" / "000003.log").is_file()
     assert json.loads((sd / "meta.json").read_text())["ext_export"]["raw"]["copied"] is True
+
+
+def test_f1_reference_keep_on_complete_exports(tmp_path):
+    """t102 #7 (levi 00402): on a complete export, the session the seeded rule selects (its id only) keeps the raw
+    storage with meta.ext_export.ref_keep {every, rule, selected: true}; an unselected one records selected false and
+    copies nothing; a failed export is the F1 keep as before; the rate is 1 in 20 by id (null: 6000 ids, 304 selected)."""
+    import profile_clone as PC
+    assert PC.F1_REF_KEEP_EVERY == 20
+    sd, prof = _f1_session(tmp_path / "s", ok=True, name="yt_100014")
+    _run_f1(sd, prof)
+    rec = json.loads((sd / "meta.json").read_text())["ext_export"]
+    assert rec["ok"] is True and rec["ref_keep"]["selected"] is True and rec["raw"]["copied"] is True
+    assert (sd / "ext_storage_raw" / "abcdefghijklmnopabcdefghijklmnop" / "000003.log").is_file()
+    sd, prof = _f1_session(tmp_path / "u", ok=True, name="yt_1")
+    _run_f1(sd, prof)
+    rec = json.loads((sd / "meta.json").read_text())["ext_export"]
+    assert rec["ref_keep"]["selected"] is False and "raw" not in rec and not (sd / "ext_storage_raw").exists()
+    sd, prof = _f1_session(tmp_path / "f", ok=False, name="yt_100014")
+    _run_f1(sd, prof)
+    rec = json.loads((sd / "meta.json").read_text())["ext_export"]
+    assert rec["ok"] is False and rec["raw"]["copied"] is True and "ref_keep" not in rec
+    n = sum(PC.f1_ref_keep(f"{p}_{i}")["selected"] for p in ("yt", "tw", "ti") for i in range(100000, 102000))
+    assert n == 304 and PC.f1_ref_keep("yt_100014") == PC.f1_ref_keep("yt_100014")      # deterministic, by id only

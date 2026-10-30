@@ -2333,9 +2333,13 @@ def _export_via_service_worker(session_dir: Path) -> bool:
             print(f"[browser] Player stats ({len(stats)} records) → {session_dir / 'player_stats.jsonl'}", flush=True)
 
         def clear_storage():
-            # Clear storage so the next run starts fresh: only after every file above / below is on disk
-            sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s), r))"
-                    % json.dumps(sorted(side)), await_promise=True)
+            # Clear storage so the next run starts fresh: only after every file above / below is on disk. t102 #7: a
+            # session the F1 reference keep selects (profile_clone.f1_ref_keep, its id only) keeps its storage for exp.py
+            from profile_clone import f1_ref_keep
+            ref = f1_ref_keep(session_dir.name)
+            if not (ref and ref["selected"]):
+                sw.eval("new Promise(r => chrome.storage.local.remove(['events', 'player_stats', 'side_counters'].concat(%s), r))"
+                        % json.dumps(sorted(side)), await_promise=True)
             sw.close()
             _close_target(tmp_tab)
 

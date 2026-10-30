@@ -1665,10 +1665,14 @@ if __name__ == "__main__":
         try:
             ext_export = json.loads((session_dir / "meta.json").read_text()).get("ext_export") or {"ok": False,
                                                                                                   "reason": "not_run"}
+            from profile_clone import f1_ref_keep, keep_ext_storage
             if ext_export.get("ok") is not True:
-                from profile_clone import keep_ext_storage
                 session_meta.write(session_dir, ext_export={**ext_export, "raw": keep_ext_storage(chrome_profile,
                                                                                                     session_dir)})
+            elif f1_ref_keep(session_dir.name) is not None:   # t102 #7: the F1 reference keep, 1 in F1_REF_KEEP_EVERY
+                ref = f1_ref_keep(session_dir.name)
+                session_meta.write(session_dir, ext_export={**ext_export, "ref_keep": ref, **(
+                    {"raw": keep_ext_storage(chrome_profile, session_dir)} if ref["selected"] else {})})
         except Exception as e:
             print(f"ext storage not kept: {e!r}")
         # F1 block end

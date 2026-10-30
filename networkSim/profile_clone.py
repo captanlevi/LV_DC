@@ -29,6 +29,24 @@ def remove_profile_clone(clones_root: Path, prof: Path) -> bool:
 EXT_STORAGE = ("Default", "Local Extension Settings")
 EXT_STORAGE_COPY = "ext_storage_raw"
 
+# t102 #7 (levi 00402): on a COMPLETE export, 1 session in F1_REF_KEEP_EVERY keeps the same raw copy as the F1 reference
+# (the only after-the-fact check of F1 on good sessions): the export leaves that session's storage uncleared (the clone
+# is removed after check_session anyway) and exp.py's F1 block copies it. The selection is seeded by the session id only
+# (never by platform state); the rule, seed and selection are recorded in meta.ext_export.ref_keep on every complete
+# export. 0 = off: 7809b21c's behaviour (the storage cleared, nothing recorded).
+F1_REF_KEEP_EVERY = 20
+F1_REF_SALT = "lvqoe-f1-ref:"
+
+
+def f1_ref_keep(session_id: str) -> dict | None:
+    """{every, rule, selected} for this session id; None when off."""
+    if not F1_REF_KEEP_EVERY:
+        return None
+    import hashlib
+    h = int(hashlib.sha256((F1_REF_SALT + str(session_id)).encode()).hexdigest()[:8], 16)
+    return {"every": F1_REF_KEEP_EVERY, "rule": f"sha256('{F1_REF_SALT}' + session id)[:8] % {F1_REF_KEEP_EVERY} == 0",
+            "selected": h % F1_REF_KEEP_EVERY == 0}
+
 
 def keep_ext_storage(prof: Path, session_dir: Path) -> dict:
     """Copy the clone's extension storage into session_dir/ext_storage_raw; the record for meta.ext_export.raw."""
