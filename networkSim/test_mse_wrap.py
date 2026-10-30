@@ -81,13 +81,14 @@ fs.writeFileSync(outPath, JSON.stringify(res));
 """
 
 
-def run(now_ms: int, block_s: int, max_recs: int = 2000, noadd: bool = False, r2: int = int(B.MSE_WRAP_R2)) -> dict:
+def run(now_ms: int, block_s: int, max_recs: int = 2000, noadd: bool = False, r2: int = int(B.MSE_WRAP_R2),
+        yt: bool = False) -> dict:
     node = shutil.which("node")
     assert node, "node not found: the MSE wrap test cannot run (install node)"
     with tempfile.TemporaryDirectory() as t:
         h, js, out = Path(t) / "h.js", Path(t) / "w.js", Path(t) / "out.json"
         h.write_text(HARNESS)
-        js.write_text(B.mse_wrap_js(block_s, max_recs=max_recs, r2=bool(r2)))
+        js.write_text(B.mse_wrap_js(block_s, max_recs=max_recs, r2=bool(r2), webm=yt, ykey=yt))
         subprocess.run([node, str(h), str(js), str(out), str(now_ms)] + (["noadd"] if noadd else []), check=True)
         return json.loads(out.read_text())
 
@@ -114,6 +115,13 @@ def test_mse_wrap_transparent_and_recorded():
     for bs, t in ((0, 1_000_000), (60, 125_000)):                              # no MSE use, ON or OFF: one install post
         na = run(now_ms=t, block_s=bs, noadd=True)["posted"]
         assert [(p["recs"], p["inst"], p["first"]) for p in na] == [([], 7, None)], na
+    # t102: the yt rows on (MSE_WRAP_WEBM / MSE_WRAP_YT_KEY) keep every call transparent and every record above; the
+    # only addition on a non-WebM buffer is the batch's ms record
+    on_yt = run(now_ms=1_000_000, block_s=0, yt=True)
+    assert on_yt["add_same"] and on_yt["append_same"] and on_yt["throw_same"] and on_yt["fault_contained"]
+    assert on_yt["n_calls"] == 6
+    yrecs = on_yt["posted"][0]["recs"]
+    assert [x for x in yrecs if x["op"] != "ms"] == recs and [x["op"] for x in yrecs][-1] == "ms", yrecs
 
 
 def test_frame_log_arm_epoch():

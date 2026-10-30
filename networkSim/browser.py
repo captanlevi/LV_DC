@@ -1805,7 +1805,8 @@ MSE_WRAP_YT_PARSER = r"""  // t102 rows (3) / (7) + the yt key (levi 22:10; audi
   // (laced blocks, never keyed), us (the reason the stream is unsynced: start / abort / ct / err; that append is not
   // parsed). abort(), changeType() and a parse fault (r2err) reset; remove() never does (levi audit 1: MSE keeps the
   // parser). Sync returns only on an append that starts with the EBML or Cluster ID (MSE: after an abort the next
-  // append starts at a Cluster or an init), never by a payload scan. The batch carries ms, the wrap's own time.
+  // append starts at a Cluster or an init), never by a payload scan. Each non-empty batch ends with an ms record (op
+  // "ms", v: the wrap's own time so far, ms; levi audit 6).
   const WEBM = %(webm)d, YKEY = %(ykey)d, KEY_EVERY = %(key_every)d;
   let ms = 0;
   const VWEBM = /^\s*video\/webm/i;
@@ -1865,7 +1866,7 @@ MSE_WRAP_YT_EDITS = [('  } catch (e) { r.tf = null; r.r2err = 1; } };\n', '  } c
     ('      push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n', '      push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n      W(sb).vid = VWEBM.test(String(a[0]));\n'),
     ('      if (R2) r2(sb, a[0], r);\n', '      if (R2) r2(sb, a[0], r);\n      yt(sb, a, r);\n'),
     ('    wrap(p, "changeType", (sb, a) => push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) }));\n', '    wrap(p, "changeType", (sb, a) => { push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n      const s = W(sb); reset(s, "ct"); s.vid = VWEBM.test(String(a[0])); });\n    wrap(p, "abort", (sb) => reset(W(sb), "abort"));\n'),
-    ('    try { window.postMessage({ source: "lvqoe-mse", recs: batch, over, inst, first }, "*"); } catch (e) {}\n', '    try { window.postMessage({ source: "lvqoe-mse", recs: batch, over, inst, first, ms: Math.round(ms * 100) / 100 }, "*"); } catch (e) {}\n')]
+    ('    const batch = recs; recs = [];\n', '    if (recs.length) recs.push({ op: "ms", v: Math.round(ms * 100) / 100, t: performance.now() });   // the wrap\'s own ms so far, as a record (content.js keeps recs only)\n    const batch = recs; recs = [];\n')]
 
 
 def _mse_wrap_yt_template() -> str:

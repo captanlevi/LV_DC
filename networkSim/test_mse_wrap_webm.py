@@ -50,7 +50,7 @@ class MediaSource {} MediaSource.prototype.addSourceBuffer = function () { retur
 const ctx = { MediaSource, SourceBuffer, performance: { now: () => 7 }, Date: { now: () => plan.now_ms }, String, Math,
   Uint8Array, DataView, ArrayBuffer, Error, setInterval: (f) => timers.push(f), postMessage: (m) => posted.push(JSON.parse(JSON.stringify(m))) };
 ctx.window = ctx; vm.createContext(ctx); vm.runInContext(src, ctx);
-const runs = []; let rets = 0;
+const runs = [], msrecs = []; let rets = 0;
 for (const ops of plan.runs) {
   const sb = new MediaSource().addSourceBuffer(plan.mime); let last = null;
   for (const op of ops) {
@@ -61,9 +61,10 @@ for (const ops of plan.runs) {
     else if (op.scribble && last) last.fill(0);                       // the page reuses its buffer after the append
   }
   const n0 = posted.length; for (const f of timers) f();
-  runs.push(posted.slice(n0).flatMap((p) => p.recs).filter((r) => r.op === "app"));
+  const rs = posted.slice(n0).flatMap((p) => p.recs); msrecs.push(rs.filter((r) => r.op === "ms").length);
+  runs.push(rs.filter((r) => r.op === "app"));
 }
-fs.writeFileSync(outPath, JSON.stringify({ runs, rets, seen, posted_keys: posted.map((p) => Object.keys(p)), ms: posted.map((p) => p.ms) }));
+fs.writeFileSync(outPath, JSON.stringify({ runs, msrecs, rets, seen, posted_keys: posted.map((p) => Object.keys(p)), ms: posted.map((p) => p.ms) }));
 """
 
 
@@ -269,7 +270,8 @@ def test_off_is_7809b21c_and_key_only_and_off_blocks():
     ko = run(B.mse_wrap_js(0, r2=True, webm=False, ykey=True, key_every=1), cut)
     assert keys_of(ko["runs"][0]) == want_keys(blocks)
     assert not any(f in a for a in ko["runs"][0] for f in ("cc", "wc", "nb", "b0", "lace", "us"))
-    assert all("ms" in k for k in ko["posted_keys"])
+    assert all("ms" not in k for k in ko["posted_keys"])                    # the batch keys stay 7809b21c's
+    assert ko["msrecs"] == [1] and run(off, cut)["msrecs"] == [0]          # an ms record per batch, on only
     on = run(wrap(block_s=60), cut, now_ms=60_000 + 5_000)            # ON block: keys
     offb = run(wrap(block_s=60), cut, now_ms=120_000 + 5_000)         # OFF block: no record at all
     assert keys_of(on["runs"][0]) == want_keys(blocks) and offb["runs"][0] == []
