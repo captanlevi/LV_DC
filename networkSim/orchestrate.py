@@ -806,6 +806,7 @@ SESSION_RANGE: tuple | None = None     # --session-range (dry runs only, never t
 # tt anchor A/B (shagun 00:40, levi 00144 A1): --session-range-tt, the same law for tiktok slots only (short tt sessions,
 # tw / yt keep theirs); dry only, never the record; it wins over --session-range on tt
 SESSION_RANGE_TT: tuple | None = None
+ANCHOR_AB_ENVS = ("LVDC_ANCHOR_AB_TT", "LVDC_ANCHOR_AB_TW")    # browser.ANCHOR_AB_ENV's names (orchestrate never imports browser)
 TRIO_POLL_S = 2.0
 # under the trio root (data/_trio, trio_slots.TRIO_DIR)
 TRIO_DRAIN_FILE = "_summaries/trio_drain"   # touch it to drain: no refill, every slot ends; archived when used
@@ -1572,10 +1573,9 @@ def arg_refusal(args, environ) -> str | None:
         if not 0 < lo <= hi:
             return f"{flag} LO,HI with 0 < LO <= HI"
     if args.trio_record:                # levi 00144 A4: the anchor A/B override is dry only (exp.py refuses it per session too)
-        import browser as _b_ab
-        _ab = _b_ab.anchor_ab_refusal(os.environ, True)
+        _ab = sorted(v for v in ANCHOR_AB_ENVS if environ.get(v))
         if _ab:
-            return _ab
+            return f"{', '.join(_ab)} with --trio-record: the anchor A/B is dry only"
     # levi on a2f0cac (bundle item 6): a counted run never runs with the data volume check off; preflight's
     # check_data_uuid is "not checked" when LVDC_DATA_ROOT_UUID is unset, so the record refuses that here
     if args.trio_record and not (environ.get("LVDC_DATA_ROOT_UUID") or "").strip():

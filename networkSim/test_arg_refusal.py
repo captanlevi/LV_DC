@@ -46,6 +46,9 @@ def without(argv, *flags):
 
 def test_record_line_accepted():
     assert refusal(RECORD) is None
+    # levi 00144 A4: the tt / tw anchor A/B override never reaches a counted line
+    for v in ("LVDC_ANCHOR_AB_TT", "LVDC_ANCHOR_AB_TW"):
+        assert refusal(RECORD, {**ENV, v: "off"}) == f"{v} with --trio-record: the anchor A/B is dry only"
     assert refusal(without(RECORD, "--trio-steer-platforms")) is None                  # every platform steered
     assert refusal(without(RECORD, "--trio-steer", "--trio-steer-platforms")) is None   # steering off
 

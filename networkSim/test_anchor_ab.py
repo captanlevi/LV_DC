@@ -144,7 +144,9 @@ def test_arm_selection_and_counted_mutant():
     ex, orch = (HERE / "exp.py").read_text(), (HERE / "orchestrate.py").read_text()
     i_ref, i_dir = ex.index("_abr = anchor_ab_refusal(os.environ"), ex.index("    if args.save_dir:\n        session_dir = args.save_dir")
     assert i_ref < i_dir and "sys.exit(EXIT_ANCHOR_AB_REFUSED)" in ex and 'meta_extra["ab_arm"] = browser.ab_arm' in ex
-    assert "_b_ab.anchor_ab_refusal(os.environ, True)" in orch
+    import orchestrate as O
+    assert set(O.ANCHOR_AB_ENVS) == set(B.ANCHOR_AB_ENV.values()) and "import browser" not in orch.split("def arg_refusal")[1][:4000]
+    assert "with --trio-record: the anchor A/B is dry only" in (HERE / "test_arg_refusal.py").read_text()
 
 
 class _Fake:
