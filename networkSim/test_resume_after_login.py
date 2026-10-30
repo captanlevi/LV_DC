@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -35,6 +36,13 @@ STUBS = {
 }
 
 
+LAUNCH_CAP_S = 30.0
+
+
+def _calls(stub: Path) -> str:
+    return (stub / "calls").read_text() if (stub / "calls").exists() else ""
+
+
 def run(tmp: Path, ntp_yes_at="1", hold=False, batch_go=True, wait_s="2", offload_stuck=False):
     stub, state, mount = tmp / "stub", tmp / "state", tmp / "mount"
     for d in (stub, state, mount / "LV_DC_v2_data"):
@@ -54,7 +62,15 @@ def run(tmp: Path, ntp_yes_at="1", hold=False, batch_go=True, wait_s="2", offloa
     before = {p for p in (mount).rglob("*")}
     r = subprocess.run(["bash", str(HOOK)], env=env, capture_output=True, text=True, timeout=60)
     log = "\n".join(p.read_text() for p in sorted(state.glob("resume_*.log")))
-    calls = (stub / "calls").read_text() if (stub / "calls").exists() else ""
+    # env.sh launch_wrapper backgrounds the launch (setsid nohup ... &): the stub records its call after the hook may
+    # have exited (halo4 3754460f under load: run_batch.sh missing from calls although the log says relaunched). Wait on
+    # the condition, the launched stub's own record, never a timer; LAUNCH_CAP_S only bounds a launch that never lands.
+    calls = _calls(stub)
+    if "RESUME: batch wrapper relaunched" in log:
+        t_end = time.monotonic() + LAUNCH_CAP_S
+        while "run_batch.sh" not in calls and time.monotonic() < t_end:
+            time.sleep(0.05)
+            calls = _calls(stub)
     written = {p for p in mount.rglob("*")} - before
     return r.returncode, log, calls, written
 
