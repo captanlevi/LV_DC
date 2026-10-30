@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""t102 (B) (levi 23:22 / 23:24): tt's tier codec from the main player element.
+"""t102 (B') (levi 23:34): tt's tier codec from WorkerAnchor's worker-MSE rows over the main element's presented frames.
 
-Synthetic rvfc ticks + CDP media events: the main element is the one with the most presented frames; its player is the
-video player with its first-frame size loaded in [first - 30 s, first + 2 s]; every candidate's codec must agree.
-  - "mixed" ladder (tt_stream) with an hevc main -> tier_ok True; an h264 main (a rotated room) -> False;
-  - hevc only on previews (fewer frames) -> False;
-  - two candidates that agree -> that codec; that disagree -> null; a size-matching preview loaded in the window with
-    another codec -> null, never the preview's codec;
-  - no ticks / no first frame / no candidate -> null with a reason;
-  - mutant: "the first video player by position" gives the wrong answer on the rotated-room case (the rule does not);
-  - off: tier_ok reads tt_stream.codec (7809b21c); coverage_report's snapshot goes through tt_main.tier_ok.
+Synthetic rvfc ticks + worker mse rows (worker time + meta time_origin):
+  - an hevc main on a "mixed" ladder (tt_stream) -> tier_ok True; an h264 main after a rotation (a new worker) -> False,
+    and the first-by-position mutant (the first video row's codec) would say hevc;
+  - a mid-session switch: the codec covering the most presented frames decides, both directions (ti_100175's hvc1 ->
+    avc1 changeType shape);
+  - a preview element (MediaStream, no MSE) with fewer frames never becomes the main element;
+  - row codecs: init's 'vide' sample entry (audio inits ignored), ct / add video mimes; worker rows only (a page MSE row,
+    no wi, is not tt's); a worker without time_origin contributes nothing;
+  - nulls: no ticks, no worker video rows, most frames before the first row;
+  - record() reads meta.json's worker_anchor and the frames file; off: tier_ok reads tt_stream.codec (7809b21c).
 
     python3 test_tt_main.py        (exit 0 = pass)
 """
@@ -22,23 +23,26 @@ sys.path.insert(0, str(HERE))
 import tt_main as M  # noqa: E402
 
 T0 = 1_800_000_000.0
+ORIGIN = {0: (T0 - 100) * 1000, 1: (T0 + 400) * 1000}         # worker wi -> time_origin (epoch ms)
+WORKERS = [{"wi": w, "time_origin": o} for w, o in ORIGIN.items()]
 
 
-def ticks(el, src, t0, n, size=(720, 1280), fps=30):
-    out = [{"k": "first_frame", "el": el, "src": src, "ts": t0 * 1000, "w": size[0], "h": size[1]}]
-    out += [{"k": "tick", "el": el, "src": src, "ts": (t0 + i) * 1000, "pf": i * fps} for i in range(n)]
-    return out
+def ticks(el, src, t0, n, fps=30):
+    return [{"k": "tick", "el": el, "src": src, "ts": (t0 + i) * 1000, "pf": i * fps} for i in range(n)]
 
 
-def player(pid, t_load, codec, size="720x1280"):
-    return [{"t": t_load, "method": "playerEventsAdded", "playerId": pid,
-             "events": [{"timestamp": 1.0, "value": json.dumps({"event": "kLoad", "url": f"blob:https://www.tiktok.com/{pid}"})}]},
-            {"t": t_load + 0.5, "method": "playerPropertiesChanged", "playerId": pid,
-             "properties": [{"name": "kVideoTracks", "value": json.dumps([{"codec": codec, "natural size": size}])}]}]
+def wrow(wi, t_epoch, op, codec=None, kind="vide"):
+    r = {"k": "mse", "wi": wi, "sb": 1, "op": op, "t": t_epoch * 1000 - ORIGIN[wi]}
+    entry = {"hevc": "hvc1", "h264": "avc1"}.get(codec, codec)
+    if op == "init":
+        r["tr"] = [[1, 1000, kind, entry if kind == "vide" else "mp4a", 640, 1280, None]]
+    else:
+        r["mime"] = f"{'video' if kind == 'vide' else 'audio'}/mp4;codecs={ {'hevc': 'hev1.1.6.L93.B0', 'h264': 'avc1.64001f'}.get(codec, codec)}"
+    return r
 
 
 def _tier_on(meta: dict) -> bool:
-    """tier_ok with the rule on (it ships off: levi's (b) rule, see tt_main.TT_MAIN_CODEC)."""
+    """tier_ok with the rule on (it ships off unless levi 23:34 (2) holds 9 / 9)."""
     keep = M.TT_MAIN_CODEC
     M.TT_MAIN_CODEC = True
     try:
@@ -48,76 +52,65 @@ def _tier_on(meta: dict) -> bool:
 
 
 def test_hevc_main_on_a_mixed_ladder():
-    fr = ticks(2, "MediaSourceHandle#16", T0 + 10, 600) + ticks(3, "MediaSourceHandle#20", T0 + 100, 60)
-    me = player("A", T0 + 9.2, "hevc") + player("P", T0 + 99, "h264")          # P: a preview, fewer frames
-    r = M.main_codec(fr, me)
-    assert r["codec"] == "hevc" and r["element"] == [2, "MediaSourceHandle#16"] and r["frames"] == 599 * 30
-    assert r["candidates"] == [{"player": "A", "codec": "hevc", "size": "720x1280", "dt": 0.8}] and r["agree"]
+    fr = [wrow(0, T0 + 9, "add", "hevc"), wrow(0, T0 + 9.5, "init", "hevc")] + ticks(2, "MediaSourceHandle#16", T0 + 10, 600)
+    r = M.main_codec(fr, WORKERS)
+    assert r["codec"] == "hevc" and r["element"] == [2, "MediaSourceHandle#16"] and r["frames_by_codec"] == {"hevc": 599 * 30}
     assert _tier_on({"tt_main_codec": r, "tt_stream": {"codec": "mixed"}})
 
 
-def rotated():
-    """room 1 hevc (short), then a rotation: room 2's player h264 presents most frames."""
-    fr = ticks(2, "MediaSourceHandle#16", T0 + 10, 120) + ticks(2, "MediaSourceHandle#40", T0 + 200, 700)
-    me = player("R1", T0 + 9, "hevc") + player("R2", T0 + 199.7, "h264")
-    return fr, me
-
-
 def test_h264_main_after_a_rotation_and_the_position_mutant():
-    fr, me = rotated()
-    r = M.main_codec(fr, me)
+    fr = ([wrow(0, T0 + 9, "init", "hevc")] + ticks(2, "MediaSourceHandle#16", T0 + 10, 100)
+          + [wrow(1, T0 + 409, "init", "h264")] + ticks(2, "MediaSourceHandle#40", T0 + 410, 700))
+    r = M.main_codec(fr, WORKERS)
     assert r["codec"] == "h264" and r["element"] == [2, "MediaSourceHandle#40"] and not _tier_on({"tt_main_codec": r})
-    first_by_position = next(p["codec"] for p in M.players(me).values() if p["codec"])
-    assert first_by_position == "hevc" != r["codec"]                              # the mutant would count it as tier
+    assert M.timeline(fr, WORKERS)[0][1] == "hevc" != r["codec"]                  # the first-by-position mutant
+    assert [s[1] for s in r["switches"]] == ["hevc", "h264"]
 
 
-def test_hevc_only_on_previews():
-    fr = ticks(2, "MediaSourceHandle#5", T0 + 10, 600) + ticks(5, "MediaSourceHandle#9", T0 + 50, 30)
-    me = player("M", T0 + 9.5, "h264") + player("V", T0 + 49.5, "hevc")
-    r = M.main_codec(fr, me)
-    assert r["codec"] == "h264" and not _tier_on({"tt_main_codec": r})
+def test_mid_session_switch_majority_decides():
+    fr = [wrow(0, T0 + 9, "add", "hevc"), wrow(0, T0 + 9.2, "init", "hevc")] + ticks(2, "MSH#16", T0 + 10, 1000)
+    fr.insert(2, wrow(0, T0 + 17.5, "ct", "h264"))                               # ti_100175's shape: hvc1 -> avc1 at +8 s
+    fr.insert(3, wrow(0, T0 + 17.6, "init", "h264"))
+    r = M.main_codec(fr, WORKERS)
+    assert r["codec"] == "h264" and r["frames_by_codec"]["hevc"] == 8 * 30 and r["switches"][1][1:] == ["h264", "ct"]
+    back = [wrow(0, T0 + 9, "init", "h264"), wrow(0, T0 + 30, "ct", "hevc")] + ticks(2, "MSH#16", T0 + 10, 1000)
+    r = M.main_codec(back, WORKERS)
+    assert r["codec"] == "hevc" and _tier_on({"tt_main_codec": r})
 
 
-def test_multi_candidates():
-    fr = ticks(2, "MediaSourceHandle#58", T0 + 100, 600)
-    agree = player("a", T0 + 72, "h264") + player("b", T0 + 86, "h264") + player("c", T0 + 98, "h264")
-    r = M.main_codec(fr, agree)
-    assert r["codec"] == "h264" and r["agree"] and sorted(c["dt"] for c in r["candidates"]) == [2.0, 14.0, 28.0]
-    disagree = player("a", T0 + 86, "h264") + player("b", T0 + 98, "hevc")
-    r = M.main_codec(fr, disagree)
-    assert r["codec"] is None and r["why"] == "candidates disagree" and not r["agree"]
-    assert not _tier_on({"tt_main_codec": r})
+def test_preview_element_never_main():
+    fr = ([wrow(0, T0 + 9, "init", "h264")] + ticks(2, "MediaSourceHandle#5", T0 + 10, 600)
+          + ticks(1, "MediaStream#3", T0 + 10, 50, fps=60))                         # a preview: MediaStream, fewer frames
+    r = M.main_codec(fr, WORKERS)
+    assert r["element"] == [2, "MediaSourceHandle#5"] and r["codec"] == "h264"
 
 
-def test_size_matching_preview_in_the_window():
-    fr = ticks(2, "MediaSourceHandle#16", T0 + 10, 600)
-    me = player("main", T0 + 9, "hevc") + player("prev", T0 + 5, "h264")         # same size, inside the window
-    r = M.main_codec(fr, me)
-    assert r["codec"] is None and r["why"] == "candidates disagree"              # never the preview's codec
-    other_size = player("main", T0 + 9, "hevc") + player("prev", T0 + 5, "h264", size="540x960")
-    assert M.main_codec(fr, other_size)["codec"] == "hevc"
+def test_row_codecs():
+    assert M.row_codec(wrow(0, T0, "init", "hevc")) == "hevc" and M.row_codec(wrow(0, T0, "init", "h264")) == "h264"
+    assert M.row_codec(wrow(0, T0, "init", "x", kind="soun")) is None                 # an audio init
+    assert M.row_codec(wrow(0, T0, "ct", "hevc")) == "hevc" and M.row_codec(wrow(0, T0, "add", "h264")) == "h264"
+    assert M.row_codec(wrow(0, T0, "add", "mp4a.40.2", kind="soun")) is None
+    assert M.row_codec({"op": "init", "tr": [[1, 1000, "vide", "hev1", 1, 1, None]]}) == "hevc"
+    page = {k: v for k, v in wrow(0, T0, "init", "hevc").items() if k != "wi"}       # a page MSE row: not a worker's
+    assert M.timeline([page], WORKERS) == [] and M.timeline([wrow(0, T0, "init", "hevc")], [{"wi": 0}]) == []
 
 
-def test_window_edges_and_nulls():
-    fr = ticks(2, "MediaSourceHandle#16", T0 + 10, 600)
-    assert M.main_codec(fr, player("x", T0 + 10 + 1.9, "hevc"))["codec"] == "hevc"      # load after the frame (host t)
-    assert M.main_codec(fr, player("x", T0 + 10 + 2.1, "hevc"))["codec"] is None
-    assert M.main_codec(fr, player("x", T0 + 10 - 30.0, "hevc"))["codec"] == "hevc"
-    r = M.main_codec(fr, player("x", T0 + 10 - 30.1, "hevc"))
-    assert r["codec"] is None and r["why"] == "no 720x1280 video player loaded in the window"
-    assert M.main_codec([], player("x", T0, "hevc")) == {**M.main_codec([], []), "codec": None}
-    assert M.main_codec([], [])["why"] == "no rVFC ticks"
-    no_first = [t for t in fr if t["k"] == "tick"]
-    assert M.main_codec(no_first, player("x", T0 + 9, "hevc"))["why"] == "no first frame on the main element"
+def test_nulls():
+    assert M.main_codec([], WORKERS)["why"] == "no rVFC ticks"
+    fr = ticks(2, "MSH#1", T0 + 10, 100)
+    assert M.main_codec(fr, WORKERS)["why"] == "no worker video init / changeType rows"
+    late = fr + [wrow(0, T0 + 105, "init", "hevc")]
+    r = M.main_codec(late, WORKERS)
+    assert r["codec"] is None and r["why"] == "most frames precede every worker video row"
 
 
-def test_record_reads_files(tmp_path: Path):
-    tmp = tmp_path
-    fr, me = rotated()
-    (tmp / "rvfc_frames.jsonl").write_text("".join(json.dumps(r) + "\n" for r in fr) + "not json\n")
-    (tmp / "media_events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in me))
-    assert M.record(tmp, "rvfc_frames.jsonl", "media_events.jsonl")["codec"] == "h264"
-    assert M.record(tmp, "absent.jsonl", "media_events.jsonl")["why"] == "no rVFC ticks"
+def test_record_reads_meta_and_frames(tmp_path: Path):
+    fr = [wrow(0, T0 + 9, "init", "hevc")] + ticks(2, "MSH#16", T0 + 10, 60) + ["not json"]
+    (tmp_path / "rvfc_frames.jsonl").write_text("".join((json.dumps(r) if isinstance(r, dict) else r) + "\n" for r in fr))
+    (tmp_path / "meta.json").write_text(json.dumps({"frame_log": {"worker_anchor": {"workers": WORKERS}}}))
+    assert M.record(tmp_path, "rvfc_frames.jsonl")["codec"] == "hevc"
+    (tmp_path / "meta.json").write_text("{}")
+    assert M.record(tmp_path, "rvfc_frames.jsonl")["why"] == "no worker video init / changeType rows"
 
 
 def test_off_and_wiring():
@@ -128,21 +121,20 @@ def test_off_and_wiring():
         assert not M.tier_ok({"tt_stream": {"codec": "mixed"}, "tt_main_codec": {"codec": "hevc"}})
     finally:
         M.TT_MAIN_CODEC = keep
-    cr = (HERE / "coverage_report.py").read_text()
-    assert "tier_ok = tt_main.tier_ok(meta)" in cr
+    assert "tier_ok = tt_main.tier_ok(meta)" in (HERE / "coverage_report.py").read_text()
     ex = (HERE / "exp.py").read_text()
-    assert 'if platform == "tiktok" and tt_main.TT_MAIN_CODEC:' in ex and "tt_main_codec=tt_main.record(" in ex
-    assert M.WIN_BEFORE_S == 30.0 and M.WIN_AFTER_S == 2.0 and M.TT_MAIN_CODEC is False   # ships off (levi (b))
+    assert 'if platform == "tiktok" and tt_main.TT_MAIN_CODEC:' in ex
+    assert 'tt_main_codec=tt_main.record(\n                    session_dir, session_files.side_file("frames")[0]))' in ex
 
 
 def main() -> int:
     import tempfile
     for f in (test_hevc_main_on_a_mixed_ladder, test_h264_main_after_a_rotation_and_the_position_mutant,
-              test_hevc_only_on_previews, test_multi_candidates, test_size_matching_preview_in_the_window,
-              test_window_edges_and_nulls, test_off_and_wiring):
+              test_mid_session_switch_majority_decides, test_preview_element_never_main, test_row_codecs, test_nulls,
+              test_off_and_wiring):
         f()
     with tempfile.TemporaryDirectory() as t:
-        test_record_reads_files(Path(t))
+        test_record_reads_meta_and_frames(Path(t))
     print("test_tt_main: ok")
     return 0
 
