@@ -87,7 +87,7 @@ def run(now_ms: int, block_s: int, max_recs: int = 2000, noadd: bool = False, r2
     with tempfile.TemporaryDirectory() as t:
         h, js, out = Path(t) / "h.js", Path(t) / "w.js", Path(t) / "out.json"
         h.write_text(HARNESS)
-        js.write_text(B.MSE_WRAP_JS % {"block_s": block_s, "max": max_recs, "r2": r2})
+        js.write_text(B.mse_wrap_js(block_s, max_recs=max_recs, r2=bool(r2)))
         subprocess.run([node, str(h), str(js), str(out), str(now_ms)] + (["noadd"] if noadd else []), check=True)
         return json.loads(out.read_text())
 
@@ -179,9 +179,9 @@ def test_r2_off_is_971e444e_and_on_reads_heads():
     old = (HERE / "fixtures" / "mse_wrap_js_971e444e.js").read_text() % {"block_s": 0, "max": 2000}
     for mime, steps in r2_plans():
         o = run_plan(old, steps, mime)
-        off = run_plan(B.MSE_WRAP_JS % {"block_s": 0, "max": 2000, "r2": 0}, steps, mime)
+        off = run_plan(B.mse_wrap_js(0, max_recs=2000, r2=False, webm=False, ykey=False), steps, mime)
         assert json.dumps(off, sort_keys=True) == json.dumps(o, sort_keys=True), (mime, off, o)
-        on = run_plan(B.MSE_WRAP_JS % {"block_s": 0, "max": 2000, "r2": 1}, steps, mime)
+        on = run_plan(B.mse_wrap_js(0, max_recs=2000, r2=True), steps, mime)
         assert on["leaks"] == 0 and on["rets"] == len(steps) and on["calls"] == len(steps)
         recs = on["posted"][0]["recs"]
         apps = [r for r in recs if r["op"] == "app"]

@@ -1687,6 +1687,9 @@ def _set_download_dir(page: CDPPage, download_path: str) -> None:
 FRAME_LOG_ENV = "LVQOE_FRAME_LOG"
 FRAME_LOG_MSE_MAX = 2000      # t93 rows 9 / 20: the page-world MSE wrap's records per 1 s batch (past it counted, over)
 MSE_WRAP_R2 = True            # t100 R2 (rushi 14:35): yt app tso + head time (tf / ctc), init / tcs; off = 971e444e's records
+MSE_WRAP_WEBM = True          # t102 row (7) (levi 22:10): yt WebM video byte-stream state (cc / wc / nb / b0 / us); off = 7809b21c's records
+MSE_WRAP_YT_KEY = True        # t102 yt key (levi 22:10): keyed WebM blocks (watcher.media.vcl_keys.key); off = no key rows
+MSE_WRAP_KEY_EVERY = 30       # every Nth WebM video block by count, as WORKER_ANCHOR_KEY_EVERY (levi audit: N from S1's F1 headroom)
 # t93 rows 9 / 20 (levi 00124; brad W3): yt's MSE calls in the page world, added before any page script by
 # Page.addScriptToEvaluateOnNewDocument, only when the frame log is enabled on yt (tw's MSE runs in a worker, tt's live is
 # a MediaStream: out by construction). Each wrapped call runs the original with the same this and arguments and returns
@@ -1786,6 +1789,103 @@ MSE_WRAP_JS = r"""(() => {
     try { window.postMessage({ source: "lvqoe-mse", recs: batch, over, inst, first }, "*"); } catch (e) {}
   }, 1000);
 })();"""
+
+
+# t102 rows (3) / (7) + the yt key (levi 22:10; audit 00138; fast gate 00139 G0): the yt WebM additions, inserted into
+# MSE_WRAP_JS only when MSE_WRAP_WEBM or MSE_WRAP_YT_KEY is on, so with both off the injected script is 7809b21c's,
+# byte for byte. Each anchor occurs once in MSE_WRAP_JS (checked at import).
+MSE_WRAP_YT_PARSER = r"""  // t102 rows (3) / (7) + the yt key (levi 22:10; audit 00138; MSE_WRAP_WEBM / MSE_WRAP_YT_KEY): a WebM video buffer's
+  // appends are one byte stream; a generator per buffer walks its element headers through every append (masters Segment /
+  // Info / Cluster / BlockGroup entered, others passed by size; payloads read only for TimecodeScale, a Cluster Timecode,
+  // a block's 4-byte header and a keyed block's first / last 256 bytes). app gains cc (the Cluster Timecode in force at
+  // byte 0, the carry), wc ([Timecode, byte offset of its Cluster's ID in this append] of the first Cluster Timecode read
+  // here), nb / b0 (blocks starting here, the first one's relative tc), key ([abs tc = Cluster tc + rel, rel, L, FNV-1a 32
+  // over the payload's first 256 + last 256 bytes (all when L <= 512): watcher.media.vcl_keys.key, keyframe bit or null
+  // for a Block], ON blocks, every KEY_EVERY-th block by count and the first after a reset or a Cluster tc jump), lace
+  // (laced blocks, never keyed), us (the reason the stream is unsynced: start / abort / ct / err; that append is not
+  // parsed). abort(), changeType() and a parse fault (r2err) reset; remove() never does (levi audit 1: MSE keeps the
+  // parser). Sync returns only on an append that starts with the EBML or Cluster ID (MSE: after an abort the next
+  // append starts at a Cluster or an init), never by a payload scan. The batch carries ms, the wrap's own time.
+  const WEBM = %(webm)d, YKEY = %(ykey)d, KEY_EVERY = %(key_every)d;
+  let ms = 0;
+  const VWEBM = /^\s*video\/webm/i;
+  const I_EBML = 0x1a45dfa3, I_CL = 0x1f43b675, I_TC = 0xe7, I_TCS = 0x2ad7b1, I_SB = 0xa3, I_BL = 0xa1;
+  const MASTER = [0x18538067, 0x1549a966, I_CL, 0xa0];
+  const wst = new WeakMap();
+  const W = (sb) => { let s = wst.get(sb); if (!s) { s = { vid: false, sync: false, why: "start", tcs: 1e6, ctc: null,
+      last: null, nb: 0, pend: true, q: [], qn: 0, pos: 0, cl: null, g: null, r: null }; wst.set(sb, s); } return s; };
+  const reset = (s, why) => { s.sync = false; s.why = why; s.g = null; s.q = []; s.qn = 0; s.ctc = null; s.pend = true; };
+  const fnv = (h, p) => { for (let i = 0; i < p.length; i++) { h ^= p[i]; h = Math.imul(h, 0x01000193) >>> 0; } return h; };
+  function* need(s, n) { while (s.qn < n) yield; const out = new Uint8Array(n); let k = 0;
+    while (k < n) { const c = s.q[0], m = Math.min(n - k, c[0].length - c[1]); out.set(c[0].subarray(c[1], c[1] + m), k);
+      k += m; c[1] += m; s.qn -= m; s.pos += m; if (c[1] === c[0].length) s.q.shift(); }
+    return out; }
+  function* pass(s, n) { while (n > 0) { while (!s.qn) yield; const c = s.q[0], m = Math.min(n, c[0].length - c[1]);
+      c[1] += m; s.qn -= m; s.pos += m; n -= m; if (c[1] === c[0].length) s.q.shift(); } }
+  function* vr(s, keep) { const a = (yield* need(s, 1))[0]; let n = 1; while (n <= 8 && !(a & (0x80 >> (n - 1)))) n++;
+    if (n > 8) throw new Error("vint"); let v = keep ? a : a & (0xff >> n), ones = (a & (0xff >> n)) === (0xff >> n);
+    if (n > 1) for (const x of yield* need(s, n - 1)) { v = v * 256 + x; if (x !== 0xff) ones = false; }
+    return [v, n, ones]; }
+  function* webm(s) { for (;;) {
+    const at = s.pos, el = (yield* vr(s, true))[0], z = yield* vr(s, false);
+    if (MASTER.includes(el)) { if (el === I_CL) s.cl = at; continue; }
+    if (z[2]) throw new Error("unknown size " + el);
+    const n = z[0];
+    if (el === I_TC || el === I_TCS) { let v = 0; for (const x of yield* need(s, n)) v = v * 256 + x;
+      if (el === I_TCS) { s.tcs = v; continue; }
+      if (s.last !== null && (v < s.last || v - s.last > 5e9 / s.tcs)) s.pend = true;
+      s.ctc = v; if (s.r && s.r.wc === undefined) s.r.wc = [v, s.cl - s.r.p0]; continue; }
+    if ((el === I_SB || el === I_BL) && s.ctc !== null) {
+      const tk = yield* vr(s, false), hb = yield* need(s, 3), L = n - tk[1] - 3;
+      if (L < 0) throw new Error("block size");
+      const rel = ((hb[0] << 8) | hb[1]) - (hb[0] & 0x80 ? 0x10000 : 0), abs = s.ctc + rel, r = s.r;
+      s.last = abs; s.nb += 1; if (r) { r.nb = (r.nb || 0) + 1; if (r.b0 === undefined) r.b0 = rel; }
+      if (hb[2] & 0x06) { if (r) r.lace = (r.lace || 0) + 1; yield* pass(s, L); continue; }
+      if (YKEY && L > 0 && on() && (s.pend || s.nb %% KEY_EVERY === 0)) { s.pend = false; let h;
+        if (L <= 512) h = fnv(0x811c9dc5, yield* need(s, L));
+        else { h = fnv(0x811c9dc5, yield* need(s, 256)); yield* pass(s, L - 512); h = fnv(h, yield* need(s, 256)); }
+        (s.r.key || (s.r.key = [])).push([abs, rel, L, h >>> 0, el === I_SB ? hb[2] >> 7 : null]);   // the append it completes in
+        continue; }
+      yield* pass(s, L); continue; }
+    yield* pass(s, n); } }
+  const feed = (sb, b0, r) => { const s = W(sb); if (!s.vid) return; const b = u8(b0); if (!b || !b.length) return;
+    if (!s.sync) { const h4 = b.length >= 4 ? ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0 : 0;
+      if (h4 !== I_EBML && h4 !== I_CL) { r.us = s.why; return; }
+      reset(s, null); s.sync = true; s.g = webm(s); s.g.next(); }
+    r.cc = s.ctc; r.p0 = s.pos + s.qn; s.r = r; s.q.push([b, 0]); s.qn += b.length;   // p0: this append's byte 0 in the stream
+    try { s.g.next(); s.q = s.q.map((c) => [c[0].slice(c[1]), 0]); }   // the leftover (< 512 B) copied: the page may reuse b
+    catch (e) { reset(s, "err"); r.r2err = 1; }
+    s.r = null; delete r.p0; };
+  const ROW1 = ["cc", "wc", "nb", "b0", "lace", "us"];
+  const yt = (sb, a, r) => { const q = performance.now();                 // the parse runs for either row; Row 1's fields
+    try { feed(sb, a[0], r); if (!WEBM) for (const f of ROW1) delete r[f]; } catch (e) {}   // only with MSE_WRAP_WEBM
+    ms += performance.now() - q; };
+"""
+MSE_WRAP_YT_EDITS = [('  } catch (e) { r.tf = null; r.r2err = 1; } };\n', '  } catch (e) { r.tf = null; r.r2err = 1; } };\n__PARSER__'),
+    ('      push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n', '      push({ op: "add", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n      W(sb).vid = VWEBM.test(String(a[0]));\n'),
+    ('      if (R2) r2(sb, a[0], r);\n', '      if (R2) r2(sb, a[0], r);\n      yt(sb, a, r);\n'),
+    ('    wrap(p, "changeType", (sb, a) => push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) }));\n', '    wrap(p, "changeType", (sb, a) => { push({ op: "ct", sb: id(sb), mime: String(a[0]).slice(0, 160) });\n      const s = W(sb); reset(s, "ct"); s.vid = VWEBM.test(String(a[0])); });\n    wrap(p, "abort", (sb) => reset(W(sb), "abort"));\n'),
+    ('    try { window.postMessage({ source: "lvqoe-mse", recs: batch, over, inst, first }, "*"); } catch (e) {}\n', '    try { window.postMessage({ source: "lvqoe-mse", recs: batch, over, inst, first, ms: Math.round(ms * 100) / 100 }, "*"); } catch (e) {}\n')]
+
+
+def _mse_wrap_yt_template() -> str:
+    t = MSE_WRAP_JS
+    for anchor, repl in MSE_WRAP_YT_EDITS:
+        assert t.count(anchor) == 1, anchor
+        t = t.replace(anchor, repl.replace("__PARSER__", MSE_WRAP_YT_PARSER))
+    return t
+
+
+MSE_WRAP_YT_JS = _mse_wrap_yt_template()
+
+
+def mse_wrap_js(block_s: int, *, max_recs: int = FRAME_LOG_MSE_MAX, r2: bool = MSE_WRAP_R2, webm: bool = MSE_WRAP_WEBM,
+                ykey: bool = MSE_WRAP_YT_KEY, key_every: int = MSE_WRAP_KEY_EVERY) -> str:
+    """MSE_WRAP_JS for one session (the constants frozen with the tip; tests pass their own)."""
+    if not (webm or ykey):                    # both off: 7809b21c's script, byte for byte (fast gate G0)
+        return MSE_WRAP_JS % {"block_s": int(block_s), "max": int(max_recs), "r2": int(r2)}
+    return MSE_WRAP_YT_JS % {"block_s": int(block_s), "max": int(max_recs), "r2": int(r2), "webm": int(webm),
+                             "ykey": int(ykey), "key_every": max(1, int(key_every))}
 
 
 def mse_wrap_settle(page, rec: dict) -> dict:
@@ -5470,10 +5570,10 @@ class BrowserSession:
         try:
             self._page.call("Page.enable")
             r = self._page.call("Page.addScriptToEvaluateOnNewDocument", {
-                "source": MSE_WRAP_JS % {"block_s": self.frame_log["block_s"], "max": FRAME_LOG_MSE_MAX,
-                                         "r2": int(MSE_WRAP_R2)}})
+                "source": mse_wrap_js(self.frame_log["block_s"])})
             self.frame_log["mse_wrap"].update({"installed": bool(r.get("identifier")), "id": r.get("identifier"),
-                                               "installed_at": round(time.time(), 3)})
+                                               "installed_at": round(time.time(), 3), "webm": int(MSE_WRAP_WEBM),
+                                               "ykey": int(MSE_WRAP_YT_KEY), "key_every": MSE_WRAP_KEY_EVERY})
         except Exception as exc:
             self.frame_log["mse_wrap"]["error"] = repr(exc)[:200]
 
