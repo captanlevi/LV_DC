@@ -227,6 +227,7 @@ EXIT_FRAME_LOG_REFUSED = 14   # levi 02:52: a counted v4 run without LVQOE_FRAME
 # chaos at session end. False = 7809b21c (both run here). The field-only tshark reads (dns_answers, check_session's
 # packets) stay: no keylog, no decode.
 CHAOS_HTTP_LOGS = False
+EXIT_ANCHOR_AB_REFUSED = 17   # levi 00144 A4: LVDC_ANCHOR_AB_TT / _TW on a counted run (or a bad arm), refused before any session dir
 EXIT_BROWSER_DEAD = 16   # t102 #4 (levi 00403): the slot's Chrome died (pid) or its page's renderer crashed; counted, never the channel's
 
 
@@ -1119,6 +1120,14 @@ if __name__ == "__main__":
         print(f"DRY HOLD REFUSED: {_dhr}", flush=True)
         sys.exit(EXIT_DRY_HOLD_REFUSED)
     DRY_HOLD = os.environ.get(DRY_HOLD_ENV) == "1"
+    # levi 00144 A4: the anchor A/B override (LVDC_ANCHOR_AB_TT / _TW) is dry only: refused on a counted run, before any
+    # session dir (and an arm outside browser.ANCHOR_ARMS)
+    from browser import anchor_ab_refusal
+    _abr = anchor_ab_refusal(os.environ, os.environ.get("LVDC_TRIO_RECORD") == "1"
+                             or _dr_fl.record_root_check(_dr_fl.DATA_ROOT)["marker"])
+    if _abr:
+        print(f"ANCHOR A/B REFUSED: {_abr}", flush=True)
+        sys.exit(EXIT_ANCHOR_AB_REFUSED)
     if args.save_dir:
         session_dir = args.save_dir
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -1568,6 +1577,8 @@ if __name__ == "__main__":
                 if tcp_state is not None:
                     browser.frame_log["tcp_state"] = tcp_state.stop()
                 meta_extra["frame_log"] = browser.frame_log
+            if browser.ab_arm is not None:              # levi 00144: tw / tt, every session (the constant or the dry cycle)
+                meta_extra["ab_arm"] = browser.ab_arm
             try:                                        # v3 A4: one offer schema for every platform (meta.json offer)
                 import offer as _offer
                 meta_extra["offer"] = _offer.offer_record(platform, {k: meta_extra.get(k)

@@ -2071,10 +2071,84 @@ WORKER_ANCHOR_JS = r"""(() => {
 })()"""
 
 
-def worker_anchor_js(block_s: int) -> str:
-    return (WORKER_ANCHOR_JS.replace("__BLOCK_S__", str(int(block_s))).replace("__MAX__", str(FRAME_LOG_MSE_MAX))
-            .replace("__KEY_EVERY__", str(WORKER_ANCHOR_KEY_EVERY))
-            .replace("__KINDS__", json.dumps({k: 1 for k in WORKER_ANCHOR_KINDS}, sort_keys=True)))
+def worker_anchor_js(block_s: int, proxy: bool = False) -> str:
+    js = (WORKER_ANCHOR_JS.replace("__BLOCK_S__", str(int(block_s))).replace("__MAX__", str(FRAME_LOG_MSE_MAX))
+          .replace("__KEY_EVERY__", str(WORKER_ANCHOR_KEY_EVERY))
+          .replace("__KINDS__", json.dumps({k: 1 for k in WORKER_ANCHOR_KINDS}, sort_keys=True)))
+    if proxy:
+        for old, new in ANCHOR_PROXY_EDITS:
+            assert js.count(old) == 1, old[:60]
+            js = js.replace(old, new)
+    return js
+
+
+# tt anchor A/B (levi 00405 / 00143; supervisor 00:36 b3): the worker anchor's arm per platform. "full" = cbe3ce9d; "off" =
+# nothing attached (the v3-equivalent tt path; the rest of v4 on); "b1" = attach + resume, nothing installed (the
+# mechanism arm); "proxy" (b3) = full's rows, each wrapped method a Proxy of the native function (name / length stay
+# native; V8 prints a bare Proxy as "function () { [native code] }", so Function.prototype.toString is itself a Proxy that
+# returns each wrapped function's original text, and its own), the timestampOffset setter a Proxy of the native setter in
+# the same accessor shape, and no worker global
+# (no "again" flag; the batch is read through the take function's objectId, Runtime.callFunctionOn). The constant is the
+# frozen default. ANCHOR_AB_ENV (dry only): a per-session cycle such as "off,full" or "off,b1,proxy,full", the arm =
+# cycle[the session name's number % its length]; on a counted run exp.py refuses it before any session dir, and
+# anchor_arm() keeps the constant whatever the env says. levi 00144 A4: a freeze flips one constant (frozen: full / proxy /
+# off; b1 is the dry's mechanism arm only), accepted on G0 equality with the dry's override of the same arm.
+TT_WORKER_ANCHOR = "full"
+TW_WORKER_ANCHOR = "full"
+ANCHOR_ARMS = ("full", "off", "b1", "proxy")
+ANCHOR_AB_ENV = {"tiktok": "LVDC_ANCHOR_AB_TT", "twitch": "LVDC_ANCHOR_AB_TW"}
+ANCHOR_PROXY_EDITS = (
+    ('  if (self.__lvqoeAnchor) return "again";\n  self.__lvqoeAnchor = true;\n', ""),
+    ("  const wrap = (proto, name, before, after) => {\n",
+     "  const TS = Function.prototype.toString, NS = new WeakMap();\n"
+     "  const nat = (p, o) => { NS.set(p, Reflect.apply(TS, o, [])); return p; };\n"
+     "  Function.prototype.toString = nat(new Proxy(TS, { apply(t, th, a) { return NS.has(th) ? NS.get(th) : "
+     "Reflect.apply(t, th, a); } }), TS);\n"
+     "  const wrap = (proto, name, before, after) => {\n"),
+    ("""    proto[name] = function (...a) {
+      if (before) timed(() => before(this, a));
+      const ret = orig.apply(this, a);
+      if (after) timed(() => after(this, a, ret));
+      return ret;
+    };""", """    proto[name] = nat(new Proxy(orig, { apply(t, th, a) {
+      if (before) timed(() => before(th, a));
+      const ret = Reflect.apply(t, th, a);
+      if (after) timed(() => after(th, a, ret));
+      return ret;
+    } }), orig);"""),
+    ("""      set(v) { timed(() => { S(this).pend = true; push({ op: "tso", sb: id(this), v, was: d.get.call(this) }, true); }); d.set.call(this, v); } });""",
+     """      set: nat(new Proxy(d.set, { apply(t, th, a) { timed(() => { S(th).pend = true; push({ op: "tso", sb: id(th), v: a[0], was: d.get.call(th) }, true); });
+        return Reflect.apply(t, th, a); } }), d.set) });"""),
+    ("  self.__lvqoeAnchorTake = () => {", "  const take = () => {"),
+    ('  return "ok";\n})()', "  return take;\n})()"),
+)
+ANCHOR_TAKE_FN = "function () { return this(); }"
+
+
+def anchor_ab_refusal(env, counted: bool) -> str | None:
+    """A dry-only A/B cycle on a counted run, or an arm outside ANCHOR_ARMS: the reason; else None."""
+    set_ = sorted(v for v in ANCHOR_AB_ENV.values() if env.get(v))
+    if counted and set_:
+        return f"{', '.join(set_)} on a counted run (LVDC_TRIO_RECORD=1 or a record-marker root): the anchor A/B is dry only"
+    for v in set_:
+        bad = [a for a in env[v].split(",") if a.strip() not in ANCHOR_ARMS]
+        if bad:
+            return f"{v}={env[v]!r}: {bad} not in {ANCHOR_ARMS}"
+    return None
+
+
+def anchor_arm(platform: str, env, session_name: str | None, counted: bool) -> dict:
+    """meta.json ab_arm: the session's anchor arm and where it came from (the constant, or the dry cycle)."""
+    rec = {"arm": {"tiktok": TT_WORKER_ANCHOR, "twitch": TW_WORKER_ANCHOR}.get(platform, "off"), "source": "constant"}
+    raw = (env.get(ANCHOR_AB_ENV[platform]) or "").strip() if platform in ANCHOR_AB_ENV else ""
+    if not raw:
+        return rec
+    if counted:
+        return {**rec, "env_ignored": raw}
+    cyc = [a.strip() for a in raw.split(",")]
+    n = int(re.sub(r"\D", "", session_name or "") or 0)
+    arm = cyc[n % len(cyc)]
+    return {"arm": arm if arm in ANCHOR_ARMS else rec["arm"], "source": "env", "env": raw, "n": n}
 
 
 def frame_log_arm(block_s: int, now_s: float | None = None) -> bool:
@@ -3590,9 +3664,10 @@ class WorkerAnchor:
     counts (recs: delivered; post_lost_recs: posts the page refused), and per record kind its count and JSON bytes as
     posted (levi 14:35: the cost of record is measured)."""
 
-    def __init__(self, ws_url: str, block_s: int):
-        self.ws_url, self.block_s = ws_url, block_s
-        self.js = worker_anchor_js(block_s)
+    def __init__(self, ws_url: str, block_s: int, arm: str = "full"):
+        self.ws_url, self.block_s, self.arm = ws_url, block_s, arm
+        self.js = worker_anchor_js(block_s, proxy=arm == "proxy")
+        self._take_oid: dict[str, str] = {}        # proxy: sessionId -> the take function's objectId (no worker global)
         self.workers: list[dict] = []
         self.workers_overflow = 0
         self._live: dict[str, dict] = {}           # sessionId -> its worker record
@@ -3657,9 +3732,12 @@ class WorkerAnchor:
             self.workers_overflow += 1
         self._by_sid[sid] = w
         try:
-            if info.get("type") == "worker":       # the filter admits dedicated workers only; anything else just resumes
+            if info.get("type") == "worker" and self.arm == "b1":     # attach + resume, nothing installed
                 self._live[sid] = w
-                self._pending[send("Runtime.evaluate", {"expression": self.js, "returnByValue": True,
+                w["wrap"] = "none (b1)"
+            elif info.get("type") == "worker":     # the filter admits dedicated workers only; anything else just resumes
+                self._live[sid] = w
+                self._pending[send("Runtime.evaluate", {"expression": self.js, "returnByValue": self.arm != "proxy",
                                                         "timeout": WORKER_ANCHOR_EVAL_TIMEOUT_MS}, sid)] = ("wrap", sid, 0)
         except Exception as exc:
             w["wrap_error"] = repr(exc)[:200]
@@ -3676,7 +3754,14 @@ class WorkerAnchor:
         val = (res.get("result") or {}).get("value")
         err = msg.get("error") or res.get("exceptionDetails")
         w = self._by_sid.get(sid)
-        if kind == "wrap" and w is not None:
+        if kind == "wrap" and w is not None and self.arm == "proxy":
+            oid = (res.get("result") or {}).get("objectId")
+            w["wrap"] = "ok" if oid and not err else None
+            if oid and not err:
+                self._take_oid[sid] = oid
+            if err:
+                w["wrap_error"] = json.dumps(err, default=str)[:200]
+        elif kind == "wrap" and w is not None:
             w["wrap"] = val if not err else None
             if err:
                 w["wrap_error"] = json.dumps(err, default=str)[:200]
@@ -3721,13 +3806,21 @@ class WorkerAnchor:
 
     def take(self, send) -> None:
         """Ask every live worker for its batch (the reply is relayed in _reply)."""
+        if self.arm == "b1":
+            return
         for sid in list(self._live):
+            if self.arm == "proxy":
+                if sid in self._take_oid:
+                    self._pending[send("Runtime.callFunctionOn", {"functionDeclaration": ANCHOR_TAKE_FN, "objectId":
+                                                                  self._take_oid[sid], "returnByValue": True},
+                                       sid)] = ("take", sid, 0)
+                continue
             self._pending[send("Runtime.evaluate", {"expression": "self.__lvqoeAnchorTake ? self.__lvqoeAnchorTake() "
                                                                   ": null", "returnByValue": True}, sid)] = ("take", sid, 0)
 
     def record(self) -> dict:
         workers = [{k: v for k, v in w.items() if k != "posted_inst"} for w in self.workers]
-        return {"armed": self.armed.is_set(), "armed_error": self.armed_error, "attach": WORKER_ANCHOR_ATTACH,
+        return {"arm": self.arm, "armed": self.armed.is_set(), "armed_error": self.armed_error, "attach": WORKER_ANCHOR_ATTACH,
                 "kinds_on": list(WORKER_ANCHOR_KINDS), "key_every": WORKER_ANCHOR_KEY_EVERY,
                 "eval_timeout_ms": WORKER_ANCHOR_EVAL_TIMEOUT_MS, "workers": workers,
                 "workers_overflow": self.workers_overflow, "batches": self.batches, "recs": self.recs,
@@ -5445,6 +5538,10 @@ class BrowserSession:
         self._master: MasterListener | None = None   # twitch: the master playlist listener
         self._tt_room: TtRoomListener | None = None  # tiktok: the room/enter listener (meta.json tt_room_enter)
         self._anchor: WorkerAnchor | None = None     # t100 R1: tw / tt worker MSE anchor (frame log enabled only)
+        # levi 00144: the anchor's arm (meta.json ab_arm; tw / tt only); a counted session keeps the constant
+        self.ab_arm = (anchor_arm(platform, os.environ, session_dir.name if session_dir is not None else None,
+                                  os.environ.get("LVDC_TRIO_RECORD") == "1" or bool((self.frame_log or {}).get("record")))
+                       if platform in WORKER_ANCHOR_PLATFORMS else None)
         self.t2_skipped: list[dict] = []            # stuck rule: T2_S frozen with only the fallback rung (no T2)
         self.player_ladder: dict | None = None      # twitch: the quality menu's options when the master was not read
         self.shot_origin: dict | None = None        # the X11 shot origin calibration (t37; calibrate_shot_origin)
@@ -5664,9 +5761,13 @@ class BrowserSession:
         failure is recorded in meta frame_log.worker_anchor."""
         if not (self.frame_log and self.frame_log.get("enabled") and self.platform in WORKER_ANCHOR_PLATFORMS):
             return
+        arm = (getattr(self, "ab_arm", None) or {}).get("arm", "full")
+        if arm == "off":                          # levi 00144: nothing attached (the v3-equivalent tt path)
+            self.frame_log["worker_anchor"] = {"arm": "off"}
+            return
         t0 = time.time()
         try:
-            self._anchor = WorkerAnchor(self._ws_url, self.frame_log["block_s"]).start()
+            self._anchor = WorkerAnchor(self._ws_url, self.frame_log["block_s"], arm).start()
             self.frame_log["worker_anchor"] = {"installed_at": round(t0, 3), "armed_s": round(time.time() - t0, 3),
                                                "armed": self._anchor.armed.is_set(), "armed_error": self._anchor.armed_error}
         except Exception as exc:

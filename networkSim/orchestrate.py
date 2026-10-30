@@ -803,6 +803,9 @@ def window_fits(now: float, minutes: float, deadline: float, allowance_s: float 
     (a session ending exactly at the deadline fits)."""
     return now + minutes * 60 + (WINDOW_ALLOWANCE_S if allowance_s is None else allowance_s) <= deadline
 SESSION_RANGE: tuple | None = None     # --session-range (dry runs only, never the record): the length law's bounds
+# tt anchor A/B (shagun 00:40, levi 00144 A1): --session-range-tt, the same law for tiktok slots only (short tt sessions,
+# tw / yt keep theirs); dry only, never the record; it wins over --session-range on tt
+SESSION_RANGE_TT: tuple | None = None
 TRIO_POLL_S = 2.0
 # under the trio root (data/_trio, trio_slots.TRIO_DIR)
 TRIO_DRAIN_FILE = "_summaries/trio_drain"   # touch it to drain: no refill, every slot ends; archived when used
@@ -866,8 +869,9 @@ def _trio_refill(tag: str, T, targets: dict, started: dict, running: dict, pause
     # index); a held state (decode_stress) runs base episodes (exp.py: hold is base)
     held = TRIO_STRESS and (TRIO_PINS.get(tag) or TRIO_PINS.get(p) or {}).get("state")
     slen = None if held else draw_session_minutes(f"{run_id}:{s.tag}:{started[tag] + 1}")
-    if slen and SESSION_RANGE:          # a dry run's law (--session-range, never the record): the same draw rescaled
-        lo, hi = SESSION_RANGE
+    rng = SESSION_RANGE_TT if (p == "tiktok" and SESSION_RANGE_TT) else SESSION_RANGE
+    if slen and rng:                    # a dry run's law (--session-range[-tt], never the record): the same draw rescaled
+        lo, hi = rng
         slen = {**slen, "session_range": [lo, hi],
                 "minutes": round(lo + (hi - lo) * (slen["minutes"] - 10.0) / 30.0, 4)}
     if slen and REPLAY:                  # v3 W-A: the replayed schedule fixes the length (exp.py ends with it)
@@ -1409,6 +1413,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="--concurrent, an uncounted run only (e.g. the refill dry run): each session's length is "
                              "the restart §4 draw rescaled from U(10, 40) to U(LO, HI) minutes, recorded "
                              "(session_length.session_range). Refused with --trio-record.")
+    parser.add_argument("--session-range-tt", default=None, metavar="3,3",
+                        help="--concurrent, an uncounted run only (tt anchor A/B, levi 00144): --session-range for "
+                             "tiktok slots only; tw / yt keep theirs. Refused with --trio-record.")
     parser.add_argument("--trio-pin", action="append", default=[], metavar="PLATFORM|TAG:k=v,...",
                         help="--concurrent: a recorded pin of a slot's pick (levi 00261; default off), e.g. "
                              "'twitch:channel=gothamchess,state=10,geometry=window:1920x1080' (keys: category, channel "
@@ -1553,15 +1560,22 @@ def arg_refusal(args, environ) -> str | None:
                 "fullscreen)")
     if args.window_min is not None and args.max_per_slot is not None:
         return "--max-per-slot does not apply inside a window (a window runs to time)"
-    if args.session_range:
+    for flag, val in (("--session-range", args.session_range), ("--session-range-tt", args.session_range_tt)):
+        if not val:
+            continue
         if args.trio_record or not args.concurrent:
-            return "--session-range is for an uncounted --concurrent run only (never the record)"
+            return f"{flag} is for an uncounted --concurrent run only (never the record)"
         try:
-            lo, hi = (float(x) for x in args.session_range.split(","))
+            lo, hi = (float(x) for x in val.split(","))
         except ValueError:
-            return "--session-range LO,HI (minutes)"
+            return f"{flag} LO,HI (minutes)"
         if not 0 < lo <= hi:
-            return "--session-range LO,HI with 0 < LO <= HI"
+            return f"{flag} LO,HI with 0 < LO <= HI"
+    if args.trio_record:                # levi 00144 A4: the anchor A/B override is dry only (exp.py refuses it per session too)
+        import browser as _b_ab
+        _ab = _b_ab.anchor_ab_refusal(os.environ, True)
+        if _ab:
+            return _ab
     # levi on a2f0cac (bundle item 6): a counted run never runs with the data volume check off; preflight's
     # check_data_uuid is "not checked" when LVDC_DATA_ROOT_UUID is unset, so the record refuses that here
     if args.trio_record and not (environ.get("LVDC_DATA_ROOT_UUID") or "").strip():
@@ -1783,6 +1797,8 @@ if __name__ == "__main__":
         targets = batch_targets(args.batch)
         if args.session_range:                         # arg_refusal checked it
             SESSION_RANGE = tuple(float(x) for x in args.session_range.split(","))
+        if args.session_range_tt:
+            SESSION_RANGE_TT = tuple(float(x) for x in args.session_range_tt.split(","))
         TRIO_RECORD = bool(args.trio_record)
         for spec in args.trio_pin:
             plat, pin = parse_pin(spec, args.trio_pin_reason)      # arg_refusal checked it
