@@ -37,13 +37,23 @@ def player(pid, t_load, codec, size="720x1280"):
              "properties": [{"name": "kVideoTracks", "value": json.dumps([{"codec": codec, "natural size": size}])}]}]
 
 
+def _tier_on(meta: dict) -> bool:
+    """tier_ok with the rule on (it ships off: levi's (b) rule, see tt_main.TT_MAIN_CODEC)."""
+    keep = M.TT_MAIN_CODEC
+    M.TT_MAIN_CODEC = True
+    try:
+        return M.tier_ok(meta)
+    finally:
+        M.TT_MAIN_CODEC = keep
+
+
 def test_hevc_main_on_a_mixed_ladder():
     fr = ticks(2, "MediaSourceHandle#16", T0 + 10, 600) + ticks(3, "MediaSourceHandle#20", T0 + 100, 60)
     me = player("A", T0 + 9.2, "hevc") + player("P", T0 + 99, "h264")          # P: a preview, fewer frames
     r = M.main_codec(fr, me)
     assert r["codec"] == "hevc" and r["element"] == [2, "MediaSourceHandle#16"] and r["frames"] == 599 * 30
     assert r["candidates"] == [{"player": "A", "codec": "hevc", "size": "720x1280", "dt": 0.8}] and r["agree"]
-    assert M.tier_ok({"tt_main_codec": r, "tt_stream": {"codec": "mixed"}})
+    assert _tier_on({"tt_main_codec": r, "tt_stream": {"codec": "mixed"}})
 
 
 def rotated():
@@ -56,7 +66,7 @@ def rotated():
 def test_h264_main_after_a_rotation_and_the_position_mutant():
     fr, me = rotated()
     r = M.main_codec(fr, me)
-    assert r["codec"] == "h264" and r["element"] == [2, "MediaSourceHandle#40"] and not M.tier_ok({"tt_main_codec": r})
+    assert r["codec"] == "h264" and r["element"] == [2, "MediaSourceHandle#40"] and not _tier_on({"tt_main_codec": r})
     first_by_position = next(p["codec"] for p in M.players(me).values() if p["codec"])
     assert first_by_position == "hevc" != r["codec"]                              # the mutant would count it as tier
 
@@ -65,7 +75,7 @@ def test_hevc_only_on_previews():
     fr = ticks(2, "MediaSourceHandle#5", T0 + 10, 600) + ticks(5, "MediaSourceHandle#9", T0 + 50, 30)
     me = player("M", T0 + 9.5, "h264") + player("V", T0 + 49.5, "hevc")
     r = M.main_codec(fr, me)
-    assert r["codec"] == "h264" and not M.tier_ok({"tt_main_codec": r})
+    assert r["codec"] == "h264" and not _tier_on({"tt_main_codec": r})
 
 
 def test_multi_candidates():
@@ -76,7 +86,7 @@ def test_multi_candidates():
     disagree = player("a", T0 + 86, "h264") + player("b", T0 + 98, "hevc")
     r = M.main_codec(fr, disagree)
     assert r["codec"] is None and r["why"] == "candidates disagree" and not r["agree"]
-    assert not M.tier_ok({"tt_main_codec": r})
+    assert not _tier_on({"tt_main_codec": r})
 
 
 def test_size_matching_preview_in_the_window():
@@ -122,7 +132,7 @@ def test_off_and_wiring():
     assert "tier_ok = tt_main.tier_ok(meta)" in cr
     ex = (HERE / "exp.py").read_text()
     assert 'if platform == "tiktok" and tt_main.TT_MAIN_CODEC:' in ex and "tt_main_codec=tt_main.record(" in ex
-    assert M.WIN_BEFORE_S == 30.0 and M.WIN_AFTER_S == 2.0 and M.TT_MAIN_CODEC is True
+    assert M.WIN_BEFORE_S == 30.0 and M.WIN_AFTER_S == 2.0 and M.TT_MAIN_CODEC is False   # ships off (levi (b))
 
 
 def main() -> int:

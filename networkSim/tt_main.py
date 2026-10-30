@@ -12,7 +12,10 @@ disagreement -> null with a reason (tier_ok False). Never the first player by po
 import json
 from pathlib import Path
 
-TT_MAIN_CODEC = True        # off = 7809b21c (no meta.tt_main_codec; coverage_report's tier_ok reads tt_stream.codec)
+# off = 7809b21c (no meta.tt_main_codec; coverage_report's tier_ok reads tt_stream.codec). OFF by levi's (b) rule: on
+# ti_100175 the main element's player reported hevc throughout while its 193 MB main FLV flow carries AVC (FLV video tag
+# codecid 7, decrypted on halo4): the CDP player's kVideoTracks stays stale after an in-place hd5 -> hd switch.
+TT_MAIN_CODEC = False
 WIN_BEFORE_S = 30.0
 WIN_AFTER_S = 2.0
 
