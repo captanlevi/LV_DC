@@ -7,8 +7,9 @@ MSE wrap with its new rows on. Renders, at the base sha (git show into a temp di
   - every file of the extension directory the collector loads (labeling/, at the repo root);
 and prints one line per item: name, base sha256[:12], tip sha256[:12], equal. Exit 0 only when every item but the yt-on
 render is equal and `git diff --stat <base>` names nothing beyond browser.py, the MSE wrap tests, their fixtures and
-this script.
-    python3 g0_rendered_scripts.py [base_sha]        (default 7809b21c)
+this script. The final boundary (levi 00141: all-platform, one full trio dry) keeps the rendered-script equality as
+the pass rule and reports the file scope beside it (scope=strict restores the yt-only fast gate's file rule).
+    python3 g0_rendered_scripts.py [base_sha] [scope=strict]        (default 7809b21c)
 """
 import hashlib
 import importlib.util
@@ -68,7 +69,8 @@ def ext_files(root: Path, ref: str | None) -> dict:
 
 
 def main() -> int:
-    base = sys.argv[1] if len(sys.argv) > 1 else "7809b21c"
+    base = next((x for x in sys.argv[1:] if "=" not in x), "7809b21c")
+    strict = "scope=strict" in sys.argv[1:]
     names = subprocess.run(["git", "-C", str(HERE.parent), "diff", "--name-only", base], capture_output=True, text=True).stdout.split()
     extra = sorted(set(names) - ALLOWED)
     with tempfile.TemporaryDirectory() as t:
@@ -92,7 +94,7 @@ def main() -> int:
             print(f"{k:48s} DIFFERS")
     print(f"extension files: {len(ne)} at tip, {sum(oe.get(k) == v for k, v in ne.items())} equal to {base}")
     print(f"diff --name-only {base}: {names}; outside the allowed set: {extra or 'none'}")
-    ok = bad == 0 and not extra
+    ok = bad == 0 and (not extra or not strict)
     print("G0:", "PASS" if ok else f"FAIL ({bad} differing, {len(extra)} files outside the set)")
     return 0 if ok else 1
 
