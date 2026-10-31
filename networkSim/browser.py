@@ -2077,7 +2077,8 @@ WORKER_ANCHOR_JS = r"""(() => {
 
 # W's WebCodecs block, before the take: per VideoDecoder (dec = its id) "wcfg" (configure: codec, coded size, the
 # description's bytes), "wdec" (decode: the EncodedVideoChunk's timestamp ts in us, ty 1 = key, n bytes; on a key and every
-# KEY_EVERY-th chunk k = FNV-1a of its first and last 256 bytes), "wrst" (reset); "wout" (a VideoFrame written to a stream
+# KEY_EVERY-th chunk h = FNV-1a of its first and last 256 bytes; never "k": content.js spreads a record over
+# its frames row {k: "mse", ...r}), "wrst" (reset); "wout" (a VideoFrame written to a stream
 # writer: its timestamp ts in us, i.e. what the MediaStreamTrackGenerator presents). The batch adds nd (chunks decoded).
 ANCHOR_W_EDITS = (
     ("  self.__lvqoeAnchorTake = () => {", r"""  let nd = 0;
@@ -2090,7 +2091,7 @@ ANCHOR_W_EDITS = (
     wrap(VD, "decode", (d, a) => { const ch = a[0]; if (!ch || typeof ch.timestamp !== "number") return; nd += 1;
       const r = { op: "wdec", dec: id(d), ts: ch.timestamp, ty: ch.type === "key" ? 1 : 0, n: ch.byteLength };
       if (r.ty || nd % KEY_EVERY === 0) { const n = ch.byteLength, b = new Uint8Array(n); ch.copyTo(b);
-        r.k = [fnv(b, 0, Math.min(256, n)), fnv(b, Math.max(0, n - 256), n)]; }
+        r.h = [fnv(b, 0, Math.min(256, n)), fnv(b, Math.max(0, n - 256), n)]; }
       push(r); });
     wrap(VD, "reset", (d) => push({ op: "wrst", dec: id(d) }, true));
   }

@@ -6,7 +6,7 @@
     mutant: a pause under W is refused (ValueError at construction);
   - the script: full's, byte for byte, plus ANCHOR_W_EDITS; full / proxy carry no WebCodecs block;
   - under node (no MediaSource in the stub: the MSE part stays inert): configure -> wcfg (codec, coded size, description
-    bytes), decode -> wdec (chunk ts in us, ty, n; k = FNV-1a of the first / last 256 bytes on a key and every
+    bytes), decode -> wdec (chunk ts in us, ty, n; h = FNV-1a of the first / last 256 bytes on a key and every
     KEY_EVERY-th chunk), reset -> wrst, a VideoFrame written to a stream writer -> wout (its ts); every wrapped call
     passes its this / arguments / return through, a fault in the record is contained, the take carries nd;
   - refusals: W in LVDC_ANCHOR_AB_TW (or TW_WORKER_ANCHOR = W) is refused (tt only); the tt cycle off,W with the frame log
@@ -105,8 +105,9 @@ def test_w_records_under_node():
     assert len(dec) == 30 and r["take"]["nd"] == 30, (len(dec), r["take"]["nd"])   # the faulting chunk: counted out, contained
     big = bytes(((i * 7 + 3) & 255) for i in range(1000))
     assert dec[0]["ts"] == 40000 and dec[0]["ty"] == 1 and dec[0]["n"] == 1000
-    assert dec[0]["k"] == [fnv(big[:256]), fnv(big[-256:])]
-    assert all("k" not in x for x in dec[1:29]) and dec[29]["k"] == [fnv(bytes([1, 2, 3, 4, 5]))] * 2
+    assert dec[0]["h"] == [fnv(big[:256]), fnv(big[-256:])]
+    assert all("h" not in x for x in dec[1:29]) and dec[29]["h"] == [fnv(bytes([1, 2, 3, 4, 5]))] * 2
+    assert all("k" not in x for x in recs), "a record field k would overwrite content.js's frames row kind"
     assert [x["ts"] for x in dec] == [40000 * (i + 1) for i in range(30)]
     assert [x for x in recs if x["op"] == "wout"] == [{"op": "wout", "ts": 80000, "t": [x for x in recs if x["op"] == "wout"][0]["t"]}]
     assert [x["op"] for x in recs if x["op"] == "wrst"] == ["wrst"]
