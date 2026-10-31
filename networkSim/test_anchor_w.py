@@ -32,7 +32,7 @@ import browser as B  # noqa: E402
 
 HARNESS = r"""
 const fs = require("fs"), vm = require("vm");
-const [srcPath, outPath] = process.argv.slice(2), src = fs.readFileSync(srcPath, "utf8");
+const [srcPath, outPath] = process.argv.slice(2, 4), src = fs.readFileSync(srcPath, "utf8");
 const calls = [], RET = { ret: "write-return" };
 class VideoDecoder {}
 VideoDecoder.prototype.configure = function (c) { calls.push({ m: "configure", self: this, args: [...arguments] }); };
@@ -43,11 +43,22 @@ class WritableStreamDefaultWriter {}
 WritableStreamDefaultWriter.prototype.write = function (x) { calls.push({ m: "write", self: this, args: [...arguments] }); return RET; };
 const chunk = (ts, type, bytes) => ({ timestamp: ts, type, byteLength: bytes.length, copyTo(dst) { dst.set(bytes); } });
 let now = 5;
-const ctx = { VideoDecoder, VideoFrame, WritableStreamDefaultWriter, performance: { now: () => now, timeOrigin: 1761740000123.5 },
+const late = process.argv[4] === "late" || process.argv[4] === "late_nt", nt = process.argv[4] === "late_nt", timers = [];
+class EventTarget {}
+const lcalls = [];
+EventTarget.prototype.addEventListener = function (t, f) { lcalls.push([this, t, f]); return "listener-return"; };
+const ctx = { VideoFrame, WritableStreamDefaultWriter, EventTarget, performance: { now: () => now, timeOrigin: 1761740000123.5 },
   Date: { now: () => 1000000 }, JSON, Math, String, Uint8Array, DataView, ArrayBuffer, WeakMap, Object, RangeError, Error };
 ctx.self = ctx;
 vm.createContext(ctx);
+if (!nt) ctx.setTimeout = (f, ms) => timers.push(f);
+if (!late) ctx.VideoDecoder = VideoDecoder;
 const out = { first: vm.runInContext(src, ctx), second: vm.runInContext(src, ctx), checks: {} };
+if (late && !nt) { for (let i = 0; i < 3 && timers.length; i++) timers.shift()();      // the poll runs while the interface is absent
+  ctx.VideoDecoder = VideoDecoder; out.polls_before = 3; while (timers.length) timers.shift()(); }
+if (nt) { ctx.VideoDecoder = VideoDecoder; const tgt = new EventTarget(), fn = () => 0;   // the script registers its listener
+  const rr = tgt.addEventListener("message", fn);
+  out.checks.listener_same = rr === "listener-return" && lcalls.length === 1 && lcalls[0][0] === tgt && lcalls[0][2] === fn; }
 const d = new VideoDecoder(), w = new WritableStreamDefaultWriter();
 const big = Uint8Array.from({ length: 1000 }, (_, i) => (i * 7 + 3) & 255), small = Uint8Array.from([1, 2, 3, 4, 5]);
 const cfg = { codec: "hev1.1.6.L120.90", codedWidth: 720, codedHeight: 1280, description: new Uint8Array(23) };
@@ -73,14 +84,14 @@ def fnv(b: bytes) -> int:
     return h
 
 
-def run_w() -> dict:
+def run_w(late: bool = False, timers: bool = True) -> dict:
     node = shutil.which("node")
     assert node, "node not found: the W test cannot run (install node)"
     with tempfile.TemporaryDirectory() as t:
         h, src, out = (Path(t) / x for x in ("h.js", "w.js", "out.json"))
         h.write_text(HARNESS)
         src.write_text(B.worker_anchor_js(0, w=True))
-        subprocess.run([node, str(h), str(src), str(out)], check=True)
+        subprocess.run([node, str(h), str(src), str(out)] + ([("late" if timers else "late_nt")] if late else []), check=True)
         return json.loads(out.read_text())
 
 
@@ -91,13 +102,15 @@ def test_w_script_is_full_plus_edits():
     for old, new in B.ANCHOR_W_EDITS:
         assert x.count(old) == 1
         x = x.replace(old, new)
-    assert x == w and "wdec" in w and "nv, nd, to:" in w
+    x = x.replace("__WC_POLL_MS__", str(B.WC_POLL_MS)).replace("__WC_POLL_MAX__", str(B.WC_POLL_MAX))
+    assert x == w and "wdec" in w and "nv, nd, wc: wcOn, to:" in w and "__WC_POLL" not in w
 
 
 def test_w_records_under_node():
     r = run_w()
     assert r["first"] == "ok" and r["second"] == "again", r
     assert all(r["checks"].values()) and len(r["checks"]) == 5, r["checks"]
+    assert [(x["tries"], x["via"]) for x in r["take"]["recs"] if x["op"] == "wins"] == [(0, "install")]
     recs = r["take"]["recs"]
     cfg = [x for x in recs if x["op"] == "wcfg"]
     assert cfg == [{"op": "wcfg", "dec": 1, "codec": "hev1.1.6.L120.90", "w": 720, "h": 1280, "desc": 23, "t": cfg[0]["t"]}]
@@ -112,6 +125,28 @@ def test_w_records_under_node():
     assert [x for x in recs if x["op"] == "wout"] == [{"op": "wout", "ts": 80000, "t": [x for x in recs if x["op"] == "wout"][0]["t"]}]
     assert [x["op"] for x in recs if x["op"] == "wrst"] == ["wrst"]
     assert [x["m"] for x in recs if x["op"] == "err"] == ["Error: fault"], recs        # full's timed(): logged, contained
+
+
+def test_w_late_videodecoder():
+    """laptop W screen: with no pause the install precedes the worker script and VideoDecoder ([SecureContext]) is not
+    exposed yet; the wrap waits for it (mutant: the eager typeof check alone gives 0 wdec rows, the screen's result)."""
+    r = run_w(late=True)
+    assert r["first"] == "ok" and all(r["checks"].values()), r
+    recs = r["take"]["recs"]
+    wins = [x for x in recs if x["op"] == "wins"]
+    assert len(wins) == 1 and wins[0]["tries"] == 3 and wins[0]["via"] == "poll", wins
+    assert len([x for x in recs if x["op"] == "wdec"]) == 30 and [x["op"] for x in recs if x["op"] == "wcfg"] == ["wcfg"]
+    assert r["take"]["wc"] is True
+
+
+def test_w_late_no_timers():
+    """the real early worker global: no setTimeout and no VideoDecoder at install; the script's first addEventListener
+    installs the wrap (a take would too); the listener call itself passes through."""
+    r = run_w(late=True, timers=False)
+    assert r["first"] == "ok" and all(r["checks"].values()) and r["checks"].get("listener_same"), r
+    wins = [x for x in r["take"]["recs"] if x["op"] == "wins"]
+    assert len(wins) == 1 and wins[0]["via"] == "listener", wins
+    assert len([x for x in r["take"]["recs"] if x["op"] == "wdec"]) == 30
 
 
 def test_w_attach_no_pause_and_recorded():

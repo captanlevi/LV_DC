@@ -2080,10 +2080,15 @@ WORKER_ANCHOR_JS = r"""(() => {
 # KEY_EVERY-th chunk h = FNV-1a of its first and last 256 bytes; never "k": content.js spreads a record over
 # its frames row {k: "mse", ...r}), "wrst" (reset); "wout" (a VideoFrame written to a stream
 # writer: its timestamp ts in us, i.e. what the MediaStreamTrackGenerator presents). The batch adds nd (chunks decoded).
+WC_POLL_MS, WC_POLL_MAX = 5, 4000      # W: the VideoDecoder wrap's wait for the interface, every 5 ms for at most 20 s
 ANCHOR_W_EDITS = (
     ("  self.__lvqoeAnchorTake = () => {", r"""  let nd = 0;
   const fnv = (b, s0, e0) => { let h = 0x811c9dc5; for (let x = s0; x < e0; x++) { h ^= b[x]; h = Math.imul(h, 0x01000193) >>> 0; } return h; };
-  if (typeof VideoDecoder !== "undefined") {
+  const WC_POLL_MS = __WC_POLL_MS__, WC_POLL_MAX = __WC_POLL_MAX__;
+  let wcOn = false, wcTries = 0, wcVia = "install";             // with no pause the install lands before the worker's script is fetched,
+  const wcInstall = () => {                    // when the [SecureContext] VideoDecoder is not exposed yet: wrap it once it is
+    if (wcOn || typeof VideoDecoder === "undefined") return wcOn;
+    wcOn = true; push({ op: "wins", tries: wcTries, via: wcVia }, true);
     const VD = VideoDecoder.prototype;
     wrap(VD, "configure", (d, a) => { const c = a[0] || {}; const r = { op: "wcfg", dec: id(d), codec: String(c.codec).slice(0, 80) };
       if (c.codedWidth) { r.w = c.codedWidth; r.h = c.codedHeight; } if (c.hardwareAcceleration) r.hw = String(c.hardwareAcceleration);
@@ -2094,11 +2099,19 @@ ANCHOR_W_EDITS = (
         r.h = [fnv(b, 0, Math.min(256, n)), fnv(b, Math.max(0, n - 256), n)]; }
       push(r); });
     wrap(VD, "reset", (d) => push({ op: "wrst", dec: id(d) }, true));
+    return true; };
+  if (!wcInstall()) {                         // the early global has no setTimeout either (laptop W, 12:0x): the worker
+    if (typeof setTimeout === "function") {    // script's first addEventListener (veworker: "message") then installs it
+      const poll = () => { wcVia = "poll"; if (!wcInstall() && ++wcTries < WC_POLL_MAX) setTimeout(poll, WC_POLL_MS); }; setTimeout(poll, 0); }
+    if (typeof EventTarget !== "undefined")
+      wrap(EventTarget.prototype, "addEventListener", () => { if (!wcOn) { wcVia = "listener"; wcInstall(); } });
   }
   if (typeof VideoFrame !== "undefined" && typeof WritableStreamDefaultWriter !== "undefined")
     wrap(WritableStreamDefaultWriter.prototype, "write", (w, a) => { const f = a[0]; if (f instanceof VideoFrame) push({ op: "wout", ts: f.timestamp }); });
   self.__lvqoeAnchorTake = () => {"""),
-    ("ms: Math.round(ms * 10) / 10, nv, to:", "ms: Math.round(ms * 10) / 10, nv, nd, to:"),
+    ("  self.__lvqoeAnchorTake = () => { const b = recs; recs = [];",
+     "  self.__lvqoeAnchorTake = () => { if (!wcOn) { wcVia = \"take\"; wcInstall(); } const b = recs; recs = [];"),
+    ("ms: Math.round(ms * 10) / 10, nv, to:", "ms: Math.round(ms * 10) / 10, nv, nd, wc: wcOn, to:"),
 )
 
 
@@ -2109,7 +2122,7 @@ def worker_anchor_js(block_s: int, proxy: bool = False, w: bool = False) -> str:
     for old, new in (ANCHOR_PROXY_EDITS if proxy else ()) + (ANCHOR_W_EDITS if w else ()):
         assert js.count(old) == 1, old[:60]
         js = js.replace(old, new)
-    return js
+    return js.replace("__WC_POLL_MS__", str(WC_POLL_MS)).replace("__WC_POLL_MAX__", str(WC_POLL_MAX)) if w else js
 
 
 # tt anchor A/B (levi 00405 / 00143; supervisor 00:36 b3): the worker anchor's arm per platform. "full" = cbe3ce9d; "off" =
