@@ -3277,6 +3277,9 @@ def _media_load_kind(value) -> str | None:
     return url.split(":", 1)[0] if ":" in url else ("stream" if url else None)
 
 
+INSPECTOR_EVENTS = ("Inspector.targetCrashed", "Inspector.detached", "Inspector.targetReloadedAfterCrash")
+
+
 class MediaListener:
     """Chrome's media-internals over CDP (the Media domain) by a second CDP client on the page, recording only
     (supervisor 2026-10-18, peter's ti_43 read: the player reset to readyState 0 while the FLV stream kept arriving;
@@ -3286,10 +3289,15 @@ class MediaListener:
     Every platform since decision A (levi 00271 item 3, supervisor (b)): summary() is meta.json media_decoders, each
     player's load kind and video decoder. tt's live stream is a MediaStream player ("stream": its kLoad names a stream
     id, not a URL), which has no decoder in the media log: its decode happens in the page, so tt's decoders here are
-    only its blob clips' (a stated gap for the N = 3 regime)."""
+    only its blob clips' (a stated gap for the N = 3 regime).
+    levi 15:4x / supervisor 15:42 (RENDERER_CRASH_WATCH off): the same client also enables the Inspector domain and
+    records the page's Inspector.targetCrashed / detached / targetReloadedAfterCrash (no new client, no attach; record
+    only, never an abort), so a renderer death killed without a stderr line (SIGKILL, the OOM path) still leaves a
+    runtime record: media_events.jsonl rows (method "Inspector.<event>") and summary()'s page_crash."""
 
     def __init__(self, ws_url: str, path: Path | None):
         self.ws_url, self.path, self.error = ws_url, path, None
+        self.page_crash: dict | None = None       # the page's first Inspector.targetCrashed / detached / reload times
         self.players: dict[str, dict] = {}
         self.loads: dict[str, dict] = {}          # player -> its kLoad's kind ("blob" / "data" / "https" / "stream") and t
         self.recent: list[dict] = []
@@ -3310,6 +3318,18 @@ class MediaListener:
         """One CDP message -> the record to write (None for the rest); keeps the players' properties and the recent
         non-property records for snapshot()."""
         m, prm = msg.get("method") or "", msg.get("params") or {}
+        if m in INSPECTOR_EVENTS:                 # the page's renderer crash / detach (record only)
+            rec = {"t": round(now, 3), "method": m, **prm}
+            with self._lock:
+                pc = self.page_crash or {"crashed_t": None, "detached_t": None, "detach_reason": None, "reloaded_t": None}
+                key = {"Inspector.targetCrashed": "crashed_t", "Inspector.detached": "detached_t",
+                       "Inspector.targetReloadedAfterCrash": "reloaded_t"}[m]
+                if pc[key] is None:
+                    pc[key] = round(now, 3)
+                    if m == "Inspector.detached":
+                        pc["detach_reason"] = prm.get("reason")
+                self.page_crash = pc
+            return rec
         if not m.startswith("Media."):
             return None
         if m == "Media.playerMessagesLogged":
@@ -3350,7 +3370,7 @@ class MediaListener:
                             "platform_video_decoder": pr.get("kIsPlatformVideoDecoder"), "codec": codec,
                             "resolution": pr.get("kResolution")})
             return {"players": len(set(self.loads) | set(self.players)), "loads": kinds, "video_decoders": dec,
-                    "written": self.written, "error": self.error}
+                    "written": self.written, "error": self.error, "page_crash": self.page_crash}
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -3363,6 +3383,7 @@ class MediaListener:
             ws.settimeout(1)
             ws.connect(self.ws_url)
             ws.send(json.dumps({"id": 1, "method": "Media.enable", "params": {}}))
+            ws.send(json.dumps({"id": 2, "method": "Inspector.enable", "params": {}}))   # the page crash record
         except Exception as exc:
             self.error = repr(exc)
             return
