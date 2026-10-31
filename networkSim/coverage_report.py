@@ -130,6 +130,8 @@ ABR_ONLY_RULE = ("restart prereg §2b: yt Q_240p, yt Q_480p are ABR-only (the to
 # (no worker rows; tt_stream deferred to halo4; media_decoders stale, ruling (B)), so an off session's tier_ok is None, never
 # False or True (an assumed codec the picks would consume), its non-STALL minutes count nowhere, and tt's tier classes
 # leave steering (unreachable targets, named); STALL and the entry states stay steered. (c) later: halo4's write-back.
+# levi 14:54 (the W pick): under W tt tiers stay unsteered (tt_main reads only MSE init / ct / add rows, so an W session's
+# tier_ok is False, not None; the counting is `is not True`, so steering is unaffected).
 TT_TIER_STEERED = False
 TT_TIER_NULL_WHY = "off: no on-box codec"
 TT_TIER_RULE = ("levi 06:27 (b): tt anchor off, no on-box codec: tier_ok null, tt tier classes unsteered (tier dims on "

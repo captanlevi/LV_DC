@@ -2135,8 +2135,8 @@ def worker_anchor_js(block_s: int, proxy: bool = False, w: bool = False) -> str:
 # frozen default. ANCHOR_AB_ENV (dry only): a per-session cycle such as "off,full" or "off,b1,proxy,full", the arm =
 # cycle[the session name's number % its length]; on a counted run exp.py refuses it before any session dir, and
 # anchor_arm() keeps the constant whatever the env says. levi 00144 A4: a freeze flips one constant (frozen: full / proxy /
-# off; b1 is the dry's mechanism arm only), accepted on G0 equality with the dry's override of the same arm.
-TT_WORKER_ANCHOR = "off"       # frozen (levi 00144 A4): the TTAB pick; coverage_report.TT_TIER_STEERED False with it
+# off / W; b1 is the dry's mechanism arm only), accepted on G0 equality with the dry's override of the same arm.
+TT_WORKER_ANCHOR = "W"         # frozen (levi 14:54, the TTW pick; was off, the TTAB pick); TT_TIER_STEERED stays False
 TW_WORKER_ANCHOR = "full"
 ANCHOR_ARMS = ("full", "off", "b1", "proxy", "W")
 ANCHOR_TT_ONLY = ("W",)          # levi 00153 B: W on tw is refused (tw is decided by TWAB1)

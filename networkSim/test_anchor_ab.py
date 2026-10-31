@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tt anchor A/B (levi 00144 A1-A4; supervisor 00:36 b3): the worker anchor's arm selector and the proxy install.
 
-  - the arm: the constant by default (TT_WORKER_ANCHOR = "off", frozen from the TTAB pick, with coverage_report.TT_TIER_STEERED False (levi 06:27 (b)); TW_WORKER_ANCHOR = cbe3ce9d's "full"); the dry cycle
+  - the arm: the constant by default (TT_WORKER_ANCHOR = "W", frozen from the TTW pick (levi 14:54; was "off", the TTAB pick), with coverage_report.TT_TIER_STEERED False (levi 06:27 (b), 14:54); TW_WORKER_ANCHOR = cbe3ce9d's "full"); the dry cycle
     (LVDC_ANCHOR_AB_TT / _TW) gives cycle[session number % length], recorded (meta ab_arm); a counted session keeps the
     constant whatever the env says (mutant: an override honoured in a counted run); anchor_ab_refusal refuses the env on a
     counted run and an unknown arm; exp.py / orchestrate.py call it before any session dir;
@@ -12,7 +12,7 @@
     length / property descriptor shape, and toString prints its own native text (mutant: full's plain wrapper leaks);
   - proxy's CDP: the install evaluates without returnByValue, the take is Runtime.callFunctionOn on the returned objectId;
   - G0 (A4): constant = X with no override and override = X give the same arm, the same injected script and the same CDP
-    command sequence;
+    command sequence (X in full / proxy / off / W); the W constant gives env W's worker_anchor record (arm W, pause false);
   - --session-range-tt: tiktok slots only, refused with --trio-record or without --concurrent.
 
     python3 test_anchor_ab.py        (needs node; exit 0 = pass)
@@ -122,9 +122,9 @@ def test_arm_selection_and_counted_mutant():
     keep = B.TT_WORKER_ANCHOR
     try:
         import coverage_report as C
-        assert B.TT_WORKER_ANCHOR == "off"                          # the freeze (levi 00144 A4)
-        assert C.TT_TIER_STEERED is (B.TT_WORKER_ANCHOR != "off")    # levi 06:27 (b): tt tiers leave steering with off
-        assert B.anchor_arm("tiktok", {}, "ti_100183", False) == {"arm": "off", "source": "constant"}
+        assert B.TT_WORKER_ANCHOR == "W"                            # the freeze (levi 14:54, the TTW pick)
+        assert C.TT_TIER_STEERED is (B.TT_WORKER_ANCHOR in ("full", "proxy"))   # levi 06:27 (b) / 14:54: off and W unsteered
+        assert B.anchor_arm("tiktok", {}, "ti_100183", False) == {"arm": "W", "source": "constant"}
         assert B.anchor_arm("twitch", {}, "tw_100183", False) == {"arm": "full", "source": "constant"}
         env = {"LVDC_ANCHOR_AB_TT": "off,proxy,b1,full,off,proxy,b1,full,off,proxy,b1"}
         cyc = env["LVDC_ANCHOR_AB_TT"].split(",")
@@ -134,7 +134,7 @@ def test_arm_selection_and_counted_mutant():
                                                                    "env": env["LVDC_ANCHOR_AB_TT"], "n": 100183}
         assert B.anchor_arm("twitch", env, "tw_100183", False)["source"] == "constant"     # tt's env is tt's only
         # a counted session keeps the constant, the env named; the mutant (the override honoured) fails here
-        assert B.anchor_arm("tiktok", {"LVDC_ANCHOR_AB_TT": "full"}, "ti_7", True) == {"arm": "off", "source": "constant",
+        assert B.anchor_arm("tiktok", {"LVDC_ANCHOR_AB_TT": "full"}, "ti_7", True) == {"arm": "W", "source": "constant",
                                                                                        "env_ignored": "full"}
         B.TT_WORKER_ANCHOR = "proxy"
         assert B.anchor_arm("tiktok", {}, "ti_7", True) == {"arm": "proxy", "source": "constant"}
@@ -218,7 +218,7 @@ def _cdp_sequence(arm: str) -> list:
     a.handle(W.attach("S1"), s, now=1.0)
     if arm == "proxy":
         a.handle({"id": 1, "result": {"result": {"objectId": "O"}}}, s, now=1.01)
-    elif arm == "full":
+    elif arm in ("full", "W"):
         a.handle({"id": 1, "result": {"result": {"value": "ok"}}}, s, now=1.01)
     a.take(s)
     return [(m, json.dumps(p, sort_keys=True), sid) for _, m, p, sid in s.sent]
@@ -228,7 +228,7 @@ def test_g0_constant_equals_override():
     """levi 00144 A4: constant = X (no override) and override = X give the same arm, script and CDP sequence."""
     keep = B.TT_WORKER_ANCHOR
     try:
-        for x in ("full", "proxy", "off"):
+        for x in ("full", "proxy", "off", "W"):
             B.TT_WORKER_ANCHOR = x
             c = B.anchor_arm("tiktok", {}, "ti_100190", False)["arm"]
             B.TT_WORKER_ANCHOR = "full"
@@ -240,6 +240,19 @@ def test_g0_constant_equals_override():
     finally:
         B.TT_WORKER_ANCHOR = keep
     assert B.WorkerAnchor("ws://x", 0).js == B.worker_anchor_js(0) and _cdp_sequence("full")[0][0] == "Runtime.evaluate"
+
+
+def test_w_constant_record_equals_env_w():
+    """levi 14:54: the W constant gives the dry's env-W worker_anchor record: arm W, attach without the pause."""
+    c = B.anchor_arm("tiktok", {}, "ti_100190", True)
+    o = B.anchor_arm("tiktok", {"LVDC_ANCHOR_AB_TT": "W"}, "ti_100190", False)
+    assert c == {"arm": "W", "source": "constant"} and o["arm"] == "W" and o["source"] == "env"
+    rc, ro = B.WorkerAnchor("ws://x", 0, c["arm"]).record(), B.WorkerAnchor("ws://x", 0, o["arm"]).record()
+    assert rc == ro and rc["arm"] == "W" and rc["attach"] == B.WORKER_ANCHOR_ATTACH_W
+    assert rc["attach"]["waitForDebuggerOnStart"] is False and B.WORKER_ANCHOR_ATTACH["waitForDebuggerOnStart"] is True
+    assert _cdp_sequence(c["arm"]) == _cdp_sequence(o["arm"])
+    m, prm, _ = _cdp_sequence("W")[0]
+    assert m == "Runtime.evaluate" and json.loads(prm)["expression"] == B.worker_anchor_js(0, w=True)
 
 
 def test_session_range_tt():
@@ -254,7 +267,8 @@ def main() -> int:
     for f in (test_proxy_rows_equal_full_and_native_text, test_full_is_cbe3ce9d_and_proxy_edits_apply_once,
               test_arm_selection_and_counted_mutant, test_unrun_arm_recorded_ran_false,
               test_off_attaches_nothing_and_b1_installs_nothing,
-              test_proxy_cdp_take_by_object_id, test_g0_constant_equals_override, test_session_range_tt):
+              test_proxy_cdp_take_by_object_id, test_g0_constant_equals_override, test_w_constant_record_equals_env_w,
+              test_session_range_tt):
         f()
     print("test_anchor_ab: ok")
     return 0
