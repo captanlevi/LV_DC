@@ -1951,6 +1951,10 @@ WORKER_ANCHOR_DRAIN_AT = True     # t102 #8 (levi 01:06 / 00402): meta frame_log
 WORKER_ANCHOR_EVAL_TIMEOUT_MS = 50           # levi: the wrap's install is cut at 50 ms; the resume is sent regardless
 WORKER_ANCHOR_ATTACH = {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True,
                         "filter": [{"type": "worker", "exclude": False}, {"exclude": True}]}
+# tt candidate W (rushi 11:3x reopen, levi 00153): the same filter with NO pause. Laptop Track A: the pause alone (b1,
+# resumed after 22 ms) put tt on MediaSourceHandle, while an attach or the full install without it kept MediaStream (whose
+# WebCodecs path the MSE wrap never sees). W = no pause + full's install + a WebCodecs block (ANCHOR_W_EDITS).
+WORKER_ANCHOR_ATTACH_W = {**WORKER_ANCHOR_ATTACH, "waitForDebuggerOnStart": False}
 WORKER_ANCHOR_JS = r"""(() => {
   if (self.__lvqoeAnchor) return "again";
   self.__lvqoeAnchor = true;
@@ -2071,14 +2075,39 @@ WORKER_ANCHOR_JS = r"""(() => {
 })()"""
 
 
-def worker_anchor_js(block_s: int, proxy: bool = False) -> str:
+# W's WebCodecs block, before the take: per VideoDecoder (dec = its id) "wcfg" (configure: codec, coded size, the
+# description's bytes), "wdec" (decode: the EncodedVideoChunk's timestamp ts in us, ty 1 = key, n bytes; on a key and every
+# KEY_EVERY-th chunk k = FNV-1a of its first and last 256 bytes), "wrst" (reset); "wout" (a VideoFrame written to a stream
+# writer: its timestamp ts in us, i.e. what the MediaStreamTrackGenerator presents). The batch adds nd (chunks decoded).
+ANCHOR_W_EDITS = (
+    ("  self.__lvqoeAnchorTake = () => {", r"""  let nd = 0;
+  const fnv = (b, s0, e0) => { let h = 0x811c9dc5; for (let x = s0; x < e0; x++) { h ^= b[x]; h = Math.imul(h, 0x01000193) >>> 0; } return h; };
+  if (typeof VideoDecoder !== "undefined") {
+    const VD = VideoDecoder.prototype;
+    wrap(VD, "configure", (d, a) => { const c = a[0] || {}; const r = { op: "wcfg", dec: id(d), codec: String(c.codec).slice(0, 80) };
+      if (c.codedWidth) { r.w = c.codedWidth; r.h = c.codedHeight; } if (c.hardwareAcceleration) r.hw = String(c.hardwareAcceleration);
+      if (c.description) r.desc = c.description.byteLength; push(r, true); });
+    wrap(VD, "decode", (d, a) => { const ch = a[0]; if (!ch || typeof ch.timestamp !== "number") return; nd += 1;
+      const r = { op: "wdec", dec: id(d), ts: ch.timestamp, ty: ch.type === "key" ? 1 : 0, n: ch.byteLength };
+      if (r.ty || nd % KEY_EVERY === 0) { const n = ch.byteLength, b = new Uint8Array(n); ch.copyTo(b);
+        r.k = [fnv(b, 0, Math.min(256, n)), fnv(b, Math.max(0, n - 256), n)]; }
+      push(r); });
+    wrap(VD, "reset", (d) => push({ op: "wrst", dec: id(d) }, true));
+  }
+  if (typeof VideoFrame !== "undefined" && typeof WritableStreamDefaultWriter !== "undefined")
+    wrap(WritableStreamDefaultWriter.prototype, "write", (w, a) => { const f = a[0]; if (f instanceof VideoFrame) push({ op: "wout", ts: f.timestamp }); });
+  self.__lvqoeAnchorTake = () => {"""),
+    ("ms: Math.round(ms * 10) / 10, nv, to:", "ms: Math.round(ms * 10) / 10, nv, nd, to:"),
+)
+
+
+def worker_anchor_js(block_s: int, proxy: bool = False, w: bool = False) -> str:
     js = (WORKER_ANCHOR_JS.replace("__BLOCK_S__", str(int(block_s))).replace("__MAX__", str(FRAME_LOG_MSE_MAX))
           .replace("__KEY_EVERY__", str(WORKER_ANCHOR_KEY_EVERY))
           .replace("__KINDS__", json.dumps({k: 1 for k in WORKER_ANCHOR_KINDS}, sort_keys=True)))
-    if proxy:
-        for old, new in ANCHOR_PROXY_EDITS:
-            assert js.count(old) == 1, old[:60]
-            js = js.replace(old, new)
+    for old, new in (ANCHOR_PROXY_EDITS if proxy else ()) + (ANCHOR_W_EDITS if w else ()):
+        assert js.count(old) == 1, old[:60]
+        js = js.replace(old, new)
     return js
 
 
@@ -2095,7 +2124,8 @@ def worker_anchor_js(block_s: int, proxy: bool = False) -> str:
 # off; b1 is the dry's mechanism arm only), accepted on G0 equality with the dry's override of the same arm.
 TT_WORKER_ANCHOR = "off"       # frozen (levi 00144 A4): the TTAB pick; coverage_report.TT_TIER_STEERED False with it
 TW_WORKER_ANCHOR = "full"
-ANCHOR_ARMS = ("full", "off", "b1", "proxy")
+ANCHOR_ARMS = ("full", "off", "b1", "proxy", "W")
+ANCHOR_TT_ONLY = ("W",)          # levi 00153 B: W on tw is refused (tw is decided by TWAB1)
 ANCHOR_AB_ENV = {"tiktok": "LVDC_ANCHOR_AB_TT", "twitch": "LVDC_ANCHOR_AB_TW"}
 ANCHOR_PROXY_EDITS = (
     ('  if (self.__lvqoeAnchor) return "again";\n  self.__lvqoeAnchor = true;\n', ""),
@@ -2140,6 +2170,10 @@ def anchor_ab_refusal(env, counted: bool) -> str | None:
         bad = [a for a in env[v].split(",") if a.strip() not in ANCHOR_ARMS]
         if bad:
             return f"{v}={env[v]!r}: {bad} not in {ANCHOR_ARMS}"
+    tw = [a.strip() for a in (env.get(ANCHOR_AB_ENV["twitch"]) or "").split(",")]
+    if any(a in ANCHOR_TT_ONLY for a in tw) or TW_WORKER_ANCHOR in ANCHOR_TT_ONLY:
+        return f"{ANCHOR_TT_ONLY} on twitch ({ANCHOR_AB_ENV['twitch']}={env.get(ANCHOR_AB_ENV['twitch'])!r}, " \
+               f"TW_WORKER_ANCHOR={TW_WORKER_ANCHOR!r}): tt only"
     return None
 
 
@@ -3672,7 +3706,10 @@ class WorkerAnchor:
 
     def __init__(self, ws_url: str, block_s: int, arm: str = "full"):
         self.ws_url, self.block_s, self.arm = ws_url, block_s, arm
-        self.js = worker_anchor_js(block_s, proxy=arm == "proxy")
+        self.js = worker_anchor_js(block_s, proxy=arm == "proxy", w=arm == "W")
+        self.attach = WORKER_ANCHOR_ATTACH_W if arm == "W" else WORKER_ANCHOR_ATTACH
+        if arm == "W" and self.attach.get("waitForDebuggerOnStart"):   # levi 00153 B: a pause under W is refused
+            raise ValueError("W attaches without the pause (WORKER_ANCHOR_ATTACH_W.waitForDebuggerOnStart must be False)")
         self._take_oid: dict[str, str] = {}        # proxy: sessionId -> the take function's objectId (no worker global)
         self.workers: list[dict] = []
         self.workers_overflow = 0
@@ -3802,6 +3839,8 @@ class WorkerAnchor:
             w["ms"] = batch.get("ms")
             w["video_samples"] = batch.get("nv")
             w["time_origin"] = batch.get("to")      # levi 14:59: t / inst / first.t are on the worker's clock; + to = epoch ms
+            if "nd" in batch:                      # W only: the chunks its VideoDecoder wrap saw
+                w["decode_samples"] = batch.get("nd")
             if not recs and w.get("posted_inst"):
                 return
             w["posted_inst"] = True               # the first post goes out even empty: inst / first reach content.js
@@ -3826,7 +3865,7 @@ class WorkerAnchor:
 
     def record(self) -> dict:
         workers = [{k: v for k, v in w.items() if k != "posted_inst"} for w in self.workers]
-        return {"arm": self.arm, "armed": self.armed.is_set(), "armed_error": self.armed_error, "attach": WORKER_ANCHOR_ATTACH,
+        return {"arm": self.arm, "armed": self.armed.is_set(), "armed_error": self.armed_error, "attach": self.attach,
                 "kinds_on": list(WORKER_ANCHOR_KINDS), "key_every": WORKER_ANCHOR_KEY_EVERY,
                 "eval_timeout_ms": WORKER_ANCHOR_EVAL_TIMEOUT_MS, "workers": workers,
                 "workers_overflow": self.workers_overflow, "batches": self.batches, "recs": self.recs,
@@ -3862,7 +3901,7 @@ class WorkerAnchor:
                     return
                 self.handle(msg, send)
         try:
-            arm_id = send("Target.setAutoAttach", WORKER_ANCHOR_ATTACH)
+            arm_id = send("Target.setAutoAttach", self.attach)
             while not self._stop.is_set():
                 try:
                     msg = json.loads(ws.recv())
