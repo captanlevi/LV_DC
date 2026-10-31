@@ -148,10 +148,13 @@ def test_fullscreen():
     assert G.parse("fullscreen:1920x1080") == ("fullscreen", 1920, 1080) and G.chrome_args("fullscreen:1920x1080") == ["--test-type"]   # hot-fix 4: no --no-sandbox infobar
     assert "fullscreen:1920x1080" in G.GEOMETRY_CHOICES["youtube"]
     assert not any(c.startswith("fullscreen") for c in G.GEOMETRY_CHOICES["twitch"] + G.GEOMETRY_CHOICES["tiktok"])
-    assert B._fullscreen_on_screen({"fullscreen": True, "viewport": [1920, 1080], "screen": [1920, 1080], "dpr": 1}) == \
-        (0, 0, 1920, 1080)
-    assert B._fullscreen_on_screen({"fullscreen": True, "viewport": [1280, 720], "screen": [1280, 720], "dpr": 1.5}) == \
-        (0, 0, 1920, 1080)
+    assert B._fullscreen_on_screen({"fullscreen": True, "viewport": [1920, 1080], "screen": [1920, 1080], "dpr": 1,
+                                    "player": {"rect": [0, 0, 1920, 1080]}}) == (0, 0, 1920, 1080)
+    assert B._fullscreen_on_screen({"fullscreen": True, "viewport": [1280, 720], "screen": [1280, 720], "dpr": 1.5,
+                                    "player": {"rect": [0, 0, 1280, 720]}}) == (0, 0, 1920, 1080)
+    # brad 9489de36 (DB1 yt_100001): <html> fullscreen, yt's watch layout kept: not the screen, the player crop is taken
+    assert B._fullscreen_on_screen({"fullscreen": True, "viewport": [1920, 1080], "screen": [1920, 1080], "dpr": 1,
+                                    "player": {"rect": [16, 12, 1348, 758]}}) is None
     assert B._fullscreen_on_screen({"fullscreen": False, "screen": [1920, 1080]}) is None
     assert B._fullscreen_on_screen(None) is None
 
@@ -288,7 +291,8 @@ def test_fullscreen_window_and_screen_checks():
     assert r["ok"] and r["window_state"] == "fullscreen" and r["viewport_is_screen"] and r["state_before"] == "normal", r
     assert "Browser.setWindowBounds" in calls
     assert B.covers_screen([1920, 1080], [1920, 1080]) and not B.covers_screen([1818, 868], [1920, 1080])
-    yt44 = {"fullscreen": True, "viewport": [1818, 868], "screen": [1920, 1080], "dpr": 1}
+    yt44 = {"fullscreen": True, "viewport": [1818, 868], "screen": [1920, 1080], "dpr": 1,
+            "player": {"rect": [0, 0, 1920, 1080]}}
     assert B._fullscreen_on_screen(yt44) is None                               # windowed: not the screen
     assert B._fullscreen_on_screen({**yt44, "viewport": [1920, 1080]}) == (0, 0, 1920, 1080)
     meta = {"player_pin": {"fullscreen": {"on": True, "window": {"window_state": "normal"}}},

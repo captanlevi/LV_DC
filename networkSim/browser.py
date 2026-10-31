@@ -5166,10 +5166,15 @@ def calibrate_shot_origin(page: "CDPPage", target_id: str | None = None) -> dict
 
 
 def _fullscreen_on_screen(pr: dict | None) -> tuple[int, int, int, int] | None:
-    """In fullscreen with the viewport covering the screen the player is the screen: the whole screen in device px.
-    The shot loop takes it only where the calibration confirmed it (origin fullscreen_screen)."""
+    """In fullscreen with the viewport covering the screen and the player covering the screen, the player is the screen:
+    the whole screen in device px. The shot loop takes it only where the calibration confirmed it (origin
+    fullscreen_screen). brad 9489de36 / levi 19:58 (DB1 yt_100001, TTW yt_100006): yt's `f` put <html> in fullscreen
+    while its layout stayed the watch page (player [16, 12, 1348, 758]), so a fullscreen document is not a fullscreen
+    player; without player_is_screen the shot is the player crop, as in any other geometry."""
     try:
         if not (pr or {}).get("fullscreen") or not covers_screen(pr.get("viewport"), pr.get("screen")):
+            return None
+        if not player_is_screen({"player_rect": (pr.get("player") or {}).get("rect"), "screen": pr.get("screen")}):
             return None
         dpr = float(pr.get("dpr") or 1)
         w, h = pr["screen"]
