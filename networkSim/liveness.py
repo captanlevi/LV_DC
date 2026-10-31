@@ -15,7 +15,11 @@ from pathlib import Path
 BROWSER_LIVENESS_ABORT = True    # t102 #4; off = 7809b21c (no watch, no meta key, no exit 16)
 # levi 23:45: the renderer path (browser.RendererCrashWatch, a second CDP client on the page) is separable; off = the pid
 # path alone (no CDP connection). On: laptop control pair A / B within the S0 spread; the trio dry decides per platform.
-RENDERER_CRASH_WATCH = True
+# levi 15:32 (8b): off for COUNT_GO. A second CDP client on the page is a debugger attach under
+# collector.boundary.player_behaviour_ab, with no OFF arm on the counted host. The pid watch stays. A renderer crash is read
+# post hoc from the session's chrome_stderr.log crash lines (the kill-block sources), so a crashed session is never read
+# as STALL. meta.browser_liveness then carries no renderer record (no renderer_crash_t / child_crashes).
+RENDERER_CRASH_WATCH = False
 POLL_S = 5.0
 MISSES_TO_FIRE = 2
 

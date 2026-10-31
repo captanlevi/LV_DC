@@ -198,7 +198,7 @@ def test_meta_and_off_paths():
     i_stop = exp.index('meta_extra["browser_liveness"] = liveness.stop()')            # stopped before any teardown step
     assert i_stop < exp.index("browser.resumer.stop()") and i_stop < exp.index("            browser.stop()")
     assert "if BROWSER_LIVENESS_ABORT and RENDERER_CRASH_WATCH and self.liveness is not None:" in br   # separable (levi 23:45)
-    assert L.RENDERER_CRASH_WATCH is True
+    assert L.RENDERER_CRASH_WATCH is False                     # levi 15:32 (8b): off for COUNT_GO, the pid watch stays
     assert L.BROWSER_LIVENESS_ABORT is True and L.POLL_S == 5.0 and L.MISSES_TO_FIRE == 2
 
 
